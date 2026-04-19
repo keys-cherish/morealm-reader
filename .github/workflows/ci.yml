@@ -1,0 +1,225 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Stage 1: 格式化 + 静态检查 ──
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查行尾空格和换行符
+        run: |
+          # Trailing whitespace
+          if grep -rn ' $' app/src/main/java/ --include="*.kt"; then
+            echo "::error::发现行尾空格"
+            exit 1
+          fi
+
+      - name: 检查合并冲突标记
+        run: |
+          if grep -rn '<<<<<<< \|======= \|>>>>>>> ' app/src/ --include="*.kt"; then
+            echo "::error::发现未解决的合并冲突"
+            exit 1
+          fi
+
+      - name: 许可证文件检查
+        run: |
+          test -f LICENSE || (echo "::error::缺少 LICENSE 文件" && exit 1)
+          grep -q "MIT License" LICENSE || (echo "::error::LICENSE 不是 MIT" && exit 1)
+
+      - name: 架构层级检查
+        run: |
+          # UI 层不应直接引用 domain.db
+          if grep -rn "import com.morealm.app.domain.db" app/src/main/java/com/morealm/app/ui/; then
+            echo "::error::UI 层不应直接引用 domain.db，请通过 presentation 层访问"
+            exit 1
+          fi
+          # UI 层不应直接引用 domain.repository
+          if grep -rn "import com.morealm.app.domain.repository" app/src/main/java/com/morealm/app/ui/; then
+            echo "::error::UI 层不应直接引用 domain.repository"
+            exit 1
+          fi
+
+      - name: 敏感信息检查
+        run: |
+          if grep -rn "password\s*=\s*\"[^\"]\+" app/src/ --include="*.kt" | grep -v "test\|example\|TODO\|placeholder"; then
+            echo "::warning::可能包含硬编码密码"
+          fi
+
+      - name: AndroidManifest 类引用检查
+        run: |
+          MANIFEST="app/src/main/AndroidManifest.xml"
+          SRC_ROOT="app/src/main/java"
+          NAMESPACE="com.morealm.app"
+          ERRORS=0
+          # Extract android:name values that start with "."
+          for CLASS in $(sed -n 's/.*android:name="\.\([^"]*\)".*/\1/p' "$MANIFEST"); do
+            FULL="$NAMESPACE.$CLASS"
+            FILE_PATH="$SRC_ROOT/$(echo "$FULL" | tr '.' '/')".kt
+            FILE_PATH_JAVA="$SRC_ROOT/$(echo "$FULL" | tr '.' '/')".java
+            if [ ! -f "$FILE_PATH" ] && [ ! -f "$FILE_PATH_JAVA" ]; then
+              echo "::error::AndroidManifest 引用的类不存在: $FULL (期望: $FILE_PATH)"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+          # Also check xml resources for targetClass references
+          for CLASS in $(grep -rho 'android:targetClass="[^"]*"' app/src/main/res/ 2>/dev/null | sed 's/android:targetClass="//;s/"//'); do
+            FILE_PATH="$SRC_ROOT/$(echo "$CLASS" | tr '.' '/')".kt
+            FILE_PATH_JAVA="$SRC_ROOT/$(echo "$CLASS" | tr '.' '/')".java
+            if [ ! -f "$FILE_PATH" ] && [ ! -f "$FILE_PATH_JAVA" ]; then
+              echo "::error::XML 引用的类不存在: $CLASS"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+          if [ $ERRORS -gt 0 ]; then
+            exit 1
+          fi
+          echo "✓ AndroidManifest 所有类引用有效"
+
+  # ── Stage 2: 编译检查 ──
+  compile:
+    name: Compile
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Gradle 缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Kotlin 编译检查
+        run: ./gradlew compileDebugKotlin --no-daemon
+
+      - name: Android Lint
+        run: ./gradlew lintDebug --no-daemon
+        continue-on-error: true
+
+      - name: Upload Lint Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-debug.html
+          retention-days: 7
+
+  # ── Stage 3: 单元测试 ──
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: compile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Gradle 缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: 运行单元测试
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Upload Test Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: app/build/reports/tests/testDebugUnitTest/
+          retention-days: 7
+
+  # ── Stage 4: 构建 APK ──
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Gradle 缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: 构建 Debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: morealm-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+  # ── Stage 5: 数据库 Schema 验证 ──
+  schema:
+    name: DB Schema Check
+    runs-on: ubuntu-latest
+    needs: compile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查 Room Schema 导出
+        run: |
+          SCHEMA_DIR="app/schemas/com.morealm.app.domain.db.AppDatabase"
+          if [ ! -d "$SCHEMA_DIR" ]; then
+            echo "::warning::Room schema 目录不存在: $SCHEMA_DIR"
+          else
+            LATEST=$(ls -v "$SCHEMA_DIR"/*.json 2>/dev/null | tail -1)
+            if [ -z "$LATEST" ]; then
+              echo "::warning::没有找到 schema JSON 文件"
+            else
+              echo "最新 schema: $LATEST"
+              python3 -m json.tool "$LATEST" > /dev/null 2>&1 || echo "::error::Schema JSON 格式错误"
+            fi
+          fi
