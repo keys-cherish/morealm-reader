@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">墨境</string>
+    <string name="app_description">本地阅读器 · 自定义排版引擎</string>
+    <string name="tab_shelf">书架</string>
+    <string name="tab_listen">听书</string>
+    <string name="tab_profile">我的</string>
+    <string name="continue_reading">继续阅读</string>
+    <string name="empty_shelf">书架空空如也\n导入本地书籍开始阅读</string>
+    <string name="import_local">导入本地书</string>
+    <string name="import_folder">导入文件夹</string>
+    <string name="tts_playing">正在朗读</string>
+    <string name="webdav_sync">WebDAV 同步</string>
+    <string name="data_migration">数据迁移</string>
+    <string name="theme_settings">主题设置</string>
+    <string name="content_rules">内容解析规则</string>
+    <string name="content_rules_desc">管理自定义解析配置</string>
+    <string name="advanced_settings">高级设置</string>
+    <string name="search_shelf">搜索书架内书籍</string>
+    <string name="privacy_notice">墨境是一款本地阅读工具。App 不提供任何内容，用户对自行导入的文件和配置负责。</string>
+    <string name="shortcut_continue">继续阅读</string>
+    <string name="shortcut_continue_long">继续阅读上次的书</string>
+</resources>

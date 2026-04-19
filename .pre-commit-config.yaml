@@ -1,0 +1,74 @@
+# MoRealm Pre-commit Hooks
+# Install: pre-commit install && pre-commit install --hook-type pre-push
+# Run all: pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        name: 去除行尾空格
+      - id: end-of-file-fixer
+        name: 文件末尾换行符
+      - id: check-yaml
+        name: YAML 语法检查
+      - id: check-json
+        name: JSON 语法检查
+      - id: check-merge-conflict
+        name: 合并冲突标记检查
+      - id: check-added-large-files
+        name: 大文件检查
+        args: ['--maxkb=2048']
+      - id: detect-private-key
+        name: 私钥泄露检查
+
+  - repo: local
+    hooks:
+      - id: license-check
+        name: MIT 许可证检查
+        entry: "bash -c 'test -f LICENSE && grep -q MIT LICENSE'"
+        language: system
+        pass_filenames: false
+
+      - id: architecture-check
+        name: 架构层级检查
+        entry: "bash -c 'grep -rn \"import com.morealm.app.domain.db\" app/src/main/java/com/morealm/app/ui/ && exit 1; true'"
+        language: system
+        files: '\.kt$'
+        pass_filenames: false
+
+      - id: no-secrets
+        name: 敏感信息检查
+        entry: "bash -c 'grep -rn \"password.*=.*\\\"[a-zA-Z0-9]\" app/src/main/java/ --include=\"*.kt\" | grep -v \"test\\|= \\\"\\\"\" && exit 1; true'"
+        language: system
+        pass_filenames: false
+
+      - id: manifest-class-check
+        name: AndroidManifest 类引用检查
+        entry: "bash -c 'ERRORS=0; for CLASS in $(sed -n \"s/.*android:name=\\\"\\.\\([^\\\"]*\\)\\\".*/\\1/p\" app/src/main/AndroidManifest.xml); do F=\"app/src/main/java/$(echo com.morealm.app.$CLASS | tr . /)\"; if [ ! -f \"$F.kt\" ] && [ ! -f \"$F.java\" ]; then echo \"ERROR: 类不存在: com.morealm.app.$CLASS\"; ERRORS=$((ERRORS+1)); fi; done; [ $ERRORS -eq 0 ]'"
+        language: system
+        files: '(AndroidManifest\.xml|\.kt)$'
+        pass_filenames: false
+
+      - id: gradle-compile
+        name: Kotlin 编译检查
+        entry: "bash -c './gradlew compileDebugKotlin --daemon -q'"
+        language: system
+        files: '\.kt$|\.kts$'
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: gradle-test
+        name: 单元测试
+        entry: "bash -c './gradlew testDebugUnitTest --daemon -q'"
+        language: system
+        files: '\.kt$'
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: unit-test-quick
+        name: 单元测试 (快速)
+        entry: "bash -c './gradlew testDebugUnitTest --daemon -q --tests \"com.morealm.app.domain.*\" --tests \"com.morealm.app.core.*\" 2>&1 | tail -5'"
+        language: system
+        files: '\.kt$'
+        pass_filenames: false
