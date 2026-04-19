@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="continue_reading"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_continue"
+        android:shortcutLongLabel="@string/shortcut_continue_long"
+        android:icon="@drawable/ic_launcher_foreground">
+        <intent
+            android:action="com.morealm.app.CONTINUE_READING"
+            android:targetPackage="com.morealm.app"
+            android:targetClass="com.morealm.app.ui.navigation.MainActivity" />
+    </shortcut>
+</shortcuts>
