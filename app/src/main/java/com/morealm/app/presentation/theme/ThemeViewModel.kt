@@ -7,7 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.ThemeRepository
-import com.morealm.app.ui.theme.BuiltinThemes
+import com.morealm.app.domain.entity.BuiltinThemes
 import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -51,6 +51,13 @@ class ThemeViewModel @Inject constructor(
 
     val autoNightMode: StateFlow<Boolean> = prefs.autoNightMode
         .stateIn(viewModelScope, SharingStarted.Eagerly, prefs.getAutoNightModeSync())
+
+    val customCss: StateFlow<String> = prefs.customCss
+        .stateIn(viewModelScope, SharingStarted.Lazily, "")
+
+    fun setCustomCss(css: String) {
+        viewModelScope.launch { prefs.setCustomCss(css) }
+    }
 
     init {
         viewModelScope.launch {
