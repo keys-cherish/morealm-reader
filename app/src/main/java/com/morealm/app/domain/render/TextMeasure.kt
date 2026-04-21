@@ -7,7 +7,7 @@ import androidx.core.util.getOrDefault
 import kotlin.math.ceil
 
 /**
- * Text measurement engine — ported from Legado's TextMeasure.
+ * Text measurement engine.
  * Caches character widths for fast repeated measurement.
  * Handles CJK characters, surrogate pairs, and ASCII efficiently.
  */

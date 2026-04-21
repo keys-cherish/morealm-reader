@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.presentation.theme.ThemeViewModel
-import com.morealm.app.ui.theme.BuiltinThemes
+import com.morealm.app.domain.entity.BuiltinThemes
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.ui.theme.toComposeColor
 
@@ -266,12 +266,15 @@ fun ProfileScreen(
 
     // Custom theme editor dialog
     if (showCustomThemeEditor) {
+        val currentCss by themeViewModel.customCss.collectAsState()
         CustomThemeEditorDialog(
             onDismiss = { showCustomThemeEditor = false },
             onSave = { theme ->
                 themeViewModel.importCustomTheme(theme)
                 showCustomThemeEditor = false
             },
+            currentCustomCss = currentCss,
+            onCustomCssChange = { themeViewModel.setCustomCss(it) },
         )
     }
 }
@@ -388,6 +391,8 @@ fun SettingsItem(icon: ImageVector, title: String, subtitle: String? = null, onC
 private fun CustomThemeEditorDialog(
     onDismiss: () -> Unit,
     onSave: (ThemeEntity) -> Unit,
+    currentCustomCss: String = "",
+    onCustomCssChange: (String) -> Unit = {},
 ) {
     val moColors = LocalMoRealmColors.current
     var themeName by remember { mutableStateOf("我的主题") }
@@ -449,6 +454,57 @@ private fun CustomThemeEditorDialog(
                 ColorPickRow("强调色", accentColor, editingColor == "accent",
                     { editingColor = if (editingColor == "accent") null else "accent" },
                     accentPalette) { accentColor = it }
+
+                // Custom CSS
+                Spacer(Modifier.height(12.dp))
+                var cssText by remember { mutableStateOf(currentCustomCss) }
+                var showCssEditor by remember { mutableStateOf(currentCustomCss.isNotEmpty()) }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().clickable { showCssEditor = !showCssEditor },
+                ) {
+                    Text("自定义 CSS", style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.weight(1f))
+                    if (cssText.isNotEmpty()) {
+                        Text("已配置", style = MaterialTheme.typography.labelSmall,
+                            color = moColors.accent)
+                    }
+                    Icon(
+                        if (showCssEditor) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                        modifier = Modifier.size(18.dp))
+                }
+                if (showCssEditor) {
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = cssText,
+                        onValueChange = { cssText = it },
+                        placeholder = { Text("p { text-indent: 0; }", style = MaterialTheme.typography.bodySmall) },
+                        modifier = Modifier.fillMaxWidth().height(80.dp),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = false,
+                            onClick = { onCustomCssChange(cssText) },
+                            label = { Text("应用 CSS") },
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = moColors.accent.copy(alpha = 0.15f)),
+                        )
+                        if (cssText.isNotEmpty()) {
+                            FilterChip(
+                                selected = false,
+                                onClick = { cssText = ""; onCustomCssChange("") },
+                                label = { Text("清除") },
+                            )
+                        }
+                    }
+                }
 
                 Spacer(Modifier.height(12.dp))
                 // Live preview

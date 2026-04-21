@@ -15,7 +15,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.morealm.app.domain.tts.TtsVoice
+import com.morealm.app.domain.entity.TtsVoice
 import com.morealm.app.ui.theme.LocalMoRealmColors
 
 /**
