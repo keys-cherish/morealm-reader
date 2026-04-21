@@ -1,12 +1,9 @@
 package com.morealm.app.domain.source
 
+import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.rule.RuleEngine
 import com.morealm.app.core.log.AppLog
 import kotlinx.serialization.json.Json
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.net.URLEncoder
-import java.util.concurrent.TimeUnit
 
 /**
  * Online book fetching engine.
@@ -17,11 +14,6 @@ import java.util.concurrent.TimeUnit
 object WebBookEngine {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .build()
 
     data class BookInfo(
         val name: String, val author: String = "", val intro: String = "",
@@ -33,10 +25,9 @@ object WebBookEngine {
 
     // ── Fetch book detail page ──
 
-    fun fetchBookInfo(sourceJson: String, bookUrl: String, baseUrl: String): BookInfo? {
-        val source = parseSource(sourceJson) ?: return null
+    fun fetchBookInfo(source: BookSource, bookUrl: String, baseUrl: String): BookInfo? {
         val rules = source.ruleBookInfo ?: return null
-        val body = fetchUrl(bookUrl, source.header) ?: return null
+        val body = fetchUrl(bookUrl, source.getHeaderMap()) ?: return null
 
         val engine = RuleEngine()
         engine.setContent(body, bookUrl)
@@ -52,8 +43,7 @@ object WebBookEngine {
 
     // ── Fetch chapter list ──
 
-    fun fetchToc(sourceJson: String, tocUrl: String, baseUrl: String): List<Chapter> {
-        val source = parseSource(sourceJson) ?: return emptyList()
+    fun fetchToc(source: BookSource, tocUrl: String, baseUrl: String): List<Chapter> {
         val rules = source.ruleToc ?: return emptyList()
         val chapterListRule = rules.chapterList ?: return emptyList()
 
@@ -62,7 +52,7 @@ object WebBookEngine {
         var page = 0
 
         while (currentUrl != null && page < 50) {
-            val body = fetchUrl(currentUrl, source.header) ?: break
+            val body = fetchUrl(currentUrl, source.getHeaderMap()) ?: break
             val engine = RuleEngine()
             engine.setContent(body, currentUrl)
 
@@ -82,8 +72,7 @@ object WebBookEngine {
 
     // ── Fetch chapter content ──
 
-    fun fetchContent(sourceJson: String, contentUrl: String, baseUrl: String): String {
-        val source = parseSource(sourceJson) ?: return ""
+    fun fetchContent(source: BookSource, contentUrl: String, baseUrl: String): String {
         val rules = source.ruleContent ?: return ""
         val contentRule = rules.content ?: return ""
 
@@ -92,7 +81,7 @@ object WebBookEngine {
         var page = 0
 
         while (currentUrl != null && page < 20) {
-            val body = fetchUrl(currentUrl, source.header) ?: break
+            val body = fetchUrl(currentUrl, source.getHeaderMap()) ?: break
             val engine = RuleEngine()
             engine.setContent(body, currentUrl)
 
@@ -112,19 +101,11 @@ object WebBookEngine {
 
     // ── Helpers ──
 
-    private fun parseSource(sourceJson: String): LegadoBookSource? = try {
-        json.decodeFromString<LegadoBookSource>(sourceJson)
-    } catch (_: Exception) { null }
-
-    private fun fetchUrl(url: String, headerJson: String?): String? = try {
-        val reqBuilder = Request.Builder().url(url)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36")
-        headerJson?.let {
-            try {
-                json.decodeFromString<Map<String, String>>(it).forEach { (k, v) -> reqBuilder.header(k, v) }
-            } catch (_: Exception) {}
-        }
-        client.newCall(reqBuilder.build()).execute().body?.string()
+    private fun fetchUrl(url: String, headers: Map<String, String>): String? = try {
+        val reqBuilder = okhttp3.Request.Builder().url(url)
+        headers.forEach { (k, v) -> reqBuilder.header(k, v) }
+        com.morealm.app.domain.http.okHttpClient
+            .newCall(reqBuilder.build()).execute().body?.string()
     } catch (e: Exception) {
         AppLog.warn("WebBook", "Fetch failed: $url - ${e.message}")
         null
@@ -133,7 +114,7 @@ object WebBookEngine {
     private fun String.resolveUrl(baseUrl: String): String = when {
         startsWith("http") -> this
         startsWith("//") -> "https:$this"
-        startsWith("/") -> baseUrl.substringBefore("/", baseUrl).let {
+        startsWith("/") -> {
             val scheme = if (baseUrl.startsWith("https")) "https" else "http"
             "$scheme://${java.net.URI(baseUrl).host}$this"
         }

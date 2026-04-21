@@ -12,6 +12,7 @@ import com.morealm.app.domain.entity.rule.ExploreRule
 import com.morealm.app.domain.entity.rule.ReviewRule
 import com.morealm.app.domain.entity.rule.SearchRule
 import com.morealm.app.domain.entity.rule.TocRule
+import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -108,31 +109,31 @@ data class BookSource(
 
     class Converters {
         @TypeConverter
-        fun exploreRuleToString(rule: ExploreRule?): String = jsonParser.encodeToString(rule)
+        fun exploreRuleToString(rule: ExploreRule?): String = jsonParser.encodeToString(ExploreRule.serializer().nullable, rule)
         @TypeConverter
         fun stringToExploreRule(json: String?): ExploreRule? =
             json?.let { runCatching { jsonParser.decodeFromString<ExploreRule>(it) }.getOrNull() }
 
         @TypeConverter
-        fun searchRuleToString(rule: SearchRule?): String = jsonParser.encodeToString(rule)
+        fun searchRuleToString(rule: SearchRule?): String = jsonParser.encodeToString(SearchRule.serializer().nullable, rule)
         @TypeConverter
         fun stringToSearchRule(json: String?): SearchRule? =
             json?.let { runCatching { jsonParser.decodeFromString<SearchRule>(it) }.getOrNull() }
 
         @TypeConverter
-        fun bookInfoRuleToString(rule: BookInfoRule?): String = jsonParser.encodeToString(rule)
+        fun bookInfoRuleToString(rule: BookInfoRule?): String = jsonParser.encodeToString(BookInfoRule.serializer().nullable, rule)
         @TypeConverter
         fun stringToBookInfoRule(json: String?): BookInfoRule? =
             json?.let { runCatching { jsonParser.decodeFromString<BookInfoRule>(it) }.getOrNull() }
 
         @TypeConverter
-        fun tocRuleToString(rule: TocRule?): String = jsonParser.encodeToString(rule)
+        fun tocRuleToString(rule: TocRule?): String = jsonParser.encodeToString(TocRule.serializer().nullable, rule)
         @TypeConverter
         fun stringToTocRule(json: String?): TocRule? =
             json?.let { runCatching { jsonParser.decodeFromString<TocRule>(it) }.getOrNull() }
 
         @TypeConverter
-        fun contentRuleToString(rule: ContentRule?): String = jsonParser.encodeToString(rule)
+        fun contentRuleToString(rule: ContentRule?): String = jsonParser.encodeToString(ContentRule.serializer().nullable, rule)
         @TypeConverter
         fun stringToContentRule(json: String?): ContentRule? =
             json?.let { runCatching { jsonParser.decodeFromString<ContentRule>(it) }.getOrNull() }
