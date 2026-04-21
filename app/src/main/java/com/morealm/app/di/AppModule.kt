@@ -112,6 +112,44 @@ private val MIGRATION_8_9 = object : Migration(8, 9) {
     }
 }
 
+private val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // book_sources 表结构完全重构，删除旧表并重建
+        db.execSQL("DROP TABLE IF EXISTS `book_sources`")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS `book_sources` (
+            `bookSourceUrl` TEXT NOT NULL,
+            `bookSourceName` TEXT NOT NULL,
+            `bookSourceGroup` TEXT,
+            `bookSourceType` INTEGER NOT NULL DEFAULT 0,
+            `bookUrlPattern` TEXT,
+            `customOrder` INTEGER NOT NULL DEFAULT 0,
+            `enabled` INTEGER NOT NULL DEFAULT 1,
+            `enabledExplore` INTEGER NOT NULL DEFAULT 1,
+            `concurrentRate` TEXT,
+            `header` TEXT,
+            `loginUrl` TEXT,
+            `loginUi` TEXT,
+            `loginCheckJs` TEXT,
+            `coverDecodeJs` TEXT,
+            `bookSourceComment` TEXT,
+            `variableComment` TEXT,
+            `lastUpdateTime` INTEGER NOT NULL DEFAULT 0,
+            `respondTime` INTEGER NOT NULL DEFAULT 180000,
+            `weight` INTEGER NOT NULL DEFAULT 0,
+            `exploreUrl` TEXT,
+            `searchUrl` TEXT,
+            `ruleExplore` TEXT,
+            `ruleSearch` TEXT,
+            `ruleBookInfo` TEXT,
+            `ruleToc` TEXT,
+            `ruleContent` TEXT,
+            `ruleReview` TEXT,
+            PRIMARY KEY(`bookSourceUrl`)
+        )""")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_book_sources_bookSourceUrl` ON `book_sources` (`bookSourceUrl`)")
+    }
+}
+
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
@@ -121,7 +159,7 @@ object AppModule {
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "morealm.db")
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
             .fallbackToDestructiveMigrationOnDowngrade()
             .build()
 

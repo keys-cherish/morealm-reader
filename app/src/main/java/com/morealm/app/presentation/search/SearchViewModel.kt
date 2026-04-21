@@ -3,16 +3,17 @@ package com.morealm.app.presentation.search
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.db.BookDao
-import com.morealm.app.domain.db.BookSourceDao
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.entity.SearchBook
 import com.morealm.app.domain.preference.AppPreferences
+import com.morealm.app.domain.repository.SourceRepository
+import com.morealm.app.domain.webbook.WebBook
 import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 data class SearchResult(
@@ -21,12 +22,13 @@ data class SearchResult(
     val coverUrl: String? = null,
     val bookUrl: String = "",
     val sourceName: String = "",
-    val sourceId: String = "",
+    val sourceUrl: String = "",
     val intro: String = "",
+    val searchBook: SearchBook? = null,
 )
 
 data class SourceSearchProgress(
-    val sourceId: String,
+    val sourceUrl: String,
     val sourceName: String,
     val status: SourceStatus,
 )
@@ -35,7 +37,7 @@ enum class SourceStatus { WAITING, SEARCHING, DONE, FAILED }
 
 @HiltViewModel
 class SearchViewModel @Inject constructor(
-    private val sourceDao: BookSourceDao,
+    private val sourceRepo: SourceRepository,
     private val bookDao: BookDao,
     private val prefs: AppPreferences,
 ) : ViewModel() {
@@ -70,36 +72,45 @@ class SearchViewModel @Inject constructor(
         _isSearching.value = true
 
         viewModelScope.launch(Dispatchers.IO) {
-            // Local shelf search first (instant)
             val localBooks = bookDao.searchBooks("%$keyword%")
             _localResults.value = localBooks
             AppLog.info("Search", "Local: ${localBooks.size} results for '$keyword'")
 
-            // Then online source search
-            val sources = sourceDao.getEnabledSourcesList()
+            val sources = sourceRepo.getEnabledSourcesList()
             if (sources.isEmpty()) {
                 _isSearching.value = false
                 return@launch
             }
 
             _sourceProgress.value = sources.map {
-                SourceSearchProgress(it.id, it.name, SourceStatus.WAITING)
+                SourceSearchProgress(it.bookSourceUrl, it.bookSourceName, SourceStatus.WAITING)
             }
-
             AppLog.info("Search", "Searching '$keyword' across ${sources.size} sources")
 
             sources.map { source ->
                 launch {
-                    updateSourceStatus(source.id, SourceStatus.SEARCHING)
+                    updateSourceStatus(source.bookSourceUrl, SourceStatus.SEARCHING)
                     try {
-                        val results = searchSource(source, keyword)
-                        if (results.isNotEmpty()) {
-                            _results.value = _results.value + results
+                        val searchBooks = WebBook.searchBookAwait(source, keyword)
+                        val mapped = searchBooks.map { sb ->
+                            SearchResult(
+                                title = sb.name,
+                                author = sb.author,
+                                coverUrl = sb.coverUrl,
+                                bookUrl = sb.bookUrl,
+                                sourceName = sb.originName,
+                                sourceUrl = sb.origin,
+                                intro = sb.intro ?: "",
+                                searchBook = sb,
+                            )
                         }
-                        updateSourceStatus(source.id, SourceStatus.DONE)
+                        if (mapped.isNotEmpty()) {
+                            _results.value = _results.value + mapped
+                        }
+                        updateSourceStatus(source.bookSourceUrl, SourceStatus.DONE)
                     } catch (e: Exception) {
-                        updateSourceStatus(source.id, SourceStatus.FAILED)
-                        AppLog.warn("Search", "${source.name} failed: ${e.message}")
+                        updateSourceStatus(source.bookSourceUrl, SourceStatus.FAILED)
+                        AppLog.warn("Search", "${source.bookSourceName} failed: ${e.message}")
                     }
                 }
             }.forEach { it.join() }
@@ -109,71 +120,9 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    private fun updateSourceStatus(sourceId: String, status: SourceStatus) {
+    private fun updateSourceStatus(sourceUrl: String, status: SourceStatus) {
         _sourceProgress.value = _sourceProgress.value.map {
-            if (it.sourceId == sourceId) it.copy(status = status) else it
+            if (it.sourceUrl == sourceUrl) it.copy(status = status) else it
         }
-    }
-
-    private suspend fun searchSource(source: BookSource, keyword: String): List<SearchResult> {
-        val ruleJson = try {
-            kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-                .decodeFromString<com.morealm.app.domain.source.LegadoBookSource>(source.ruleJson)
-        } catch (_: Exception) { return emptyList() }
-
-        val searchUrl = ruleJson.searchUrl ?: return emptyList()
-        if (searchUrl.isBlank()) return emptyList()
-        // Skip JS-based rules — requires a JS engine which we don't support yet
-        if (searchUrl.contains("@js:") || searchUrl.contains("<js>")) return emptyList()
-
-        val ruleSearch = ruleJson.ruleSearch ?: return emptyList()
-        val bookListRule = ruleSearch.bookList ?: return emptyList()
-
-        // Build URL
-        val url = searchUrl
-            .replace("{{key}}", java.net.URLEncoder.encode(keyword, "UTF-8"))
-            .replace("{{page}}", "1")
-            .replace("\n.*".toRegex(), "")
-        val finalUrl = if (url.startsWith("http")) url
-            else source.url.trimEnd('/') + "/" + url.trimStart('/')
-
-        // Fetch content
-        val response = withContext(Dispatchers.IO) {
-            okhttp3.OkHttpClient.Builder().build()
-                .newCall(okhttp3.Request.Builder().url(finalUrl)
-                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36")
-                    .build())
-                .execute()
-        }
-        val body = response.body?.string() ?: return emptyList()
-
-        // Parse with RuleEngine
-        val engine = com.morealm.app.domain.rule.RuleEngine()
-        engine.setContent(body, finalUrl)
-        val elements = engine.getElements(bookListRule)
-        if (elements.isEmpty()) return emptyList()
-
-        return elements.mapNotNull { el ->
-            try {
-                val child = engine.createChild(el)
-                val name = ruleSearch.name?.let { child.getString(it) }?.takeIf { it.isNotBlank() }
-                    ?: return@mapNotNull null
-                val author = ruleSearch.author?.let { child.getString(it) } ?: ""
-                val bookUrl = ruleSearch.bookUrl?.let { child.getString(it) } ?: ""
-                val coverUrl = ruleSearch.coverUrl?.let { child.getString(it) }
-                val intro = ruleSearch.intro?.let { child.getString(it) } ?: ""
-
-                SearchResult(
-                    title = name,
-                    author = author,
-                    coverUrl = coverUrl,
-                    bookUrl = if (bookUrl.startsWith("http")) bookUrl
-                        else source.url.trimEnd('/') + "/" + bookUrl.trimStart('/'),
-                    sourceName = source.name,
-                    sourceId = source.id,
-                    intro = intro,
-                )
-            } catch (_: Exception) { null }
-        }.take(20)
     }
 }
