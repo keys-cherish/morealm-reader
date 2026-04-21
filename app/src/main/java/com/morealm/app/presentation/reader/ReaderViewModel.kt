@@ -181,8 +181,8 @@ class ReaderViewModel @Inject constructor(
     private var cachedReplaceRules: List<com.morealm.app.domain.entity.ReplaceRule> = emptyList()
 
     // ── TTS voice selection ──
-    private val _ttsVoices = MutableStateFlow<List<com.morealm.app.domain.tts.TtsVoice>>(emptyList())
-    val ttsVoices: StateFlow<List<com.morealm.app.domain.tts.TtsVoice>> = _ttsVoices.asStateFlow()
+    private val _ttsVoices = MutableStateFlow<List<com.morealm.app.domain.entity.TtsVoice>>(emptyList())
+    val ttsVoices: StateFlow<List<com.morealm.app.domain.entity.TtsVoice>> = _ttsVoices.asStateFlow()
 
     private val _ttsVoiceName = MutableStateFlow("")
     val ttsVoiceName: StateFlow<String> = _ttsVoiceName.asStateFlow()
@@ -1260,6 +1260,11 @@ class ReaderViewModel @Inject constructor(
 
     fun onTextSelected(text: String) {
         _selectedText.value = text
+    }
+
+    fun copyTextToClipboard(text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("MoRealm", text))
     }
 
     fun clearSelectedText() {

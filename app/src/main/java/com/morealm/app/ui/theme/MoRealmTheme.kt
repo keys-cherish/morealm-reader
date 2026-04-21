@@ -8,6 +8,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.domain.entity.ThemeEntity
+import com.morealm.app.domain.entity.BuiltinThemes
 
 /** Parse "#AARRGGBB" or "#RRGGBB" hex string to Compose Color */
 fun String.toComposeColor(): Color {

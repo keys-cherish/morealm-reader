@@ -93,8 +93,6 @@ fun MoRealmNavHost(
             modifier = Modifier.padding(innerPadding),
         ) {
             composable("main_tabs") {
-                val activeTheme by themeViewModel.activeTheme.collectAsState()
-                val isNight = activeTheme?.isNightTheme ?: true
                 val columns = when {
                     windowSizeClass.widthSizeClass >= WindowWidthSizeClass.Expanded -> 5
                     windowSizeClass.widthSizeClass >= WindowWidthSizeClass.Medium -> 4
@@ -119,15 +117,21 @@ fun MoRealmNavHost(
                     beyondViewportPageCount = tabs.size,
                 ) { page ->
                     when (tabs[page]) {
-                        BottomTab.Shelf -> ShelfScreen(
-                            onBookClick = onBookClick,
-                            onBookLongClick = onBookLongClick,
-                            onSearch = onSearchTab,
-                            onToggleDayNight = onToggleDayNight,
-                            isNightTheme = isNight,
-                            columns = columns,
-                            continueReading = continueReading,
-                        )
+                        BottomTab.Shelf -> {
+                            // Read theme state inside ShelfScreen's scope so changes
+                            // only recompose this branch, not the entire Pager
+                            val activeTheme by themeViewModel.activeTheme.collectAsState()
+                            val isNight = activeTheme?.isNightTheme ?: true
+                            ShelfScreen(
+                                onBookClick = onBookClick,
+                                onBookLongClick = onBookLongClick,
+                                onSearch = onSearchTab,
+                                onToggleDayNight = onToggleDayNight,
+                                isNightTheme = isNight,
+                                columns = columns,
+                                continueReading = continueReading,
+                            )
+                        }
                         BottomTab.Discover -> SearchScreen(
                             onBack = onSearchBack,
                         )

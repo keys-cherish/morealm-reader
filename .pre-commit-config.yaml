@@ -30,9 +30,51 @@ repos:
         language: system
         pass_filenames: false
 
-      - id: architecture-check
-        name: 架构层级检查
-        entry: "bash -c 'grep -rn \"import com.morealm.app.domain.db\" app/src/main/java/com/morealm/app/ui/ && exit 1; true'"
+      - id: mvvm-boundary-check
+        name: MVVM 层级边界检查
+        entry: "bash -c '
+          ERRORS=0;
+          UI_DIR=app/src/main/java/com/morealm/app/ui;
+          PRES_DIR=app/src/main/java/com/morealm/app/presentation;
+          DOM_DIR=app/src/main/java/com/morealm/app/domain;
+
+          # 1. UI层禁止引用domain业务模块(db/repository/parser/sync/source/rule/tts/preference)
+          for MOD in db repository parser sync source rule tts preference; do
+            HITS=$(grep -rn \"import com.morealm.app.domain.$MOD\" $UI_DIR --include=\"*.kt\" 2>/dev/null);
+            if [ -n \"$HITS\" ]; then
+              echo \"ERROR [UI→domain.$MOD] UI层不应直接引用domain业务模块:\";
+              echo \"$HITS\";
+              ERRORS=$((ERRORS+1));
+            fi;
+          done;
+
+          # 2. domain层禁止引用ui层和presentation层
+          HITS=$(grep -rn \"import com.morealm.app.ui\\|import com.morealm.app.presentation\" $DOM_DIR --include=\"*.kt\" 2>/dev/null);
+          if [ -n \"$HITS\" ]; then
+            echo \"ERROR [domain→ui/presentation] domain层不应引用上层:\";
+            echo \"$HITS\";
+            ERRORS=$((ERRORS+1));
+          fi;
+
+          # 3. presentation层禁止引用ui层
+          HITS=$(grep -rn \"import com.morealm.app.ui\" $PRES_DIR --include=\"*.kt\" 2>/dev/null);
+          if [ -n \"$HITS\" ]; then
+            echo \"ERROR [presentation→ui] presentation层不应引用ui层:\";
+            echo \"$HITS\";
+            ERRORS=$((ERRORS+1));
+          fi;
+
+          # 4. presentation层禁止引用Compose
+          HITS=$(grep -rn \"import androidx.compose\" $PRES_DIR --include=\"*.kt\" 2>/dev/null);
+          if [ -n \"$HITS\" ]; then
+            echo \"ERROR [presentation→compose] presentation层不应引用Compose:\";
+            echo \"$HITS\";
+            ERRORS=$((ERRORS+1));
+          fi;
+
+          [ $ERRORS -eq 0 ] && echo \"MVVM 边界检查通过\";
+          [ $ERRORS -eq 0 ]
+        '"
         language: system
         files: '\.kt$'
         pass_filenames: false
