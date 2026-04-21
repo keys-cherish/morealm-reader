@@ -224,8 +224,9 @@ class AnalyzeByJSoup(doc: Any) {
                 }
             }
             if (split == '!') {
-                for (pcInt in indexSet) elements[pcInt] = null
-                elements.removeAll(nullSet)
+                val removeSet = mutableSetOf<Element>()
+                for (pcInt in indexSet) removeSet.add(elements[pcInt])
+                elements.removeAll(removeSet)
             } else if (split == '.') {
                 val es = Elements()
                 for (pcInt in indexSet) es.add(elements[pcInt])
