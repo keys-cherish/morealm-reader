@@ -13,6 +13,7 @@ import com.morealm.app.domain.http.postJson
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
 import java.util.regex.Pattern
 import kotlin.coroutines.CoroutineContext
@@ -151,9 +152,7 @@ class AnalyzeUrl(
                     if (!encodedForm.isNullOrEmpty() || body.isNullOrBlank()) {
                         postForm(encodedForm ?: "")
                     } else if (!contentType.isNullOrBlank()) {
-                        val requestBody = body.toByteArray().let {
-                            okhttp3.RequestBody.Companion.create(it, contentType.toMediaType())
-                        }
+                        val requestBody = body.toRequestBody(contentType.toMediaType())
                         post(requestBody)
                     } else {
                         postJson(body)

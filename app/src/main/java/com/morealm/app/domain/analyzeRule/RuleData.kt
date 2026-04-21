@@ -22,6 +22,6 @@ class RuleData : RuleDataInterface {
 
     fun getVariable(): String? {
         if (variableMap.isEmpty()) return null
-        return Json.encodeToString(variableMap)
+        return Json.encodeToString(kotlinx.serialization.serializer<HashMap<String, String>>(), variableMap)
     }
 }

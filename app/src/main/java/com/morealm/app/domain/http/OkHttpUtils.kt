@@ -74,7 +74,7 @@ suspend fun OkHttpClient.newCallStrResponse(
     builder: Request.Builder.() -> Unit
 ): StrResponse {
     return newCallResponse(retry, builder).let {
-        StrResponse(it, it.body.text())
+        StrResponse(it, it.body?.text() ?: "")
     }
 }
 

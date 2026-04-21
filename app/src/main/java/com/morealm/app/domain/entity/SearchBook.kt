@@ -46,14 +46,14 @@ data class SearchBook(
 
     override fun putVariable(key: String, value: String?): Boolean {
         if (super.putVariable(key, value)) {
-            variable = Json.encodeToString(variableMap)
+            variable = Json.encodeToString(kotlinx.serialization.serializer<HashMap<String, String>>(), variableMap)
         }
         return true
     }
 
-    fun getVariable(): String? {
+    fun variableString(): String? {
         if (variableMap.isEmpty()) return null
-        return Json.encodeToString(variableMap)
+        return Json.encodeToString(kotlinx.serialization.serializer<HashMap<String, String>>(), variableMap)
     }
 
     fun toBook() = Book(
