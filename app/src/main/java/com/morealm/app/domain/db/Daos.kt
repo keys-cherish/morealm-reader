@@ -84,17 +84,17 @@ interface ChapterDao {
 
 @Dao
 interface BookSourceDao {
-    @Query("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY sortOrder")
+    @Query("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY customOrder")
     fun getEnabledSources(): Flow<List<BookSource>>
 
-    @Query("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY sortOrder")
+    @Query("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY customOrder")
     suspend fun getEnabledSourcesList(): List<BookSource>
 
-    @Query("SELECT * FROM book_sources ORDER BY sortOrder")
+    @Query("SELECT * FROM book_sources ORDER BY customOrder")
     fun getAllSources(): Flow<List<BookSource>>
 
-    @Query("SELECT * FROM book_sources WHERE id = :id")
-    suspend fun getById(id: String): BookSource?
+    @Query("SELECT * FROM book_sources WHERE bookSourceUrl = :url")
+    suspend fun getByUrl(url: String): BookSource?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(source: BookSource)

@@ -164,7 +164,7 @@ fun SearchScreen(
                             modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
                         )
                     }
-                    items(results, key = { "${it.sourceId}_${it.bookUrl}" }) { result ->
+                    items(results, key = { "${it.sourceUrl}_${it.bookUrl}" }) { result ->
                         SearchResultItem(result)
                     }
                 }

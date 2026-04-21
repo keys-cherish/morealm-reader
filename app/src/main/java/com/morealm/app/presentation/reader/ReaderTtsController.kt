@@ -1,0 +1,383 @@
+package com.morealm.app.presentation.reader
+
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import com.morealm.app.domain.preference.AppPreferences
+import com.morealm.app.service.TtsEventBus
+import com.morealm.app.service.TtsService
+import com.morealm.app.core.log.AppLog
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+/**
+ * Manages all TTS (Text-to-Speech) functionality for the reader.
+ * Extracted from ReaderViewModel to keep it focused.
+ */
+class ReaderTtsController(
+    private val context: Context,
+    private val prefs: AppPreferences,
+    private val scope: CoroutineScope,
+) {
+    // ── State ──
+    private val _ttsPlaying = MutableStateFlow(false)
+    val ttsPlaying: StateFlow<Boolean> = _ttsPlaying.asStateFlow()
+
+    private val _ttsSpeed = MutableStateFlow(1.0f)
+    val ttsSpeed: StateFlow<Float> = _ttsSpeed.asStateFlow()
+
+    private val _ttsEngine = MutableStateFlow("system")
+    val ttsEngine: StateFlow<String> = _ttsEngine.asStateFlow()
+
+    private val _ttsParagraphIndex = MutableStateFlow(0)
+    val ttsParagraphIndex: StateFlow<Int> = _ttsParagraphIndex.asStateFlow()
+
+    private val _ttsTotalParagraphs = MutableStateFlow(0)
+    val ttsTotalParagraphs: StateFlow<Int> = _ttsTotalParagraphs.asStateFlow()
+
+    private val _ttsSleepMinutes = MutableStateFlow(0)
+    val ttsSleepMinutes: StateFlow<Int> = _ttsSleepMinutes.asStateFlow()
+
+    private val _ttsVoices = MutableStateFlow<List<com.morealm.app.domain.entity.TtsVoice>>(emptyList())
+    val ttsVoices: StateFlow<List<com.morealm.app.domain.entity.TtsVoice>> = _ttsVoices.asStateFlow()
+
+    private val _ttsVoiceName = MutableStateFlow("")
+    val ttsVoiceName: StateFlow<String> = _ttsVoiceName.asStateFlow()
+
+    /** TTS scroll progress: 0.0 to 1.0, used to auto-scroll WebView during TTS */
+    private val _ttsScrollProgress = MutableStateFlow(-1f)
+    val ttsScrollProgress: StateFlow<Float> = _ttsScrollProgress.asStateFlow()
+
+    private var ttsParagraphs: List<String> = emptyList()
+    private var ttsJob: Job? = null
+    private var sleepTimerJob: Job? = null
+    private var ttsServiceStarted = false
+    private var ttsPausedByFocusLoss = false
+    private var ttsSkipRegex: Regex? = null
+
+    private val systemTtsEngine by lazy {
+        com.morealm.app.domain.tts.SystemTtsEngine(context).also { it.initialize() }
+    }
+
+    private val edgeTtsEngine by lazy {
+        com.morealm.app.domain.tts.EdgeTtsEngine()
+    }
+
+    private fun currentTtsEngine(): com.morealm.app.domain.tts.TtsEngine {
+        return if (_ttsEngine.value == "edge") edgeTtsEngine else systemTtsEngine
+    }
+
+    /** Initialize TTS preferences and event listeners. Call from ViewModel init. */
+    fun initialize(
+        getBookTitle: () -> String,
+        getChapterTitle: () -> String,
+    ) {
+        scope.launch {
+            prefs.ttsSpeed.first().let { _ttsSpeed.value = it }
+        }
+        scope.launch {
+            prefs.ttsSkipPattern.first().let { pattern ->
+                ttsSkipRegex = if (pattern.isNotBlank()) {
+                    try { Regex(pattern) } catch (_: Exception) { null }
+                } else null
+            }
+        }
+        scope.launch {
+            val savedEngine = prefs.ttsEngine.first()
+            _ttsEngine.value = savedEngine
+            val voiceName = prefs.ttsVoice.first()
+            _ttsVoiceName.value = voiceName
+            if (savedEngine == "edge") {
+                _ttsVoices.value = com.morealm.app.domain.tts.EdgeTtsEngine.VOICES
+                if (voiceName.isNotBlank()) edgeTtsEngine.setVoice(voiceName)
+            } else {
+                systemTtsEngine.awaitReady()
+                _ttsVoices.value = systemTtsEngine.getChineseVoices()
+                if (voiceName.isNotBlank()) systemTtsEngine.setVoice(voiceName)
+            }
+        }
+        scope.launch {
+            TtsEventBus.events.collect { event ->
+                when (event) {
+                    is TtsEventBus.Event.PlayPause -> ttsPlayPause()
+                    is TtsEventBus.Event.AudioFocusLoss -> {
+                        if (_ttsPlaying.value) {
+                            ttsPausedByFocusLoss = true
+                            ttsPause()
+                        }
+                    }
+                    is TtsEventBus.Event.AudioFocusGain -> {
+                        if (ttsPausedByFocusLoss) {
+                            ttsPausedByFocusLoss = false
+                            // Will be resumed by caller via onTtsEvent
+                        }
+                    }
+                    else -> {} // PrevChapter/NextChapter handled by ViewModel
+                }
+            }
+        }
+    }
+
+    /** Collect TTS events that need ViewModel-level handling (chapter navigation). */
+    fun collectChapterEvents(onPrev: () -> Unit, onNext: () -> Unit) {
+        scope.launch {
+            TtsEventBus.events.collect { event ->
+                when (event) {
+                    is TtsEventBus.Event.PrevChapter -> onPrev()
+                    is TtsEventBus.Event.NextChapter -> onNext()
+                    is TtsEventBus.Event.AudioFocusGain -> {
+                        if (ttsPausedByFocusLoss) {
+                            ttsPausedByFocusLoss = false
+                            ttsPlay(null, null, null, null)
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    fun resetParagraphIndex() {
+        _ttsParagraphIndex.value = 0
+    }
+
+    private fun parseParagraphs(content: String): List<String> {
+        val text = content
+            .replace(Regex("<img[^>]*>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<svg[\\s\\S]*?</svg>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("</p>|</div>|</li>|</h[1-6]>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("<[^>]+>"), "")
+            .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'")
+        val paragraphs = text.lines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() && it.length > 1 }
+        val skip = ttsSkipRegex
+        return if (skip != null) {
+            paragraphs.filter { !skip.containsMatchIn(it) }
+        } else paragraphs
+    }
+
+    private fun ensureTtsService(bookTitle: String, chapterTitle: String) {
+        if (ttsServiceStarted) return
+        try {
+            val intent = Intent(context, TtsService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            ttsServiceStarted = true
+            TtsEventBus.sendCommand(TtsEventBus.Command.UpdateMeta(bookTitle, chapterTitle))
+            AppLog.info("Reader", "TTS service started")
+        } catch (e: Exception) {
+            AppLog.error("Reader", "Failed to start TTS service", e)
+        }
+    }
+
+    private fun pushTtsState(playing: Boolean, bookTitle: String = "", chapterTitle: String = "") {
+        TtsEventBus.sendCommand(TtsEventBus.Command.UpdateMeta(bookTitle, chapterTitle))
+        TtsEventBus.sendCommand(TtsEventBus.Command.SetPlaying(playing))
+    }
+
+    fun ttsPlayPause() {
+        if (_ttsPlaying.value) ttsPause()
+        else ttsPlay(null, null, null, null)
+    }
+
+    /**
+     * Start TTS playback.
+     * @param displayedContent current chapter content (null = resume from current paragraphs)
+     * @param bookTitle book title for notification
+     * @param chapterTitle chapter title for notification
+     * @param onChapterFinished callback when chapter finishes (for auto-advance)
+     */
+    fun ttsPlay(
+        displayedContent: String?,
+        bookTitle: String?,
+        chapterTitle: String?,
+        onChapterFinished: (() -> Unit)?,
+    ) {
+        ensureTtsService(bookTitle ?: "", chapterTitle ?: "")
+        _ttsPlaying.value = true
+        pushTtsState(true, bookTitle ?: "", chapterTitle ?: "")
+
+        ttsJob?.cancel()
+        ttsJob = scope.launch {
+            try {
+                if (displayedContent != null) {
+                    ttsParagraphs = parseParagraphs(displayedContent)
+                    _ttsTotalParagraphs.value = ttsParagraphs.size
+                }
+                if (ttsParagraphs.isEmpty()) {
+                    _ttsPlaying.value = false
+                    pushTtsState(false)
+                    return@launch
+                }
+
+                val startIdx = _ttsParagraphIndex.value.coerceIn(0, ttsParagraphs.size - 1)
+                val engine = currentTtsEngine()
+                if (engine is com.morealm.app.domain.tts.SystemTtsEngine) {
+                    engine.awaitReady()
+                }
+
+                var consecutiveErrors = 0
+                for (idx in startIdx until ttsParagraphs.size) {
+                    if (!_ttsPlaying.value) break
+                    _ttsParagraphIndex.value = idx
+                    _ttsScrollProgress.value = if (ttsParagraphs.size > 1) {
+                        idx.toFloat() / (ttsParagraphs.size - 1)
+                    } else 1f
+                    try {
+                        engine.speak(ttsParagraphs[idx], _ttsSpeed.value).collect { }
+                        consecutiveErrors = 0
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        consecutiveErrors++
+                        AppLog.warn("Reader", "TTS speak error on paragraph $idx", e)
+                        if (consecutiveErrors >= 3) {
+                            if (_ttsEngine.value != "system") {
+                                AppLog.info("Reader", "Edge TTS failing, falling back to system TTS")
+                                _ttsEngine.value = "system"
+                                systemTtsEngine.awaitReady()
+                                consecutiveErrors = 0
+                                continue
+                            }
+                            AppLog.error("Reader", "TTS engine failing repeatedly, stopping")
+                            _ttsPlaying.value = false
+                            pushTtsState(false)
+                            return@launch
+                        }
+                        delay(200)
+                    }
+                }
+                // Chapter finished
+                if (_ttsPlaying.value) {
+                    onChapterFinished?.invoke()
+                }
+            } catch (_: CancellationException) {
+            } catch (e: Exception) {
+                AppLog.error("Reader", "TTS error", e)
+                _ttsPlaying.value = false
+                pushTtsState(false)
+            }
+        }
+    }
+
+    fun ttsPause() {
+        _ttsPlaying.value = false
+        _ttsScrollProgress.value = -1f
+        ttsJob?.cancel()
+        currentTtsEngine().stop()
+        pushTtsState(false)
+    }
+
+    fun ttsStop() {
+        ttsPause()
+        _ttsParagraphIndex.value = 0
+        if (ttsServiceStarted) {
+            TtsEventBus.sendCommand(TtsEventBus.Command.StopService)
+            ttsServiceStarted = false
+        }
+    }
+
+    fun ttsPrevParagraph() {
+        val newIdx = (_ttsParagraphIndex.value - 1).coerceAtLeast(0)
+        _ttsParagraphIndex.value = newIdx
+        if (_ttsPlaying.value) {
+            currentTtsEngine().stop()
+            ttsJob?.cancel()
+            ttsPlay(null, null, null, null)
+        }
+    }
+
+    fun ttsNextParagraph() {
+        val newIdx = (_ttsParagraphIndex.value + 1).coerceAtMost(ttsParagraphs.size - 1)
+        _ttsParagraphIndex.value = newIdx
+        if (_ttsPlaying.value) {
+            currentTtsEngine().stop()
+            ttsJob?.cancel()
+            ttsPlay(null, null, null, null)
+        }
+    }
+
+    fun setTtsSpeed(speed: Float) {
+        _ttsSpeed.value = speed
+        scope.launch { prefs.setTtsSpeed(speed) }
+    }
+
+    fun setTtsEngine(engine: String) {
+        val wasPlaying = _ttsPlaying.value
+        if (wasPlaying) ttsPause()
+
+        _ttsEngine.value = engine
+        scope.launch {
+            prefs.setTtsEngine(engine)
+            if (engine == "edge") {
+                _ttsVoices.value = com.morealm.app.domain.tts.EdgeTtsEngine.VOICES
+                val savedVoice = _ttsVoiceName.value
+                val edgeVoice = com.morealm.app.domain.tts.EdgeTtsEngine.VOICES.find { it.id == savedVoice }
+                if (edgeVoice == null) {
+                    val defaultVoice = com.morealm.app.domain.tts.EdgeTtsEngine.VOICES.first().id
+                    _ttsVoiceName.value = defaultVoice
+                    edgeTtsEngine.setVoice(defaultVoice)
+                } else {
+                    edgeTtsEngine.setVoice(savedVoice)
+                }
+            } else {
+                systemTtsEngine.awaitReady()
+                _ttsVoices.value = systemTtsEngine.getChineseVoices()
+                val savedVoice = _ttsVoiceName.value
+                systemTtsEngine.setVoice(savedVoice)
+            }
+            if (wasPlaying) ttsPlay(null, null, null, null)
+        }
+    }
+
+    fun setTtsVoice(voiceName: String) {
+        _ttsVoiceName.value = voiceName
+        if (_ttsEngine.value == "edge") {
+            edgeTtsEngine.setVoice(voiceName)
+        } else {
+            systemTtsEngine.setVoice(voiceName)
+        }
+        scope.launch { prefs.setTtsVoice(voiceName) }
+    }
+
+    fun setTtsSleepTimer(minutes: Int) {
+        _ttsSleepMinutes.value = minutes
+        sleepTimerJob?.cancel()
+        if (minutes > 0) {
+            sleepTimerJob = scope.launch {
+                delay(minutes * 60_000L)
+                ttsStop()
+                _ttsSleepMinutes.value = 0
+                AppLog.info("Reader", "TTS sleep timer expired")
+            }
+        }
+    }
+
+    /** Speak text one-shot (doesn't affect TTS state) */
+    fun speakSelectedText(text: String) {
+        if (text.isBlank()) return
+        scope.launch {
+            val engine = currentTtsEngine()
+            if (engine is com.morealm.app.domain.tts.SystemTtsEngine) engine.awaitReady()
+            engine.speak(text, _ttsSpeed.value).collect { }
+        }
+    }
+
+    fun shutdown() {
+        ttsJob?.cancel()
+        sleepTimerJob?.cancel()
+        systemTtsEngine.stop()
+        systemTtsEngine.shutdown()
+        edgeTtsEngine.stop()
+        if (ttsServiceStarted) {
+            TtsEventBus.sendCommand(TtsEventBus.Command.StopService)
+            ttsServiceStarted = false
+        }
+    }
+}

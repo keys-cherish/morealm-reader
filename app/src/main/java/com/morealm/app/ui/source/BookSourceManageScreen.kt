@@ -58,9 +58,9 @@ fun BookSourceManageScreen(
     val filteredSources = remember(sources, searchQuery) {
         if (searchQuery.isBlank()) sources
         else sources.filter {
-            it.name.contains(searchQuery, ignoreCase = true) ||
-            it.url.contains(searchQuery, ignoreCase = true) ||
-            (it.groupName ?: "").contains(searchQuery, ignoreCase = true)
+            it.bookSourceName.contains(searchQuery, ignoreCase = true) ||
+            it.bookSourceUrl.contains(searchQuery, ignoreCase = true) ||
+            (it.bookSourceGroup ?: "").contains(searchQuery, ignoreCase = true)
         }
     }
 
@@ -173,7 +173,7 @@ fun BookSourceManageScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    items(filteredSources, key = { it.id }) { source ->
+                    items(filteredSources, key = { it.bookSourceUrl }) { source ->
                         SourceItem(
                             source = source,
                             onToggle = { viewModel.toggleSource(source) },
@@ -253,7 +253,7 @@ private fun SourceItem(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    source.name.ifBlank { source.url },
+                    source.bookSourceName.ifBlank { source.bookSourceUrl },
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     color = if (source.enabled) MaterialTheme.colorScheme.onSurface
@@ -262,16 +262,16 @@ private fun SourceItem(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Row {
-                    if (!source.groupName.isNullOrBlank()) {
+                    if (!source.bookSourceGroup.isNullOrBlank()) {
                         Text(
-                            source.groupName!!,
+                            source.bookSourceGroup!!,
                             style = MaterialTheme.typography.labelSmall,
                             color = moColors.accent.copy(alpha = 0.6f),
                         )
                         Spacer(Modifier.width(8.dp))
                     }
                     Text(
-                        source.url,
+                        source.bookSourceUrl,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
                         maxLines = 1,
