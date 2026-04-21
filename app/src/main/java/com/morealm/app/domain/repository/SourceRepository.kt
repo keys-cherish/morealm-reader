@@ -12,9 +12,11 @@ class SourceRepository @Inject constructor(
 ) {
     fun getEnabledSources(): Flow<List<BookSource>> = sourceDao.getEnabledSources()
 
+    suspend fun getEnabledSourcesList(): List<BookSource> = sourceDao.getEnabledSourcesList()
+
     fun getAllSources(): Flow<List<BookSource>> = sourceDao.getAllSources()
 
-    suspend fun getById(id: String): BookSource? = sourceDao.getById(id)
+    suspend fun getByUrl(url: String): BookSource? = sourceDao.getByUrl(url)
 
     suspend fun insert(source: BookSource) = sourceDao.insert(source)
 

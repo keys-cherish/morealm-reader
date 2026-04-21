@@ -219,8 +219,8 @@ fun BookDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.heightIn(max = 400.dp),
                 ) {
-                    items(availableSources, key = { it.id }) { source ->
-                        val isCurrent = source.id == book?.sourceId
+                    items(availableSources, key = { it.bookSourceUrl }) { source ->
+                        val isCurrent = source.bookSourceUrl == book?.sourceId
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -234,7 +234,7 @@ fun BookDetailScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    source.name,
+                                    source.bookSourceName,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = if (isCurrent) moColors.accent
                                             else MaterialTheme.colorScheme.onSurface,
