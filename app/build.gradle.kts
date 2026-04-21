@@ -114,6 +114,7 @@ dependencies {
     implementation(libs.jsoupxpath)
     implementation(libs.jsonpath)
     implementation(libs.quick.transfer.core)
+    implementation("org.apache.commons:commons-text:1.12.0")
 
     // Image
     implementation(libs.coil.compose)

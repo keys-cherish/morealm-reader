@@ -3,11 +3,11 @@ package com.morealm.app.presentation.profile
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.morealm.app.domain.db.BookSourceDao
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.repository.BookRepository
+import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.domain.parser.EpubMetadataWriter
 import com.morealm.app.domain.parser.EpubParser
 import com.morealm.app.core.log.AppLog
@@ -26,7 +26,7 @@ import javax.inject.Inject
 class BookDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val bookRepo: BookRepository,
-    private val sourceDao: BookSourceDao,
+    private val sourceRepo: SourceRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -44,7 +44,7 @@ class BookDetailViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             _book.value = bookRepo.getById(bookId)
-            _availableSources.value = sourceDao.getEnabledSourcesList()
+            _availableSources.value = sourceRepo.getEnabledSourcesList()
         }
     }
 
@@ -55,13 +55,13 @@ class BookDetailViewModel @Inject constructor(
         viewModelScope.launch {
             val current = _book.value ?: return@launch
             val updated = current.copy(
-                sourceId = source.id,
-                originName = source.name,
+                sourceId = source.bookSourceUrl,
+                originName = source.bookSourceName,
             )
             bookRepo.update(updated)
             _book.value = updated
             _showSourcePicker.value = false
-            AppLog.info("Detail", "Switched source to: ${source.name}")
+            AppLog.info("Detail", "Switched source to: ${source.bookSourceName}")
         }
     }
 
