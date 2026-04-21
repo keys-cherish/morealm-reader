@@ -1483,57 +1483,6 @@ fun ReaderSettingsPanel(
                     )
                 }
             }
-
-            // ── Custom CSS ──
-            Spacer(Modifier.height(16.dp))
-            var showCssEditor by remember { mutableStateOf(false) }
-            var cssText by remember { mutableStateOf(customCss) }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().clickable { showCssEditor = !showCssEditor },
-            ) {
-                Text("自定义 CSS", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                Spacer(Modifier.weight(1f))
-                if (customCss.isNotEmpty()) {
-                    Text("已配置", style = MaterialTheme.typography.labelSmall,
-                        color = moColors.accent)
-                }
-                Icon(
-                    if (showCssEditor) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.size(18.dp))
-            }
-            if (showCssEditor) {
-                Spacer(Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = cssText,
-                    onValueChange = { cssText = it },
-                    placeholder = { Text("p { text-indent: 0; }", style = MaterialTheme.typography.bodySmall) },
-                    modifier = Modifier.fillMaxWidth().height(100.dp),
-                    textStyle = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = false,
-                        onClick = { onCustomCssChange(cssText) },
-                        label = { Text("应用") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = moColors.accent.copy(alpha = 0.15f)),
-                    )
-                    if (cssText.isNotEmpty()) {
-                        FilterChip(
-                            selected = false,
-                            onClick = { cssText = ""; onCustomCssChange("") },
-                            label = { Text("清除") },
-                        )
-                    }
-                }
-            }
         }
     }
 }

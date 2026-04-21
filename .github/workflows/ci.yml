@@ -38,18 +38,41 @@ jobs:
           test -f LICENSE || (echo "::error::缺少 LICENSE 文件" && exit 1)
           grep -q "MIT License" LICENSE || (echo "::error::LICENSE 不是 MIT" && exit 1)
 
-      - name: 架构层级检查
+      - name: MVVM 层级边界检查
         run: |
-          # UI 层不应直接引用 domain.db
-          if grep -rn "import com.morealm.app.domain.db" app/src/main/java/com/morealm/app/ui/; then
-            echo "::error::UI 层不应直接引用 domain.db，请通过 presentation 层访问"
-            exit 1
+          ERRORS=0
+          UI_DIR=app/src/main/java/com/morealm/app/ui
+          PRES_DIR=app/src/main/java/com/morealm/app/presentation
+          DOM_DIR=app/src/main/java/com/morealm/app/domain
+
+          # 1. UI层禁止引用domain业务模块
+          for MOD in db repository parser sync source rule tts preference; do
+            if grep -rn "import com.morealm.app.domain.$MOD" $UI_DIR --include="*.kt"; then
+              echo "::error::UI层不应直接引用 domain.$MOD，请通过 presentation 层"
+              ERRORS=$((ERRORS+1))
+            fi
+          done
+
+          # 2. domain层禁止引用ui/presentation层
+          if grep -rn "import com.morealm.app.ui\|import com.morealm.app.presentation" $DOM_DIR --include="*.kt"; then
+            echo "::error::domain层不应引用 ui/presentation 层"
+            ERRORS=$((ERRORS+1))
           fi
-          # UI 层不应直接引用 domain.repository
-          if grep -rn "import com.morealm.app.domain.repository" app/src/main/java/com/morealm/app/ui/; then
-            echo "::error::UI 层不应直接引用 domain.repository"
-            exit 1
+
+          # 3. presentation层禁止引用ui层
+          if grep -rn "import com.morealm.app.ui" $PRES_DIR --include="*.kt"; then
+            echo "::error::presentation层不应引用 ui 层"
+            ERRORS=$((ERRORS+1))
           fi
+
+          # 4. presentation层禁止引用Compose
+          if grep -rn "import androidx.compose" $PRES_DIR --include="*.kt"; then
+            echo "::error::presentation层不应引用 Compose"
+            ERRORS=$((ERRORS+1))
+          fi
+
+          if [ $ERRORS -gt 0 ]; then exit 1; fi
+          echo "✓ MVVM 边界检查通过"
 
       - name: 敏感信息检查
         run: |

@@ -33,11 +33,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.presentation.theme.ThemeViewModel
-import com.morealm.app.ui.theme.BuiltinThemes
+import com.morealm.app.domain.entity.BuiltinThemes
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.ui.theme.toComposeColor
 import com.morealm.app.presentation.reader.ReaderViewModel
 import com.morealm.app.presentation.reader.PageTurnMode
+import com.morealm.app.ui.reader.renderer.toPageAnimType
 import com.morealm.app.ui.reader.TtsOverlayPanel
 
 @Composable
@@ -103,7 +104,7 @@ fun ReaderScreen(
             activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
-    // Save progress on pause (like Legado's onPause → ReadBook.saveRead())
+    // Save progress on pause
     val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -242,10 +243,14 @@ fun ReaderScreen(
                 paddingHorizontal = marginHorizontal,
                 paddingVertical = marginTopVal,
                 startFromLastPage = navigateDirection < 0,
+                pageAnimType = pageAnim.toPageAnimType(),
                 onTapCenter = { viewModel.toggleControls() },
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
                 onNextChapter = { viewModel.nextChapter() },
                 onPrevChapter = { viewModel.prevChapter() },
+                onCopyText = { text -> viewModel.copyTextToClipboard(text) },
+                onSpeakFromHere = { text -> viewModel.onTextSelected(text); viewModel.speakSelectedText() },
+                onLookupWord = { text -> viewModel.onTextSelected(text) },
                 modifier = Modifier.fillMaxSize(),
             )
         } else {

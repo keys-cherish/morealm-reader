@@ -1,6 +1,4 @@
-package com.morealm.app.ui.theme
-
-import com.morealm.app.domain.entity.ThemeEntity
+package com.morealm.app.domain.entity
 
 /**
  * 6 built-in themes for MoRealm.

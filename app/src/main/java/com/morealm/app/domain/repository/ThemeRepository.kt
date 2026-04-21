@@ -4,7 +4,7 @@ import com.morealm.app.domain.db.ThemeDao
 import com.morealm.app.domain.entity.LegadoThemeConfig
 import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.domain.preference.AppPreferences
-import com.morealm.app.ui.theme.BuiltinThemes
+import com.morealm.app.domain.entity.BuiltinThemes
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
 import javax.inject.Inject

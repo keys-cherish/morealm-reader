@@ -1,18 +1,12 @@
 package com.morealm.app.domain.tts
 
+import com.morealm.app.domain.entity.TtsVoice
 import kotlinx.coroutines.flow.Flow
 
 /** Audio chunk from TTS engine */
 data class AudioChunk(
     val data: ByteArray,
     val format: String = "pcm",
-)
-
-data class TtsVoice(
-    val id: String,
-    val name: String,
-    val language: String,
-    val engine: String,
 )
 
 /**
