@@ -21,6 +21,17 @@ fun String.toComposeColor(): Color {
     }
 }
 
+/** Mix this color toward [other] by [fraction] (0.0 = this, 1.0 = other) */
+private fun Color.mix(other: Color, fraction: Float): Color {
+    val f = fraction.coerceIn(0f, 1f)
+    return Color(
+        red = red * (1 - f) + other.red * f,
+        green = green * (1 - f) + other.green * f,
+        blue = blue * (1 - f) + other.blue * f,
+        alpha = alpha * (1 - f) + other.alpha * f,
+    )
+}
+
 @Stable
 data class MoRealmColors(
     val accent: Color,
@@ -70,17 +81,46 @@ fun MoRealmTheme(
         if (t.isNightTheme) Color(0x0FFFFFFF) else Color(0x0F000000),
         spec, label = "glass")
 
+    // Derive missing on* colors from onBg so all components get correct text/icon colors.
+    // Material3 lightColorScheme defaults assume M3 baseline purple — we must override them.
+    val onPrimary = if (t.isNightTheme) Color(0xFF1A1A2E) else Color.White
+    val onSecondary = onPrimary
+    val onTertiary = onPrimary
+    val surfaceVariant = if (t.isNightTheme) surface.mix(onBg, 0.08f) else surface.mix(onBg, 0.06f)
+    val onSurfaceVariant = onBg.copy(alpha = 0.7f)
+    val outline = onBg.copy(alpha = 0.3f)
+    val outlineVariant = onBg.copy(alpha = 0.15f)
+    val surfaceContainer = if (t.isNightTheme) surface.mix(onBg, 0.05f) else surface.mix(onBg, 0.03f)
+    val surfaceContainerHigh = if (t.isNightTheme) surface.mix(onBg, 0.08f) else surface.mix(onBg, 0.05f)
+    val surfaceContainerHighest = if (t.isNightTheme) surface.mix(onBg, 0.12f) else surface.mix(onBg, 0.08f)
+    val inverseSurface = onBg
+    val inverseOnSurface = background
+
     val colorScheme = if (t.isNightTheme) {
         darkColorScheme(
             primary = primary, secondary = secondary,
             background = background, surface = surface,
             onBackground = onBg, onSurface = onBg,
+            onPrimary = onPrimary, onSecondary = onSecondary, onTertiary = onTertiary,
+            surfaceVariant = surfaceVariant, onSurfaceVariant = onSurfaceVariant,
+            outline = outline, outlineVariant = outlineVariant,
+            surfaceContainer = surfaceContainer,
+            surfaceContainerHigh = surfaceContainerHigh,
+            surfaceContainerHighest = surfaceContainerHighest,
+            inverseSurface = inverseSurface, inverseOnSurface = inverseOnSurface,
         )
     } else {
         lightColorScheme(
             primary = primary, secondary = secondary,
             background = background, surface = surface,
             onBackground = onBg, onSurface = onBg,
+            onPrimary = onPrimary, onSecondary = onSecondary, onTertiary = onTertiary,
+            surfaceVariant = surfaceVariant, onSurfaceVariant = onSurfaceVariant,
+            outline = outline, outlineVariant = outlineVariant,
+            surfaceContainer = surfaceContainer,
+            surfaceContainerHigh = surfaceContainerHigh,
+            surfaceContainerHighest = surfaceContainerHighest,
+            inverseSurface = inverseSurface, inverseOnSurface = inverseOnSurface,
         )
     }
 
