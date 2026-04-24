@@ -11,6 +11,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -25,7 +26,7 @@ fun ReplaceRuleScreen(
     viewModel: ReplaceRuleViewModel = hiltViewModel(),
 ) {
     val moColors = LocalMoRealmColors.current
-    val rules by viewModel.allRules.collectAsState()
+    val rules by viewModel.allRules.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
     var editingRuleId by remember { mutableStateOf<String?>(null) }
 
@@ -40,7 +41,7 @@ fun ReplaceRuleScreen(
                 },
                 actions = {
                     IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Icons.Default.Add, "添加规则", tint = moColors.accent)
+                        Icon(Icons.Default.Add, "添加规则", tint = MaterialTheme.colorScheme.primary)
                     }
                 },
             )
@@ -108,7 +109,7 @@ private fun ReplaceRuleItem(
     val moColors = LocalMoRealmColors.current
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -117,7 +118,7 @@ private fun ReplaceRuleItem(
             Switch(
                 checked = rule.enabled,
                 onCheckedChange = { onToggle() },
-                colors = SwitchDefaults.colors(checkedTrackColor = moColors.accent),
+                colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier.size(36.dp),
             )
             Spacer(Modifier.width(12.dp))
@@ -176,7 +177,7 @@ private fun ReplaceRuleDialog(
                     label = { Text("规则名称") },
                     singleLine = true, modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary),
                 )
                 OutlinedTextField(
                     value = pattern, onValueChange = { pattern = it },
@@ -185,7 +186,7 @@ private fun ReplaceRuleDialog(
                     singleLine = true, modifier = Modifier.fillMaxWidth(),
                     textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary),
                 )
                 OutlinedTextField(
                     value = replacement, onValueChange = { replacement = it },
@@ -193,12 +194,12 @@ private fun ReplaceRuleDialog(
                     singleLine = true, modifier = Modifier.fillMaxWidth(),
                     textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
                         checked = isRegex, onCheckedChange = { isRegex = it },
-                        colors = CheckboxDefaults.colors(checkedColor = moColors.accent),
+                        colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary),
                     )
                     Text("使用正则表达式", style = MaterialTheme.typography.bodySmall)
                 }
@@ -209,7 +210,7 @@ private fun ReplaceRuleDialog(
                 onClick = { if (pattern.isNotBlank()) onSave(name, pattern, replacement, isRegex, scope) },
                 enabled = pattern.isNotBlank(),
             ) {
-                Text("保存", color = if (pattern.isNotBlank()) moColors.accent
+                Text("保存", color = if (pattern.isNotBlank()) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f))
             }
         },

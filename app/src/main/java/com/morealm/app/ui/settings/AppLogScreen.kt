@@ -11,6 +11,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -30,7 +31,7 @@ import java.util.Locale
 @Composable
 fun AppLogScreen(onBack: () -> Unit) {
     val moColors = LocalMoRealmColors.current
-    val logs by AppLog.logs.collectAsState()
+    val logs by AppLog.logs.collectAsStateWithLifecycle()
     var selected by remember { mutableStateOf<LogRecord?>(null) }
     val timeFmt = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.US) }
 
@@ -63,10 +64,10 @@ fun AppLogScreen(onBack: () -> Unit) {
             ) {
                 items(logs.reversed(), key = { "${it.time}_${it.message.hashCode()}" }) { record ->
                     val color = when (record.level) {
-                        LogLevel.FATAL -> Color(0xFFD32F2F)
-                        LogLevel.ERROR -> Color(0xFFEF5350)
-                        LogLevel.WARN -> Color(0xFFFFA726)
-                        LogLevel.INFO -> moColors.accent
+                        LogLevel.FATAL -> MaterialTheme.colorScheme.error
+                        LogLevel.ERROR -> MaterialTheme.colorScheme.error
+                        LogLevel.WARN -> MaterialTheme.colorScheme.tertiary
+                        LogLevel.INFO -> MaterialTheme.colorScheme.primary
                         LogLevel.DEBUG -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                         LogLevel.VERBOSE -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
                     }
@@ -75,7 +76,7 @@ fun AppLogScreen(onBack: () -> Unit) {
                             .clickable { selected = if (selected == record) null else record }
                             .background(
                                 if (record.level.priority >= LogLevel.WARN.priority) color.copy(alpha = 0.06f) else Color.Transparent,
-                                RoundedCornerShape(6.dp),
+                                MaterialTheme.shapes.extraSmall,
                             )
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
@@ -100,7 +101,7 @@ fun AppLogScreen(onBack: () -> Unit) {
                             Spacer(Modifier.height(4.dp))
                             Text(record.throwable,
                                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, fontFamily = FontFamily.Monospace),
-                                color = Color(0xFFEF5350).copy(alpha = 0.8f))
+                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f))
                         }
                     }
                 }

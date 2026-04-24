@@ -2,38 +2,46 @@ package com.morealm.app.presentation.profile
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import android.content.Context
 import android.net.Uri
-import com.morealm.app.domain.db.AppDatabase
-import com.morealm.app.domain.db.BookDao
-import com.morealm.app.domain.db.ReadStatsDao
 import com.morealm.app.domain.preference.AppPreferences
-import com.morealm.app.domain.sync.BackupManager
+import com.morealm.app.domain.repository.BackupRepository
+import com.morealm.app.domain.repository.BookRepository
+import com.morealm.app.domain.repository.ReadStatsRepository
 import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
 
+data class AnnualReport(
+    val year: Int,
+    val totalBooks: Int,
+    val totalWordsWan: Int,       // 万字
+    val totalDurationHours: Int,
+    val activeDays: Int,
+    val longestSessionMin: Int,
+    val peakHour: String,         // e.g. "23:00"
+    val favoriteBook: String,
+    val tags: List<String>,
+)
+
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
-    private val bookDao: BookDao,
-    private val readStatsDao: ReadStatsDao,
+    private val bookRepo: BookRepository,
+    private val readStatsRepo: ReadStatsRepository,
     private val prefs: AppPreferences,
-    private val db: AppDatabase,
-    @ApplicationContext private val context: Context,
+    private val backupRepo: BackupRepository,
 ) : ViewModel() {
 
-    /** Logical book count: folder = 1 book, loose file = 1 book */
-    val totalBooks: StateFlow<Int> = flow { emit(bookDao.countLogicalBooks()) }
+    val totalBooks: StateFlow<Int> = flow { emit(bookRepo.countLogicalBooks()) }
         .stateIn(viewModelScope, SharingStarted.Lazily, 0)
 
-    private val recentStats = readStatsDao.getRecent(30)
+    private val recentStats = readStatsRepo.getRecent(30)
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val totalReadMs: StateFlow<Long> = recentStats
@@ -47,7 +55,6 @@ class ProfileViewModel @Inject constructor(
 
     val recentDays: StateFlow<Int> = recentStats.map { stats ->
         if (stats.isEmpty()) return@map 0
-        // Count consecutive days from today backwards
         val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         val dates = stats.map { it.date }.toSet()
         var count = 0
@@ -75,8 +82,7 @@ class ProfileViewModel @Inject constructor(
         _testResult.value = "测试中..."
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val client = com.morealm.app.domain.sync.WebDavClient(url.trimEnd('/'), user, pass)
-                val ok = client.exists("")
+                val ok = backupRepo.testWebDav(url, user, pass)
                 _testResult.value = if (ok) "连接成功" else "连接失败：服务器无响应"
             } catch (e: Exception) {
                 _testResult.value = "连接失败：${e.message}"
@@ -101,7 +107,7 @@ class ProfileViewModel @Inject constructor(
     fun exportBackup(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             _backupStatus.value = "导出中..."
-            val ok = BackupManager.exportBackup(context, db, uri)
+            val ok = backupRepo.exportBackup(uri)
             _backupStatus.value = if (ok) "导出成功" else "导出失败"
         }
     }
@@ -109,7 +115,7 @@ class ProfileViewModel @Inject constructor(
     fun importBackup(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             _backupStatus.value = "导入中..."
-            val ok = BackupManager.importBackup(context, db, uri)
+            val ok = backupRepo.importBackup(uri)
             _backupStatus.value = if (ok) "导入成功" else "导入失败"
         }
     }
@@ -128,18 +134,15 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             _webDavStatus.value = "备份中..."
             try {
-                val client = com.morealm.app.domain.sync.WebDavClient(url.trimEnd('/'), user, pass)
-                // Create backup directory
+                val client = backupRepo.createWebDavClient(url, user, pass)
                 client.mkdir("MoRealm")
-                // Generate backup data
-                val backupData = BackupManager.generateBackupBytes(context, db)
+                val backupData = backupRepo.generateBackupBytes()
                 if (backupData == null) {
                     _webDavStatus.value = "备份数据生成失败"
                     return@launch
                 }
                 val ts = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
                 client.upload("MoRealm/backup_$ts.zip", backupData)
-                // Also keep a "latest" copy for easy restore
                 client.upload("MoRealm/backup_latest.zip", backupData)
                 _webDavStatus.value = "备份成功"
                 AppLog.info("WebDAV", "Backup uploaded: ${backupData.size} bytes")
@@ -159,17 +162,73 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             _webDavStatus.value = "恢复中..."
             try {
-                val client = com.morealm.app.domain.sync.WebDavClient(url.trimEnd('/'), user, pass)
+                val client = backupRepo.createWebDavClient(url, user, pass)
                 val data = client.download("MoRealm/backup_latest.zip")
                 if (data.isEmpty()) {
                     _webDavStatus.value = "未找到备份文件"
                     return@launch
                 }
-                val ok = BackupManager.importBackupFromBytes(context, db, data)
+                val ok = backupRepo.importBackupFromBytes(data)
                 _webDavStatus.value = if (ok) "恢复成功" else "恢复失败"
             } catch (e: Exception) {
                 _webDavStatus.value = "恢复失败：${e.message}"
                 AppLog.error("WebDAV", "Restore failed", e)
+            }
+        }
+    }
+
+    // ── Annual Report ──
+
+    private val _annualReport = MutableStateFlow<AnnualReport?>(null)
+    val annualReport: StateFlow<AnnualReport?> = _annualReport.asStateFlow()
+
+    fun loadAnnualReport(year: Int = Calendar.getInstance().get(Calendar.YEAR)) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val prefix = "$year"
+                val yearStats = readStatsRepo.getByYear(prefix)
+                val totalMs = yearStats.sumOf { it.readDurationMs }
+                val totalWords = yearStats.sumOf { it.wordsRead }
+                val booksFinished = yearStats.sumOf { it.booksFinished }
+                val activeDays = yearStats.count { it.readDurationMs > 0 }
+                val longestMs = yearStats.maxOfOrNull { it.readDurationMs } ?: 0L
+
+                // Peak reading hour: daily granularity only, default estimate
+                val peakHour = "22:00"
+
+                // Favorite book: highest read progress
+                val allBooks = bookRepo.getAllBooksSync()
+                val favoriteBook = allBooks
+                    .filter { it.lastReadAt > 0 && it.readProgress > 0f }
+                    .maxByOrNull { it.readProgress }
+                    ?.title ?: allBooks.firstOrNull()?.title ?: ""
+
+                // Tags: collect unique categories/kinds
+                val tags = allBooks
+                    .flatMap { listOfNotNull(it.category, it.kind) }
+                    .flatMap { it.split(",", "\u3001", "/", ";") }
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() && it.length <= 6 }
+                    .groupingBy { it }
+                    .eachCount()
+                    .entries
+                    .sortedByDescending { it.value }
+                    .take(5)
+                    .map { it.key }
+
+                _annualReport.value = AnnualReport(
+                    year = year,
+                    totalBooks = if (booksFinished > 0) booksFinished else allBooks.size,
+                    totalWordsWan = (totalWords / 10000).toInt(),
+                    totalDurationHours = (totalMs / 3600000).toInt(),
+                    activeDays = activeDays,
+                    longestSessionMin = (longestMs / 60000).toInt(),
+                    peakHour = peakHour,
+                    favoriteBook = favoriteBook,
+                    tags = tags,
+                )
+            } catch (e: Exception) {
+                AppLog.error("Profile", "Failed to load annual report", e)
             }
         }
     }

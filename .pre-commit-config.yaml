@@ -114,3 +114,68 @@ repos:
         language: system
         files: '\.kt$'
         pass_filenames: false
+
+      - id: inline-regex-check
+        name: 内联 Regex 编译检查
+        entry: "bash -c '
+          HITS=$(grep -rn \"Regex(\" app/src/main/java/com/morealm/app/ --include=\"*.kt\" \
+            | grep -v \"object \" | grep -v \"companion \" | grep -v \"val .*= Regex\" \
+            | grep -v \"AppPattern\" | grep -v \"import \" | grep -v \"ttsSkipRegex\" \
+            | grep -v \"//\" | grep -v \"getCachedRegex\" | grep -v \"test/\");
+          if [ -n \"$HITS\" ]; then
+            echo \"WARNING: 发现内联 Regex() 编译，应使用 AppPattern 预编译常量:\";
+            echo \"$HITS\";
+          fi;
+          true
+        '"
+        language: system
+        files: '\.kt$'
+        pass_filenames: false
+
+      - id: thread-blocking-check
+        name: 主线程阻塞检查
+        entry: "bash -c '
+          ERRORS=0;
+          # Thread.sleep in non-test, non-log code
+          HITS=$(grep -rn \"Thread\\.sleep\" app/src/main/java/com/morealm/app/ --include=\"*.kt\" \
+            | grep -v \"core/log/\" | grep -v \"test/\");
+          if [ -n \"$HITS\" ]; then
+            echo \"ERROR: Thread.sleep 应替换为 delay():\";
+            echo \"$HITS\";
+            ERRORS=$((ERRORS+1));
+          fi;
+          # runBlocking without Dispatchers
+          HITS=$(grep -rn \"runBlocking\\s*{\" app/src/main/java/com/morealm/app/ --include=\"*.kt\");
+          if [ -n \"$HITS\" ]; then
+            echo \"ERROR: runBlocking 缺少 Dispatchers.IO:\";
+            echo \"$HITS\";
+            ERRORS=$((ERRORS+1));
+          fi;
+          # viewModelScope.launch without Dispatcher (DB/IO operations)
+          HITS=$(grep -rn \"viewModelScope\\.launch\\s*{\" app/src/main/java/com/morealm/app/presentation/ --include=\"*.kt\" \
+            | grep -v \"prefs\\.set\" | grep -v \"_show\" | grep -v \"_auto\");
+          if [ -n \"$HITS\" ]; then
+            echo \"WARNING: viewModelScope.launch 缺少 Dispatchers.IO (如含 DB/IO 操作请加上):\";
+            echo \"$HITS\";
+          fi;
+          [ $ERRORS -eq 0 ]
+        '"
+        language: system
+        files: '\.kt$'
+        pass_filenames: false
+
+      - id: mutable-stateflow-exposure-check
+        name: MutableStateFlow 公开暴露检查
+        entry: "bash -c '
+          HITS=$(grep -rn \"val [a-z]\\w* = MutableStateFlow\" app/src/main/java/com/morealm/app/presentation/ --include=\"*.kt\" \
+            | grep -v \"private \");
+          if [ -n \"$HITS\" ]; then
+            echo \"ERROR: MutableStateFlow 不应公开暴露，应使用 private + asStateFlow():\";
+            echo \"$HITS\";
+            exit 1;
+          fi;
+          true
+        '"
+        language: system
+        files: '\.kt$'
+        pass_filenames: false

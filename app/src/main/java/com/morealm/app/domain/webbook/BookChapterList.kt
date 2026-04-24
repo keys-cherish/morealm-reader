@@ -5,6 +5,8 @@ import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setCoroutineCont
 import com.morealm.app.domain.analyzeRule.AnalyzeUrl
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.rule.TocRule
+import com.script.ScriptBindings
+import com.script.rhino.RhinoScriptEngine
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 
@@ -66,6 +68,28 @@ object BookChapterList {
         val lh = LinkedHashSet(chapterList)
         val list = ArrayList(lh)
         list.reverse()
+
+        // formatJs: 格式化章节标题
+        val formatJs = tocRule.formatJs
+        if (!formatJs.isNullOrBlank()) {
+            org.mozilla.javascript.Context.enter().use {
+                val bindings = ScriptBindings()
+                bindings["gInt"] = 0
+                list.forEachIndexed { index, chapter ->
+                    bindings["index"] = index + 1
+                    bindings["title"] = chapter.title
+                    runCatching {
+                        RhinoScriptEngine.eval(formatJs, RhinoScriptEngine.getRuntimeScope(bindings))
+                            ?.toString()?.let { newTitle ->
+                                if (newTitle.isNotBlank() && newTitle != chapter.title) {
+                                    list[index] = chapter.copy(title = newTitle)
+                                }
+                            }
+                    }
+                }
+            }
+        }
+
         return list
     }
     private suspend fun analyzeChapterPage(

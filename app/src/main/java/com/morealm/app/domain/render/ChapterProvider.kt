@@ -1,9 +1,17 @@
 package com.morealm.app.domain.render
 
+import android.graphics.BitmapFactory
 import android.graphics.Paint.FontMetrics
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import com.morealm.app.core.text.AppPattern
 import kotlin.math.roundToInt
 
 /**
@@ -36,7 +44,8 @@ class ChapterProvider(
 ) {
     companion object {
         const val INDENT_CHAR = "\u3000"
-        const val IMG_PATTERN = """<img[^>]+src="([^"]+)"[^>]*>"""
+        val IMG_PATTERN = AppPattern.imgSrcPattern
+        private val nonImgTagRegex = Regex("<(?!img)[^>]+>", RegexOption.IGNORE_CASE)
     }
 
     val visibleWidth: Int = viewWidth - paddingLeft - paddingRight
@@ -48,14 +57,10 @@ class ChapterProvider(
     private val contentPaintFontMetrics: FontMetrics = contentPaint.fontMetrics
     private val indentCharWidth: Float = contentPaint.measureText(INDENT_CHAR)
 
-    private val imgPattern = Regex(IMG_PATTERN, RegexOption.IGNORE_CASE)
+    private val imgPattern = Regex(IMG_PATTERN.pattern(), RegexOption.IGNORE_CASE)
 
     /**
-     * Layout a chapter into pages.
-     * @param title Chapter title
-     * @param content Chapter text content (may contain HTML img tags)
-     * @param chapterIndex Index of this chapter
-     * @param chaptersSize Total number of chapters
+     * Layout a chapter into pages (synchronous).
      * @return Fully laid-out TextChapter with all pages
      */
     fun layoutChapter(
@@ -66,11 +71,88 @@ class ChapterProvider(
     ): TextChapter {
         val textChapter = TextChapter(chapterIndex, title, chaptersSize)
         val textPages = arrayListOf<TextPage>()
+        layoutInternal(title, content, chapterIndex, chaptersSize, textChapter, textPages)
+        return textChapter
+    }
+
+    /**
+     * 异步流式排版 — 移植自 Legado TextChapterLayout。
+     * 排完一页立即通过 Channel 发送，UI 可以立即显示第一页，无需等待整章排完。
+     *
+     * @param scope 协程作用域，用于启动排版协程
+     * @param onPageReady 每排完一页的回调（在排版线程调用）
+     * @param onCompleted 全部排完的回调
+     * @param onError 排版异常回调
+     * @return AsyncLayoutHandle，可用于取消排版和读取 Channel
+     */
+    fun layoutChapterAsync(
+        title: String,
+        content: String,
+        chapterIndex: Int,
+        chaptersSize: Int = 0,
+        scope: CoroutineScope,
+        onPageReady: ((Int, TextPage) -> Unit)? = null,
+        onCompleted: (() -> Unit)? = null,
+        onError: ((Throwable) -> Unit)? = null,
+    ): AsyncLayoutHandle {
+        val textChapter = TextChapter(chapterIndex, title, chaptersSize)
+        val channel = Channel<TextPage>(Channel.UNLIMITED)
+
+        val job = scope.launch(Dispatchers.Default) {
+            try {
+                val textPages = arrayListOf<TextPage>()
+                layoutInternal(
+                    title, content, chapterIndex, chaptersSize,
+                    textChapter, textPages, channel, onPageReady,
+                )
+                channel.close()
+                onCompleted?.invoke()
+            } catch (e: Exception) {
+                channel.close(e)
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    onError?.invoke(e)
+                }
+            }
+        }
+
+        return AsyncLayoutHandle(textChapter, channel, job)
+    }
+
+    /**
+     * 内部排版逻辑，同步和异步共用。
+     * 当 channel 不为 null 时，每排完一页就发送到 channel。
+     */
+    private fun layoutInternal(
+        title: String,
+        content: String,
+        chapterIndex: Int,
+        chaptersSize: Int,
+        textChapter: TextChapter,
+        textPages: ArrayList<TextPage>,
+        channel: Channel<TextPage>? = null,
+        onPageReady: ((Int, TextPage) -> Unit)? = null,
+    ) {
         val stringBuilder = StringBuilder()
         var absStartX = paddingLeft
         var durY = 0f
         textPages.add(TextPage())
         val floatArray = FloatArray(256)
+
+        // 内部辅助：完成一页时的处理
+        fun finalizePage(page: TextPage) {
+            page.index = textPages.indexOf(page)
+            page.chapterIndex = chapterIndex
+            page.chapterSize = chaptersSize
+            page.title = title
+            page.doublePage = doublePage
+            page.paddingTop = paddingTop
+            page.isCompleted = true
+            page.textChapter = textChapter
+            page.upLinesPosition()
+            textChapter.addPage(page)
+            channel?.trySend(page)
+            onPageReady?.invoke(page.index, page)
+        }
 
         // Parse content into paragraphs
         val isHtml = content.trimStart().let {
@@ -79,6 +161,8 @@ class ChapterProvider(
         val paragraphs = if (isHtml) parseHtmlParagraphs(content) else {
             content.lines().filter { it.isNotBlank() }
         }
+
+        val pageCountBefore = textPages.size
 
         // Layout title
         if (titleMode != 2) {
@@ -99,12 +183,19 @@ class ChapterProvider(
             durY += titleBottomSpacing
         }
 
+        // 检查排版过程中是否产生了新页（分页），如果有就 finalize 已完成的页
+        fun flushCompletedPages() {
+            // 除了最后一页（正在排版中），之前的页都已完成
+            while (textChapter.pageSize < textPages.size - 1) {
+                val idx = textChapter.pageSize
+                finalizePage(textPages[idx])
+            }
+        }
+
         // Layout content paragraphs
         for (para in paragraphs) {
-            // Check for inline images
             val imgMatcher = imgPattern.find(para)
             if (imgMatcher != null) {
-                // Handle mixed text + image content
                 var start = 0
                 var matchResult = imgMatcher
                 while (matchResult != null) {
@@ -148,6 +239,9 @@ class ChapterProvider(
                 textPages.last().lines.last().isParagraphEnd = true
             }
             stringBuilder.append("\n")
+
+            // 流式：每处理完一个段落，flush 已完成的页
+            flushCompletedPages()
         }
 
         // Finalize last page
@@ -160,25 +254,9 @@ class ChapterProvider(
             lastPage.height += endPadding
         }
         lastPage.text = stringBuilder.toString()
+        finalizePage(lastPage)
 
-        // Set page metadata
-        textPages.forEachIndexed { index, page ->
-            page.index = index
-            page.chapterIndex = chapterIndex
-            page.chapterSize = chaptersSize
-            page.title = title
-            page.doublePage = doublePage
-            page.paddingTop = paddingTop
-            page.isCompleted = true
-            page.textChapter = textChapter
-            page.upLinesPosition()
-        }
-
-        for (page in textPages) {
-            textChapter.addPage(page)
-        }
         textChapter.isCompleted = true
-        return textChapter
     }
 
     // ── Image layout ──
@@ -193,10 +271,24 @@ class ChapterProvider(
     ): Pair<Int, Float> {
         var absStartX = x
         var durY = y
-        // Reserve space for image — use content width, aspect ratio 4:3 default
-        val imgWidth = visibleWidth
-        var imgHeight = (visibleWidth * 0.75f).toInt()
-        if (imgHeight > visibleHeight) imgHeight = visibleHeight
+        // Read actual image dimensions for correct aspect ratio (ported from Legado)
+        val path = src.removePrefix("file://")
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, opts)
+        val intrinsicW = opts.outWidth
+        val intrinsicH = opts.outHeight
+        val imgWidth: Int
+        var imgHeight: Int
+        if (intrinsicW > 0 && intrinsicH > 0) {
+            imgWidth = visibleWidth
+            imgHeight = (visibleWidth.toFloat() / intrinsicW * intrinsicH).roundToInt()
+            if (imgHeight > visibleHeight) imgHeight = visibleHeight
+        } else {
+            // Fallback: 4:3 if dimensions unreadable
+            imgWidth = visibleWidth
+            imgHeight = (visibleWidth * 0.75f).toInt()
+            if (imgHeight > visibleHeight) imgHeight = visibleHeight
+        }
 
         if (durY + imgHeight > visibleHeight) {
             val textPage = textPages.last()
@@ -558,13 +650,29 @@ class ChapterProvider(
 
     private fun parseHtmlParagraphs(html: String): List<String> {
         val text = html
-            .replace(Regex("</p>|</div>|</li>|</h[1-6]>", RegexOption.IGNORE_CASE), "\n")
-            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+            .replace(AppPattern.htmlDivCloseRegex, "\n")
+            .replace(AppPattern.htmlBrRegex, "\n")
             .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
             .replace("&nbsp;", " ").replace("&quot;", "\"")
-        // Keep img tags intact for image extraction, strip other tags
-        val cleaned = text.replace(Regex("<(?!img)[^>]+>", RegexOption.IGNORE_CASE), "")
+        val cleaned = text.replace(nonImgTagRegex, "")
         return cleaned.lines().map { it.trim() }.filter { it.isNotBlank() }
+    }
+}
+
+/**
+ * 异步排版句柄。
+ * - textChapter: 排版结果（页面会逐步添加）
+ * - channel: 流式接收已排完的页面
+ * - job: 排版协程，可用于取消
+ */
+class AsyncLayoutHandle(
+    val textChapter: TextChapter,
+    val channel: Channel<TextPage>,
+    val job: Job,
+) {
+    fun cancel() {
+        job.cancel()
+        channel.close()
     }
 }
 

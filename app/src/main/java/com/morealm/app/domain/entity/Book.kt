@@ -61,5 +61,5 @@ data class Book(
 
 @Serializable
 enum class BookFormat {
-    TXT, EPUB, PDF, MOBI, AZW3, CBZ, UNKNOWN
+    TXT, EPUB, PDF, MOBI, AZW3, CBZ, UMD, WEB, UNKNOWN
 }

@@ -52,7 +52,7 @@ fun TtsOverlayPanel(
 
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = moColors.bottomBar.copy(alpha = 0.97f),
+        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f),
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
         tonalElevation = 12.dp,
     ) {
@@ -64,7 +64,7 @@ fun TtsOverlayPanel(
             Box(
                 modifier = Modifier
                     .width(40.dp).height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
+                    .clip(MaterialTheme.shapes.extraSmall)
                     .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
             )
 
@@ -83,9 +83,9 @@ fun TtsOverlayPanel(
                 Spacer(Modifier.height(8.dp))
                 LinearProgressIndicator(
                     progress = { (currentParagraph + 1).toFloat() / totalParagraphs },
-                    modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
-                    color = moColors.accent,
-                    trackColor = moColors.accent.copy(alpha = 0.12f),
+                    modifier = Modifier.fillMaxWidth().height(3.dp).clip(MaterialTheme.shapes.extraSmall),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                 )
                 Text("${currentParagraph + 1} / $totalParagraphs 段",
                     style = MaterialTheme.typography.labelSmall,
@@ -121,7 +121,7 @@ fun TtsOverlayPanel(
                     modifier = Modifier.size(56.dp),
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = moColors.accent),
+                        containerColor = MaterialTheme.colorScheme.primary),
                 ) {
                     Icon(
                         if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -161,12 +161,12 @@ fun TtsOverlayPanel(
                     steps = 9,
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                     colors = SliderDefaults.colors(
-                        thumbColor = moColors.accent,
-                        activeTrackColor = moColors.accent),
+                        thumbColor = MaterialTheme.colorScheme.primary,
+                        activeTrackColor = MaterialTheme.colorScheme.primary),
                 )
                 Text("${String.format("%.1f", speed)}x",
                     style = MaterialTheme.typography.labelMedium,
-                    color = moColors.accent)
+                    color = MaterialTheme.colorScheme.primary)
             }
 
             Spacer(Modifier.height(8.dp))
@@ -248,8 +248,8 @@ fun TtsOverlayPanel(
                             onClick = { onEngineChange(id) },
                             label = { Text(label, style = MaterialTheme.typography.labelSmall) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = moColors.accent.copy(alpha = 0.2f),
-                                selectedLabelColor = moColors.accent),
+                                selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                selectedLabelColor = MaterialTheme.colorScheme.primary),
                             modifier = Modifier.height(28.dp),
                         )
                     }
@@ -263,7 +263,7 @@ fun TtsOverlayPanel(
                             Icon(
                                 if (sleepMinutes > 0) Icons.Default.Timer else Icons.Default.TimerOff,
                                 "定时关闭",
-                                tint = if (sleepMinutes > 0) moColors.accent
+                                tint = if (sleepMinutes > 0) MaterialTheme.colorScheme.primary
                                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                                 modifier = Modifier.size(20.dp))
                         }
@@ -283,7 +283,7 @@ fun TtsOverlayPanel(
                     if (sleepMinutes > 0) {
                         Text("${sleepMinutes}分后停",
                             style = MaterialTheme.typography.labelSmall,
-                            color = moColors.accent.copy(alpha = 0.7f),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                             modifier = Modifier.align(Alignment.CenterVertically))
                     }
 

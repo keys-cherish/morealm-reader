@@ -248,9 +248,9 @@ object AppLog {
             .let { File(it, "logs").apply { mkdirs() } }
 
         // Register built-in sinks — all use DEBUG as minimum to keep app UI and file in sync
-        val logcat = LogcatSink(LogLevel.VERBOSE)
-        val memory = MemorySink(LogLevel.DEBUG, 300)
-        val file = RollingFileSink(logDir, LogLevel.DEBUG, maxFileSize = 4 * 1024 * 1024L, maxFiles = 5)
+        val logcat = LogcatSink(LogLevel.DEBUG)
+        val memory = MemorySink(LogLevel.WARN, 300)
+        val file = RollingFileSink(logDir, LogLevel.ERROR, maxFileSize = 4 * 1024 * 1024L, maxFiles = 5)
 
         memorySink = memory
         fileSink = file

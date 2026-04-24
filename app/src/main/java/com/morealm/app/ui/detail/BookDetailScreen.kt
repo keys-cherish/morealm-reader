@@ -13,14 +13,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -36,11 +39,14 @@ fun BookDetailScreen(
     onRead: () -> Unit,
     viewModel: BookDetailViewModel = hiltViewModel(),
 ) {
-    val book by viewModel.book.collectAsState()
-    val showSourcePicker by viewModel.showSourcePicker.collectAsState()
-    val availableSources by viewModel.availableSources.collectAsState()
-    val saving by viewModel.saving.collectAsState()
+    val book by viewModel.book.collectAsStateWithLifecycle()
+    val showSourcePicker by viewModel.showSourcePicker.collectAsStateWithLifecycle()
+    val availableSources by viewModel.availableSources.collectAsStateWithLifecycle()
+    val saving by viewModel.saving.collectAsStateWithLifecycle()
     val moColors = LocalMoRealmColors.current
+    val context = LocalContext.current
+    val isDownloading by viewModel.isCacheDownloading.collectAsStateWithLifecycle()
+    val downloadProgress by viewModel.cacheDownloadProgress.collectAsStateWithLifecycle()
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
 
@@ -85,8 +91,8 @@ fun BookDetailScreen(
                 Box(
                     modifier = Modifier
                         .size(140.dp, 200.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(moColors.surfaceGlass),
+                        .clip(MaterialTheme.shapes.medium)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (b.coverUrl != null) {
@@ -100,7 +106,7 @@ fun BookDetailScreen(
                         Icon(
                             Icons.AutoMirrored.Filled.MenuBook,
                             contentDescription = null,
-                            tint = moColors.accent,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(48.dp),
                         )
                     }
@@ -141,9 +147,9 @@ fun BookDetailScreen(
                     onClick = onRead,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = moColors.accent,
+                        containerColor = MaterialTheme.colorScheme.primary,
                     ),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MaterialTheme.shapes.medium,
                 ) {
                     Text(
                         if (b.lastReadChapter > 0) "继续阅读" else "开始阅读",
@@ -157,11 +163,43 @@ fun BookDetailScreen(
                     OutlinedButton(
                         onClick = { viewModel.showSourcePicker() },
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = MaterialTheme.shapes.medium,
                     ) {
                         Icon(Icons.Default.SwapHoriz, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("换源 (${b.originName ?: "未知"})")
+                    }
+
+                    // Download / cache button
+                    Spacer(Modifier.height(8.dp))
+                    val isThisBookDownloading = isDownloading && downloadProgress.bookId == b.id
+                    OutlinedButton(
+                        onClick = {
+                            if (isThisBookDownloading) {
+                                viewModel.stopCacheBook()
+                            } else {
+                                val sourceUrl = b.sourceUrl ?: b.sourceId ?: return@OutlinedButton
+                                viewModel.startCacheBook(b.id, sourceUrl)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        if (isThisBookDownloading) {
+                            val prog = downloadProgress
+                            val done = prog.completed + prog.failed + prog.cached
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("下载中 $done/${prog.total}")
+                        } else {
+                            Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("离线缓存全本")
+                        }
                     }
                 }
 
@@ -225,8 +263,8 @@ fun BookDetailScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { viewModel.switchSource(source) },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (isCurrent) moColors.accent.copy(alpha = 0.12f)
+                            shape = MaterialTheme.shapes.small,
+                            color = if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
                                     else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                         ) {
                             Row(
@@ -236,13 +274,13 @@ fun BookDetailScreen(
                                 Text(
                                     source.bookSourceName,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = if (isCurrent) moColors.accent
+                                    color = if (isCurrent) MaterialTheme.colorScheme.primary
                                             else MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.weight(1f),
                                 )
                                 if (isCurrent) {
                                     Text("当前", style = MaterialTheme.typography.labelSmall,
-                                        color = moColors.accent)
+                                        color = MaterialTheme.colorScheme.primary)
                                 }
                             }
                         }
@@ -277,8 +315,8 @@ fun BookDetailScreen(
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = moColors.accent,
-                                cursorColor = moColors.accent,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                cursorColor = MaterialTheme.colorScheme.primary,
                             ),
                         )
                         OutlinedTextField(
@@ -288,8 +326,8 @@ fun BookDetailScreen(
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = moColors.accent,
-                                cursorColor = moColors.accent,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                cursorColor = MaterialTheme.colorScheme.primary,
                             ),
                         )
                         OutlinedTextField(
@@ -299,15 +337,15 @@ fun BookDetailScreen(
                             maxLines = 4,
                             modifier = Modifier.fillMaxWidth(),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = moColors.accent,
-                                cursorColor = moColors.accent,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                cursorColor = MaterialTheme.colorScheme.primary,
                             ),
                         )
                         if (isEpub) {
                             Text(
                                 "修改将写入 EPUB 文件，重新导入后仍保留",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = moColors.accent.copy(alpha = 0.7f),
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                             )
                         }
                     }
@@ -324,10 +362,10 @@ fun BookDetailScreen(
                             CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
                                 strokeWidth = 2.dp,
-                                color = moColors.accent,
+                                color = MaterialTheme.colorScheme.primary,
                             )
                         } else {
-                            Text("保存", color = moColors.accent)
+                            Text("保存", color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 },
