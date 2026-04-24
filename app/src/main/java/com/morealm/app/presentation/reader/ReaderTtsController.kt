@@ -4,7 +4,10 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import com.morealm.app.domain.preference.AppPreferences
+import com.morealm.app.core.text.AppPattern
+import com.morealm.app.core.text.stripHtml
 import com.morealm.app.service.TtsEventBus
+import com.morealm.app.service.TtsPlaybackState
 import com.morealm.app.service.TtsService
 import com.morealm.app.core.log.AppLog
 import kotlinx.coroutines.*
@@ -143,11 +146,11 @@ class ReaderTtsController(
 
     private fun parseParagraphs(content: String): List<String> {
         val text = content
-            .replace(Regex("<img[^>]*>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<svg[\\s\\S]*?</svg>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("</p>|</div>|</li>|</h[1-6]>", RegexOption.IGNORE_CASE), "\n")
-            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
-            .replace(Regex("<[^>]+>"), "")
+            .replace(AppPattern.htmlImgRegex, "")
+            .replace(AppPattern.htmlSvgRegex, "")
+            .replace(AppPattern.htmlDivCloseRegex, "\n")
+            .replace(AppPattern.htmlBrRegex, "\n")
+            .replace(AppPattern.htmlTagRegex, "")
             .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
             .replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'")
         val paragraphs = text.lines()
@@ -179,6 +182,15 @@ class ReaderTtsController(
     private fun pushTtsState(playing: Boolean, bookTitle: String = "", chapterTitle: String = "") {
         TtsEventBus.sendCommand(TtsEventBus.Command.UpdateMeta(bookTitle, chapterTitle))
         TtsEventBus.sendCommand(TtsEventBus.Command.SetPlaying(playing))
+        TtsEventBus.updatePlayback {
+            copy(
+                bookTitle = bookTitle.ifBlank { this.bookTitle },
+                chapterTitle = chapterTitle.ifBlank { this.chapterTitle },
+                isPlaying = playing,
+                speed = _ttsSpeed.value,
+                engine = _ttsEngine.value,
+            )
+        }
     }
 
     fun ttsPlayPause() {
@@ -226,6 +238,9 @@ class ReaderTtsController(
                 for (idx in startIdx until ttsParagraphs.size) {
                     if (!_ttsPlaying.value) break
                     _ttsParagraphIndex.value = idx
+                    TtsEventBus.updatePlayback {
+                        copy(paragraphIndex = idx, totalParagraphs = ttsParagraphs.size)
+                    }
                     _ttsScrollProgress.value = if (ttsParagraphs.size > 1) {
                         idx.toFloat() / (ttsParagraphs.size - 1)
                     } else 1f
@@ -277,6 +292,7 @@ class ReaderTtsController(
     fun ttsStop() {
         ttsPause()
         _ttsParagraphIndex.value = 0
+        TtsEventBus.updatePlayback { copy(isPlaying = false, paragraphIndex = 0) }
         if (ttsServiceStarted) {
             TtsEventBus.sendCommand(TtsEventBus.Command.StopService)
             ttsServiceStarted = false
@@ -306,6 +322,7 @@ class ReaderTtsController(
     fun setTtsSpeed(speed: Float) {
         _ttsSpeed.value = speed
         scope.launch { prefs.setTtsSpeed(speed) }
+        TtsEventBus.updatePlayback { copy(speed = speed) }
     }
 
     fun setTtsEngine(engine: String) {

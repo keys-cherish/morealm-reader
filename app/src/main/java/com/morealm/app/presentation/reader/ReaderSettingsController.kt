@@ -2,33 +2,32 @@ package com.morealm.app.presentation.reader
 
 import android.content.Context
 import android.net.Uri
+import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.preference.AppPreferences
+import com.morealm.app.domain.repository.ReaderStyleRepository
 import com.morealm.app.core.log.AppLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 /**
  * Manages reader settings/preferences delegation for ReaderViewModel.
+ *
+ * Visual/layout settings live in [ReaderStyle] (Room) — single source of truth.
+ * Behavioral/system settings stay in [AppPreferences] (DataStore).
  */
 class ReaderSettingsController(
     private val prefs: AppPreferences,
     private val scope: CoroutineScope,
     private val context: Context,
-    private val readerStyleDao: com.morealm.app.domain.db.ReaderStyleDao,
+    private val styleRepo: ReaderStyleRepository,
 ) {
-    // ── Preference flows ──
+    // ══════════════════════════════════════════════════════════════
+    // Behavioral settings (DataStore) — NOT part of visual style
+    // ══════════════════════════════════════════════════════════════
+
     val pageTurnMode: StateFlow<PageTurnMode> = prefs.pageTurnMode
         .map { key -> PageTurnMode.entries.find { it.key == key } ?: PageTurnMode.SCROLL }
         .stateIn(scope, SharingStarted.Eagerly, PageTurnMode.SCROLL)
-
-    val fontFamily: StateFlow<String> = prefs.readerFontFamily
-        .stateIn(scope, SharingStarted.Eagerly, "noto_serif_sc")
-
-    val fontSize: StateFlow<Float> = prefs.readerFontSize
-        .stateIn(scope, SharingStarted.Eagerly, 17f)
-
-    val lineHeight: StateFlow<Float> = prefs.readerLineHeight
-        .stateIn(scope, SharingStarted.Eagerly, 2.0f)
 
     val customFontUri: StateFlow<String> = prefs.customFontUri
         .stateIn(scope, SharingStarted.Eagerly, "")
@@ -54,9 +53,6 @@ class ReaderSettingsController(
     val tapLeftAction: StateFlow<String> = prefs.tapLeftAction
         .stateIn(scope, SharingStarted.Eagerly, "prev")
 
-    val pageAnim: StateFlow<String> = prefs.pageAnim
-        .stateIn(scope, SharingStarted.Eagerly, "none")
-
     val screenOrientation: StateFlow<Int> = prefs.screenOrientation
         .stateIn(scope, SharingStarted.Eagerly, -1)
 
@@ -66,34 +62,13 @@ class ReaderSettingsController(
     val chineseConvertMode: StateFlow<Int> = prefs.chineseConvertMode
         .stateIn(scope, SharingStarted.Eagerly, 0)
 
-    val readerEngine: StateFlow<String> = prefs.readerEngine
-        .stateIn(scope, SharingStarted.Eagerly, "canvas")
-
-    val paragraphSpacing: StateFlow<Float> = prefs.paragraphSpacing
-        .stateIn(scope, SharingStarted.Eagerly, 1.4f)
-
-    val marginHorizontal: StateFlow<Int> = prefs.readerMargin
-        .stateIn(scope, SharingStarted.Eagerly, 24)
-
-    val marginTop: StateFlow<Int> = prefs.marginTop
-        .stateIn(scope, SharingStarted.Eagerly, 24)
-
-    val marginBottom: StateFlow<Int> = prefs.marginBottom
-        .stateIn(scope, SharingStarted.Eagerly, 24)
-
-    val customCss: StateFlow<String> = prefs.customCss
-        .stateIn(scope, SharingStarted.Eagerly, "")
-
-    val customBgImage: StateFlow<String> = prefs.customBgImage
-        .stateIn(scope, SharingStarted.Eagerly, "")
-
-    // ── Tap zone customization ──
+    // Tap zone customization
     val tapActionTopLeft: StateFlow<String> = prefs.tapActionTopLeft.stateIn(scope, SharingStarted.Eagerly, "prev")
     val tapActionTopRight: StateFlow<String> = prefs.tapActionTopRight.stateIn(scope, SharingStarted.Eagerly, "next")
     val tapActionBottomLeft: StateFlow<String> = prefs.tapActionBottomLeft.stateIn(scope, SharingStarted.Eagerly, "prev")
     val tapActionBottomRight: StateFlow<String> = prefs.tapActionBottomRight.stateIn(scope, SharingStarted.Eagerly, "next")
 
-    // ── Header/footer customization ──
+    // Header/footer customization
     val headerLeft: StateFlow<String> = prefs.headerLeft.stateIn(scope, SharingStarted.Eagerly, "time")
     val headerCenter: StateFlow<String> = prefs.headerCenter.stateIn(scope, SharingStarted.Eagerly, "none")
     val headerRight: StateFlow<String> = prefs.headerRight.stateIn(scope, SharingStarted.Eagerly, "battery")
@@ -101,58 +76,82 @@ class ReaderSettingsController(
     val footerCenter: StateFlow<String> = prefs.footerCenter.stateIn(scope, SharingStarted.Eagerly, "none")
     val footerRight: StateFlow<String> = prefs.footerRight.stateIn(scope, SharingStarted.Eagerly, "progress")
 
-    // ── Reader Style Presets ──
-    val allStyles: StateFlow<List<com.morealm.app.domain.entity.ReaderStyle>> =
-        readerStyleDao.getAll()
+    // ══════════════════════════════════════════════════════════════
+    // Visual style (Room) — single source of truth: ReaderStyle
+    // ══════════════════════════════════════════════════════════════
+
+    val allStyles: StateFlow<List<ReaderStyle>> =
+        styleRepo.getAll()
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     private val _activeStyleId = MutableStateFlow("preset_paper")
     val activeStyleId: StateFlow<String> = _activeStyleId.asStateFlow()
 
-    val activeStyle: StateFlow<com.morealm.app.domain.entity.ReaderStyle?> =
+    val activeStyle: StateFlow<ReaderStyle?> =
         combine(allStyles, _activeStyleId) { styles, id ->
             styles.find { it.id == id } ?: styles.firstOrNull()
         }.stateIn(scope, SharingStarted.Eagerly, null)
 
+    // Derived convenience flows from activeStyle (for UI bindings that need individual values)
+    val fontSize: StateFlow<Float> = activeStyle
+        .map { it?.textSize?.toFloat() ?: 18f }
+        .stateIn(scope, SharingStarted.Eagerly, 18f)
+
+    val lineHeight: StateFlow<Float> = activeStyle
+        .map { it?.lineHeight ?: 2.0f }
+        .stateIn(scope, SharingStarted.Eagerly, 2.0f)
+
+    val fontFamily: StateFlow<String> = activeStyle
+        .map { it?.fontFamily ?: "noto_serif_sc" }
+        .stateIn(scope, SharingStarted.Eagerly, "noto_serif_sc")
+
+    val paragraphSpacing: StateFlow<Float> = activeStyle
+        .map { it?.paragraphSpacing?.toFloat() ?: 8f }
+        .stateIn(scope, SharingStarted.Eagerly, 8f)
+
+    val marginHorizontal: StateFlow<Int> = activeStyle
+        .map { it?.paddingLeft ?: 24 }
+        .stateIn(scope, SharingStarted.Eagerly, 24)
+
+    val marginTop: StateFlow<Int> = activeStyle
+        .map { it?.paddingTop ?: 24 }
+        .stateIn(scope, SharingStarted.Eagerly, 24)
+
+    val marginBottom: StateFlow<Int> = activeStyle
+        .map { it?.paddingBottom ?: 24 }
+        .stateIn(scope, SharingStarted.Eagerly, 24)
+
+    val customCss: StateFlow<String> = activeStyle
+        .map { it?.customCss ?: "" }
+        .stateIn(scope, SharingStarted.Eagerly, "")
+
+    val customBgImage: StateFlow<String> = activeStyle
+        .map { it?.customBgImage ?: "" }
+        .stateIn(scope, SharingStarted.Eagerly, "")
+
+    val pageAnim: StateFlow<String> = activeStyle
+        .map { it?.pageAnim ?: "slide" }
+        .stateIn(scope, SharingStarted.Eagerly, "slide")
+
+    // ══════════════════════════════════════════════════════════════
+    // Initialization
+    // ══════════════════════════════════════════════════════════════
+
     fun initialize() {
         scope.launch(Dispatchers.IO) {
-            if (readerStyleDao.count() == 0) {
-                readerStyleDao.upsertAll(com.morealm.app.domain.entity.ReaderStyle.defaults())
-            }
+            styleRepo.ensureDefaults()
         }
         scope.launch {
             _activeStyleId.value = prefs.activeReaderStyle.first()
         }
     }
 
-    // ── Setters ──
+    // ══════════════════════════════════════════════════════════════
+    // Setters — behavioral (DataStore)
+    // ══════════════════════════════════════════════════════════════
 
     fun setPageTurnMode(mode: PageTurnMode) {
-        scope.launch {
-            prefs.setPageTurnMode(mode.key)
-            AppLog.info("Reader", "Page turn mode: ${mode.label}")
-        }
-    }
-
-    fun setFontFamily(family: String) {
-        scope.launch {
-            prefs.setReaderFontFamily(family)
-            AppLog.info("Reader", "Font family: $family")
-        }
-    }
-
-    fun setFontSize(size: Float) {
-        scope.launch {
-            prefs.setReaderFontSize(size)
-            AppLog.info("Reader", "Font size: $size")
-        }
-    }
-
-    fun setLineHeight(height: Float) {
-        scope.launch {
-            prefs.setReaderLineHeight(height)
-            AppLog.info("Reader", "Line height: $height")
-        }
+        scope.launch { prefs.setPageTurnMode(mode.key) }
     }
 
     fun importCustomFont(uri: Uri, name: String) {
@@ -185,10 +184,6 @@ class ReaderSettingsController(
         scope.launch { prefs.setTextSelectable(enabled) }
     }
 
-    fun setReaderEngine(engine: String) {
-        scope.launch { prefs.setReaderEngine(engine) }
-    }
-
     fun setChineseConvertMode(mode: Int) {
         scope.launch { prefs.setChineseConvertMode(mode) }
     }
@@ -217,47 +212,56 @@ class ReaderSettingsController(
         scope.launch { prefs.setHeaderFooter(key, value) }
     }
 
+    // ══════════════════════════════════════════════════════════════
+    // Setters — visual style (write to Room via activeStyle)
+    // ══════════════════════════════════════════════════════════════
+
+    private fun updateStyle(transform: (ReaderStyle) -> ReaderStyle) {
+        scope.launch(Dispatchers.IO) {
+            val current = activeStyle.value ?: return@launch
+            styleRepo.upsert(transform(current))
+        }
+    }
+
+    fun setFontFamily(family: String) = updateStyle { it.copy(fontFamily = family) }
+
+    fun setFontSize(size: Float) = updateStyle { it.copy(textSize = size.toInt()) }
+
+    fun setLineHeight(height: Float) = updateStyle { it.copy(lineHeight = height) }
+
+    fun setParagraphSpacing(value: Float) = updateStyle { it.copy(paragraphSpacing = value.toInt()) }
+
+    fun setMarginHorizontal(value: Int) = updateStyle { it.copy(paddingLeft = value, paddingRight = value) }
+
+    fun setMarginTop(value: Int) = updateStyle { it.copy(paddingTop = value) }
+
+    fun setMarginBottom(value: Int) = updateStyle { it.copy(paddingBottom = value) }
+
+    fun setCustomCss(css: String) = updateStyle { it.copy(customCss = css) }
+
+    fun setCustomBgImage(uri: String) = updateStyle { it.copy(customBgImage = uri) }
+
+    fun setPageAnim(anim: String) = updateStyle { it.copy(pageAnim = anim) }
+
+    // ── Style preset management ──
+
     fun switchStyle(styleId: String) {
         _activeStyleId.value = styleId
         scope.launch { prefs.setActiveReaderStyle(styleId) }
     }
 
-    fun saveCurrentStyle(style: com.morealm.app.domain.entity.ReaderStyle) {
-        scope.launch(Dispatchers.IO) { readerStyleDao.upsert(style) }
+    fun saveCurrentStyle(style: ReaderStyle) {
+        scope.launch(Dispatchers.IO) { styleRepo.upsert(style) }
     }
 
     fun deleteStyle(styleId: String) {
         if (styleId.startsWith("preset_")) return
         scope.launch(Dispatchers.IO) {
-            readerStyleDao.deleteById(styleId)
+            styleRepo.deleteById(styleId)
             if (_activeStyleId.value == styleId) {
                 _activeStyleId.value = "preset_paper"
                 prefs.setActiveReaderStyle("preset_paper")
             }
         }
-    }
-
-    fun setParagraphSpacing(value: Float) {
-        scope.launch { prefs.setParagraphSpacing(value) }
-    }
-
-    fun setMarginHorizontal(value: Int) {
-        scope.launch { prefs.setReaderMargin(value) }
-    }
-
-    fun setMarginTop(value: Int) {
-        scope.launch { prefs.setMarginTop(value) }
-    }
-
-    fun setMarginBottom(value: Int) {
-        scope.launch { prefs.setMarginBottom(value) }
-    }
-
-    fun setCustomCss(css: String) {
-        scope.launch { prefs.setCustomCss(css) }
-    }
-
-    fun setCustomBgImage(uri: String) {
-        scope.launch { prefs.setCustomBgImage(uri) }
     }
 }

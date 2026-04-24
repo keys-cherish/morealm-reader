@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.core.log.AppLog
 import java.io.File
@@ -11,21 +12,22 @@ import java.io.FileOutputStream
 
 /**
  * PDF parser using Android's PdfRenderer.
- *
- * Strategy:
- * - Chapters: every 10 pages = 1 chapter
- * - Content: renders pages as bitmaps → HTML <img> tags for WebView display
- * - Cover: first page rendered as JPEG
- * - All renders cached to disk for fast re-access
+ * Caches the PdfRenderer instance (like Legado's PdfFile singleton pattern)
+ * to avoid re-opening the file descriptor on every page render.
  */
 object PdfParser {
 
     private const val PAGES_PER_CHAPTER = 10
-    private const val RENDER_DPI = 200 // balance between quality and memory
+    private const val RENDER_DPI = 200
+
+    // Cached renderer instance
+    private var cachedUri: String? = null
+    private var cachedPfd: ParcelFileDescriptor? = null
+    private var cachedRenderer: PdfRenderer? = null
 
     fun parseChapters(context: Context, uri: Uri): List<BookChapter> {
         val bookId = uri.toString()
-        val pageCount = getPageCount(context, uri) ?: return emptyList()
+        val pageCount = withPdfRenderer(context, uri) { it.pageCount } ?: return emptyList()
         val chapters = mutableListOf<BookChapter>()
         var chapterIdx = 0
         var page = 0
@@ -53,25 +55,27 @@ object PdfParser {
         cacheDir.mkdirs()
 
         val sb = StringBuilder()
-        withPdfRenderer(context, uri) { renderer ->
-            for (pageIdx in startPage until endPage) {
-                val imgFile = File(cacheDir, "page_$pageIdx.jpg")
-                if (!imgFile.exists()) {
+        // Render one page at a time, releasing the PdfRenderer lock between pages
+        // so other callers (e.g. next chapter preload) are not starved.
+        for (pageIdx in startPage until endPage) {
+            val imgFile = File(cacheDir, "page_$pageIdx.jpg")
+            if (!imgFile.exists()) {
+                withPdfRenderer(context, uri) { renderer ->
                     renderPage(renderer, pageIdx, imgFile)
                 }
-                if (imgFile.exists()) {
-                    sb.append("<div class=\"pdf-page\" style=\"margin-bottom:8px;\">")
-                    sb.append("<img src=\"file://${imgFile.absolutePath}\" style=\"width:100%;\" />")
-                    sb.append("<div style=\"text-align:center;font-size:11px;color:#888;\">")
-                    sb.append("${pageIdx + 1} / ${renderer.pageCount}")
-                    sb.append("</div></div>")
-                }
+            }
+            if (imgFile.exists()) {
+                val pageCount = withPdfRenderer(context, uri) { it.pageCount } ?: 0
+                sb.append("<div class=\"pdf-page\" style=\"margin-bottom:8px;\">")
+                sb.append("<img src=\"file://${imgFile.absolutePath}\" style=\"width:100%;\" loading=\"lazy\" />")
+                sb.append("<div style=\"text-align:center;font-size:11px;color:#888;\">")
+                sb.append("${pageIdx + 1} / $pageCount")
+                sb.append("</div></div>")
             }
         }
         return sb.toString().ifEmpty { "（PDF 渲染失败）" }
     }
 
-    /** Extract cover from first page */
     fun extractCover(context: Context, uri: Uri): String? {
         val cacheDir = File(context.cacheDir, "pdf_covers/${uri.hashCode()}")
         cacheDir.mkdirs()
@@ -84,16 +88,22 @@ object PdfParser {
         }
     }
 
-    private fun getPageCount(context: Context, uri: Uri): Int? {
-        return withPdfRenderer(context, uri) { it.pageCount }
-    }
+    /** Max pixel count per rendered page to prevent OOM (≈ 4MB @ ARGB_8888) */
+    private const val MAX_PAGE_PIXELS = 1024 * 1024
 
     private fun renderPage(renderer: PdfRenderer, pageIdx: Int, outFile: File) {
         if (pageIdx >= renderer.pageCount) return
         renderer.openPage(pageIdx).use { page ->
             val scale = RENDER_DPI / 72f
-            val width = (page.width * scale).toInt()
-            val height = (page.height * scale).toInt()
+            var width = (page.width * scale).toInt()
+            var height = (page.height * scale).toInt()
+            // Down-scale if the page would exceed the pixel budget
+            val pixels = width.toLong() * height
+            if (pixels > MAX_PAGE_PIXELS) {
+                val ratio = Math.sqrt(MAX_PAGE_PIXELS.toDouble() / pixels).toFloat()
+                width = (width * ratio).toInt()
+                height = (height * ratio).toInt()
+            }
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(android.graphics.Color.WHITE)
             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
@@ -104,17 +114,39 @@ object PdfParser {
         }
     }
 
+    @Synchronized
     private fun <T> withPdfRenderer(context: Context, uri: Uri, block: (PdfRenderer) -> T): T? {
-        return try {
-            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
-            pfd.use {
-                val renderer = PdfRenderer(it)
-                renderer.use { r -> block(r) }
+        val uriStr = uri.toString()
+        val renderer = if (uriStr == cachedUri && cachedRenderer != null) {
+            cachedRenderer!!
+        } else {
+            releaseCache()
+            try {
+                val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
+                val r = PdfRenderer(pfd)
+                cachedPfd = pfd
+                cachedRenderer = r
+                cachedUri = uriStr
+                r
+            } catch (e: Exception) {
+                AppLog.error("PdfParser", "PdfRenderer failed: ${e.message}")
+                return null
             }
+        }
+        return try {
+            block(renderer)
         } catch (e: Exception) {
-            AppLog.error("PdfParser", "PdfRenderer failed: ${e.message}")
+            AppLog.error("PdfParser", "PdfRenderer operation failed: ${e.message}")
             null
         }
+    }
+
+    fun releaseCache() {
+        try { cachedRenderer?.close() } catch (_: Exception) {}
+        try { cachedPfd?.close() } catch (_: Exception) {}
+        cachedRenderer = null
+        cachedPfd = null
+        cachedUri = null
     }
 
     fun clearCache(context: Context, uri: Uri) {

@@ -54,11 +54,11 @@ fun AboutScreen(onBack: () -> Unit) {
             Box(
                 modifier = Modifier
                     .size(80.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(moColors.accent.copy(alpha = 0.12f)),
+                    .clip(MaterialTheme.shapes.large)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("墨", fontSize = 36.sp, fontWeight = FontWeight.Bold, color = moColors.accent)
+                Text("墨", fontSize = 36.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
             }
             Spacer(Modifier.height(16.dp))
             Text("墨境", fontSize = 24.sp, fontWeight = FontWeight.Bold,
@@ -67,7 +67,7 @@ fun AboutScreen(onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
             Spacer(Modifier.height(4.dp))
             Text("v1.0.0", style = MaterialTheme.typography.labelMedium,
-                color = moColors.accent)
+                color = MaterialTheme.colorScheme.primary)
         }
 
         Spacer(Modifier.height(32.dp))
@@ -75,8 +75,8 @@ fun AboutScreen(onBack: () -> Unit) {
         // Description
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = moColors.surfaceGlass),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Text(
                 "墨境是一款注重阅读体验的 Android 阅读器，支持 TXT、EPUB、PDF、MOBI 等多种格式。" +
@@ -93,8 +93,8 @@ fun AboutScreen(onBack: () -> Unit) {
         // Features
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = moColors.surfaceGlass),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("特性", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -113,8 +113,8 @@ fun AboutScreen(onBack: () -> Unit) {
         // Tech info
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = moColors.surfaceGlass),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("技术信息", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -151,7 +151,7 @@ private fun FeatureRow(
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = moColors.accent, modifier = Modifier.size(20.dp))
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(12.dp))
         Column {
             Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)

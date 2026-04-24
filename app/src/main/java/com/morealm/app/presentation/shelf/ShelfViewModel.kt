@@ -10,21 +10,23 @@ import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.BookGroup
-import com.morealm.app.domain.db.BookGroupDao
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.BookRepository
+import com.morealm.app.domain.repository.BookGroupRepository
 import com.morealm.app.domain.parser.EpubParser
 import com.morealm.app.domain.parser.PdfParser
 import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -34,40 +36,93 @@ import javax.inject.Inject
 @HiltViewModel
 class ShelfViewModel @Inject constructor(
     private val bookRepo: BookRepository,
-    private val groupDao: BookGroupDao,
+    private val groupRepo: BookGroupRepository,
     private val prefs: AppPreferences,
+    private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
-
-    val books: StateFlow<List<Book>> = bookRepo.getAllBooks()
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val lastReadBook: StateFlow<Book?> = bookRepo.getLastReadBook()
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
 
+    init {
+        // On startup, check for books with stale cover paths (cache cleared)
+        // and re-extract covers from the original files
+        viewModelScope.launch(Dispatchers.IO) { refreshStaleCoverPaths() }
+    }
+
+    private suspend fun refreshStaleCoverPaths() {
+        val allBooks = bookRepo.getAllBooksSync()
+        for (book in allBooks) {
+            val cover = book.coverUrl ?: continue
+            // Only check local cache paths (starts with /), not HTTP URLs
+            if (!cover.startsWith("/")) continue
+            if (java.io.File(cover).exists()) continue
+            // Cover file is missing — try to re-extract
+            val localPath = book.localPath ?: continue
+            val uri = Uri.parse(localPath)
+            val newCover = try {
+                when (book.format) {
+                    BookFormat.EPUB -> EpubParser.extractCover(context, uri)
+                    BookFormat.PDF -> PdfParser.extractCover(context, uri)
+                    else -> null
+                }
+            } catch (_: Exception) { null }
+            if (newCover != null && newCover != cover) {
+                bookRepo.update(book.copy(coverUrl = newCover))
+            } else if (newCover == null) {
+                // Cover can't be re-extracted, clear the stale path
+                bookRepo.update(book.copy(coverUrl = null))
+            }
+        }
+    }
+
     val resumeLastRead: StateFlow<Boolean> = prefs.resumeLastRead
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    /** folderId -> group name */
-    val groupNames: StateFlow<Map<String, String>> = groupDao.getAllGroups()
+    val allGroups: StateFlow<List<BookGroup>> = groupRepo.getAllGroups()
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    val groupNames: StateFlow<Map<String, String>> = groupRepo.getAllGroups()
         .map { groups -> groups.associate { it.id to it.name } }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyMap())
 
-    /** Current sort mode: "recent" | "title" | "addTime" | "format" */
     private val _sortMode = MutableStateFlow("title")
     val sortMode: StateFlow<String> = _sortMode.asStateFlow()
 
     fun setSortMode(mode: String) { _sortMode.value = mode }
 
-    /** Sort books: pinned first, then by selected mode */
-    fun sortedBooks(books: List<Book>): List<Book> {
-        val sorted = when (_sortMode.value) {
-            "addTime" -> books.sortedByDescending { it.addedAt }
-            "recent" -> books.sortedByDescending { it.lastReadAt }
-            "format" -> books.sortedWith(compareBy<Book> { it.format.name }.thenBy { it.title })
-            else -> books.sortedBy { it.title } // "title" — default
+    /** All books as a simple Flow, sorted client-side */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val books: StateFlow<List<Book>> = _sortMode.flatMapLatest { sort ->
+        bookRepo.getAllBooks().map { list -> sortBooks(list, sort) }
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    /** Folder book counts — derived from the books flow */
+    val folderBookCounts: StateFlow<Map<String, Int>> = books
+        .map { list ->
+            list.filter { it.folderId != null }
+                .groupBy { it.folderId!! }
+                .mapValues { it.value.size }
         }
-        return sorted.sortedByDescending { it.pinned }
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyMap())
+
+    /** Folder cover URLs — first 4 cover URLs per folder for mosaic display */
+    val folderCoverUrls: StateFlow<Map<String, List<String?>>> = books
+        .map { list ->
+            list.filter { it.folderId != null }
+                .groupBy { it.folderId!! }
+                .mapValues { entry ->
+                    entry.value.take(4).map { it.coverUrl }
+                }
+        }
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyMap())
+
+    private fun sortBooks(list: List<Book>, sort: String): List<Book> = when (sort) {
+        "recent" -> list.sortedByDescending { it.lastReadAt }
+        "addTime" -> list.sortedByDescending { it.addedAt }
+        "format" -> list.sortedWith(compareBy<Book> { it.format.name }.thenBy { it.title.lowercase() })
+        else -> list.sortedBy { it.title.lowercase() }
     }
 
     fun togglePinBook(bookId: String) {
@@ -79,8 +134,8 @@ class ShelfViewModel @Inject constructor(
 
     fun togglePinFolder(folderId: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val group = groupDao.getById(folderId) ?: return@launch
-            groupDao.insert(group.copy(pinned = !group.pinned))
+            val group = groupRepo.getById(folderId) ?: return@launch
+            groupRepo.insert(group.copy(pinned = !group.pinned))
         }
     }
 
@@ -101,39 +156,74 @@ class ShelfViewModel @Inject constructor(
     }
 
     private fun buildBookFromFile(uri: Uri, fileName: String, format: BookFormat): Book {
-        val baseName = fileName.substringBeforeLast('.')
+        val parsed = parseBookFilename(fileName)
+        val baseName = parsed.first
+        val author = parsed.second
         return when (format) {
             BookFormat.EPUB -> try {
                 val result = EpubParser.extractMetadataAndCover(context, uri)
                 Book(
                     id = UUID.randomUUID().toString(),
                     title = result.metadata.title.ifBlank { baseName },
-                    author = result.metadata.author,
+                    author = result.metadata.author.ifBlank { author },
                     description = result.metadata.description.ifBlank { null },
                     localPath = uri.toString(), format = format,
                     coverUrl = result.coverPath, addedAt = System.currentTimeMillis(),
                 )
             } catch (_: Exception) {
-                Book(id = UUID.randomUUID().toString(), title = baseName,
+                Book(id = UUID.randomUUID().toString(), title = baseName, author = author,
                     localPath = uri.toString(), format = format, addedAt = System.currentTimeMillis())
             }
             BookFormat.PDF -> {
                 val cover = try { PdfParser.extractCover(context, uri) } catch (_: Exception) { null }
-                Book(id = UUID.randomUUID().toString(), title = baseName,
+                Book(id = UUID.randomUUID().toString(), title = baseName, author = author,
                     localPath = uri.toString(), format = format,
                     coverUrl = cover, addedAt = System.currentTimeMillis())
             }
-            else -> Book(id = UUID.randomUUID().toString(), title = baseName,
+            else -> Book(id = UUID.randomUUID().toString(), title = baseName, author = author,
                 localPath = uri.toString(), format = format, addedAt = System.currentTimeMillis())
         }
     }
 
     /**
-     * Smart folder import — detects sub-folders as separate books.
-     * If the selected folder contains sub-folders with book files, each sub-folder becomes a book group.
-     * If deeply nested (e.g., 1/2/3/小说1/content.txt), finds the deepest folder containing book files.
-     * If the folder directly contains book files, imports them as a single group.
+     * Smart filename parsing — extract title and author from common patterns:
+     * - "书名 - 作者.txt"
+     * - "作者 - 书名.txt"  (if author part looks like a name)
+     * - "[作者] 书名.epub"
+     * - "书名(作者).mobi"
+     * - "书名_作者.txt"
      */
+    private fun parseBookFilename(fileName: String): Pair<String, String> {
+        val base = fileName.substringBeforeLast('.').trim()
+
+        // Pattern: [作者] 书名 or 【作者】书名
+        val bracketMatch = Regex("^[\\[【](.+?)[\\]】]\\s*(.+)$").find(base)
+        if (bracketMatch != null) {
+            return bracketMatch.groupValues[2].trim() to bracketMatch.groupValues[1].trim()
+        }
+
+        // Pattern: 书名(作者) or 书名（作者）
+        val parenMatch = Regex("^(.+?)[（(](.+?)[）)]$").find(base)
+        if (parenMatch != null) {
+            return parenMatch.groupValues[1].trim() to parenMatch.groupValues[2].trim()
+        }
+
+        // Pattern: title - author or author - title (split by " - ", " _ ", " — ")
+        val sepMatch = Regex("^(.+?)\\s*[-_—]\\s*(.+)$").find(base)
+        if (sepMatch != null) {
+            val left = sepMatch.groupValues[1].trim()
+            val right = sepMatch.groupValues[2].trim()
+            // Heuristic: shorter part is likely the author
+            return if (left.length <= right.length && left.length <= 6) {
+                right to left
+            } else {
+                left to right
+            }
+        }
+
+        return base to ""
+    }
+
     fun importFolder(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             val startTime = System.currentTimeMillis()
@@ -179,14 +269,14 @@ class ShelfViewModel @Inject constructor(
             collectBookFiles(folder, files, maxDepth = 6)
             if (files.isEmpty()) continue
             val groupId = UUID.randomUUID().toString()
-            bookRepo.insertGroup(BookGroup(id = groupId, name = folder.name ?: "文件夹"))
+            groupRepo.insert(BookGroup(id = groupId, name = folder.name ?: "文件夹"))
             importFilesWithDeferredCovers(files, groupId)
         }
     }
 
     private suspend fun importAsGroup(files: List<DocumentFile>, groupName: String) {
         val groupId = UUID.randomUUID().toString()
-        bookRepo.insertGroup(BookGroup(id = groupId, name = groupName))
+        groupRepo.insert(BookGroup(id = groupId, name = groupName))
         importFilesWithDeferredCovers(files, groupId)
     }
 
@@ -197,14 +287,9 @@ class ShelfViewModel @Inject constructor(
         importAsGroup(allFiles, folderName)
     }
 
-    /**
-     * Import files with covers and metadata extracted in parallel.
-     * All data is ready when books appear on the shelf.
-     */
     private suspend fun importFilesWithDeferredCovers(files: List<DocumentFile>, folderId: String) {
         AppLog.info("Import", "Processing ${files.size} files for group $folderId")
 
-        // Phase 1: insert all books instantly with filenames (shelf shows immediately)
         data class PendingBook(val book: Book, val file: DocumentFile, val format: BookFormat)
         val pending = mutableListOf<PendingBook>()
 
@@ -227,7 +312,6 @@ class ShelfViewModel @Inject constructor(
         }
         AppLog.info("Import", "${pending.size} books added to shelf")
 
-        // Phase 2: extract metadata + covers sequentially (avoid SAF IO contention)
         for (pb in pending) {
             if (pb.format != BookFormat.EPUB) continue
             try {
@@ -246,7 +330,6 @@ class ShelfViewModel @Inject constructor(
         AppLog.info("Import", "All metadata extracted")
     }
 
-    /** Recursively collect book files with depth limit */
     private fun collectBookFiles(dir: DocumentFile, out: MutableList<DocumentFile>, maxDepth: Int, depth: Int = 0) {
         if (depth > maxDepth) return
         dir.listFiles().forEach { file ->
@@ -261,7 +344,6 @@ class ShelfViewModel @Inject constructor(
         }
     }
 
-    /** Fast file listing using ContentResolver query — much faster than DocumentFile.listFiles() */
     data class FileInfo(val uri: Uri, val name: String, val isDir: Boolean)
 
     private fun listFilesFast(treeUri: Uri): List<FileInfo> {
@@ -296,7 +378,6 @@ class ShelfViewModel @Inject constructor(
         return results
     }
 
-    /** Search books by keyword */
     fun searchBooks(keyword: String, onResult: (List<Book>) -> Unit) {
         viewModelScope.launch {
             val results = kotlinx.coroutines.withContext(Dispatchers.IO) {
@@ -306,7 +387,6 @@ class ShelfViewModel @Inject constructor(
         }
     }
 
-    /** Delete a folder and all books in it */
     fun deleteFolder(folderId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             bookRepo.deleteFolder(folderId)
@@ -314,7 +394,6 @@ class ShelfViewModel @Inject constructor(
         }
     }
 
-    /** Batch delete multiple books by ID */
     fun batchDelete(bookIds: Set<String>) {
         viewModelScope.launch(Dispatchers.IO) {
             bookIds.forEach { bookRepo.deleteById(it) }
@@ -322,11 +401,6 @@ class ShelfViewModel @Inject constructor(
         }
     }
 
-    /** All groups for group management */
-    val allGroups: StateFlow<List<BookGroup>> = groupDao.getAllGroups()
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    /** Create a new custom group */
     fun createGroup(name: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val group = BookGroup(
@@ -334,21 +408,19 @@ class ShelfViewModel @Inject constructor(
                 name = name,
                 sortOrder = (allGroups.value.maxOfOrNull { it.sortOrder } ?: 0) + 1,
             )
-            groupDao.insert(group)
+            groupRepo.insert(group)
             AppLog.info("Shelf", "Created group: $name")
         }
     }
 
-    /** Rename a group */
     fun renameGroup(groupId: String, newName: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val group = groupDao.getById(groupId) ?: return@launch
-            groupDao.insert(group.copy(name = newName))
+            val group = groupRepo.getById(groupId) ?: return@launch
+            groupRepo.insert(group.copy(name = newName))
             AppLog.info("Shelf", "Renamed group $groupId to $newName")
         }
     }
 
-    /** Move books to a group (null = ungrouped) */
     fun moveToGroup(bookIds: Set<String>, groupId: String?) {
         viewModelScope.launch(Dispatchers.IO) {
             bookIds.forEach { id ->
@@ -359,7 +431,6 @@ class ShelfViewModel @Inject constructor(
         }
     }
 
-    /** Filter out books that are already imported (by localPath) */
     private suspend fun filterNewBooks(books: List<Book>): List<Book> {
         return books.filter { bookRepo.findByLocalPath(it.localPath ?: "") == null }
     }
@@ -373,7 +444,21 @@ class ShelfViewModel @Inject constructor(
             "mobi" -> BookFormat.MOBI
             "azw3", "azw" -> BookFormat.AZW3
             "cbz", "cbr" -> BookFormat.CBZ
+            "umd" -> BookFormat.UMD
             else -> BookFormat.UNKNOWN
         }
+    }
+
+    // ── Cache/download delegation ──
+
+    val isCacheDownloading: StateFlow<Boolean> = cacheRepo.isDownloading
+    val cacheDownloadProgress = cacheRepo.downloadProgress
+
+    fun startCacheBook(bookId: String, sourceUrl: String) {
+        cacheRepo.startDownload(bookId, sourceUrl)
+    }
+
+    fun stopCacheBook() {
+        cacheRepo.stopDownload()
     }
 }

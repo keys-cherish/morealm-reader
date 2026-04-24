@@ -27,6 +27,7 @@ class BookDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val bookRepo: BookRepository,
     private val sourceRepo: SourceRepository,
+    private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -42,7 +43,7 @@ class BookDetailViewModel @Inject constructor(
     val showSourcePicker: StateFlow<Boolean> = _showSourcePicker.asStateFlow()
 
     init {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _book.value = bookRepo.getById(bookId)
             _availableSources.value = sourceRepo.getEnabledSourcesList()
         }
@@ -52,7 +53,7 @@ class BookDetailViewModel @Inject constructor(
     fun hideSourcePicker() { _showSourcePicker.value = false }
 
     fun switchSource(source: BookSource) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val current = _book.value ?: return@launch
             val updated = current.copy(
                 sourceId = source.bookSourceUrl,
@@ -61,14 +62,12 @@ class BookDetailViewModel @Inject constructor(
             bookRepo.update(updated)
             _book.value = updated
             _showSourcePicker.value = false
-            AppLog.info("Detail", "Switched source to: ${source.bookSourceName}")
         }
     }
 
     fun deleteBook() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             bookRepo.deleteById(bookId)
-            AppLog.info("Detail", "Deleted book: $bookId")
         }
     }
 
@@ -106,7 +105,6 @@ class BookDetailViewModel @Inject constructor(
                     )
                     val success = EpubMetadataWriter.updateMetadata(context, uri, epubUpdate)
                     if (success) {
-                        AppLog.info("Detail", "EPUB metadata written back to file")
                     }
                 } catch (e: Exception) {
                     AppLog.error("Detail", "Failed to write EPUB metadata: ${e.message}")
@@ -115,4 +113,10 @@ class BookDetailViewModel @Inject constructor(
             _saving.value = false
         }
     }
+
+    val isCacheDownloading = cacheRepo.isDownloading
+    val cacheDownloadProgress = cacheRepo.downloadProgress
+
+    fun startCacheBook(bookId: String, sourceUrl: String) = cacheRepo.startDownload(bookId, sourceUrl)
+    fun stopCacheBook() = cacheRepo.stopDownload()
 }

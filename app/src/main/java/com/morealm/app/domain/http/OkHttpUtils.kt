@@ -132,3 +132,35 @@ fun Request.Builder.postJson(json: String?) {
         post(requestBody)
     }
 }
+
+fun Request.Builder.postMultipart(type: String?, bodyMap: Map<String, Any>) {
+    val builder = okhttp3.MultipartBody.Builder()
+        .setType(okhttp3.MultipartBody.FORM)
+    bodyMap.forEach { (key, value) ->
+        when (value) {
+            is Map<*, *> -> {
+                val fileName = value["fileName"]?.toString() ?: key
+                val contentType = value["contentType"]?.toString() ?: "application/octet-stream"
+                val bytes = when (val body = value["body"]) {
+                    is ByteArray -> body
+                    is String -> body.toByteArray()
+                    else -> value.toString().toByteArray()
+                }
+                builder.addFormDataPart(
+                    key, fileName,
+                    bytes.toRequestBody(contentType.toMediaType())
+                )
+            }
+            else -> builder.addFormDataPart(key, value.toString())
+        }
+    }
+    post(builder.build())
+}
+
+suspend fun OkHttpClient.newCallByteArrayResponse(
+    retry: Int = 0,
+    builder: Request.Builder.() -> Unit
+): ByteArray {
+    val response = newCallResponse(retry, builder)
+    return response.body?.bytes() ?: ByteArray(0)
+}

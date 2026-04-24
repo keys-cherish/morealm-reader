@@ -33,6 +33,16 @@ object BookList {
         analyzeRule.setRedirectUrl(baseUrl)
         analyzeRule.setCoroutineContext(coroutineContext)
 
+        // bookUrlPattern: 搜索结果链接匹配详情页，直接按详情页解析
+        if (isSearch) bookSource.bookUrlPattern?.let { pattern ->
+            coroutineContext.ensureActive()
+            if (pattern.isNotBlank() && baseUrl.matches(pattern.toRegex())) {
+                getInfoItem(bookSource, analyzeRule, analyzeUrl, body, baseUrl, ruleData.getVariable())
+                    ?.let { bookList.add(it) }
+                return bookList
+            }
+        }
+
         val bookListRule: BookListRule = when {
             isSearch -> bookSource.getSearchRule()
             bookSource.getExploreRule().bookList.isNullOrBlank() -> bookSource.getSearchRule()
@@ -46,7 +56,11 @@ object BookList {
         val collections = analyzeRule.getElements(ruleList)
         coroutineContext.ensureActive()
 
-        if (collections.isNotEmpty()) {
+        if (collections.isEmpty() && bookSource.bookUrlPattern.isNullOrEmpty()) {
+            // 列表为空且无bookUrlPattern，尝试按详情页解析
+            getInfoItem(bookSource, analyzeRule, analyzeUrl, body, baseUrl, ruleData.getVariable())
+                ?.let { bookList.add(it) }
+        } else if (collections.isNotEmpty()) {
             val ruleName = analyzeRule.splitSourceRule(bookListRule.name)
             val ruleBookUrl = analyzeRule.splitSourceRule(bookListRule.bookUrl)
             val ruleAuthor = analyzeRule.splitSourceRule(bookListRule.author)
@@ -63,7 +77,6 @@ object BookList {
                     ruleName, ruleBookUrl, ruleAuthor, ruleCoverUrl,
                     ruleIntro, ruleKind, ruleLastChapter, ruleWordCount
                 )?.let { searchBook ->
-                    if (baseUrl == searchBook.bookUrl) { /* skip self-referencing */ }
                     bookList.add(searchBook)
                 }
             }
@@ -72,6 +85,35 @@ object BookList {
             if (reverse) bookList.reverse()
         }
         return bookList
+    }
+
+    /**
+     * 按详情页规则解析单本书（bookUrlPattern匹配或列表为空时的回退）
+     */
+    @Throws(Exception::class)
+    private suspend fun getInfoItem(
+        bookSource: BookSource,
+        analyzeRule: AnalyzeRule,
+        analyzeUrl: AnalyzeUrl,
+        body: String,
+        baseUrl: String,
+        variable: String?,
+    ): SearchBook? {
+        val searchBook = SearchBook(variable = variable)
+        searchBook.bookUrl = AnalyzeRule.getAbsoluteURL(analyzeUrl.url, analyzeUrl.ruleUrl)
+        searchBook.origin = bookSource.bookSourceUrl
+        searchBook.originName = bookSource.bookSourceName
+        searchBook.originOrder = bookSource.customOrder
+        searchBook.type = bookSource.bookSourceType
+        analyzeRule.setRuleData(searchBook)
+        BookInfo.analyzeBookInfo(
+            bookSource = bookSource,
+            searchBook = searchBook,
+            baseUrl = baseUrl,
+            redirectUrl = baseUrl,
+            body = body,
+        )
+        return if (searchBook.name.isNotBlank()) searchBook else null
     }
     @Throws(Exception::class)
     private suspend fun getSearchItem(

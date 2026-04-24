@@ -110,6 +110,53 @@ jobs:
           fi
           echo "✓ AndroidManifest 所有类引用有效"
 
+      - name: 内联 Regex 编译检查
+        run: |
+          HITS=$(grep -rn 'Regex(' app/src/main/java/com/morealm/app/ --include="*.kt" \
+            | grep -v 'object ' | grep -v 'companion ' | grep -v 'val .*= Regex' \
+            | grep -v 'AppPattern' | grep -v 'import ' | grep -v 'ttsSkipRegex' \
+            | grep -v '//' | grep -v 'getCachedRegex' | grep -v 'test/' || true)
+          if [ -n "$HITS" ]; then
+            echo "::warning::发现内联 Regex() 编译，应使用 AppPattern 预编译常量"
+            echo "$HITS"
+          fi
+
+      - name: 主线程阻塞检查
+        run: |
+          ERRORS=0
+          # Thread.sleep in non-log code
+          if grep -rn 'Thread\.sleep' app/src/main/java/com/morealm/app/ --include="*.kt" | grep -v 'core/log/'; then
+            echo "::error::Thread.sleep 应替换为 kotlinx.coroutines.delay()"
+            ERRORS=$((ERRORS+1))
+          fi
+          # runBlocking without Dispatchers
+          if grep -rn 'runBlocking\s*{' app/src/main/java/com/morealm/app/ --include="*.kt"; then
+            echo "::error::runBlocking 缺少 Dispatchers.IO"
+            ERRORS=$((ERRORS+1))
+          fi
+          if [ $ERRORS -gt 0 ]; then exit 1; fi
+          echo "✓ 无主线程阻塞问题"
+
+      - name: MutableStateFlow 公开暴露检查
+        run: |
+          HITS=$(grep -rn 'val [a-z][a-zA-Z]* = MutableStateFlow' app/src/main/java/com/morealm/app/presentation/ --include="*.kt" \
+            | grep -v 'private ' || true)
+          if [ -n "$HITS" ]; then
+            echo "::error::MutableStateFlow 不应公开暴露，应使用 private + asStateFlow()"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "✓ StateFlow 封装正确"
+
+      - name: viewModelScope Dispatcher 检查
+        run: |
+          HITS=$(grep -rn 'viewModelScope\.launch\s*{' app/src/main/java/com/morealm/app/presentation/ --include="*.kt" \
+            | grep -v 'prefs\.set' | grep -v '_show' | grep -v '_auto' || true)
+          if [ -n "$HITS" ]; then
+            echo "::warning::viewModelScope.launch 缺少 Dispatchers.IO (如含 DB/IO 操作请加上)"
+            echo "$HITS"
+          fi
+
   # ── Stage 2: 编译检查 ──
   compile:
     name: Compile

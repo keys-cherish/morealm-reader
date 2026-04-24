@@ -2,36 +2,40 @@ package com.morealm.app.domain.parser
 
 import android.content.Context
 import android.net.Uri
-import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.BookFormat
+import com.morealm.app.domain.entity.TxtTocRule
+import com.morealm.app.domain.db.TxtTocRuleDao
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import java.util.concurrent.ConcurrentHashMap
+import java.util.regex.Pattern
+import java.util.regex.PatternSyntaxException
 
 /**
- * Unified local book parser — handles TXT, EPUB, MOBI, PDF.
- * Designed for speed: streaming parse, lazy chapter loading, parallel image decode.
+ * Unified local book parser — handles TXT, EPUB, MOBI, PDF, CBZ, UMD.
  *
- * Key design:
- * - TXT: streaming regex chapter detection, no full-file load
- * - EPUB: ZIP streaming, OPF spine parse, lazy XHTML extraction
- * - MOBI: header parse + PalmDOC decompress (basic support)
- * - Images: extracted to cache on first access, not at import time
+ * TXT parsing follows Legado's approach:
+ * 1. Read enabled TxtTocRules from DB (fallback to hardcoded defaults)
+ * 2. Sample first 512KB, try each rule, pick the one with most matches
+ * 3. Parse full file with the best rule
+ * 4. If no rule matches, auto-split by fixed size (10KB)
  */
 object LocalBookParser {
 
-    // Common Chinese chapter patterns
-    private val chapterPatterns = listOf(
-        Regex("^\\s*第[零一二三四五六七八九十百千万\\d]+[章节回卷集部篇].*"),
-        Regex("^\\s*Chapter\\s+\\d+.*", RegexOption.IGNORE_CASE),
-        Regex("^\\s*卷[零一二三四五六七八九十百千万\\d]+.*"),
-        Regex("^\\s*正文\\s.*"),
-        Regex("^\\s*序[章言].*"),
-        Regex("^\\s*楔子.*"),
-        Regex("^\\s*番外.*"),
+    // Fallback patterns when DB has no rules
+    private val defaultPatterns = listOf(
+        "^\\s*第[零一二三四五六七八九十百千万\\d]+[章节回卷集部篇].*",
+        "^\\s*Chapter\\s+\\d+.*",
+        "^\\s*卷[零一二三四五六七八九十百千万\\d]+.*",
+        "^\\s*(正文|序[章言]|楔子|番外).*",
     )
+
+    /** Inject from DI; set once at app startup or before first parse */
+    var txtTocRuleDao: TxtTocRuleDao? = null
+
+    // Charset cache: URI string → detected charset name
+    private val charsetCache = ConcurrentHashMap<String, String>()
 
     suspend fun parseChapters(
         context: Context,
@@ -45,6 +49,7 @@ object LocalBookParser {
             BookFormat.MOBI, BookFormat.AZW3 -> MobiParser.parseChapters(context, uri)
             BookFormat.PDF -> PdfParser.parseChapters(context, uri)
             BookFormat.CBZ -> CbzParser.parseChapters(context, uri)
+            BookFormat.UMD -> UmdParser.parseChapters(context, uri)
             else -> emptyList()
         }
     }
@@ -61,6 +66,7 @@ object LocalBookParser {
             BookFormat.MOBI, BookFormat.AZW3 -> MobiParser.readChapter(context, uri, chapter)
             BookFormat.PDF -> PdfParser.readChapter(context, uri, chapter)
             BookFormat.CBZ -> CbzParser.readChapter(context, uri, chapter)
+            BookFormat.UMD -> UmdParser.readChapter(context, uri, chapter)
             else -> ""
         }
     }
@@ -68,21 +74,78 @@ object LocalBookParser {
     // ── TXT ──────────────────────────────────────────────
 
     private const val BLOCK_SIZE = 512 * 1024 // 512KB blocks
+    private const val MAX_LENGTH_NO_TOC = 10 * 1024 // 10KB per chapter when no TOC found
+    private const val MAX_LENGTH_WITH_TOC = 200 * 1024 // 200KB max chapter with TOC
 
     fun parseTxtChapters(context: Context, uri: Uri, customRegex: String = ""): List<BookChapter> {
-        val chapters = mutableListOf<BookChapter>()
-        val bookId = ""
-        val charsetName = detectCharset(context, uri)
+        val charsetName = getCachedCharset(context, uri)
         val cs = charset(charsetName)
-        val customPattern = customRegex.takeIf { it.isNotBlank() }?.let {
-            try { Regex(it) } catch (_: Exception) { null }
+
+        val tocPattern: Pattern? = if (customRegex.isNotBlank()) {
+            try { Pattern.compile(customRegex, Pattern.MULTILINE) } catch (_: Exception) { null }
+        } else {
+            detectBestTocRule(context, uri, cs)
         }
 
+        return if (tocPattern != null) {
+            parseWithTocPattern(context, uri, cs, tocPattern)
+        } else {
+            parseWithoutToc(context, uri, cs)
+        }
+    }
+
+    /**
+     * Detect the best TOC rule by sampling the first block of the file.
+     */
+    private fun detectBestTocRule(context: Context, uri: Uri, cs: java.nio.charset.Charset): Pattern? {
+        val sampleText = context.contentResolver.openInputStream(uri)?.use { stream ->
+            val buffer = ByteArray(BLOCK_SIZE)
+            val read = stream.read(buffer)
+            if (read > 0) String(buffer, 0, read, cs) else null
+        } ?: return null
+
+        val rulePatterns: List<String> = try {
+            val dbRules = txtTocRuleDao?.getEnabledRulesSync()
+            if (!dbRules.isNullOrEmpty()) dbRules.map { it.pattern } else defaultPatterns
+        } catch (_: Exception) {
+            defaultPatterns
+        }
+
+        var bestPattern: Pattern? = null
+        var maxMatches = 1
+
+        for (rulePattern in rulePatterns.reversed()) {
+            val pattern = try {
+                Pattern.compile(rulePattern, Pattern.MULTILINE)
+            } catch (_: PatternSyntaxException) { continue }
+            val matcher = pattern.matcher(sampleText)
+            var count = 0
+            var lastEnd = 0
+            while (matcher.find()) {
+                if (lastEnd == 0 || matcher.start() - lastEnd > 1000) {
+                    count++
+                    lastEnd = matcher.end()
+                }
+            }
+            if (count >= maxMatches) {
+                maxMatches = count
+                bestPattern = pattern
+            }
+        }
+        return bestPattern
+    }
+
+    private fun parseWithTocPattern(
+        context: Context, uri: Uri,
+        cs: java.nio.charset.Charset, pattern: Pattern,
+    ): List<BookChapter> {
+        val chapters = mutableListOf<BookChapter>()
+        val bookId = ""
         var globalOffset = 0L
         var chapterStart = 0L
         var chapterTitle: String? = null
         var chapterIndex = 0
-        var leftover = "" // Partial line from previous block
+        var leftover = ""
 
         context.contentResolver.openInputStream(uri)?.use { stream ->
             val buffer = ByteArray(BLOCK_SIZE)
@@ -93,29 +156,28 @@ object LocalBookParser {
                 val blockText = leftover + String(buffer, 0, read, cs)
                 val lines = blockText.split('\n')
 
-                // Last element may be incomplete — save for next block
                 leftover = if (read == BLOCK_SIZE) lines.last() else ""
                 val completeLines = if (read == BLOCK_SIZE) lines.dropLast(1) else lines
 
                 for (line in completeLines) {
                     val lineBytes = (line + "\n").toByteArray(cs).size.toLong()
-                    if (isChapterTitle(line, customPattern) && globalOffset > chapterStart) {
+                    val trimmed = line.trim()
+                    if (trimmed.length in 1..50 && pattern.matcher(trimmed).matches() && globalOffset > chapterStart) {
                         chapters.add(BookChapter(
                             id = "${bookId}_$chapterIndex", bookId = bookId,
                             index = chapterIndex,
-                            title = (chapterTitle ?: "正文").trim(),
+                            title = (chapterTitle ?: "前言").trim(),
                             startPosition = chapterStart, endPosition = globalOffset,
                         ))
                         chapterIndex++
                         chapterStart = globalOffset
-                        chapterTitle = line.trim()
+                        chapterTitle = trimmed
                     }
                     globalOffset += lineBytes
                 }
             }
         }
 
-        // Final chapter
         if (globalOffset > chapterStart) {
             chapters.add(BookChapter(
                 id = "${bookId}_$chapterIndex", bookId = bookId,
@@ -125,12 +187,69 @@ object LocalBookParser {
             ))
         }
 
-        // Auto-split oversized chapters (>200KB)
         return chapters.flatMap { ch ->
             val size = ch.endPosition - ch.startPosition
-            if (size <= 200 * 1024) return@flatMap listOf(ch)
-            splitLargeChapter(ch, 100 * 1024)
+            if (size <= MAX_LENGTH_WITH_TOC) listOf(ch)
+            else splitLargeChapter(ch, 100 * 1024)
         }.mapIndexed { i, ch -> ch.copy(id = "${bookId}_$i", index = i) }
+    }
+
+    /**
+     * Parse TXT without any TOC rule — split by fixed size at newline boundaries.
+     */
+    private fun parseWithoutToc(
+        context: Context, uri: Uri, cs: java.nio.charset.Charset,
+    ): List<BookChapter> {
+        val chapters = mutableListOf<BookChapter>()
+        val bookId = ""
+        var globalOffset = 0L
+        var chapterStart = 0L
+        var chapterIndex = 0
+
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            val buffer = ByteArray(BLOCK_SIZE)
+            while (true) {
+                val read = stream.read(buffer)
+                if (read <= 0) break
+
+                var scanPos = 0
+                while (scanPos < read) {
+                    val bytesInChapter = (globalOffset + scanPos) - chapterStart
+                    if (bytesInChapter >= MAX_LENGTH_NO_TOC) {
+                        // Jump ahead to find next newline instead of scanning byte-by-byte
+                        var breakPos = scanPos
+                        while (breakPos < read && buffer[breakPos] != 0x0a.toByte()) breakPos++
+                        if (breakPos < read) breakPos++
+                        val endOffset = globalOffset + breakPos
+                        chapters.add(BookChapter(
+                            id = "${bookId}_$chapterIndex", bookId = bookId,
+                            index = chapterIndex,
+                            title = "第${chapterIndex + 1}节",
+                            startPosition = chapterStart, endPosition = endOffset,
+                        ))
+                        chapterIndex++
+                        chapterStart = endOffset
+                        scanPos = breakPos
+                    } else {
+                        // Skip ahead to where the threshold would be met
+                        val remaining = MAX_LENGTH_NO_TOC - bytesInChapter
+                        scanPos += remaining.toInt().coerceAtLeast(1)
+                    }
+                }
+                globalOffset += read
+            }
+        }
+
+        if (globalOffset > chapterStart) {
+            chapters.add(BookChapter(
+                id = "${bookId}_$chapterIndex", bookId = bookId,
+                index = chapterIndex,
+                title = if (chapters.isEmpty()) "正文" else "第${chapterIndex + 1}节",
+                startPosition = chapterStart, endPosition = globalOffset,
+            ))
+        }
+
+        return chapters.mapIndexed { i, ch -> ch.copy(id = "${bookId}_$i", index = i) }
     }
 
     private fun splitLargeChapter(chapter: BookChapter, maxSize: Long): List<BookChapter> {
@@ -147,37 +266,77 @@ object LocalBookParser {
         return parts
     }
 
+    // ── TXT read buffer (ported from Legado TextFile.txtBuffer sliding window) ──
+    private const val TXT_READ_BUFFER_SIZE = 8 * 1024 * 1024 // 8MB
+    private var txtReadBuffer: ByteArray? = null
+    private var txtBufferUri: String? = null
+    private var txtBufferStart = -1L
+    private var txtBufferEnd = -1L
+
     fun readTxtChapter(context: Context, uri: Uri, chapter: BookChapter): String {
-        val charsetName = detectCharset(context, uri)
+        val charsetName = getCachedCharset(context, uri)
+        val cs = charset(charsetName)
         val start = chapter.startPosition
         val length = (chapter.endPosition - start).toInt()
         if (length <= 0) return "（本章内容为空）"
 
+        val uriStr = uri.toString()
+
+        // Check if chapter fits in current sliding window
+        if (txtBufferUri == uriStr && txtReadBuffer != null
+            && start >= txtBufferStart && chapter.endPosition <= txtBufferEnd
+        ) {
+            val offset = (start - txtBufferStart).toInt()
+            return String(txtReadBuffer!!, offset, length, cs)
+        }
+
+        // Cache miss — reload buffer window around this chapter
         return context.contentResolver.openInputStream(uri)?.use { stream ->
-            // Skip directly to chapter start — O(1) instead of O(n)
+            val alignedStart = TXT_READ_BUFFER_SIZE * (start / TXT_READ_BUFFER_SIZE)
             var skipped = 0L
-            while (skipped < start) {
-                val n = stream.skip(start - skipped)
+            while (skipped < alignedStart) {
+                val n = stream.skip(alignedStart - skipped)
                 if (n <= 0) break
                 skipped += n
             }
-            val buffer = ByteArray(length.coerceAtMost(512 * 1024))
-            val read = stream.read(buffer, 0, buffer.size)
-            if (read > 0) String(buffer, 0, read, charset(charsetName))
+            val bufSize = TXT_READ_BUFFER_SIZE.coerceAtMost(
+                (chapter.endPosition - alignedStart + TXT_READ_BUFFER_SIZE / 2).toInt()
+                    .coerceAtMost(TXT_READ_BUFFER_SIZE)
+            )
+            val buf = txtReadBuffer?.takeIf { it.size >= bufSize } ?: ByteArray(bufSize)
+            var totalRead = 0
+            while (totalRead < bufSize) {
+                val n = stream.read(buf, totalRead, bufSize - totalRead)
+                if (n <= 0) break
+                totalRead += n
+            }
+            txtReadBuffer = buf
+            txtBufferUri = uriStr
+            txtBufferStart = alignedStart
+            txtBufferEnd = alignedStart + totalRead
+
+            val offset = (start - alignedStart).toInt()
+            val readLen = length.coerceAtMost(totalRead - offset)
+            if (readLen > 0) String(buf, offset, readLen, cs)
             else "（本章内容为空）"
         } ?: "（本章内容为空）"
     }
 
-    private fun isChapterTitle(line: String, customPattern: Regex? = null): Boolean {
-        val trimmed = line.trim()
-        if (trimmed.length > 50 || trimmed.isEmpty()) return false
-        // Custom pattern takes priority
-        if (customPattern != null) return customPattern.matches(trimmed)
-        return chapterPatterns.any { it.matches(trimmed) }
+    /** Release TXT read buffer memory (call when leaving reader) */
+    fun releaseTxtBuffer() {
+        txtReadBuffer = null
+        txtBufferUri = null
+        txtBufferStart = -1L
+        txtBufferEnd = -1L
+    }
+
+    // ── Charset detection with cache ─────────────────────
+
+    private fun getCachedCharset(context: Context, uri: Uri): String {
+        return charsetCache.getOrPut(uri.toString()) { detectCharset(context, uri) }
     }
 
     fun detectCharset(context: Context, uri: Uri): String {
-        // Check BOM first
         context.contentResolver.openInputStream(uri)?.use { stream ->
             val bom = ByteArray(4)
             val read = stream.read(bom)
@@ -189,14 +348,11 @@ object LocalBookParser {
                 return "UTF-16BE"
         }
 
-        // Heuristic: sample first 8KB
         context.contentResolver.openInputStream(uri)?.use { stream ->
             val sample = ByteArray(8192)
             val sampleRead = stream.read(sample, 0, sample.size)
             if (sampleRead > 0) {
-                // If it's valid UTF-8 with multi-byte sequences, it's UTF-8
                 if (looksLikeValidUtf8(sample, sampleRead)) return "UTF-8"
-                // Otherwise check GBK
                 if (looksLikeGbk(sample, sampleRead)) return "GBK"
             }
         }
@@ -204,48 +360,43 @@ object LocalBookParser {
         return "UTF-8"
     }
 
-    /** Check if data forms valid UTF-8 sequences (with at least some multi-byte chars). */
+    /** Clear charset cache when a book file changes */
+    fun clearCharsetCache(uri: Uri? = null) {
+        if (uri != null) charsetCache.remove(uri.toString()) else charsetCache.clear()
+    }
+
     private fun looksLikeValidUtf8(data: ByteArray, length: Int): Boolean {
-        var i = 0
-        var multiByte = 0
-        var invalid = 0
+        var i = 0; var multiByte = 0; var invalid = 0
         while (i < length) {
             val b = data[i].toInt() and 0xFF
             when {
-                b <= 0x7F -> { i++ } // ASCII
-                b in 0xC2..0xDF -> { // 2-byte
+                b <= 0x7F -> i++
+                b in 0xC2..0xDF -> {
                     if (i + 1 >= length) { i++; continue }
-                    val b2 = data[i + 1].toInt() and 0xFF
-                    if (b2 in 0x80..0xBF) { multiByte++; i += 2 } else { invalid++; i++ }
+                    if (data[i + 1].toInt() and 0xFF in 0x80..0xBF) { multiByte++; i += 2 } else { invalid++; i++ }
                 }
-                b in 0xE0..0xEF -> { // 3-byte (CJK lives here)
+                b in 0xE0..0xEF -> {
                     if (i + 2 >= length) { i++; continue }
-                    val b2 = data[i + 1].toInt() and 0xFF
-                    val b3 = data[i + 2].toInt() and 0xFF
+                    val b2 = data[i + 1].toInt() and 0xFF; val b3 = data[i + 2].toInt() and 0xFF
                     if (b2 in 0x80..0xBF && b3 in 0x80..0xBF) { multiByte++; i += 3 } else { invalid++; i++ }
                 }
-                b in 0xF0..0xF4 -> { // 4-byte
+                b in 0xF0..0xF4 -> {
                     if (i + 3 >= length) { i++; continue }
-                    val b2 = data[i + 1].toInt() and 0xFF
-                    val b3 = data[i + 2].toInt() and 0xFF
-                    val b4 = data[i + 3].toInt() and 0xFF
+                    val b2 = data[i + 1].toInt() and 0xFF; val b3 = data[i + 2].toInt() and 0xFF; val b4 = data[i + 3].toInt() and 0xFF
                     if (b2 in 0x80..0xBF && b3 in 0x80..0xBF && b4 in 0x80..0xBF) { multiByte++; i += 4 } else { invalid++; i++ }
                 }
-                else -> { invalid++; i++ } // 0x80-0xC1, 0xF5+ are invalid UTF-8 lead bytes
+                else -> { invalid++; i++ }
             }
         }
-        // Valid UTF-8 if we found multi-byte sequences and very few invalid ones
         return multiByte > 0 && invalid <= multiByte / 10
     }
 
     private fun looksLikeGbk(data: ByteArray, length: Int): Boolean {
-        var i = 0
-        var gbkPairs = 0
+        var i = 0; var gbkPairs = 0
         while (i < length - 1) {
             val b = data[i].toInt() and 0xFF
             if (b in 0x81..0xFE) {
-                val b2 = data[i + 1].toInt() and 0xFF
-                if (b2 in 0x40..0xFE) { gbkPairs++; i += 2; continue }
+                if (data[i + 1].toInt() and 0xFF in 0x40..0xFE) { gbkPairs++; i += 2; continue }
             }
             i++
         }

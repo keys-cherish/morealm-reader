@@ -2,6 +2,7 @@ package com.morealm.app.domain.webbook
 
 import com.morealm.app.domain.analyzeRule.AnalyzeRule
 import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setCoroutineContext
+import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setNextChapterUrl
 import com.morealm.app.domain.analyzeRule.AnalyzeUrl
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.rule.ContentRule
@@ -30,6 +31,7 @@ object BookContent {
         analyzeRule.setContent(body, baseUrl)
         analyzeRule.setRedirectUrl(redirectUrl)
         analyzeRule.setCoroutineContext(coroutineContext)
+        analyzeRule.setNextChapterUrl(nextChapterUrl)
         coroutineContext.ensureActive()
 
         var contentData = analyzeContentPage(baseUrl, redirectUrl, body, contentRule, bookSource, nextChapterUrl)
@@ -75,6 +77,7 @@ object BookContent {
         analyzeRule.setContent(body, baseUrl)
         analyzeRule.setCoroutineContext(coroutineContext)
         analyzeRule.setRedirectUrl(redirectUrl)
+        analyzeRule.setNextChapterUrl(nextChapterUrl)
 
         val nextUrlList = arrayListOf<String>()
         var content = analyzeRule.getString(contentRule.content, unescape = false)

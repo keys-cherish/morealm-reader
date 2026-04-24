@@ -5,15 +5,15 @@ import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.domain.source.BookSourceImporter
+import com.morealm.app.domain.webbook.CheckSource
+import com.morealm.app.domain.webbook.SourceDebug
 import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 
 @HiltViewModel
@@ -33,14 +33,20 @@ class BookSourceManageViewModel @Inject constructor(
     fun clearImportResult() { _importResult.value = null }
 
     fun toggleSource(source: BookSource) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             sourceRepo.insert(source.copy(enabled = !source.enabled))
         }
     }
 
     fun deleteSource(source: BookSource) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             sourceRepo.delete(source)
+        }
+    }
+
+    fun saveSource(source: BookSource) {
+        viewModelScope.launch(Dispatchers.IO) {
+            sourceRepo.insert(source)
         }
     }
 
@@ -67,12 +73,6 @@ class BookSourceManageViewModel @Inject constructor(
         }
     }
 
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .build()
-
     fun importFromUrl(urlOrJson: String) {
         viewModelScope.launch {
             _isImporting.value = true
@@ -83,13 +83,7 @@ class BookSourceManageViewModel @Inject constructor(
                 } else {
                     withContext(Dispatchers.IO) {
                         AppLog.info("SourceManage", "Fetching: $input")
-                        val response = httpClient.newCall(
-                            Request.Builder().url(input)
-                                .header("User-Agent", "Mozilla/5.0")
-                                .build()
-                        ).execute()
-                        if (!response.isSuccessful) throw Exception("HTTP ${response.code}")
-                        response.body?.string() ?: throw Exception("Empty response")
+                        sourceRepo.fetchSourceJson(input)
                     }
                 }
                 val imported = withContext(Dispatchers.IO) {
@@ -109,5 +103,104 @@ class BookSourceManageViewModel @Inject constructor(
                 _isImporting.value = false
             }
         }
+    }
+
+    // ── CheckSource 批量校验 ──
+
+    private val _isChecking = MutableStateFlow(false)
+    val isChecking: StateFlow<Boolean> = _isChecking.asStateFlow()
+
+    private val _checkProgress = MutableStateFlow(0)
+    val checkProgress: StateFlow<Int> = _checkProgress.asStateFlow()
+
+    private val _checkTotal = MutableStateFlow(0)
+    val checkTotal: StateFlow<Int> = _checkTotal.asStateFlow()
+
+    private val _checkResults = MutableStateFlow<Map<String, CheckSource.CheckResult>>(emptyMap())
+    val checkResults: StateFlow<Map<String, CheckSource.CheckResult>> = _checkResults.asStateFlow()
+
+    private var checkJob: kotlinx.coroutines.Job? = null
+
+    fun startCheckSources() {
+        if (_isChecking.value) return
+        checkJob?.cancel()
+        val allSources = sources.value.filter { it.enabled }
+        if (allSources.isEmpty()) {
+            _importResult.value = "没有启用的书源"
+            return
+        }
+        _isChecking.value = true
+        _checkProgress.value = 0
+        _checkTotal.value = allSources.size
+        _checkResults.value = emptyMap()
+
+        val completedCount = AtomicInteger(0)
+        checkJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                CheckSource.checkAll(allSources, concurrency = 4) { _, result ->
+                    _checkProgress.value = completedCount.incrementAndGet()
+                    _checkResults.value = _checkResults.value + (result.sourceUrl to result)
+                }
+                val results = _checkResults.value
+                val valid = results.values.count { it.isValid }
+                _importResult.value = "校验完成: $valid/${allSources.size} 可用"
+            } catch (e: Exception) {
+                _importResult.value = "校验失败: ${e.message}"
+            } finally {
+                _isChecking.value = false
+            }
+        }
+    }
+
+    fun cancelCheckSources() {
+        checkJob?.cancel()
+        _isChecking.value = false
+    }
+
+    fun removeInvalidSources() {
+        val results = _checkResults.value
+        val invalidUrls = results.filter { !it.value.isValid }.keys
+        if (invalidUrls.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val toDelete = sources.value.filter { it.bookSourceUrl in invalidUrls }
+            toDelete.forEach { sourceRepo.delete(it) }
+            _importResult.value = "已删除 ${toDelete.size} 个无效书源"
+            _checkResults.value = emptyMap()
+        }
+    }
+
+    // ── SourceDebug 书源调试 ──
+
+    private val _debugSteps = MutableStateFlow<List<SourceDebug.DebugStep>>(emptyList())
+    val debugSteps: StateFlow<List<SourceDebug.DebugStep>> = _debugSteps.asStateFlow()
+
+    private val _isDebugging = MutableStateFlow(false)
+    val isDebugging: StateFlow<Boolean> = _isDebugging.asStateFlow()
+
+    private var debugJob: kotlinx.coroutines.Job? = null
+
+    fun debugSource(source: BookSource, keyword: String) {
+        debugJob?.cancel()
+        _debugSteps.value = emptyList()
+        _isDebugging.value = true
+
+        debugJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                SourceDebug.debug(source, keyword) { step ->
+                    _debugSteps.value = _debugSteps.value + step
+                }
+            } catch (e: Exception) {
+                _debugSteps.value = _debugSteps.value + SourceDebug.DebugStep(
+                    "错误", error = e.message, success = false
+                )
+            } finally {
+                _isDebugging.value = false
+            }
+        }
+    }
+
+    fun cancelDebug() {
+        debugJob?.cancel()
+        _isDebugging.value = false
     }
 }

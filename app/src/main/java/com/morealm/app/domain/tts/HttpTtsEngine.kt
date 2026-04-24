@@ -83,7 +83,7 @@ class HttpTtsEngine(private var config: HttpTts) : TtsEngine {
         } catch (_: Exception) {}
     }
 
-    private fun playAudio(data: ByteArray, contentType: String) {
+    private suspend fun playAudio(data: ByteArray, contentType: String) {
         try {
             val mimeType = when {
                 contentType.contains("mp3") || contentType.contains("mpeg") -> "audio/mpeg"
@@ -109,7 +109,7 @@ class HttpTtsEngine(private var config: HttpTts) : TtsEngine {
                 track.play()
                 // Wait for playback
                 val durationMs = (data.size.toLong() * 1000) / (16000 * 2)
-                Thread.sleep(durationMs)
+                kotlinx.coroutines.delay(durationMs)
                 track.stop()
                 return
             }

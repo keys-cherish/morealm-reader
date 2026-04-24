@@ -15,7 +15,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 class AppPreferences @Inject constructor(
     private val context: Context,
 ) {
-    internal object Keys {
+    object Keys {
         val ACTIVE_THEME_ID = stringPreferencesKey("active_theme_id")
         val READER_FONT_SIZE = floatPreferencesKey("reader_font_size")
         val READER_LINE_HEIGHT = floatPreferencesKey("reader_line_height")

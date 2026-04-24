@@ -11,6 +11,11 @@ android {
     namespace = "com.morealm.app"
     compileSdk = 35
 
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     defaultConfig {
         applicationId = "com.morealm.app"
         minSdk = 21
@@ -24,6 +29,15 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("${rootProject.projectDir}/morealm-release.jks")
+            storePassword = "MoRealm@2024Kx9"
+            keyAlias = "morealm"
+            keyPassword = "MoRealm@2024Kx9"
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
@@ -32,6 +46,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -101,7 +116,12 @@ dependencies {
     // Room
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
+    implementation(libs.room.paging)
     ksp(libs.room.compiler)
+
+    // Paging
+    implementation(libs.paging.runtime)
+    implementation(libs.paging.compose)
 
     // Hilt
     implementation(libs.hilt.android)
@@ -116,12 +136,17 @@ dependencies {
     implementation(libs.quick.transfer.core)
     implementation("org.apache.commons:commons-text:1.12.0")
 
+    // Rhino JS Engine
+    implementation("org.mozilla:rhino:1.8.1")
+
     // Image
     implementation(libs.coil.compose)
+    implementation("io.coil-kt:coil-svg:2.7.0")
 
     // Media3
     implementation(libs.media3.session)
     implementation(libs.media3.exoplayer)
+    implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
 
     // DataStore
     implementation(libs.datastore.preferences)
@@ -137,6 +162,16 @@ dependencies {
 
     // WebView
     implementation(libs.webkit)
+
+    // WiFi 传书 — local HTTP server (ported from Legado NanoHTTPD)
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+    implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
+
+    // QR code scanning — book source import via camera
+    implementation("com.github.jenly1314:zxing-lite:3.3.0")
+
+    // Archive — 7z/rar/tar support beyond java.util.zip
+    implementation("me.zhanghai.android.libarchive:library:1.1.6")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

@@ -2,9 +2,13 @@ package com.morealm.app.ui.profile
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import com.morealm.app.presentation.profile.ProfileViewModel
+import com.morealm.app.presentation.profile.AnnualReport
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -19,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,15 +50,19 @@ fun ProfileScreen(
     onNavigateReadingSettings: () -> Unit = {},
     onNavigateReplaceRules: () -> Unit = {},
     onNavigateAppLog: () -> Unit = {},
+    onNavigateCacheBook: () -> Unit = {},
+    onNavigateThemeEditor: () -> Unit = {},
 ) {
     val moColors = LocalMoRealmColors.current
-    val activeTheme by themeViewModel.activeTheme.collectAsState()
-    val allThemes by themeViewModel.allThemes.collectAsState()
-    val totalBooks by profileViewModel.totalBooks.collectAsState()
-    val totalReadMs by profileViewModel.totalReadMs.collectAsState()
-    val todayReadMs by profileViewModel.todayReadMs.collectAsState()
-    val recentDays by profileViewModel.recentDays.collectAsState()
-    var showCustomThemeEditor by remember { mutableStateOf(false) }
+    val activeTheme by themeViewModel.activeTheme.collectAsStateWithLifecycle()
+    val allThemes by themeViewModel.allThemes.collectAsStateWithLifecycle()
+    val totalBooks by profileViewModel.totalBooks.collectAsStateWithLifecycle()
+    val totalReadMs by profileViewModel.totalReadMs.collectAsStateWithLifecycle()
+    val todayReadMs by profileViewModel.todayReadMs.collectAsStateWithLifecycle()
+    val recentDays by profileViewModel.recentDays.collectAsStateWithLifecycle()
+    val annualReport by profileViewModel.annualReport.collectAsStateWithLifecycle()
+    var showDeleteThemeConfirm by remember { mutableStateOf<String?>(null) }
+    var showAnnualReport by remember { mutableStateOf(false) }
 
     val backupExportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
@@ -92,8 +101,8 @@ fun ProfileScreen(
         // Reading stats card (real data)
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = moColors.accent.copy(alpha = 0.08f)),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)),
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text("阅读统计", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -106,7 +115,16 @@ fun ProfileScreen(
                 Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                     Text("今日已读 ${formatDuration(todayReadMs)}",
-                        style = MaterialTheme.typography.labelSmall, color = moColors.accent)
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    TextButton(onClick = {
+                        profileViewModel.loadAnnualReport()
+                        showAnnualReport = true
+                    }) {
+                        Text("查看年度报告 →", style = MaterialTheme.typography.labelSmall)
+                    }
                 }
             }
         }
@@ -117,8 +135,8 @@ fun ProfileScreen(
         SectionTitle("主题切换")
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = moColors.surfaceGlass),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("点击切换主题，实时预览效果",
@@ -145,7 +163,7 @@ fun ProfileScreen(
                 // Custom themes section
                 if (customThemes.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))
-                    Text("自定义主题",
+                    Text("自定义主题（长按删除）",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
                     Spacer(Modifier.height(8.dp))
@@ -155,15 +173,16 @@ fun ProfileScreen(
                         items(customThemes, key = { it.id }) { theme ->
                             ThemeGridItem(theme = theme, isActive = activeTheme?.id == theme.id,
                                 onClick = { themeViewModel.switchTheme(theme.id) },
+                                onLongClick = { showDeleteThemeConfirm = theme.id },
                                 modifier = Modifier.width(80.dp))
                         }
                     }
                 }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
-                    onClick = { showCustomThemeEditor = true },
+                    onClick = onNavigateThemeEditor,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MaterialTheme.shapes.medium,
                 ) {
                     Icon(Icons.Default.Palette, null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
@@ -177,7 +196,7 @@ fun ProfileScreen(
                             themeExportLauncher.launch("${name}.json")
                         },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = MaterialTheme.shapes.medium,
                     ) {
                         Icon(Icons.Default.Upload, null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
@@ -186,7 +205,7 @@ fun ProfileScreen(
                     OutlinedButton(
                         onClick = { themeImportLauncher.launch(arrayOf("application/json", "application/octet-stream", "text/plain")) },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = MaterialTheme.shapes.medium,
                     ) {
                         Icon(Icons.Default.Download, null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
@@ -221,6 +240,8 @@ fun ProfileScreen(
 
         SettingsCard(Icons.Default.Extension, "书源管理",
             "导入、启用、删除书源，支持 URL 订阅和 JSON 导入", onClick = onNavigateSourceManage)
+        SettingsCard(Icons.Default.CloudDownload, "离线缓存",
+            "批量下载章节，支持离线阅读", onClick = onNavigateCacheBook)
         SettingsCard(Icons.Default.ImportExport, "Legado 一键搬家",
             "导入 Legado 备份，书源/书架/进度全部迁移", onClick = {})
 
@@ -228,7 +249,7 @@ fun ProfileScreen(
         SettingsCard(Icons.Default.Widgets, "桌面小组件", "预览效果", onClick = {}) {
             Card(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                shape = RoundedCornerShape(14.dp),
+                shape = MaterialTheme.shapes.medium,
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
@@ -236,25 +257,24 @@ fun ProfileScreen(
                     Spacer(Modifier.height(8.dp))
                     LinearProgressIndicator(
                         progress = { 0.62f },
-                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                        color = moColors.accent, trackColor = moColors.accent.copy(alpha = 0.15f))
+                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(MaterialTheme.shapes.extraSmall),
+                        color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                     Spacer(Modifier.height(6.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("今日已读 ${formatDuration(todayReadMs)}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
                         Text("继续 →", style = MaterialTheme.typography.labelSmall,
-                            color = moColors.accent, fontWeight = FontWeight.SemiBold)
+                            color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
         }
 
         SettingsSection("高级") {
-            SettingsItem(Icons.Default.Extension, "内容解析规则", subtitle = "管理自定义解析配置")
-            @Suppress("DEPRECATION")
-            SettingsItem(Icons.Default.Rule, "TXT 目录规则")
-            SettingsItem(Icons.Default.FindReplace, "净化替换规则")
+            SettingsItem(Icons.Default.FindReplace, "净化替换规则",
+                subtitle = "去广告、净化正文内容",
+                onClick = onNavigateReplaceRules)
         }
         SettingsSection("关于") {
             SettingsItem(Icons.Default.Info, "关于墨境", onClick = onNavigateAbout)
@@ -264,17 +284,31 @@ fun ProfileScreen(
         Spacer(Modifier.height(32.dp))
     }
 
-    // Custom theme editor dialog
-    if (showCustomThemeEditor) {
-        val currentCss by themeViewModel.customCss.collectAsState()
-        CustomThemeEditorDialog(
-            onDismiss = { showCustomThemeEditor = false },
-            onSave = { theme ->
-                themeViewModel.importCustomTheme(theme)
-                showCustomThemeEditor = false
+    // Delete custom theme confirmation
+    showDeleteThemeConfirm?.let { themeId ->
+        val themeName = allThemes.find { it.id == themeId }?.name ?: "主题"
+        AlertDialog(
+            onDismissRequest = { showDeleteThemeConfirm = null },
+            title = { Text("删除主题") },
+            text = { Text("确定删除「$themeName」？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    themeViewModel.deleteCustomTheme(themeId)
+                    showDeleteThemeConfirm = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
             },
-            currentCustomCss = currentCss,
-            onCustomCssChange = { themeViewModel.setCustomCss(it) },
+            dismissButton = {
+                TextButton(onClick = { showDeleteThemeConfirm = null }) { Text("取消") }
+            },
+        )
+    }
+
+    // Annual report dialog
+    if (showAnnualReport) {
+        AnnualReportDialog(
+            report = annualReport,
+            accentColor = MaterialTheme.colorScheme.primary,
+            onDismiss = { showAnnualReport = false },
         )
     }
 }
@@ -283,7 +317,7 @@ fun ProfileScreen(
 private fun StatItem(value: String, label: String) {
     val moColors = LocalMoRealmColors.current
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = moColors.accent)
+        Text(value, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary)
         Text(label, style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
     }
@@ -298,27 +332,36 @@ private fun formatDuration(ms: Long): String {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ThemeGridItem(
-    theme: ThemeEntity, isActive: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier,
+    theme: ThemeEntity, isActive: Boolean, onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null, modifier: Modifier = Modifier,
 ) {
     val bgColor = theme.backgroundColor.toComposeColor()
     val accentColor = theme.accentColor.toComposeColor()
-    val moColors = LocalMoRealmColors.current
     Card(
-        onClick = onClick, modifier = modifier, shape = RoundedCornerShape(12.dp),
-        border = if (isActive) CardDefaults.outlinedCardBorder().copy(
-            brush = androidx.compose.ui.graphics.SolidColor(moColors.accent)) else null,
-        colors = CardDefaults.cardColors(containerColor = moColors.surfaceGlass),
+        modifier = modifier, shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(
+            width = if (isActive) 2.dp else 1.dp,
+            color = if (isActive) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outlineVariant,
+        ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
-        Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            Modifier
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                .padding(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Box(Modifier.size(28.dp).clip(CircleShape).background(bgColor), contentAlignment = Alignment.Center) {
                 Box(Modifier.size(12.dp).clip(CircleShape).background(accentColor))
             }
             Spacer(Modifier.height(6.dp))
             Text(theme.name, style = MaterialTheme.typography.labelSmall,
                 fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                color = if (isActive) moColors.accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         }
     }
 }
@@ -332,12 +375,12 @@ fun SettingsCard(
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = moColors.surfaceGlass),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(icon, null, tint = moColors.accent, modifier = Modifier.size(20.dp))
+                Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
                 Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             }
@@ -361,8 +404,8 @@ fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) 
     SectionTitle(title)
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = LocalMoRealmColors.current.surfaceGlass),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) { Column(Modifier.padding(vertical = 4.dp)) { content() } }
     Spacer(Modifier.height(16.dp))
 }
@@ -386,247 +429,123 @@ fun SettingsItem(icon: ImageVector, title: String, subtitle: String? = null, onC
     }
 }
 
-/** Custom theme editor — color pickers for bg/text/accent */
+
+/**
+ * Annual reading report dialog — ported from HTML prototype.
+ * All data is dynamic from ReadStats + Book tables.
+ */
 @Composable
-private fun CustomThemeEditorDialog(
+private fun AnnualReportDialog(
+    report: AnnualReport?,
+    accentColor: Color,
     onDismiss: () -> Unit,
-    onSave: (ThemeEntity) -> Unit,
-    currentCustomCss: String = "",
-    onCustomCssChange: (String) -> Unit = {},
 ) {
-    val moColors = LocalMoRealmColors.current
-    var themeName by remember { mutableStateOf("我的主题") }
-    var isNight by remember { mutableStateOf(false) }
-    var bgColor by remember { mutableStateOf("FFFDFBF7") }
-    var textColor by remember { mutableStateOf("FF2D2D2D") }
-    var accentColor by remember { mutableStateOf("FFD97706") }
-    // Which color is being edited: null / "bg" / "text" / "accent"
-    var editingColor by remember { mutableStateOf<String?>(null) }
-
-    // Common colors for quick pick
-    val bgPalette = listOf(
-        "FFFDFBF7", "FFF5F0E8", "FFE8F5E9", "FFE3F2FD", "FFFCE4EC", "FFFFF8E1",
-        "FFFFFFFF", "FFF0F0F0", "FFE0E0E0",
-        "FF0A0A0F", "FF1B2A1B", "FF0D1117", "FF1A1A2E", "FF000000", "FF121212",
-    )
-    val textPalette = listOf(
-        "FF1A1A1A", "FF2D2D2D", "FF333333", "FF1B5E20", "FF0D47A1", "FF880E4F",
-        "FFEDEDEF", "FFDCE8DC", "FFC9D1D9", "FFA0A0A0", "FFB0B0B0", "FFE0E0E0",
-    )
-    val accentPalette = listOf(
-        "FFD97706", "FF4CAF50", "FF2196F3", "FFE91E63", "FF7C5CFC", "FF81C784",
-        "FF818CF8", "FF58A6FF", "FFFF2D95", "FF6366F1", "FF555555", "FFFF5722",
-    )
-
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("自定义主题") },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        },
+        title = null,
         text = {
-            Column {
-                OutlinedTextField(
-                    value = themeName,
-                    onValueChange = { themeName = it },
-                    label = { Text("主题名称") },
-                    singleLine = true,
+            if (report == null) {
+                Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                }
+            } else {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
-                )
-                Spacer(Modifier.height(12.dp))
-
-                // Night mode toggle
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("暗色主题", style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.weight(1f))
-                    Switch(checked = isNight, onCheckedChange = { isNight = it },
-                        colors = SwitchDefaults.colors(checkedTrackColor = moColors.accent))
-                }
-                Spacer(Modifier.height(8.dp))
-
-                // Color buttons — tap to expand color grid
-                ColorPickRow("背景色", bgColor, editingColor == "bg",
-                    { editingColor = if (editingColor == "bg") null else "bg" },
-                    bgPalette) { bgColor = it }
-                ColorPickRow("文字色", textColor, editingColor == "text",
-                    { editingColor = if (editingColor == "text") null else "text" },
-                    textPalette) { textColor = it }
-                ColorPickRow("强调色", accentColor, editingColor == "accent",
-                    { editingColor = if (editingColor == "accent") null else "accent" },
-                    accentPalette) { accentColor = it }
-
-                // Custom CSS
-                Spacer(Modifier.height(12.dp))
-                var cssText by remember { mutableStateOf(currentCustomCss) }
-                var showCssEditor by remember { mutableStateOf(currentCustomCss.isNotEmpty()) }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().clickable { showCssEditor = !showCssEditor },
                 ) {
-                    Text("自定义 CSS", style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.weight(1f))
-                    if (cssText.isNotEmpty()) {
-                        Text("已配置", style = MaterialTheme.typography.labelSmall,
-                            color = moColors.accent)
-                    }
-                    Icon(
-                        if (showCssEditor) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                        modifier = Modifier.size(18.dp))
-                }
-                if (showCssEditor) {
-                    Spacer(Modifier.height(4.dp))
-                    OutlinedTextField(
-                        value = cssText,
-                        onValueChange = { cssText = it },
-                        placeholder = { Text("p { text-indent: 0; }", style = MaterialTheme.typography.bodySmall) },
-                        modifier = Modifier.fillMaxWidth().height(80.dp),
-                        textStyle = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
+                    // Year label
+                    Text(
+                        "${report.year} 年度阅读报告",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accentColor,
+                        letterSpacing = 2.sp,
+                        fontWeight = FontWeight.Bold,
                     )
-                    Spacer(Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = false,
-                            onClick = { onCustomCssChange(cssText) },
-                            label = { Text("应用 CSS") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = moColors.accent.copy(alpha = 0.15f)),
-                        )
-                        if (cssText.isNotEmpty()) {
-                            FilterChip(
-                                selected = false,
-                                onClick = { cssText = ""; onCustomCssChange("") },
-                                label = { Text("清除") },
-                            )
+                    // Big number
+                    Text(
+                        "${report.totalBooks} 本",
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.Black,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+                    )
+                    // Summary line
+                    val wordText = if (report.totalWordsWan > 0) "共 ${report.totalWordsWan} 万字" else ""
+                    val hourText = if (report.totalDurationHours > 0) "${report.totalDurationHours} 小时" else ""
+                    val summary = listOf(wordText, hourText).filter { it.isNotBlank() }.joinToString(" · ")
+                    if (summary.isNotBlank()) {
+                        Text(summary, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    // Habit row
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            Modifier.padding(12.dp).fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceAround,
+                        ) {
+                            HabitItem("\uD83C\uDF19", "最常 ${report.peakHour}")
+                            HabitItem("⏱", "最长 ${report.longestSessionMin}m")
+                            if (report.favoriteBook.isNotBlank()) {
+                                HabitItem("\uD83C\uDFC6", report.favoriteBook.take(6))
+                            }
                         }
                     }
-                }
 
-                Spacer(Modifier.height(12.dp))
-                // Live preview
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = "#$bgColor".toComposeColor()),
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text("预览效果", style = MaterialTheme.typography.labelSmall,
-                            color = "#$accentColor".toComposeColor())
-                        Spacer(Modifier.height(6.dp))
-                        Text("天地玄黄，宇宙洪荒。\n日月盈昃，辰宿列张。",
-                            style = MaterialTheme.typography.bodyMedium,
-                            lineHeight = 24.sp,
-                            color = "#$textColor".toComposeColor())
+                    // Tags
+                    if (report.tags.isNotEmpty()) {
+                        Spacer(Modifier.height(14.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            report.tags.forEach { tag ->
+                                Surface(
+                                    shape = MaterialTheme.shapes.small,
+                                    color = accentColor.copy(alpha = 0.1f),
+                                    modifier = Modifier.padding(horizontal = 3.dp),
+                                ) {
+                                    Text(
+                                        tag,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = accentColor,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
+                        }
                     }
+
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "墨境 MoRealm · 年度报告",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
+                        letterSpacing = 1.sp,
+                    )
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                val theme = ThemeEntity(
-                    id = "custom_${System.currentTimeMillis()}",
-                    name = themeName,
-                    author = "用户自定义",
-                    isBuiltin = false,
-                    isNightTheme = isNight,
-                    primaryColor = "#$accentColor",
-                    accentColor = "#$accentColor",
-                    backgroundColor = "#$bgColor",
-                    surfaceColor = "#$bgColor",
-                    onBackgroundColor = "#$textColor",
-                    bottomBackground = "#$bgColor",
-                    readerBackground = "#$bgColor",
-                    readerTextColor = "#$textColor",
-                )
-                onSave(theme)
-            }) { Text("保存并应用", color = moColors.accent) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
         },
     )
 }
 
-/** A row with color swatch + hex input + expandable palette grid */
 @Composable
-private fun ColorPickRow(
-    label: String,
-    currentHex: String,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    palette: List<String>,
-    onColorPick: (String) -> Unit,
-) {
-    val moColors = LocalMoRealmColors.current
-    var hexInput by remember(currentHex) { mutableStateOf(currentHex.takeLast(6)) }
-
-    Column {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle)
-                .padding(vertical = 6.dp),
-        ) {
-            Box(Modifier.size(24.dp).clip(CircleShape)
-                .background("#$currentHex".toComposeColor())
-                .clickable(onClick = onToggle))
-            Spacer(Modifier.width(10.dp))
-            Text(label, style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-            Text("#${currentHex.takeLast(6)}", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-            Icon(
-                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                null, modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
-        }
-        if (expanded) {
-            // Hex input
-            OutlinedTextField(
-                value = hexInput,
-                onValueChange = { v ->
-                    val clean = v.replace("#", "").take(6)
-                    hexInput = clean
-                    if (clean.length == 6 && clean.all { it in "0123456789abcdefABCDEF" }) {
-                        onColorPick("FF$clean".uppercase())
-                    }
-                },
-                label = { Text("Hex 色值") },
-                prefix = { Text("#") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
-            )
-            // Color grid
-            val rows = palette.chunked(6)
-            for (row in rows) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    row.forEach { hex ->
-                        val selected = currentHex == hex
-                        Box(
-                            Modifier.weight(1f).aspectRatio(1f)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background("#$hex".toComposeColor())
-                                .then(if (selected) Modifier.padding(2.dp) else Modifier)
-                                .clickable { onColorPick(hex); hexInput = hex.takeLast(6) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (selected) {
-                                Icon(Icons.Default.Check, null,
-                                    tint = if (hex.takeLast(6).take(2).toIntOrNull(16) ?: 128 > 128)
-                                        Color.Black.copy(alpha = 0.7f) else Color.White.copy(alpha = 0.7f),
-                                    modifier = Modifier.size(14.dp))
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-            }
-            Spacer(Modifier.height(4.dp))
-        }
+private fun HabitItem(emoji: String, label: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(emoji, fontSize = 16.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+            fontSize = 9.sp)
     }
 }

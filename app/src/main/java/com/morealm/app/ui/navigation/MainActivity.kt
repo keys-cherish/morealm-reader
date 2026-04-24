@@ -9,6 +9,7 @@ import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSiz
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.presentation.theme.ThemeViewModel
 import com.morealm.app.ui.theme.MoRealmTheme
@@ -30,7 +31,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val themeViewModel: ThemeViewModel = hiltViewModel()
-            val activeTheme by themeViewModel.activeTheme.collectAsState()
+            val activeTheme by themeViewModel.activeTheme.collectAsStateWithLifecycle()
             val windowSizeClass = calculateWindowSizeClass(this)
 
             MoRealmTheme(theme = activeTheme) {
