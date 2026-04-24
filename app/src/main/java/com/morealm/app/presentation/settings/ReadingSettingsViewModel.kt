@@ -3,9 +3,11 @@ package com.morealm.app.presentation.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.preference.AppPreferences
+import com.morealm.app.domain.repository.ReaderStyleRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -13,10 +15,11 @@ import javax.inject.Inject
 @HiltViewModel
 class ReadingSettingsViewModel @Inject constructor(
     private val prefs: AppPreferences,
+    private val styleRepo: ReaderStyleRepository,
 ) : ViewModel() {
 
     val pageAnim: StateFlow<String> = prefs.pageAnim
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "vertical")
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "slide")
 
     val tapLeftAction: StateFlow<String> = prefs.tapLeftAction
         .stateIn(viewModelScope, SharingStarted.Eagerly, "next")
@@ -48,7 +51,13 @@ class ReadingSettingsViewModel @Inject constructor(
     val ttsSkipPattern: StateFlow<String> = prefs.ttsSkipPattern
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
-    fun setPageAnim(v: String) = viewModelScope.launch { prefs.setPageAnim(v) }
+    fun setPageAnim(v: String) = viewModelScope.launch {
+        prefs.setPageAnim(v)
+        val activeId = prefs.activeReaderStyle.first()
+        styleRepo.getById(activeId)?.let { style ->
+            styleRepo.upsert(style.copy(pageAnim = v))
+        }
+    }
     fun setTapLeftAction(v: String) = viewModelScope.launch { prefs.setTapLeftAction(v) }
     fun setVolumeKeyPage(v: Boolean) = viewModelScope.launch { prefs.setVolumeKeyPage(v) }
     fun setResumeLastRead(v: Boolean) = viewModelScope.launch { prefs.setResumeLastRead(v) }

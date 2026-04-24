@@ -12,6 +12,10 @@ import com.morealm.app.domain.entity.rule.ExploreRule
 import com.morealm.app.domain.entity.rule.ReviewRule
 import com.morealm.app.domain.entity.rule.SearchRule
 import com.morealm.app.domain.entity.rule.TocRule
+import com.morealm.app.domain.http.CacheManager
+import com.morealm.app.domain.http.CookieStore
+import com.script.ScriptBindings
+import com.script.rhino.RhinoScriptEngine
 import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -41,6 +45,7 @@ data class BookSource(
     var enabled: Boolean = true,
     @ColumnInfo(defaultValue = "1")
     var enabledExplore: Boolean = true,
+    var enabledCookieJar: Boolean? = null,
     var concurrentRate: String? = null,
     var header: String? = null,
     var loginUrl: String? = null,
@@ -49,6 +54,7 @@ data class BookSource(
     var coverDecodeJs: String? = null,
     var bookSourceComment: String? = null,
     var variableComment: String? = null,
+    var jsLib: String? = null,
     var lastUpdateTime: Long = 0,
     var respondTime: Long = 180000L,
     var weight: Int = 0,
@@ -65,6 +71,8 @@ data class BookSource(
 
     override fun equals(other: Any?): Boolean =
         if (other is BookSource) other.bookSourceUrl == bookSourceUrl else false
+
+    fun getKey(): String = bookSourceUrl
 
     fun getSearchRule(): SearchRule {
         ruleSearch?.let { return it }
@@ -96,15 +104,158 @@ data class BookSource(
         else String.format("%s (%s)", bookSourceName, bookSourceGroup)
     }
 
-    fun getHeaderMap(): HashMap<String, String> = HashMap<String, String>().apply {
+    // ── 登录体系 ──
+
+    fun getLoginJs(): String? {
+        val loginJs = loginUrl
+        return when {
+            loginJs == null -> null
+            loginJs.startsWith("@js:") -> loginJs.substring(4)
+            loginJs.startsWith("<js>") -> loginJs.substring(4, loginJs.lastIndexOf("<"))
+            else -> loginJs
+        }
+    }
+
+    /**
+     * 执行登录脚本
+     */
+    fun login() {
+        val loginJs = getLoginJs()
+        if (!loginJs.isNullOrBlank()) {
+            val js = """$loginJs
+                if(typeof login=='function'){
+                    login.apply(this);
+                } else {
+                    throw('Function login not implements!!!')
+                }
+            """.trimIndent()
+            evalJS(js)
+        }
+    }
+
+    /**
+     * 获取登录头部信息
+     */
+    fun getLoginHeader(): String? {
+        return CacheManager.get("loginHeader_${getKey()}")
+    }
+
+    fun getLoginHeaderMap(): Map<String, String>? {
+        val cache = getLoginHeader() ?: return null
+        return try {
+            jsonParser.decodeFromString<Map<String, String>>(cache)
+        } catch (_: Exception) { null }
+    }
+
+    /**
+     * 保存登录头部信息
+     */
+    fun putLoginHeader(header: String) {
+        try {
+            val headerMap = jsonParser.decodeFromString<Map<String, String>>(header)
+            val cookie = headerMap["Cookie"] ?: headerMap["cookie"]
+            cookie?.let { CookieStore.replaceCookie(getKey(), it) }
+        } catch (_: Exception) {}
+        CacheManager.put("loginHeader_${getKey()}", header)
+    }
+
+    fun removeLoginHeader() {
+        CacheManager.delete("loginHeader_${getKey()}")
+        CookieStore.removeCookie(getKey())
+    }
+
+    /**
+     * 获取用户登录信息
+     */
+    fun getLoginInfo(): String? {
+        return CacheManager.get("userInfo_${getKey()}")
+    }
+
+    fun getLoginInfoMap(): Map<String, String>? {
+        val info = getLoginInfo() ?: return null
+        return try {
+            jsonParser.decodeFromString<Map<String, String>>(info)
+        } catch (_: Exception) { null }
+    }
+
+    /**
+     * 保存用户登录信息
+     */
+    fun putLoginInfo(info: String): Boolean {
+        return try {
+            CacheManager.put("userInfo_${getKey()}", info)
+            true
+        } catch (_: Exception) { false }
+    }
+
+    fun removeLoginInfo() {
+        CacheManager.delete("userInfo_${getKey()}")
+    }
+
+    // ── 自定义变量 ──
+
+    /**
+     * 设置书源级自定义变量（供JS中 source.setVariable/source.getVariable 调用）
+     */
+    fun setVariable(variable: String?) {
+        if (variable != null) {
+            CacheManager.put("sourceVariable_${getKey()}", variable)
+        } else {
+            CacheManager.delete("sourceVariable_${getKey()}")
+        }
+    }
+
+    fun getVariable(): String {
+        return CacheManager.get("sourceVariable_${getKey()}") ?: ""
+    }
+
+    /**
+     * 保存数据（供JS中 source.put/source.get 调用）
+     */
+    fun put(key: String, value: String): String {
+        CacheManager.put("v_${getKey()}_${key}", value)
+        return value
+    }
+
+    fun get(key: String): String {
+        return CacheManager.get("v_${getKey()}_${key}") ?: ""
+    }
+
+    // ── Header ──
+
+    fun getHeaderMap(hasLoginHeader: Boolean = false): HashMap<String, String> = HashMap<String, String>().apply {
         header?.let {
             try {
-                jsonParser.decodeFromString<Map<String, String>>(it).let { map -> putAll(map) }
+                val headerStr = when {
+                    it.startsWith("@js:", true) -> evalJS(it.substring(4)).toString()
+                    it.startsWith("<js>", true) -> evalJS(it.substring(4, it.lastIndexOf("<"))).toString()
+                    else -> it
+                }
+                jsonParser.decodeFromString<Map<String, String>>(headerStr).let { map -> putAll(map) }
             } catch (_: Exception) {}
         }
         if (!containsKey("User-Agent")) {
             put("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
         }
+        if (hasLoginHeader) {
+            getLoginHeaderMap()?.let { putAll(it) }
+        }
+    }
+
+    // ── JS执行 ──
+
+    /**
+     * 执行JS（书源级别，供header中@js:调用、login脚本等）
+     */
+    fun evalJS(jsStr: String): Any? {
+        val bindings = ScriptBindings()
+        bindings["java"] = this
+        bindings["source"] = this
+        bindings["baseUrl"] = bookSourceUrl
+        bindings["cookie"] = CookieStore
+        bindings["cache"] = CacheManager
+        val scope = RhinoScriptEngine.getRuntimeScope(bindings)
+        return RhinoScriptEngine.eval(jsStr, scope)
     }
 
     class Converters {

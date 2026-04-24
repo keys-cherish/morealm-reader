@@ -2,7 +2,9 @@ package com.morealm.app.domain.repository
 
 import com.morealm.app.domain.db.BookSourceDao
 import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.http.okHttpClient
 import kotlinx.coroutines.flow.Flow
+import okhttp3.Request
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -10,6 +12,7 @@ import javax.inject.Singleton
 class SourceRepository @Inject constructor(
     private val sourceDao: BookSourceDao,
 ) {
+
     fun getEnabledSources(): Flow<List<BookSource>> = sourceDao.getEnabledSources()
 
     suspend fun getEnabledSourcesList(): List<BookSource> = sourceDao.getEnabledSourcesList()
@@ -23,4 +26,14 @@ class SourceRepository @Inject constructor(
     suspend fun importAll(sources: List<BookSource>) = sourceDao.insertAll(sources)
 
     suspend fun delete(source: BookSource) = sourceDao.delete(source)
+
+    fun fetchSourceJson(url: String): String {
+        val response = okHttpClient.newCall(
+            Request.Builder().url(url)
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+        ).execute()
+        if (!response.isSuccessful) throw Exception("HTTP ${response.code}")
+        return response.body?.string() ?: throw Exception("Empty response")
+    }
 }

@@ -1,6 +1,8 @@
 package com.morealm.app.domain.render
 
 import android.graphics.Paint
+import com.morealm.app.domain.render.canvasrecorder.CanvasRecorder
+import com.morealm.app.domain.render.canvasrecorder.CanvasRecorderFactory
 
 /**
  * Core data models for the Canvas reading system.
@@ -125,6 +127,9 @@ class TextPage(
     val lines = arrayListOf<TextLine>()
     val searchResult = arrayListOf<TextColumn>()
 
+    /** 页面级绘制录制器 — 录制一次，后续帧直接回放，避免重复绘制。 */
+    val canvasRecorder: CanvasRecorder = CanvasRecorderFactory.create(locked = true)
+
     var text: String = ""
     var height: Float = 0f
     var leftLineSize: Int = 0
@@ -189,6 +194,22 @@ class TextPage(
         return this
     }
 
+    /** Group lines into paragraphs by paragraphNum (ported from Legado TextPage.paragraphs). */
+    val paragraphs: List<TextParagraph> by lazy {
+        val result = arrayListOf<TextParagraph>()
+        val filtered = lines.filter { it.paragraphNum > 0 }
+        if (filtered.isEmpty()) return@lazy result
+        val offset = filtered.first().paragraphNum - 1
+        for (line in filtered) {
+            val idx = line.paragraphNum - offset - 1
+            while (result.size <= idx) {
+                result.add(TextParagraph(result.size))
+            }
+            result[idx].textLines.add(line)
+        }
+        result
+    }
+
     fun format(): TextPage {
         if (text.isNotEmpty() && lines.isEmpty()) {
             // Simple text-only page (e.g., error message)
@@ -228,7 +249,12 @@ data class TextParagraph(
 ) {
     val textLines = arrayListOf<TextLine>()
 
+    val text: String get() = textLines.joinToString("") { it.text }
+    val length: Int get() = text.length
+    val firstLine: TextLine get() = textLines.first()
+    val lastLine: TextLine get() = textLines.last()
     val chapterPosition: Int get() = textLines.firstOrNull()?.chapterPosition ?: 0
+    val isParagraphEnd: Boolean get() = textLines.lastOrNull()?.isParagraphEnd == true
 
     val chapterIndices: IntRange get() {
         val first = textLines.firstOrNull()?.chapterPosition ?: 0
@@ -314,6 +340,8 @@ class TextChapter(
         val EMPTY = TextChapter(-1, "", 0).apply { isCompleted = true }
     }
 }
+
+// ── AsyncLayoutHandle ──
 
 // ── PageImage (for backward compat with simple image rendering) ──
 

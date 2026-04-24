@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import androidx.paging.PagingSource
 import com.morealm.app.domain.entity.*
 import kotlinx.coroutines.flow.Flow
 
@@ -22,6 +23,45 @@ interface BookDao {
 
     @Query("SELECT * FROM books ORDER BY lastReadAt DESC")
     fun getAllBooks(): Flow<List<Book>>
+
+    @Query("SELECT * FROM books ORDER BY title COLLATE NOCASE")
+    fun getAllBooksPaging(): PagingSource<Int, Book>
+
+    @Query("SELECT * FROM books WHERE folderId IS NULL ORDER BY title COLLATE NOCASE")
+    fun getUngroupedBooksPaging(): PagingSource<Int, Book>
+
+    @Query("SELECT * FROM books WHERE folderId IS NULL ORDER BY lastReadAt DESC")
+    fun getUngroupedBooksByRecent(): PagingSource<Int, Book>
+
+    @Query("SELECT * FROM books WHERE folderId IS NULL ORDER BY addedAt DESC")
+    fun getUngroupedBooksByAddTime(): PagingSource<Int, Book>
+
+    @Query("SELECT * FROM books WHERE folderId IS NULL ORDER BY format, title COLLATE NOCASE")
+    fun getUngroupedBooksByFormat(): PagingSource<Int, Book>
+
+    @Query("SELECT * FROM books ORDER BY lastReadAt DESC")
+    fun getAllBooksByRecent(): PagingSource<Int, Book>
+
+    @Query("SELECT * FROM books ORDER BY addedAt DESC")
+    fun getAllBooksByAddTime(): PagingSource<Int, Book>
+
+    @Query("SELECT * FROM books ORDER BY format, title COLLATE NOCASE")
+    fun getAllBooksByFormat(): PagingSource<Int, Book>
+
+    @Query("SELECT COUNT(*) FROM books WHERE folderId = :folderId")
+    fun countByFolderId(folderId: String): Flow<Int>
+
+    @Query("SELECT * FROM books WHERE folderId = :folderId ORDER BY title COLLATE NOCASE")
+    fun getBooksByFolderPaging(folderId: String): PagingSource<Int, Book>
+
+    @Query("SELECT * FROM books WHERE folderId = :folderId ORDER BY lastReadAt DESC")
+    fun getBooksByFolderByRecent(folderId: String): PagingSource<Int, Book>
+
+    @Query("SELECT * FROM books WHERE folderId = :folderId ORDER BY addedAt DESC")
+    fun getBooksByFolderByAddTime(folderId: String): PagingSource<Int, Book>
+
+    @Query("SELECT * FROM books WHERE folderId = :folderId ORDER BY format, title COLLATE NOCASE")
+    fun getBooksByFolderByFormat(folderId: String): PagingSource<Int, Book>
 
     @Query("SELECT * FROM books WHERE title LIKE :keyword OR author LIKE :keyword ORDER BY lastReadAt DESC")
     suspend fun searchBooks(keyword: String): List<Book>
@@ -60,6 +100,9 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE localPath = :localPath LIMIT 1")
     suspend fun findByLocalPath(localPath: String): Book?
 
+    @Query("SELECT * FROM books WHERE bookUrl = :bookUrl AND sourceUrl = :sourceUrl LIMIT 1")
+    suspend fun findByBookUrl(bookUrl: String, sourceUrl: String): Book?
+
     @Query("SELECT * FROM books ORDER BY lastReadAt DESC")
     suspend fun getAllBooksSync(): List<Book>
 }
@@ -74,6 +117,9 @@ interface ChapterDao {
 
     @Query("SELECT COUNT(*) FROM book_chapters WHERE bookId = :bookId")
     suspend fun getChapterCount(bookId: String): Int
+
+    @Query("SELECT * FROM book_chapters WHERE bookId = :bookId ORDER BY `index`")
+    suspend fun getChaptersList(bookId: String): List<BookChapter>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(chapters: List<BookChapter>)
@@ -174,6 +220,9 @@ interface ThemeDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(themes: List<ThemeEntity>)
 
+    @Query("DELETE FROM themes WHERE id = :id AND isBuiltin = 0")
+    suspend fun deleteCustomTheme(id: String)
+
     @Query("SELECT * FROM themes")
     suspend fun getAllSync(): List<ThemeEntity>
 }
@@ -188,6 +237,25 @@ interface ReadStatsDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun save(stats: ReadStats)
+
+    /** Year-level aggregates for annual report */
+    @Query("SELECT * FROM read_stats WHERE date LIKE :yearPrefix || '%' ORDER BY date")
+    suspend fun getByYear(yearPrefix: String): List<ReadStats>
+
+    @Query("SELECT SUM(readDurationMs) FROM read_stats WHERE date LIKE :yearPrefix || '%'")
+    suspend fun totalDurationByYear(yearPrefix: String): Long?
+
+    @Query("SELECT SUM(wordsRead) FROM read_stats WHERE date LIKE :yearPrefix || '%'")
+    suspend fun totalWordsByYear(yearPrefix: String): Long?
+
+    @Query("SELECT SUM(booksFinished) FROM read_stats WHERE date LIKE :yearPrefix || '%'")
+    suspend fun totalBooksFinishedByYear(yearPrefix: String): Int?
+
+    @Query("SELECT COUNT(*) FROM read_stats WHERE date LIKE :yearPrefix || '%' AND readDurationMs > 0")
+    suspend fun activeDaysByYear(yearPrefix: String): Int
+
+    @Query("SELECT MAX(readDurationMs) FROM read_stats WHERE date LIKE :yearPrefix || '%'")
+    suspend fun longestSessionByYear(yearPrefix: String): Long?
 }
 
 @Dao
@@ -230,6 +298,9 @@ interface ReplaceRuleDao {
 
     @Query("SELECT * FROM replace_rules ORDER BY sortOrder")
     suspend fun getAllSync(): List<ReplaceRule>
+
+    @Query("SELECT * FROM replace_rules WHERE enabled = 1 AND (scope = '' OR scope = :bookName OR scope = :bookOrigin) ORDER BY sortOrder")
+    fun getEnabledByScope(bookName: String, bookOrigin: String): List<ReplaceRule>
 }
 
 @Dao
@@ -267,6 +338,9 @@ interface TxtTocRuleDao {
     @Query("SELECT * FROM txt_toc_rules WHERE enabled = 1 ORDER BY sortOrder")
     suspend fun getEnabledRules(): List<TxtTocRule>
 
+    @Query("SELECT * FROM txt_toc_rules WHERE enabled = 1 ORDER BY sortOrder")
+    fun getEnabledRulesSync(): List<TxtTocRule>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(rule: TxtTocRule)
 
@@ -296,4 +370,37 @@ interface HttpTtsDao {
 
     @Query("SELECT COUNT(*) FROM http_tts")
     suspend fun count(): Int
+}
+
+@Dao
+interface CacheDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(cache: Cache)
+
+    @Query("SELECT * FROM caches WHERE `key` = :key")
+    suspend fun get(key: String): Cache?
+
+    @Query("DELETE FROM caches WHERE `key` = :key")
+    suspend fun delete(key: String)
+
+    @Query("DELETE FROM caches WHERE `key` LIKE :prefix || '%'")
+    suspend fun deleteByPrefix(prefix: String)
+
+    @Query("DELETE FROM caches")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface CookieDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(cookie: Cookie)
+
+    @Query("SELECT * FROM cookies WHERE url = :url")
+    suspend fun get(url: String): Cookie?
+
+    @Query("DELETE FROM cookies WHERE url = :url")
+    suspend fun delete(url: String)
+
+    @Query("DELETE FROM cookies")
+    suspend fun deleteAll()
 }

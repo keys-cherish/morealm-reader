@@ -12,6 +12,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -28,10 +29,10 @@ fun WebDavScreen(
     viewModel: ProfileViewModel = hiltViewModel(),
 ) {
     val moColors = LocalMoRealmColors.current
-    val savedUrl by viewModel.webDavUrl.collectAsState()
-    val savedUser by viewModel.webDavUser.collectAsState()
-    val savedPass by viewModel.webDavPass.collectAsState()
-    val testResult by viewModel.testResult.collectAsState()
+    val savedUrl by viewModel.webDavUrl.collectAsStateWithLifecycle()
+    val savedUser by viewModel.webDavUser.collectAsStateWithLifecycle()
+    val savedPass by viewModel.webDavPass.collectAsStateWithLifecycle()
+    val testResult by viewModel.testResult.collectAsStateWithLifecycle()
     var url by remember(savedUrl) { mutableStateOf(savedUrl) }
     var user by remember(savedUser) { mutableStateOf(savedUser) }
     var pass by remember(savedPass) { mutableStateOf(savedPass) }
@@ -58,11 +59,11 @@ fun WebDavScreen(
         // Info card
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = moColors.accent.copy(alpha = 0.08f)),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)),
         ) {
             Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Cloud, null, tint = moColors.accent, modifier = Modifier.size(24.dp))
+                Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("云端同步", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -82,8 +83,8 @@ fun WebDavScreen(
 
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = moColors.surfaceGlass),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
@@ -94,9 +95,9 @@ fun WebDavScreen(
                     leadingIcon = { Icon(Icons.Default.Link, null, modifier = Modifier.size(20.dp)) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = moColors.accent,
-                        cursorColor = moColors.accent,
-                        focusedLabelColor = moColors.accent,
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedLabelColor = MaterialTheme.colorScheme.primary,
                     ),
                 )
                 OutlinedTextField(
@@ -107,9 +108,9 @@ fun WebDavScreen(
                     leadingIcon = { Icon(Icons.Default.Person, null, modifier = Modifier.size(20.dp)) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = moColors.accent,
-                        cursorColor = moColors.accent,
-                        focusedLabelColor = moColors.accent,
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedLabelColor = MaterialTheme.colorScheme.primary,
                     ),
                 )
                 OutlinedTextField(
@@ -128,9 +129,9 @@ fun WebDavScreen(
                     visualTransformation = if (showPass) VisualTransformation.None else PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = moColors.accent,
-                        cursorColor = moColors.accent,
-                        focusedLabelColor = moColors.accent,
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedLabelColor = MaterialTheme.colorScheme.primary,
                     ),
                 )
             }
@@ -146,21 +147,21 @@ fun WebDavScreen(
             OutlinedButton(
                 onClick = { viewModel.testWebDav(url, user, pass) },
                 modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp),
+                shape = MaterialTheme.shapes.medium,
             ) { Text("测试连接") }
             Button(
                 onClick = {
                     viewModel.saveWebDav(url, user, pass)
                 },
                 modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = moColors.accent),
+                shape = MaterialTheme.shapes.medium,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) { Text("保存配置") }
         }
 
         if (testResult.isNotEmpty()) {
             Text(testResult, style = MaterialTheme.typography.bodySmall,
-                color = moColors.accent, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
         }
 
         Spacer(Modifier.height(24.dp))
@@ -172,8 +173,8 @@ fun WebDavScreen(
 
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = moColors.surfaceGlass),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(modifier = Modifier.padding(vertical = 4.dp)) {
                 SyncItem(Icons.Default.Backup, "备份到云端", "上传书架、进度、书源、主题") {
@@ -181,13 +182,13 @@ fun WebDavScreen(
                     viewModel.webDavBackup()
                 }
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                    color = MaterialTheme.colorScheme.outlineVariant)
                 SyncItem(Icons.Default.CloudDownload, "从云端恢复", "下载并覆盖本地数据") {
                     viewModel.saveWebDav(url, user, pass)
                     viewModel.webDavRestore()
                 }
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                    color = MaterialTheme.colorScheme.outlineVariant)
                 SyncItem(Icons.Default.SyncAlt, "自动同步", "每次打开 App 自动同步进度") {}
             }
         }
@@ -197,8 +198,8 @@ fun WebDavScreen(
         // Tips
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = moColors.surfaceGlass),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("使用提示", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
@@ -226,7 +227,7 @@ private fun SyncItem(icon: androidx.compose.ui.graphics.vector.ImageVector, titl
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = moColors.accent, modifier = Modifier.size(22.dp))
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyMedium)

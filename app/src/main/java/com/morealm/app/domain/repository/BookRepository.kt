@@ -1,5 +1,6 @@
 package com.morealm.app.domain.repository
 
+import androidx.paging.PagingSource
 import com.morealm.app.domain.db.BookDao
 import com.morealm.app.domain.db.BookGroupDao
 import com.morealm.app.domain.db.ChapterDao
@@ -20,6 +21,29 @@ class BookRepository @Inject constructor(
     private val groupDao: BookGroupDao,
 ) {
     fun getAllBooks(): Flow<List<Book>> = bookDao.getAllBooks()
+
+    fun getBooksPaging(sortMode: String): PagingSource<Int, Book> = when (sortMode) {
+        "recent" -> bookDao.getAllBooksByRecent()
+        "addTime" -> bookDao.getAllBooksByAddTime()
+        "format" -> bookDao.getAllBooksByFormat()
+        else -> bookDao.getAllBooksPaging()
+    }
+
+    fun getUngroupedBooksPaging(sortMode: String): PagingSource<Int, Book> = when (sortMode) {
+        "recent" -> bookDao.getUngroupedBooksByRecent()
+        "addTime" -> bookDao.getUngroupedBooksByAddTime()
+        "format" -> bookDao.getUngroupedBooksByFormat()
+        else -> bookDao.getUngroupedBooksPaging()
+    }
+
+    fun countByFolderId(folderId: String): Flow<Int> = bookDao.countByFolderId(folderId)
+
+    fun getBooksPagingByFolder(folderId: String, sortMode: String): PagingSource<Int, Book> = when (sortMode) {
+        "recent" -> bookDao.getBooksByFolderByRecent(folderId)
+        "addTime" -> bookDao.getBooksByFolderByAddTime(folderId)
+        "format" -> bookDao.getBooksByFolderByFormat(folderId)
+        else -> bookDao.getBooksByFolderPaging(folderId)
+    }
 
     fun getBooksInFolder(folderId: String?): Flow<List<Book>> =
         bookDao.getBooksInFolder(folderId)
@@ -47,6 +71,13 @@ class BookRepository @Inject constructor(
     suspend fun findByLocalPath(localPath: String): Book? =
         bookDao.findByLocalPath(localPath)
 
+    suspend fun findByBookUrl(bookUrl: String, sourceUrl: String): Book? =
+        bookDao.findByBookUrl(bookUrl, sourceUrl)
+
+    suspend fun countLogicalBooks(): Int = bookDao.countLogicalBooks()
+
+    suspend fun getAllBooksSync(): List<Book> = bookDao.getAllBooksSync()
+
     // Groups
     suspend fun insertGroup(group: BookGroup) = groupDao.insert(group)
 
@@ -58,6 +89,9 @@ class BookRepository @Inject constructor(
     // Chapters
     fun getChapters(bookId: String): Flow<List<BookChapter>> =
         chapterDao.getChapters(bookId)
+
+    suspend fun getChaptersList(bookId: String): List<BookChapter> =
+        chapterDao.getChaptersList(bookId)
 
     suspend fun getChapter(bookId: String, index: Int): BookChapter? =
         chapterDao.getChapter(bookId, index)

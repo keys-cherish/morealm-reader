@@ -60,7 +60,7 @@ class ThemeViewModel @Inject constructor(
     }
 
     init {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             themeRepo.ensureBuiltinThemes()
             applyAutoThemeIfNeeded()
         }
@@ -82,8 +82,7 @@ class ThemeViewModel @Inject constructor(
 
     /** Manual toggle — disables auto mode so user choice persists across restarts */
     fun toggleDayNight() {
-        viewModelScope.launch {
-            // Disable auto mode so this manual choice sticks
+        viewModelScope.launch(Dispatchers.IO) {
             prefs.setAutoNightMode(false)
             val current = activeTheme.value
             val targetId = if (current?.isNightTheme == true) {
@@ -92,31 +91,36 @@ class ThemeViewModel @Inject constructor(
                 BuiltinThemes.moRealm.id
             }
             themeRepo.activateTheme(targetId)
-            AppLog.info("Theme", "Manual day/night toggle → $targetId (auto mode disabled)")
         }
     }
 
     fun switchTheme(themeId: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             prefs.setAutoNightMode(false)
             themeRepo.activateTheme(themeId)
-            AppLog.info("Theme", "Switched to: $themeId (auto mode disabled)")
         }
     }
 
     fun setAutoNightMode(enabled: Boolean) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             prefs.setAutoNightMode(enabled)
             if (enabled) applyAutoThemeIfNeeded()
-            AppLog.info("Theme", "Auto night mode: $enabled")
         }
     }
 
-    fun importLegadoTheme(json: String) {
-        viewModelScope.launch {
+    fun importLegadoTheme(jsonStr: String) {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                themeRepo.importLegadoTheme(json)
-                AppLog.info("Theme", "Imported Legado theme")
+                val trimmed = jsonStr.trim()
+                if (trimmed.startsWith("[")) {
+                    // Array of Legado themes — import all, activate the first
+                    val themes = themeRepo.importLegadoThemes(trimmed)
+                    if (themes.isNotEmpty()) {
+                        themeRepo.activateTheme(themes.first().id)
+                    }
+                } else {
+                    themeRepo.importLegadoTheme(trimmed)
+                }
             } catch (e: Exception) {
                 AppLog.error("Theme", "Failed to import Legado theme", e)
             }
@@ -124,13 +128,18 @@ class ThemeViewModel @Inject constructor(
     }
 
     fun importCustomTheme(theme: ThemeEntity) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 themeRepo.saveAndActivate(theme)
-                AppLog.info("Theme", "Created custom theme: ${theme.name}")
             } catch (e: Exception) {
                 AppLog.error("Theme", "Failed to create custom theme", e)
             }
+        }
+    }
+
+    fun deleteCustomTheme(themeId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            themeRepo.deleteCustomTheme(themeId)
         }
     }
 

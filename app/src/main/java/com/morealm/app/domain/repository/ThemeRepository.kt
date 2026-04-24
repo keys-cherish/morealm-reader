@@ -37,7 +37,7 @@ class ThemeRepository @Inject constructor(
     suspend fun importLegadoTheme(jsonString: String): ThemeEntity {
         val legadoConfig = json.decodeFromString<LegadoThemeConfig>(jsonString)
         val entity = legadoConfig.toThemeEntity()
-        themeDao.insert(entity)
+        saveAndActivate(entity)
         return entity
     }
 
@@ -46,6 +46,16 @@ class ThemeRepository @Inject constructor(
         val entities = configs.map { it.toThemeEntity() }
         themeDao.upsertAll(entities)
         return entities
+    }
+
+    suspend fun deleteCustomTheme(themeId: String) {
+        val theme = themeDao.getById(themeId) ?: return
+        if (theme.isBuiltin) return
+        // If deleting the active theme, switch to default first
+        if (theme.isActive) {
+            activateTheme(BuiltinThemes.moRealm.id)
+        }
+        themeDao.deleteCustomTheme(themeId)
     }
 
     suspend fun ensureBuiltinThemes() {

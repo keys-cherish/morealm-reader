@@ -2,9 +2,17 @@ package com.morealm.app.domain.analyzeRule
 
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookSource
+import com.script.CompiledScript
+import com.script.ScriptBindings
+import com.script.rhino.RhinoScriptEngine
 import org.apache.commons.text.StringEscapeUtils
 import org.jsoup.nodes.Node
+import org.mozilla.javascript.NativeObject
+import org.mozilla.javascript.Scriptable
+import java.lang.ref.WeakReference
 import java.net.URL
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -19,6 +27,8 @@ class AnalyzeRule(
     private val source: BookSource? = null,
 ) {
 
+    private var chapter: com.morealm.app.domain.entity.BookChapter? = null
+    private var nextChapterUrl: String? = null
     private var content: Any? = null
     private var baseUrl: String? = null
     private var redirectUrl: URL? = null
@@ -31,6 +41,8 @@ class AnalyzeRule(
 
     private val stringRuleCache = hashMapOf<String, List<SourceRule>>()
     private val regexCache = hashMapOf<String, Regex?>()
+    private var topScopeRef: WeakReference<Scriptable>? = null
+    private var evalJSCallCount = 0
 
     private var coroutineContext: CoroutineContext = EmptyCoroutineContext
 
@@ -63,6 +75,7 @@ class AnalyzeRule(
         }
         return redirectUrl
     }
+
     private fun getAnalyzeByXPath(o: Any): AnalyzeByXPath {
         return if (o != content) AnalyzeByXPath(o)
         else { if (analyzeByXPath == null) analyzeByXPath = AnalyzeByXPath(content!!); analyzeByXPath!! }
@@ -76,6 +89,61 @@ class AnalyzeRule(
     private fun getAnalyzeByJSonPath(o: Any): AnalyzeByJSonPath {
         return if (o != content) AnalyzeByJSonPath(o)
         else { if (analyzeByJSonPath == null) analyzeByJSonPath = AnalyzeByJSonPath(content!!); analyzeByJSonPath!! }
+    }
+
+    // ── JS 执行 ──
+
+    fun evalJS(jsStr: String, result: Any? = null): Any? {
+        val bindings = ScriptBindings()
+        org.mozilla.javascript.Context.enter()
+        try {
+            // java变量绑定JsExtensions，提供base64/md5/aes/http等工具方法
+            JsExtensions.sourceGetter = { source }
+            JsExtensions.coroutineContextGetter = { coroutineContext }
+            JsExtensions.ruleDataGetter = { ruleData }
+            bindings["java"] = JsExtensions
+            bindings["source"] = source
+            bindings["book"] = ruleData
+            bindings["baseUrl"] = baseUrl
+            bindings["result"] = result
+            bindings["chapter"] = chapter
+            bindings["title"] = chapter?.title
+            bindings["src"] = content
+            bindings["nextChapterUrl"] = nextChapterUrl
+            bindings["cookie"] = com.morealm.app.domain.http.CookieStore
+            bindings["cache"] = com.morealm.app.domain.http.CacheManager
+        } finally {
+            org.mozilla.javascript.Context.exit()
+        }
+        val topScope = topScopeRef?.get()
+        // 优先使用 jsLib 共享作用域
+        val sharedScope = source?.jsLib?.let { SharedJsScope.getScope(it, coroutineContext) }
+        val scope = if (sharedScope != null) {
+            bindings.apply { prototype = sharedScope }
+        } else if (topScope == null) {
+            RhinoScriptEngine.getRuntimeScope(bindings).apply {
+                if (evalJSCallCount++ > 16) {
+                    topScopeRef = WeakReference(prototype)
+                }
+            }
+        } else {
+            bindings.apply {
+                prototype = topScope
+            }
+        }
+        // 使用编译缓存：相同 JS 源码只编译一次，后续直接执行已编译脚本
+        val compiled = scriptCache.getOrPut(jsStr) {
+            try {
+                RhinoScriptEngine.compile(jsStr)
+            } catch (_: Exception) {
+                null
+            }
+        }
+        return if (compiled != null) {
+            compiled.eval(scope, coroutineContext)
+        } else {
+            RhinoScriptEngine.eval(jsStr, scope, coroutineContext)
+        }
     }
 
     // ── 获取文本列表 ──
@@ -95,26 +163,44 @@ class AnalyzeRule(
         val content = mContent ?: this.content
         if (content != null && ruleList.isNotEmpty()) {
             result = content
-            for (sourceRule in ruleList) {
+            if (result is NativeObject) {
+                val sourceRule = ruleList.first()
                 putRule(sourceRule.putMap)
                 sourceRule.makeUpRule(result)
-                result ?: continue
-                val rule = sourceRule.rule
-                if (rule.isNotEmpty()) {
-                    result = when (sourceRule.mode) {
-                        Mode.Js -> rule // JS not supported yet, return rule as-is
-                        Mode.Json -> getAnalyzeByJSonPath(result).getStringList(rule)
-                        Mode.XPath -> getAnalyzeByXPath(result).getStringList(rule)
-                        Mode.Default -> getAnalyzeByJSoup(result).getStringList(rule)
-                        else -> rule
+                result = if (sourceRule.getParamSize() > 1) {
+                    sourceRule.rule
+                } else {
+                    result[sourceRule.rule]
+                }
+                result?.let {
+                    if (sourceRule.replaceRegex.isNotEmpty() && it is List<*>) {
+                        result = it.map { o -> replaceRegex(o.toString(), sourceRule) }
+                    } else if (sourceRule.replaceRegex.isNotEmpty()) {
+                        result = replaceRegex(result.toString(), sourceRule)
                     }
                 }
-                if (sourceRule.replaceRegex.isNotEmpty() && result is List<*>) {
-                    val newList = ArrayList<String>()
-                    for (item in result) newList.add(replaceRegex(item.toString(), sourceRule))
-                    result = newList
-                } else if (sourceRule.replaceRegex.isNotEmpty()) {
-                    result = replaceRegex(result.toString(), sourceRule)
+            } else {
+                for (sourceRule in ruleList) {
+                    putRule(sourceRule.putMap)
+                    sourceRule.makeUpRule(result)
+                    result ?: continue
+                    val rule = sourceRule.rule
+                    if (rule.isNotEmpty()) {
+                        result = when (sourceRule.mode) {
+                            Mode.Js -> evalJS(rule, result)
+                            Mode.Json -> getAnalyzeByJSonPath(result).getStringList(rule)
+                            Mode.XPath -> getAnalyzeByXPath(result).getStringList(rule)
+                            Mode.Default -> getAnalyzeByJSoup(result).getStringList(rule)
+                            else -> rule
+                        }
+                    }
+                    if (sourceRule.replaceRegex.isNotEmpty() && result is List<*>) {
+                        val newList = ArrayList<String>()
+                        for (item in result) newList.add(replaceRegex(item.toString(), sourceRule))
+                        result = newList
+                    } else if (sourceRule.replaceRegex.isNotEmpty()) {
+                        result = replaceRegex(result.toString(), sourceRule)
+                    }
                 }
             }
         }
@@ -157,26 +243,39 @@ class AnalyzeRule(
         val content = mContent ?: this.content
         if (content != null && ruleList.isNotEmpty()) {
             result = content
-            for (sourceRule in ruleList) {
+            if (result is NativeObject) {
+                val sourceRule = ruleList.first()
                 putRule(sourceRule.putMap)
                 sourceRule.makeUpRule(result)
-                result ?: continue
-                val rule = sourceRule.rule
-                if (rule.isNotBlank() || sourceRule.replaceRegex.isEmpty()) {
-                    result = when (sourceRule.mode) {
-                        Mode.Js -> rule // JS not supported yet
-                        Mode.Json -> getAnalyzeByJSonPath(result).getString(rule)
-                        Mode.XPath -> getAnalyzeByXPath(result).getString(rule)
-                        Mode.Default -> if (isUrl) {
-                            getAnalyzeByJSoup(result).getString0(rule)
-                        } else {
-                            getAnalyzeByJSoup(result).getString(rule)
-                        }
-                        else -> rule
-                    }
+                result = if (sourceRule.getParamSize() > 1) {
+                    sourceRule.rule
+                } else {
+                    result[sourceRule.rule]?.toString()
+                }?.let {
+                    replaceRegex(it, sourceRule)
                 }
-                if (result != null && sourceRule.replaceRegex.isNotEmpty()) {
-                    result = replaceRegex(result.toString(), sourceRule)
+            } else {
+                for (sourceRule in ruleList) {
+                    putRule(sourceRule.putMap)
+                    sourceRule.makeUpRule(result)
+                    result ?: continue
+                    val rule = sourceRule.rule
+                    if (rule.isNotBlank() || sourceRule.replaceRegex.isEmpty()) {
+                        result = when (sourceRule.mode) {
+                            Mode.Js -> evalJS(rule, result)
+                            Mode.Json -> getAnalyzeByJSonPath(result).getString(rule)
+                            Mode.XPath -> getAnalyzeByXPath(result).getString(rule)
+                            Mode.Default -> if (isUrl) {
+                                getAnalyzeByJSoup(result).getString0(rule)
+                            } else {
+                                getAnalyzeByJSoup(result).getString(rule)
+                            }
+                            else -> rule
+                        }
+                    }
+                    if (result != null && sourceRule.replaceRegex.isNotEmpty()) {
+                        result = replaceRegex(result.toString(), sourceRule)
+                    }
                 }
             }
         }
@@ -190,6 +289,7 @@ class AnalyzeRule(
         }
         return str
     }
+
     // ── 获取Element ──
 
     fun getElement(ruleStr: String): Any? {
@@ -206,7 +306,7 @@ class AnalyzeRule(
                 val rule = sourceRule.rule
                 result = when (sourceRule.mode) {
                     Mode.Regex -> AnalyzeByRegex.getElement(result.toString(), rule.split("&&").filter { it.isNotBlank() }.toTypedArray())
-                    Mode.Js -> rule
+                    Mode.Js -> evalJS(rule, result)
                     Mode.Json -> getAnalyzeByJSonPath(result).getObject(rule)
                     Mode.XPath -> getAnalyzeByXPath(result).getElements(rule)
                     else -> getAnalyzeByJSoup(result).getElements(rule)
@@ -234,7 +334,7 @@ class AnalyzeRule(
                 val rule = sourceRule.rule
                 result = when (sourceRule.mode) {
                     Mode.Regex -> AnalyzeByRegex.getElements(result.toString(), rule.split("&&").filter { it.isNotBlank() }.toTypedArray())
-                    Mode.Js -> rule
+                    Mode.Js -> evalJS(rule, result)
                     Mode.Json -> getAnalyzeByJSonPath(result).getList(rule)
                     Mode.XPath -> getAnalyzeByXPath(result).getElements(rule)
                     else -> getAnalyzeByJSoup(result).getElements(rule)
@@ -252,7 +352,7 @@ class AnalyzeRule(
     }
 
     fun put(key: String, value: String): String {
-        ruleData?.putVariable(key, value) ?: source?.let { /* no-op for now */ }
+        ruleData?.putVariable(key, value)
         return value
     }
 
@@ -285,6 +385,7 @@ class AnalyzeRule(
             try { regex.toRegex() } catch (_: Exception) { null }
         }
     }
+
     // ── 分离put规则 ──
 
     private fun splitPutRule(ruleStr: String, putMap: HashMap<String, String>): String {
@@ -307,6 +408,10 @@ class AnalyzeRule(
     private fun splitSourceRuleCacheString(ruleStr: String?): List<SourceRule> {
         if (ruleStr.isNullOrEmpty()) return emptyList()
         return stringRuleCache.getOrPut(ruleStr) { splitSourceRule(ruleStr) }
+    }
+
+    private fun getOrCreateSingleSourceRule(rule: String): List<SourceRule> {
+        return stringRuleCache.getOrPut(rule) { listOf(SourceRule(rule)) }
     }
 
     // ── 分解规则生成规则列表 ──
@@ -338,13 +443,42 @@ class AnalyzeRule(
         return ruleList
     }
 
+    // ── JS跨域访问 ──
+
+    /**
+     * js实现跨域访问，供书源JS中调用
+     */
+    fun ajax(url: Any): String? {
+        val urlStr = if (url is List<*>) {
+            url.firstOrNull().toString()
+        } else {
+            url.toString()
+        }
+        val analyzeUrl = AnalyzeUrl(
+            urlStr,
+            source = source,
+            ruleData = ruleData,
+            coroutineContext = coroutineContext
+        )
+        return kotlin.runCatching {
+            kotlinx.coroutines.runBlocking(coroutineContext) {
+                analyzeUrl.getStrResponseAwait().body
+            }
+        }.getOrElse {
+            it.stackTraceToString()
+        }
+    }
+
     // ── URL 工具 ──
 
     companion object {
         private val putPattern = Pattern.compile("@put:(\\{[^}]+?\\})", Pattern.CASE_INSENSITIVE)
         private val evalPattern = Pattern.compile("@get:\\{[^}]+?\\}|\\{\\{[\\w\\W]*?\\}\\}", Pattern.CASE_INSENSITIVE)
         private val regexPattern = Pattern.compile("\\$\\d{1,2}")
-        val JS_PATTERN: Pattern = Pattern.compile("@js:[\\s\\S]*$|<js>[\\s\\S]*?</js>", Pattern.CASE_INSENSITIVE)
+        val JS_PATTERN: Pattern = Pattern.compile("<js>([\\w\\W]*?)</js>|@js:([\\w\\W]*)", Pattern.CASE_INSENSITIVE)
+
+        /** JS 编译缓存 — 相同脚本源码只编译一次，所有 AnalyzeRule 实例共享。 */
+        private val scriptCache = ConcurrentHashMap<String, CompiledScript?>()
 
         fun getAbsoluteURL(baseUrl: URL?, relativePath: String): String {
             if (relativePath.isBlank()) return ""
@@ -369,7 +503,16 @@ class AnalyzeRule(
         fun AnalyzeRule.setRuleData(ruleData: RuleDataInterface?): AnalyzeRule {
             this.ruleData = ruleData; return this
         }
+
+        fun AnalyzeRule.setChapter(chapter: com.morealm.app.domain.entity.BookChapter?): AnalyzeRule {
+            this.chapter = chapter; return this
+        }
+
+        fun AnalyzeRule.setNextChapterUrl(nextChapterUrl: String?): AnalyzeRule {
+            this.nextChapterUrl = nextChapterUrl; return this
+        }
     }
+
     // ── 规则类 ──
 
     inner class SourceRule internal constructor(
@@ -411,7 +554,7 @@ class AnalyzeRule(
                     if (evalMatcher.start() > start) { tmp = rule.substring(start, evalMatcher.start()); splitRegex(tmp) }
                     tmp = evalMatcher.group()
                     when {
-                        tmp.startsWith("@get:", true) -> { ruleType.add(getRuleType); ruleParam.add(tmp.substring(6, tmp.lastIndex)) }
+                        tmp.startsWith("@get:", true) -> { ruleType.add(getRuleType); ruleParam.add(if (tmp.length > 6) tmp.substring(6, tmp.lastIndex) else "") }
                         tmp.startsWith("{{") -> { ruleType.add(jsRuleType); ruleParam.add(tmp.substring(2, tmp.length - 2)) }
                         else -> splitRegex(tmp)
                     }
@@ -450,8 +593,18 @@ class AnalyzeRule(
                             } ?: infoVal.insert(0, ruleParam[index])
                         }
                         regType == jsRuleType -> {
-                            // JS evaluation - for now just insert the param
-                            infoVal.insert(0, ruleParam[index])
+                            if (isRule(ruleParam[index])) {
+                                val ruleList = getOrCreateSingleSourceRule(ruleParam[index])
+                                getString(ruleList).let { infoVal.insert(0, it) }
+                            } else {
+                                val jsEval: Any? = evalJS(ruleParam[index], result)
+                                when {
+                                    jsEval == null -> Unit
+                                    jsEval is String -> infoVal.insert(0, jsEval)
+                                    jsEval is Double && jsEval % 1.0 == 0.0 -> infoVal.insert(0, String.format(Locale.ROOT, "%.0f", jsEval))
+                                    else -> infoVal.insert(0, jsEval.toString())
+                                }
+                            }
                         }
                         regType == getRuleType -> infoVal.insert(0, get(ruleParam[index]))
                         else -> infoVal.insert(0, ruleParam[index])
@@ -464,6 +617,13 @@ class AnalyzeRule(
             if (ruleStrS.size > 1) replaceRegex = ruleStrS[1]
             if (ruleStrS.size > 2) replacement = ruleStrS[2]
             if (ruleStrS.size > 3) replaceFirst = true
+        }
+
+        private fun isRule(ruleStr: String): Boolean {
+            return ruleStr.startsWith('@')
+                    || ruleStr.startsWith("$.")
+                    || ruleStr.startsWith("$[")
+                    || ruleStr.startsWith("//")
         }
 
         fun getParamSize(): Int = ruleParam.size
