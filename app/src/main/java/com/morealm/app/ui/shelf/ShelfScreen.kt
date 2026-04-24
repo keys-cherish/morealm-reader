@@ -52,6 +52,7 @@ fun ShelfScreen(
     viewModel: ShelfViewModel = hiltViewModel(),
 ) {
     val allBooks by viewModel.books.collectAsStateWithLifecycle()
+    val booksLoaded by viewModel.booksLoaded.collectAsStateWithLifecycle()
     val lastRead by viewModel.lastReadBook.collectAsStateWithLifecycle()
 
     // Handle "continue reading" shortcut
@@ -340,7 +341,14 @@ fun ShelfScreen(
 
         // Grid/List content
         val hasContent = displayBooks.isNotEmpty() || (currentFolderId == null && folderIds.isNotEmpty())
-        if (!hasContent) {
+        if (!booksLoaded) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(28.dp),
+                    strokeWidth = 2.dp,
+                )
+            }
+        } else if (!hasContent) {
             EmptyShelf(
                 onImportFile = { filePickerLauncher.launch(arrayOf("text/plain", "application/epub+zip")) },
                 onImportFolder = { folderPickerLauncher.launch(downloadUri) },

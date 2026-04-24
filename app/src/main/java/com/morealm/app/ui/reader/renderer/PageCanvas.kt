@@ -231,6 +231,41 @@ fun drawPageContent(
     }
 }
 
+fun drawRecordedPageContent(
+    canvas: android.graphics.Canvas,
+    page: TextPage,
+    titlePaint: TextPaint,
+    contentPaint: TextPaint,
+    width: Int,
+    height: Int,
+    searchColorArgb: Int = DEFAULT_SEARCH_RESULT_COLOR.toArgb(),
+    canvasWidth: Float = 0f,
+) {
+    page.canvasRecorder.recordIfNeededThenDraw(canvas, width, height) { recCanvas ->
+        drawPageContent(
+            canvas = recCanvas,
+            page = page,
+            titlePaint = titlePaint,
+            contentPaint = contentPaint,
+            searchColorArgb = searchColorArgb,
+            canvasWidth = canvasWidth,
+        )
+    }
+}
+
+fun predecodePageImages(page: TextPage) {
+    for (line in page.lines) {
+        if (!line.isImage) continue
+        for (col in line.columns) {
+            if (col is ImageColumn) {
+                val path = col.src.removePrefix("file://")
+                val targetWidth = (col.end - col.start).toInt().coerceAtLeast(1)
+                ImageCache.get(path, targetWidth)
+            }
+        }
+    }
+}
+
 /**
  * 将一页内容渲染到 Bitmap。仿真翻页的贝塞尔算法需要 Bitmap 作为输入。
  * @param bgColor 背景色 ARGB

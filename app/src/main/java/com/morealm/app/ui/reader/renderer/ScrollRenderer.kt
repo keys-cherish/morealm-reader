@@ -20,7 +20,10 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import com.morealm.app.domain.render.TextPage
 import com.morealm.app.domain.render.TextPos
+import com.morealm.app.domain.render.canvasrecorder.recordIfNeeded
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Continuous vertical scroll renderer — ported from Legado's ScrollPageDelegate + ContentTextView.
@@ -76,6 +79,30 @@ fun ScrollRenderer(
     // Fling animation
     val flingAnim = remember { Animatable(0f) }
     var isFling by remember { mutableStateOf(false) }
+
+    LaunchedEffect(pages, currentPageIndex, viewWidth, viewHeight, titlePaint, contentPaint, searchResultColor) {
+        if (viewWidth <= 0 || viewHeight <= 0 || pages.isEmpty()) return@LaunchedEffect
+        val indices = listOf(currentPageIndex - 1, currentPageIndex, currentPageIndex + 1, currentPageIndex + 2)
+            .filter { it in pages.indices }
+            .distinct()
+        withContext(Dispatchers.Default) {
+            indices.forEach { index ->
+                val page = pages[index]
+                predecodePageImages(page)
+                val pageHeight = page.height.toInt().coerceAtLeast(viewHeight)
+                page.canvasRecorder.recordIfNeeded(viewWidth, pageHeight) { recCanvas ->
+                    drawPageContent(
+                        canvas = recCanvas,
+                        page = page,
+                        titlePaint = titlePaint,
+                        contentPaint = contentPaint,
+                        searchColorArgb = searchResultColor.toArgb(),
+                        canvasWidth = viewWidth.toFloat(),
+                    )
+                }
+            }
+        }
+    }
 
     LaunchedEffect(resetKey, pageCount, layoutCompleted) {
         if (!pendingRestore || !layoutCompleted || pageCount <= 0) return@LaunchedEffect
@@ -267,20 +294,34 @@ fun ScrollRenderer(
                             canvas.save()
                             canvas.translate(0f, yOffset)
 
-                            // Draw page content
-                            drawPageContent(
-                                canvas = canvas,
-                                page = page,
-                                titlePaint = titlePaint,
-                                contentPaint = contentPaint,
-                                selectionStart = if (pageIdx == currentPageIndex) selectionStart else null,
-                                selectionEnd = if (pageIdx == currentPageIndex) selectionEnd else null,
-                                selColorArgb = selectionColor.toArgb(),
-                                aloudLineIndex = if (pageIdx == currentPageIndex) aloudLineIndex else -1,
-                                aloudColorArgb = aloudColor.toArgb(),
-                                searchColorArgb = searchResultColor.toArgb(),
-                                canvasWidth = viewWidth.toFloat(),
-                            )
+                            val hasOverlay = pageIdx == currentPageIndex &&
+                                (selectionStart != null || selectionEnd != null || aloudLineIndex >= 0)
+                            if (hasOverlay) {
+                                drawPageContent(
+                                    canvas = canvas,
+                                    page = page,
+                                    titlePaint = titlePaint,
+                                    contentPaint = contentPaint,
+                                    selectionStart = selectionStart,
+                                    selectionEnd = selectionEnd,
+                                    selColorArgb = selectionColor.toArgb(),
+                                    aloudLineIndex = aloudLineIndex,
+                                    aloudColorArgb = aloudColor.toArgb(),
+                                    searchColorArgb = searchResultColor.toArgb(),
+                                    canvasWidth = viewWidth.toFloat(),
+                                )
+                            } else {
+                                drawRecordedPageContent(
+                                    canvas = canvas,
+                                    page = page,
+                                    titlePaint = titlePaint,
+                                    contentPaint = contentPaint,
+                                    width = viewWidth,
+                                    height = pageH.toInt().coerceAtLeast(viewHeight),
+                                    searchColorArgb = searchResultColor.toArgb(),
+                                    canvasWidth = viewWidth.toFloat(),
+                                )
+                            }
 
                             canvas.restore()
                         }
