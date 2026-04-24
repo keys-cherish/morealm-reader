@@ -1,5 +1,7 @@
 package com.morealm.app.ui.navigation
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
@@ -8,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -22,10 +25,12 @@ import com.morealm.app.ui.listen.ListenScreen
 import com.morealm.app.ui.profile.AboutScreen
 import com.morealm.app.ui.profile.ProfileScreen
 import com.morealm.app.ui.profile.ReplaceRuleScreen
+import com.morealm.app.ui.profile.ThemeEditorScreen
 import com.morealm.app.ui.profile.WebDavScreen
 import com.morealm.app.ui.reader.ReaderScreen
 import com.morealm.app.ui.search.SearchScreen
 import com.morealm.app.ui.settings.AppLogScreen
+import com.morealm.app.ui.cache.CacheBookScreen
 import com.morealm.app.ui.settings.ReadingSettingsScreen
 import com.morealm.app.ui.shelf.ShelfScreen
 import com.morealm.app.ui.source.BookSourceManageScreen
@@ -46,7 +51,7 @@ fun MoRealmNavHost(
     val scope = rememberCoroutineScope()
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "app_log"
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "app_log" || route == "cache_book" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -65,7 +70,7 @@ fun MoRealmNavHost(
         bottomBar = {
             if (!isFullscreen && isOnMainTab) {
                 NavigationBar(
-                    containerColor = moColors.bottomBar,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     tonalElevation = 0.dp,
                 ) {
                     tabs.forEachIndexed { index, tab ->
@@ -77,9 +82,9 @@ fun MoRealmNavHost(
                                 scope.launch { pagerState.animateScrollToPage(index) }
                             },
                             colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = moColors.accent,
-                                selectedTextColor = moColors.accent,
-                                indicatorColor = moColors.accent.copy(alpha = 0.12f),
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
                             ),
                         )
                     }
@@ -109,6 +114,8 @@ fun MoRealmNavHost(
                 val onNavReadingSettings = remember { { navController.safeNavigate("reading_settings") } }
                 val onNavReplaceRules = remember { { navController.safeNavigate("replace_rules") } }
                 val onNavAppLog = remember { { navController.safeNavigate("app_log") } }
+                val onNavCacheBook = remember { { navController.safeNavigate("cache_book") } }
+                val onNavThemeEditor = remember { { navController.safeNavigate("theme_editor") } }
                 val onSearchBack = remember(scope) { { scope.launch { pagerState.animateScrollToPage(0) } ; Unit } }
 
                 HorizontalPager(
@@ -116,11 +123,28 @@ fun MoRealmNavHost(
                     modifier = Modifier.fillMaxSize(),
                     beyondViewportPageCount = tabs.size,
                 ) { page ->
+                    // 延迟 compose 非首屏 tab：冷启动首帧只 compose 当前页（Shelf），
+                    // 其余 tab 先显示背景色占位，下一帧再真正 compose 内容。
+                    // 效果等同于 Legado 的 Fragment BEHAVIOR_RESUME_ONLY_CURRENT_FRAGMENT。
+                    val isInitialPage = page == 0
+                    var ready by remember { mutableStateOf(isInitialPage) }
+                    if (!ready) {
+                        LaunchedEffect(Unit) { ready = true }
+                    }
+                    if (!ready) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background)
+                        )
+                        return@HorizontalPager
+                    }
+
                     when (tabs[page]) {
                         BottomTab.Shelf -> {
                             // Read theme state inside ShelfScreen's scope so changes
                             // only recompose this branch, not the entire Pager
-                            val activeTheme by themeViewModel.activeTheme.collectAsState()
+                            val activeTheme by themeViewModel.activeTheme.collectAsStateWithLifecycle()
                             val isNight = activeTheme?.isNightTheme ?: true
                             ShelfScreen(
                                 onBookClick = onBookClick,
@@ -134,6 +158,9 @@ fun MoRealmNavHost(
                         }
                         BottomTab.Discover -> SearchScreen(
                             onBack = onSearchBack,
+                            onNavigateReader = { bookId ->
+                                navController.navigate("reader/$bookId")
+                            },
                         )
                         BottomTab.Listen -> ListenScreen()
                         BottomTab.Profile -> ProfileScreen(
@@ -144,6 +171,8 @@ fun MoRealmNavHost(
                             onNavigateReadingSettings = onNavReadingSettings,
                             onNavigateReplaceRules = onNavReplaceRules,
                             onNavigateAppLog = onNavAppLog,
+                            onNavigateCacheBook = onNavCacheBook,
+                            onNavigateThemeEditor = onNavThemeEditor,
                         )
                     }
                 }
@@ -171,6 +200,17 @@ fun MoRealmNavHost(
 
             composable("app_log") {
                 AppLogScreen(onBack = { navController.safePopBackStack() })
+            }
+
+            composable("cache_book") {
+                CacheBookScreen(onBack = { navController.safePopBackStack() })
+            }
+
+            composable("theme_editor") {
+                ThemeEditorScreen(
+                    themeViewModel = themeViewModel,
+                    onBack = { navController.safePopBackStack() },
+                )
             }
 
             composable(

@@ -16,9 +16,9 @@ class RuleAnalyzer(data: String, code: Boolean = false) {
     var elementsType = ""
 
     fun trim() {
-        if (queue[pos] == '@' || queue[pos] < '!') {
+        if (pos < queue.length && (queue[pos] == '@' || queue[pos] < '!')) {
             pos++
-            while (queue[pos] == '@' || queue[pos] < '!') pos++
+            while (pos < queue.length && (queue[pos] == '@' || queue[pos] < '!')) pos++
             start = pos
             startX = pos
         }

@@ -18,8 +18,10 @@ import com.morealm.app.domain.entity.*
         ReaderStyle::class,
         TxtTocRule::class,
         HttpTts::class,
+        Cache::class,
+        Cookie::class,
     ],
-    version = 10,
+    version = 13,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -35,4 +37,6 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun readerStyleDao(): ReaderStyleDao
     abstract fun txtTocRuleDao(): TxtTocRuleDao
     abstract fun httpTtsDao(): HttpTtsDao
+    abstract fun cacheDao(): CacheDao
+    abstract fun cookieDao(): CookieDao
 }

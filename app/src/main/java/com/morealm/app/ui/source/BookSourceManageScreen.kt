@@ -1,7 +1,6 @@
 package com.morealm.app.ui.source
 
 import android.widget.Toast
-import com.morealm.app.presentation.source.BookSourceManageViewModel
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,6 +27,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.webbook.CheckSource
+import com.morealm.app.presentation.source.BookSourceManageViewModel
 import com.morealm.app.ui.theme.LocalMoRealmColors
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,14 +40,17 @@ fun BookSourceManageScreen(
     val moColors = LocalMoRealmColors.current
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
-    val sources by viewModel.sources.collectAsState()
-    val isImporting by viewModel.isImporting.collectAsState()
-    val importResult by viewModel.importResult.collectAsState()
+    val sources by viewModel.sources.collectAsStateWithLifecycle()
+    val isImporting by viewModel.isImporting.collectAsStateWithLifecycle()
+    val importResult by viewModel.importResult.collectAsStateWithLifecycle()
+    val isChecking by viewModel.isChecking.collectAsStateWithLifecycle()
+    val checkProgress by viewModel.checkProgress.collectAsStateWithLifecycle()
+    val checkTotal by viewModel.checkTotal.collectAsStateWithLifecycle()
+    val checkResults by viewModel.checkResults.collectAsStateWithLifecycle()
     var showImportDialog by remember { mutableStateOf(false) }
     var importUrl by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
-
-    // PLACEHOLDER_SCAFFOLD
+    var editingSource by remember { mutableStateOf<BookSource?>(null) }
 
     // Show import result toast
     LaunchedEffect(importResult) {
@@ -74,6 +79,16 @@ fun BookSourceManageScreen(
                     }
                 },
                 actions = {
+                    // Check sources button
+                    IconButton(onClick = {
+                        if (isChecking) viewModel.cancelCheckSources()
+                        else viewModel.startCheckSources()
+                    }) {
+                        Icon(
+                            if (isChecking) Icons.Default.Close else Icons.Default.CheckCircle,
+                            if (isChecking) "停止校验" else "校验书源",
+                        )
+                    }
                     IconButton(onClick = {
                         // Paste from clipboard
                         val clip = clipboardManager.getText()?.text ?: ""
@@ -103,7 +118,7 @@ fun BookSourceManageScreen(
             // Disclaimer banner
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                shape = RoundedCornerShape(8.dp),
+                shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f),
             ) {
                 Text(
@@ -123,11 +138,11 @@ fun BookSourceManageScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 placeholder = { Text("搜索书源") },
                 leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(20.dp)) },
-                shape = RoundedCornerShape(12.dp),
+                shape = MaterialTheme.shapes.medium,
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = moColors.accent,
-                    cursorColor = moColors.accent),
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    cursorColor = MaterialTheme.colorScheme.primary),
             )
 
             // Stats bar
@@ -140,13 +155,58 @@ fun BookSourceManageScreen(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
                 Text("启用 ${sources.count { it.enabled }}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = moColors.accent.copy(alpha = 0.7f))
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
             }
 
             if (isImporting) {
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                    color = moColors.accent)
+                    color = MaterialTheme.colorScheme.primary)
+            }
+
+            // Check progress bar
+            if (isChecking) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("校验中 $checkProgress/$checkTotal",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary)
+                        TextButton(onClick = { viewModel.cancelCheckSources() },
+                            contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.height(20.dp),
+                        ) {
+                            Text("取消", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    LinearProgressIndicator(
+                        progress = { if (checkTotal > 0) checkProgress.toFloat() / checkTotal else 0f },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+
+            // Show "remove invalid" button after check completes
+            if (!isChecking && checkResults.isNotEmpty()) {
+                val invalidCount = checkResults.values.count { !it.isValid }
+                if (invalidCount > 0) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("$invalidCount 个书源不可用",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { viewModel.removeInvalidSources() }) {
+                            Text("删除不可用", style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
             }
 
             // Source list
@@ -174,9 +234,12 @@ fun BookSourceManageScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     items(filteredSources, key = { it.bookSourceUrl }) { source ->
+                        val checkResult = checkResults[source.bookSourceUrl]
                         SourceItem(
                             source = source,
+                            checkResult = checkResult,
                             onToggle = { viewModel.toggleSource(source) },
+                            onEdit = { editingSource = source },
                             onDelete = { viewModel.deleteSource(source) },
                         )
                     }
@@ -201,12 +264,12 @@ fun BookSourceManageScreen(
                         onValueChange = { importUrl = it },
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("URL 或 JSON") },
-                        shape = RoundedCornerShape(8.dp),
+                        shape = MaterialTheme.shapes.small,
                         minLines = 3,
                         maxLines = 6,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = moColors.accent,
-                            cursorColor = moColors.accent),
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            cursorColor = MaterialTheme.colorScheme.primary),
                     )
                 }
             },
@@ -217,11 +280,32 @@ fun BookSourceManageScreen(
                         viewModel.importFromUrl(importUrl)
                         importUrl = ""
                     }
-                }) { Text("导入", color = moColors.accent) }
+                }) { Text("导入", color = MaterialTheme.colorScheme.primary) }
             },
             dismissButton = {
                 TextButton(onClick = { showImportDialog = false }) { Text("取消") }
             },
+        )
+    }
+
+    // Edit source screen (full-screen overlay)
+    editingSource?.let { source ->
+        val debugStepsState by viewModel.debugSteps.collectAsStateWithLifecycle()
+        val isDebuggingState by viewModel.isDebugging.collectAsStateWithLifecycle()
+        BookSourceEditScreen(
+            source = source,
+            onBack = {
+                viewModel.cancelDebug()
+                editingSource = null
+            },
+            onSave = { updated ->
+                viewModel.saveSource(updated)
+                editingSource = null
+            },
+            debugSteps = debugStepsState,
+            isDebugging = isDebuggingState,
+            onDebug = { src, keyword -> viewModel.debugSource(src, keyword) },
+            onCancelDebug = { viewModel.cancelDebug() },
         )
     }
 }
@@ -229,20 +313,22 @@ fun BookSourceManageScreen(
 @Composable
 private fun SourceItem(
     source: BookSource,
+    checkResult: CheckSource.CheckResult? = null,
     onToggle: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val moColors = LocalMoRealmColors.current
     var showMenu by remember { mutableStateOf(false) }
     val bgColor by animateColorAsState(
-        if (source.enabled) moColors.surfaceGlass
+        if (source.enabled) MaterialTheme.colorScheme.surfaceContainerHigh
         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
         label = "sourceBg"
     )
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
         color = bgColor,
     ) {
         Row(
@@ -252,21 +338,38 @@ private fun SourceItem(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    source.bookSourceName.ifBlank { source.bookSourceUrl },
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = if (source.enabled) MaterialTheme.colorScheme.onSurface
-                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        source.bookSourceName.ifBlank { source.bookSourceUrl },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = if (source.enabled) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (checkResult != null) {
+                        Spacer(Modifier.width(6.dp))
+                        val scoreColor = when {
+                            checkResult.score >= 4 -> MaterialTheme.colorScheme.tertiary
+                            checkResult.score >= 2 -> MaterialTheme.colorScheme.secondary
+                            else -> MaterialTheme.colorScheme.error
+                        }
+                        Text(
+                            "${checkResult.score}/4",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = scoreColor,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
                 Row {
                     if (!source.bookSourceGroup.isNullOrBlank()) {
                         Text(
                             source.bookSourceGroup!!,
                             style = MaterialTheme.typography.labelSmall,
-                            color = moColors.accent.copy(alpha = 0.6f),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
                         )
                         Spacer(Modifier.width(8.dp))
                     }
@@ -278,13 +381,28 @@ private fun SourceItem(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // Show check error if present
+                if (checkResult?.error != null) {
+                    Text(
+                        checkResult.error!!,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             Switch(
                 checked = source.enabled,
                 onCheckedChange = { onToggle() },
-                colors = SwitchDefaults.colors(checkedTrackColor = moColors.accent),
+                colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier.padding(start = 8.dp),
             )
+            IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.Edit, "编辑",
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.size(18.dp))
+            }
             IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
                 Icon(Icons.Default.Delete, "删除",
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),

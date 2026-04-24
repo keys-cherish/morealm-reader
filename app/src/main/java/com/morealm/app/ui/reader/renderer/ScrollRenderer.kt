@@ -1,73 +1,273 @@
 package com.morealm.app.ui.reader.renderer
 
+import android.graphics.Bitmap
 import android.text.TextPaint
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.exponentialDecay
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import com.morealm.app.domain.render.TextPage
 import com.morealm.app.domain.render.TextPos
+import kotlinx.coroutines.launch
 
 /**
- * Continuous vertical scroll renderer.
- * Renders all pages in a LazyColumn for seamless scrolling.
+ * Continuous vertical scroll renderer — ported from Legado's ScrollPageDelegate + ContentTextView.
+ *
+ * Architecture (matching Legado):
+ * - A single Canvas draws the current page at `pageOffset`, plus the next page(s) below it
+ * - `pageOffset` ranges from 0 (top of current page) to -pageHeight (bottom → triggers page advance)
+ * - Finger drag directly adjusts `pageOffset`; fling uses exponential decay via Animatable
+ * - When `pageOffset` crosses page boundaries, the "current page" index shifts and offset wraps
+ *
+ * This gives true pixel-level continuous scrolling, not page-snapping.
  */
 @Composable
 fun ScrollRenderer(
     pages: List<TextPage>,
     titlePaint: TextPaint,
     contentPaint: TextPaint,
+    bgColor: Int = Color.White.toArgb(),
+    bgBitmap: Bitmap? = null,
     selectionStart: TextPos? = null,
     selectionEnd: TextPos? = null,
-    selectionColor: Color = Color(0x4D2196F3),
+    selectionColor: Color = DEFAULT_SELECTION_COLOR,
     aloudLineIndex: Int = -1,
-    aloudColor: Color = Color(0x3300C853),
-    searchResultColor: Color = Color(0x40FFEB3B),
+    aloudColor: Color = DEFAULT_ALOUD_COLOR,
+    searchResultColor: Color = DEFAULT_SEARCH_RESULT_COLOR,
     onScrollProgress: (Int) -> Unit = {},
     onNearBottom: () -> Unit = {},
+    onTapCenter: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val listState = rememberLazyListState()
-    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val pageCount = pages.size
 
-    // Report scroll progress
-    LaunchedEffect(listState.firstVisibleItemIndex, pages.size) {
-        if (pages.isNotEmpty()) {
-            val progress = ((listState.firstVisibleItemIndex + 1) * 100) / pages.size
+    // Current page index (the page whose top edge is at or above the viewport top)
+    var currentPageIndex by remember { mutableIntStateOf(0) }
+
+    // Pixel offset of the current page relative to viewport top.
+    // 0 = page top aligned with viewport top
+    // negative = page scrolled upward (content moves up)
+    // Legado convention: pageOffset ∈ [0, -pageHeight]
+    var pageOffset by remember { mutableFloatStateOf(0f) }
+
+    // View dimensions
+    var viewWidth by remember { mutableIntStateOf(0) }
+    var viewHeight by remember { mutableIntStateOf(0) }
+
+    // Fling animation
+    val flingAnim = remember { Animatable(0f) }
+    var isFling by remember { mutableStateOf(false) }
+
+    // Report progress whenever current page changes
+    LaunchedEffect(currentPageIndex, pageCount) {
+        if (pageCount > 0) {
+            val progress = ((currentPageIndex + 1) * 100) / pageCount
             onScrollProgress(progress.coerceIn(0, 100))
         }
-        // Trigger near-bottom callback
-        if (listState.firstVisibleItemIndex >= pages.size - 2) {
+        if (currentPageIndex >= pageCount - 2) {
             onNearBottom()
         }
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = modifier,
-    ) {
-        itemsIndexed(pages, key = { index, _ -> "scroll_page_$index" }) { index, page ->
-            val pageHeightDp = with(density) { page.height.toDp() + page.paddingTop.toDp() + 16.dp }
-            PageCanvas(
-                page = page,
-                titlePaint = titlePaint,
-                contentPaint = contentPaint,
-                selectionStart = selectionStart,
-                selectionEnd = selectionEnd,
-                selectionColor = selectionColor,
-                aloudLineIndex = aloudLineIndex,
-                aloudColor = aloudColor,
-                searchResultColor = searchResultColor,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(pageHeightDp),
-            )
+    /**
+     * Core scroll logic — ported from Legado ContentTextView.scroll().
+     * Adjusts pageOffset by [delta] pixels and handles page boundary crossings.
+     *
+     * @param delta positive = scroll down (show previous content), negative = scroll up (show next content)
+     */
+    fun applyScroll(delta: Float) {
+        if (pageCount == 0 || viewHeight <= 0) return
+
+        pageOffset += delta
+
+        // Get current page height (use viewHeight as fallback)
+        val curPageHeight = pages.getOrNull(currentPageIndex)?.let {
+            val h = it.height.toInt()
+            if (h > 0) h else viewHeight
+        } ?: viewHeight
+
+        // Boundary: scrolled past top of first page
+        if (currentPageIndex == 0 && pageOffset > 0) {
+            pageOffset = 0f
+            return
+        }
+
+        // Boundary: scrolled past bottom of last page
+        if (currentPageIndex >= pageCount - 1 && pageOffset < 0) {
+            val minOffset = (viewHeight - curPageHeight).toFloat().coerceAtMost(0f)
+            if (pageOffset < minOffset) {
+                pageOffset = minOffset
+            }
+            return
+        }
+
+        // Crossed into next page (scrolled up past current page bottom)
+        if (pageOffset < -curPageHeight) {
+            if (currentPageIndex < pageCount - 1) {
+                pageOffset += curPageHeight
+                currentPageIndex++
+            } else {
+                pageOffset = -curPageHeight.toFloat()
+            }
+        }
+
+        // Crossed into previous page (scrolled down past current page top)
+        if (pageOffset > 0) {
+            if (currentPageIndex > 0) {
+                currentPageIndex--
+                val prevPageHeight = pages.getOrNull(currentPageIndex)?.let {
+                    val h = it.height.toInt()
+                    if (h > 0) h else viewHeight
+                } ?: viewHeight
+                pageOffset -= prevPageHeight
+            } else {
+                pageOffset = 0f
+            }
         }
     }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            // Tap gesture: center tap opens menu, top/bottom tap scrolls
+            .pointerInput(pageCount) {
+                detectTapGestures(
+                    onTap = { offset ->
+                        val thirdH = size.height / 3f
+                        val thirdW = size.width / 3f
+                        when {
+                            // Center region — show controls
+                            offset.x > thirdW && offset.x < thirdW * 2 &&
+                                offset.y > thirdH && offset.y < thirdH * 2 -> {
+                                onTapCenter()
+                            }
+                            // Top region — scroll up one "page" (keep one line visible)
+                            offset.y < thirdH -> {
+                                scope.launch {
+                                    flingAnim.stop()
+                                    applyScroll(viewHeight * 0.85f)
+                                }
+                            }
+                            // Bottom region — scroll down one "page"
+                            offset.y > thirdH * 2 -> {
+                                scope.launch {
+                                    flingAnim.stop()
+                                    applyScroll(-viewHeight * 0.85f)
+                                }
+                            }
+                            else -> onTapCenter()
+                        }
+                    },
+                )
+            }
+            // Drag + fling gesture for continuous scrolling
+            .pointerInput(pageCount) {
+                val velocityTracker = VelocityTracker()
+
+                detectVerticalDragGestures(
+                    onDragStart = {
+                        // Stop any ongoing fling
+                        scope.launch { flingAnim.stop() }
+                        isFling = false
+                        velocityTracker.resetTracking()
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        velocityTracker.addPointerInputChange(change)
+                        applyScroll(dragAmount)
+                    },
+                    onDragEnd = {
+                        val velocity = velocityTracker.calculateVelocity().y
+                        isFling = true
+                        scope.launch {
+                            flingAnim.snapTo(0f)
+                            var prevValue = 0f
+                            flingAnim.animateDecay(
+                                initialVelocity = velocity,
+                                animationSpec = exponentialDecay(frictionMultiplier = 1.5f),
+                            ) {
+                                val delta = value - prevValue
+                                prevValue = value
+                                applyScroll(delta)
+                            }
+                            isFling = false
+                        }
+                    },
+                    onDragCancel = {
+                        isFling = false
+                    },
+                )
+            }
+            // Draw: render current page + next pages with offset (like Legado ContentTextView.drawPage)
+            .drawWithContent {
+                if (viewWidth == 0) {
+                    viewWidth = size.width.toInt()
+                    viewHeight = size.height.toInt()
+                }
+                if (viewWidth <= 0 || viewHeight <= 0 || pageCount == 0) return@drawWithContent
+
+                drawIntoCanvas { composeCanvas ->
+                    val canvas = composeCanvas.nativeCanvas
+
+                    // Save and clip to viewport
+                    canvas.save()
+                    canvas.clipRect(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+
+                    // Draw background
+                    canvas.drawColor(bgColor)
+                    if (bgBitmap != null && !bgBitmap.isRecycled) {
+                        drawBgBitmap(canvas, bgBitmap, viewWidth.toFloat(), viewHeight.toFloat())
+                    }
+
+                    // Draw pages starting from currentPageIndex at pageOffset
+                    var yOffset = pageOffset
+                    var pageIdx = currentPageIndex
+
+                    while (yOffset < viewHeight && pageIdx < pageCount) {
+                        val page = pages.getOrNull(pageIdx) ?: break
+                        val pageH = page.height.let { if (it > 0f) it else viewHeight.toFloat() }
+
+                        // Only draw if page is visible
+                        if (yOffset + pageH > 0) {
+                            canvas.save()
+                            canvas.translate(0f, yOffset)
+
+                            // Draw page content
+                            drawPageContent(
+                                canvas = canvas,
+                                page = page,
+                                titlePaint = titlePaint,
+                                contentPaint = contentPaint,
+                                selectionStart = if (pageIdx == currentPageIndex) selectionStart else null,
+                                selectionEnd = if (pageIdx == currentPageIndex) selectionEnd else null,
+                                selColorArgb = selectionColor.toArgb(),
+                                aloudLineIndex = if (pageIdx == currentPageIndex) aloudLineIndex else -1,
+                                aloudColorArgb = aloudColor.toArgb(),
+                                searchColorArgb = searchResultColor.toArgb(),
+                                canvasWidth = viewWidth.toFloat(),
+                            )
+
+                            canvas.restore()
+                        }
+
+                        yOffset += pageH
+                        pageIdx++
+                    }
+
+                    canvas.restore()
+                }
+            }
+    )
 }

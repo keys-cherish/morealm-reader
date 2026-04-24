@@ -1,10 +1,13 @@
 package com.morealm.app.domain.webbook
 
+import com.morealm.app.domain.analyzeRule.AnalyzeRule
+import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setCoroutineContext
 import com.morealm.app.domain.analyzeRule.AnalyzeUrl
 import com.morealm.app.domain.analyzeRule.RuleData
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.SearchBook
 import com.morealm.app.domain.http.StrResponse
+import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -34,6 +37,12 @@ object WebBook {
             coroutineContext = coroutineContext
         )
         var res = analyzeUrl.getStrResponseAwait()
+        // 检测书源是否已登录
+        bookSource.loginCheckJs?.let { checkJs ->
+            if (checkJs.isNotBlank()) {
+                res = analyzeUrl.evalJS(checkJs, res) as StrResponse
+            }
+        }
         checkRedirect(bookSource, res)
         return BookList.analyzeBookList(
             bookSource = bookSource,
@@ -63,6 +72,12 @@ object WebBook {
             coroutineContext = coroutineContext
         )
         var res = analyzeUrl.getStrResponseAwait()
+        // 检测书源是否已登录
+        bookSource.loginCheckJs?.let { checkJs ->
+            if (checkJs.isNotBlank()) {
+                res = analyzeUrl.evalJS(checkJs, res) as StrResponse
+            }
+        }
         checkRedirect(bookSource, res)
         return BookList.analyzeBookList(
             bookSource = bookSource,
@@ -88,7 +103,13 @@ object WebBook {
             ruleData = null,
             coroutineContext = coroutineContext
         )
-        val res = analyzeUrl.getStrResponseAwait()
+        var res = analyzeUrl.getStrResponseAwait()
+        // 检测书源是否已登录
+        bookSource.loginCheckJs?.let { checkJs ->
+            if (checkJs.isNotBlank()) {
+                res = analyzeUrl.evalJS(checkJs, res) as StrResponse
+            }
+        }
         checkRedirect(bookSource, res)
         BookInfo.analyzeBookInfo(
             bookSource = bookSource,
@@ -108,13 +129,29 @@ object WebBook {
         bookUrl: String,
         tocUrl: String,
     ): List<ChapterResult> {
+        // preUpdateJs: 目录预更新脚本
+        bookSource.getTocRule().preUpdateJs?.let { preJs ->
+            if (preJs.isNotBlank()) {
+                kotlin.runCatching {
+                    AnalyzeRule(null, bookSource)
+                        .setCoroutineContext(coroutineContext)
+                        .evalJS(preJs)
+                }
+            }
+        }
         val analyzeUrl = AnalyzeUrl(
             mUrl = tocUrl,
             baseUrl = bookUrl,
             source = bookSource,
             coroutineContext = coroutineContext
         )
-        val res = analyzeUrl.getStrResponseAwait()
+        var res = analyzeUrl.getStrResponseAwait()
+        // 检测书源是否已登录
+        bookSource.loginCheckJs?.let { checkJs ->
+            if (checkJs.isNotBlank()) {
+                res = analyzeUrl.evalJS(checkJs, res) as StrResponse
+            }
+        }
         checkRedirect(bookSource, res)
         return BookChapterList.analyzeChapterList(
             bookSource = bookSource,
@@ -139,7 +176,13 @@ object WebBook {
             source = bookSource,
             coroutineContext = coroutineContext
         )
-        val res = analyzeUrl.getStrResponseAwait()
+        var res = analyzeUrl.getStrResponseAwait()
+        // 检测书源是否已登录
+        bookSource.loginCheckJs?.let { checkJs ->
+            if (checkJs.isNotBlank()) {
+                res = analyzeUrl.evalJS(checkJs, res) as StrResponse
+            }
+        }
         checkRedirect(bookSource, res)
         return BookContent.analyzeContent(
             bookSource = bookSource,
@@ -148,6 +191,19 @@ object WebBook {
             body = res.body,
             nextChapterUrl = nextChapterUrl,
         )
+    }
+
+    /**
+     * 精准搜索
+     */
+    suspend fun preciseSearchAwait(
+        bookSource: BookSource,
+        name: String,
+        author: String,
+    ): SearchBook? {
+        coroutineContext.ensureActive()
+        val results = searchBookAwait(bookSource, name)
+        return results.firstOrNull { it.name == name && it.author == author }
     }
 
     private fun checkRedirect(bookSource: BookSource, response: StrResponse) {

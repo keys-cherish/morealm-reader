@@ -2,13 +2,20 @@ package com.morealm.app.service
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.media3.session.MediaSession
@@ -26,6 +33,7 @@ import kotlinx.coroutines.*
  * Provides: Play/Pause, Previous Chapter, Next Chapter in notification.
  * Listens to TtsEventBus.commands for metadata/state updates from ViewModel.
  */
+@Suppress("DEPRECATION")
 @AndroidEntryPoint
 class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListener {
 
@@ -34,6 +42,35 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
     private var audioFocusRequest: AudioFocusRequest? = null
     private var wasPlayingBeforeFocusLoss = false
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    // WakeLock: keep CPU alive when screen is off (ported from Legado)
+    private val wakeLock by lazy {
+        (getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "morealm:TtsService")
+            .apply { setReferenceCounted(false) }
+    }
+
+    // WiFi lock: keep network alive for online TTS (Edge/Http)
+    private val wifiLock by lazy {
+        @Suppress("DEPRECATION")
+        (applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
+            ?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "morealm:TtsAudio")
+            ?.apply { setReferenceCounted(false) }
+    }
+
+    // Phone state listener: pause on incoming call (ported from Legado)
+    private var phoneStateListener: PhoneStateListener? = null
+    private var needResumeOnCallIdle = false
+
+    // Broadcast receiver: pause when headphones unplugged
+    private val noisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (AudioManager.ACTION_AUDIO_BECOMING_NOISY == intent.action) {
+                AppLog.info("TtsService", "Audio becoming noisy (headphones unplugged) → pausing")
+                TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss)
+            }
+        }
+    }
 
     companion object {
         const val CHANNEL_ID = "morealm_tts"
@@ -45,9 +82,6 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
 
     override fun onCreate() {
         super.onCreate()
-        // Call startForeground() ASAP to avoid ForegroundServiceDidNotStartInTimeException.
-        // On some devices, if onCreate() takes too long before onStartCommand() runs,
-        // the 5-second window expires.
         createNotificationChannel()
         val earlyNotification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("朗读中")
@@ -61,6 +95,8 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         )
         initMediaSession()
         setupAudioFocus()
+        initNoisyReceiver()
+        initPhoneStateListener()
         listenForCommands()
         AppLog.info("TtsService", "Service created")
     }
@@ -97,7 +133,12 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                     is TtsEventBus.Command.SetPlaying -> {
                         val player = mediaSession?.player as? TtsPlayer ?: return@collect
                         player.setPlaying(cmd.playing)
-                        if (cmd.playing) requestAudioFocus()
+                        if (cmd.playing) {
+                            requestAudioFocus()
+                            acquireWakeLocks()
+                        } else {
+                            releaseWakeLocks()
+                        }
                     }
                     is TtsEventBus.Command.StopService -> {
                         stopSelfAndRelease()
@@ -107,9 +148,74 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         }
     }
 
+    // ── WakeLock / WiFi Lock ──
+
+    @android.annotation.SuppressLint("WakelockTimeout")
+    private fun acquireWakeLocks() {
+        if (!wakeLock.isHeld) wakeLock.acquire()
+        wifiLock?.let { if (!it.isHeld) it.acquire() }
+    }
+
+    private fun releaseWakeLocks() {
+        if (wakeLock.isHeld) wakeLock.release()
+        wifiLock?.let { if (it.isHeld) it.release() }
+    }
+
     private fun stopSelfAndRelease() {
+        releaseWakeLocks()
         abandonAudioFocus()
         stopSelf()
+    }
+
+    // ── AUDIO_BECOMING_NOISY: pause when headphones unplugged ──
+
+    private fun initNoisyReceiver() {
+        val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(noisyReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(noisyReceiver, filter)
+        }
+    }
+
+    // ── PhoneStateListener: pause on incoming call ──
+
+    private fun initPhoneStateListener() {
+        val tm = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return
+        phoneStateListener = object : PhoneStateListener() {
+            override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                when (state) {
+                    TelephonyManager.CALL_STATE_RINGING -> {
+                        needResumeOnCallIdle = true
+                        TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss)
+                        AppLog.info("TtsService", "Incoming call → pausing TTS")
+                    }
+                    TelephonyManager.CALL_STATE_IDLE -> {
+                        if (needResumeOnCallIdle) {
+                            needResumeOnCallIdle = false
+                            TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusGain)
+                            AppLog.info("TtsService", "Call ended → resuming TTS")
+                        }
+                    }
+                }
+            }
+        }
+        try {
+            tm.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE)
+        } catch (e: SecurityException) {
+            AppLog.warn("TtsService", "No READ_PHONE_STATE permission, skipping phone listener")
+            phoneStateListener = null
+        }
+    }
+
+    private fun unregisterPhoneStateListener() {
+        phoneStateListener?.let { listener ->
+            try {
+                val tm = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+                tm?.listen(listener, PhoneStateListener.LISTEN_NONE)
+            } catch (_: Exception) {}
+            phoneStateListener = null
+        }
     }
 
     private fun setupAudioFocus() {
@@ -235,7 +341,10 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
 
     override fun onDestroy() {
         serviceScope.cancel()
+        releaseWakeLocks()
         abandonAudioFocus()
+        unregisterPhoneStateListener()
+        try { unregisterReceiver(noisyReceiver) } catch (_: Exception) {}
         mediaSession?.run {
             player.release()
             release()

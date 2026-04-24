@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -23,16 +24,16 @@ fun ReadingSettingsScreen(
     viewModel: ReadingSettingsViewModel = hiltViewModel(),
 ) {
     val moColors = LocalMoRealmColors.current
-    val pageAnim by viewModel.pageAnim.collectAsState()
-    val tapLeftAction by viewModel.tapLeftAction.collectAsState()
-    val volumeKeyPage by viewModel.volumeKeyPage.collectAsState()
-    val resumeLastRead by viewModel.resumeLastRead.collectAsState()
-    val longPressUnderline by viewModel.longPressUnderline.collectAsState()
-    val screenTimeout by viewModel.screenTimeout.collectAsState()
-    val showStatusBar by viewModel.showStatusBar.collectAsState()
-    val showChapterName by viewModel.showChapterName.collectAsState()
-    val showTimeBattery by viewModel.showTimeBattery.collectAsState()
-    val customTxtChapterRegex by viewModel.customTxtChapterRegex.collectAsState()
+    val pageAnim by viewModel.pageAnim.collectAsStateWithLifecycle()
+    val tapLeftAction by viewModel.tapLeftAction.collectAsStateWithLifecycle()
+    val volumeKeyPage by viewModel.volumeKeyPage.collectAsStateWithLifecycle()
+    val resumeLastRead by viewModel.resumeLastRead.collectAsStateWithLifecycle()
+    val longPressUnderline by viewModel.longPressUnderline.collectAsStateWithLifecycle()
+    val screenTimeout by viewModel.screenTimeout.collectAsStateWithLifecycle()
+    val showStatusBar by viewModel.showStatusBar.collectAsStateWithLifecycle()
+    val showChapterName by viewModel.showChapterName.collectAsStateWithLifecycle()
+    val showTimeBattery by viewModel.showTimeBattery.collectAsStateWithLifecycle()
+    val customTxtChapterRegex by viewModel.customTxtChapterRegex.collectAsStateWithLifecycle()
 
     // Dialog states
     var showAnimDialog by remember { mutableStateOf(false) }
@@ -121,7 +122,7 @@ fun ReadingSettingsScreen(
                     textStyle = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary),
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -141,7 +142,7 @@ fun ReadingSettingsScreen(
             // ── TTS 朗读规则 ──
             SectionHeader("TTS 朗读")
 
-            val ttsSkipPattern by viewModel.ttsSkipPattern.collectAsState()
+            val ttsSkipPattern by viewModel.ttsSkipPattern.collectAsStateWithLifecycle()
             var ttsSkip by remember { mutableStateOf(ttsSkipPattern) }
             Column(modifier = Modifier.padding(horizontal = 16.dp)) {
                 Text("跳过内容正则", style = MaterialTheme.typography.bodyLarge,
@@ -160,7 +161,7 @@ fun ReadingSettingsScreen(
                     textStyle = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary),
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -219,7 +220,7 @@ private fun SectionHeader(title: String) {
 private fun SettingsDivider() {
     HorizontalDivider(
         modifier = Modifier.padding(horizontal = 16.dp),
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+        color = MaterialTheme.colorScheme.outlineVariant,
     )
 }
 
@@ -263,7 +264,7 @@ private fun SettingsToggleRow(title: String, checked: Boolean, onCheckedChange: 
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
-                checkedTrackColor = moColors.accent,
+                checkedTrackColor = MaterialTheme.colorScheme.primary,
                 checkedThumbColor = MaterialTheme.colorScheme.surface,
             ),
         )
@@ -344,7 +345,7 @@ private fun ScreenTimeoutDialog(current: Int, onSelect: (Int) -> Unit, onDismiss
                         )
                     }
                     if (value != options.last().first) {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
             }
@@ -381,7 +382,7 @@ private fun BottomSheetPicker(
                         )
                     }
                     if (key != options.last().first) {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
             }

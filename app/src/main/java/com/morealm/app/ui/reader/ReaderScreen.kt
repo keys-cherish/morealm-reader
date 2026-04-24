@@ -8,7 +8,11 @@ import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -21,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
@@ -40,6 +45,12 @@ import com.morealm.app.presentation.reader.ReaderViewModel
 import com.morealm.app.presentation.reader.PageTurnMode
 import com.morealm.app.ui.reader.renderer.toPageAnimType
 import com.morealm.app.ui.reader.TtsOverlayPanel
+import com.morealm.app.domain.entity.Book
+import com.morealm.app.domain.entity.BookChapter
+import com.morealm.app.domain.entity.Bookmark
+import com.morealm.app.presentation.reader.ReaderViewModel.SearchResult
+import androidx.compose.ui.graphics.Color
+import com.morealm.app.ui.theme.MoRealmColors
 
 @Composable
 fun ReaderScreen(
@@ -49,44 +60,54 @@ fun ReaderScreen(
     themeViewModel: ThemeViewModel? = null,
     viewModel: ReaderViewModel = hiltViewModel(),
 ) {
-    val book by viewModel.book.collectAsState()
-    val chapters by viewModel.chapters.collectAsState()
-    val currentIndex by viewModel.currentChapterIndex.collectAsState()
-    val content by viewModel.chapterContent.collectAsState()
-    val showControls by viewModel.showControls.collectAsState()
-    val showTtsPanel by viewModel.showTtsPanel.collectAsState()
-    val showSettings by viewModel.showSettingsPanel.collectAsState()
-    val loading by viewModel.loading.collectAsState()
-    val pageTurnMode by viewModel.pageTurnMode.collectAsState()
-    val fontFamily by viewModel.fontFamily.collectAsState()
-    val fontSize by viewModel.fontSize.collectAsState()
-    val lineHeight by viewModel.lineHeight.collectAsState()
-    val scrollProgress by viewModel.scrollProgress.collectAsState()
-    val linkedBooks by viewModel.linkedBooks.collectAsState()
-    val nextBookPrompt by viewModel.nextBookPrompt.collectAsState()
-    val navigateDirection by viewModel.navigateDirection.collectAsState()
-    val customFontUri by viewModel.customFontUri.collectAsState()
-    val customFontName by viewModel.customFontName.collectAsState()
-    val volumeKeyPage by viewModel.volumeKeyPage.collectAsState()
-    val screenTimeout by viewModel.screenTimeout.collectAsState()
-    val showChapterNameSetting by viewModel.showChapterName.collectAsState()
-    val showTimeBatterySetting by viewModel.showTimeBattery.collectAsState()
-    val tapLeftAction by viewModel.tapLeftAction.collectAsState()
-    val paragraphSpacing by viewModel.paragraphSpacing.collectAsState()
-    val marginHorizontal by viewModel.marginHorizontal.collectAsState()
-    val marginTopVal by viewModel.marginTop.collectAsState()
-    val marginBottomVal by viewModel.marginBottom.collectAsState()
-    val autoPageInterval by viewModel.autoPageInterval.collectAsState()
-    val customCss by viewModel.customCss.collectAsState()
-    val customBgImage by viewModel.customBgImage.collectAsState()
-    val selectedText by viewModel.selectedText.collectAsState()
-    val viewingImageSrc by viewModel.viewingImageSrc.collectAsState()
-    val ttsScrollProgress by viewModel.ttsScrollProgress.collectAsState()
-    val pageAnim by viewModel.pageAnim.collectAsState()
-    val readerStyles by viewModel.allStyles.collectAsState()
-    val activeStyleId by viewModel.activeStyleId.collectAsState()
-    val activeStyle by viewModel.activeStyle.collectAsState()
-    val screenOrientation by viewModel.screenOrientation.collectAsState()
+    val book by viewModel.book.collectAsStateWithLifecycle()
+    val chapters by viewModel.chapters.collectAsStateWithLifecycle()
+    val currentIndex by viewModel.currentChapterIndex.collectAsStateWithLifecycle()
+    val content by viewModel.chapterContent.collectAsStateWithLifecycle()
+    val showControls by viewModel.showControls.collectAsStateWithLifecycle()
+    val showTtsPanel by viewModel.showTtsPanel.collectAsStateWithLifecycle()
+    val showSettings by viewModel.showSettingsPanel.collectAsStateWithLifecycle()
+    val loading by viewModel.loading.collectAsStateWithLifecycle()
+    val pageTurnMode by viewModel.pageTurnMode.collectAsStateWithLifecycle()
+    val fontFamily by viewModel.fontFamily.collectAsStateWithLifecycle()
+    val fontSize by viewModel.fontSize.collectAsStateWithLifecycle()
+    val lineHeight by viewModel.lineHeight.collectAsStateWithLifecycle()
+    val scrollProgress by viewModel.scrollProgress.collectAsStateWithLifecycle()
+    val linkedBooks by viewModel.linkedBooks.collectAsStateWithLifecycle()
+    val nextBookPrompt by viewModel.nextBookPrompt.collectAsStateWithLifecycle()
+    val navigateDirection by viewModel.navigateDirection.collectAsStateWithLifecycle()
+    val customFontUri by viewModel.customFontUri.collectAsStateWithLifecycle()
+    val customFontName by viewModel.customFontName.collectAsStateWithLifecycle()
+    val volumeKeyPage by viewModel.volumeKeyPage.collectAsStateWithLifecycle()
+    val screenTimeout by viewModel.screenTimeout.collectAsStateWithLifecycle()
+    val showChapterNameSetting by viewModel.showChapterName.collectAsStateWithLifecycle()
+    val showTimeBatterySetting by viewModel.showTimeBattery.collectAsStateWithLifecycle()
+    val tapLeftAction by viewModel.tapLeftAction.collectAsStateWithLifecycle()
+    val paragraphSpacing by viewModel.paragraphSpacing.collectAsStateWithLifecycle()
+    val marginHorizontal by viewModel.marginHorizontal.collectAsStateWithLifecycle()
+    val marginTopVal by viewModel.marginTop.collectAsStateWithLifecycle()
+    val marginBottomVal by viewModel.marginBottom.collectAsStateWithLifecycle()
+    val autoPageInterval by viewModel.autoPageInterval.collectAsStateWithLifecycle()
+    val customCss by viewModel.customCss.collectAsStateWithLifecycle()
+    val customBgImage by viewModel.customBgImage.collectAsStateWithLifecycle()
+    val selectedText by viewModel.selectedText.collectAsStateWithLifecycle()
+    val viewingImageSrc by viewModel.viewingImageSrc.collectAsStateWithLifecycle()
+    val ttsScrollProgress by viewModel.ttsScrollProgress.collectAsStateWithLifecycle()
+    val pageAnim by viewModel.pageAnim.collectAsStateWithLifecycle()
+    val tapTL by viewModel.tapActionTopLeft.collectAsStateWithLifecycle()
+    val tapTR by viewModel.tapActionTopRight.collectAsStateWithLifecycle()
+    val tapBL by viewModel.tapActionBottomLeft.collectAsStateWithLifecycle()
+    val tapBR by viewModel.tapActionBottomRight.collectAsStateWithLifecycle()
+    val readerStyles by viewModel.allStyles.collectAsStateWithLifecycle()
+    val activeStyleId by viewModel.activeStyleId.collectAsStateWithLifecycle()
+    val activeStyle by viewModel.activeStyle.collectAsStateWithLifecycle()
+    val screenOrientation by viewModel.screenOrientation.collectAsStateWithLifecycle()
+    val hdrLeft by viewModel.headerLeft.collectAsStateWithLifecycle()
+    val hdrCenter by viewModel.headerCenter.collectAsStateWithLifecycle()
+    val hdrRight by viewModel.headerRight.collectAsStateWithLifecycle()
+    val ftrLeft by viewModel.footerLeft.collectAsStateWithLifecycle()
+    val ftrCenter by viewModel.footerCenter.collectAsStateWithLifecycle()
+    val ftrRight by viewModel.footerRight.collectAsStateWithLifecycle()
     val moColors = LocalMoRealmColors.current
 
     // Apply screen orientation
@@ -120,7 +141,7 @@ fun ReaderScreen(
     var showFullSearch by remember { mutableStateOf(false) }
     // Texture from theme (e.g., "texture:paper")
     val bgTexture = moColors.backgroundImageUri?.takeIf { it.startsWith("texture:") }
-    val readerBrightness by viewModel.readerBrightness.collectAsState()
+    val readerBrightness by viewModel.readerBrightness.collectAsStateWithLifecycle()
 
     // Set auto-navigate callback for seamless multi-TXT reading
     LaunchedEffect(Unit) {
@@ -141,6 +162,15 @@ fun ReaderScreen(
         ActivityResultContracts.CreateDocument("text/plain")
     ) { uri -> uri?.let { viewModel.exportAsTxt(it) } }
 
+    // Restore system bars before navigating away to avoid flash
+    val restoreSystemBars = {
+        val act = context as? android.app.Activity
+        if (act != null) {
+            val ctrl = WindowCompat.getInsetsController(act.window, act.window.decorView)
+            ctrl.show(WindowInsetsCompat.Type.statusBars())
+        }
+    }
+
     // Back button: dismiss overlays first, then exit
     BackHandler(enabled = true) {
         when {
@@ -150,7 +180,10 @@ fun ReaderScreen(
             showTtsPanel -> viewModel.hideTtsPanel()
             showSettings -> viewModel.hideSettingsPanel()
             showControls -> viewModel.hideControls()
-            else -> onBack()
+            else -> {
+                restoreSystemBars()
+                onBack()
+            }
         }
     }
 
@@ -189,6 +222,25 @@ fun ReaderScreen(
         }
     }
 
+    // ── Immersive mode: hide status bar in reader (ported from Legado BaseReadBookActivity) ──
+    val showStatusBar by viewModel.showStatusBar.collectAsStateWithLifecycle()
+    DisposableEffect(showStatusBar) {
+        val act = context as? android.app.Activity ?: return@DisposableEffect onDispose {}
+        val window = act.window
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (showStatusBar) {
+            controller.show(WindowInsetsCompat.Type.statusBars())
+        } else {
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+        }
+        onDispose {
+            val a = context as? android.app.Activity ?: return@onDispose
+            WindowCompat.getInsetsController(a.window, a.window.decorView)
+                .show(WindowInsetsCompat.Type.statusBars())
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -222,27 +274,28 @@ fun ReaderScreen(
         val readerFontSize = activeStyle?.textSize?.toFloat() ?: fontSize
         val readerLineHeight = activeStyle?.lineHeight ?: lineHeight
         val readerFontFamily = activeStyle?.fontFamily ?: fontFamily
+        // Resolve background image: customBgImage (global pref) takes priority,
+        // then activeStyle's per-style bg image (day/night aware)
+        val readerBgImage = customBgImage.ifEmpty {
+            (if (isNight) activeStyle?.bgImageUriNight else activeStyle?.bgImageUri) ?: ""
+        }
         val isTxtFormat = book?.format == com.morealm.app.domain.entity.BookFormat.TXT
-        val readerEngine by viewModel.readerEngine.collectAsState()
-        val isPdfFormat = book?.format == com.morealm.app.domain.entity.BookFormat.PDF
-        val isCbzFormat = book?.format == com.morealm.app.domain.entity.BookFormat.CBZ
-        // Canvas works for TXT and EPUB; PDF/CBZ need WebView for image rendering
-        val useWebView = readerEngine == "webview" || isPdfFormat || isCbzFormat
 
-        if (!useWebView) {
-            // Canvas renderer — Compose Canvas + HorizontalPager, works for TXT and EPUB
-            com.morealm.app.ui.reader.renderer.CanvasRenderer(
+        // Always use Canvas renderer
+        com.morealm.app.ui.reader.renderer.CanvasRenderer(
                 content = content,
                 chapterTitle = chapters.getOrNull(currentIndex)?.title ?: "",
                 chapterIndex = currentIndex,
                 backgroundColor = readerBg,
                 textColor = readerFg,
-                accentColor = moColors.accent,
+                accentColor = MaterialTheme.colorScheme.primary,
                 fontSize = readerFontSize,
                 lineHeight = readerLineHeight,
                 paddingHorizontal = marginHorizontal,
                 paddingVertical = marginTopVal,
+                bgImageUri = readerBgImage,
                 startFromLastPage = navigateDirection < 0,
+                initialProgress = scrollProgress,
                 pageAnimType = pageAnim.toPageAnimType(),
                 onTapCenter = { viewModel.toggleControls() },
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
@@ -251,63 +304,29 @@ fun ReaderScreen(
                 onCopyText = { text -> viewModel.copyTextToClipboard(text) },
                 onSpeakFromHere = { text -> viewModel.onTextSelected(text); viewModel.speakSelectedText() },
                 onLookupWord = { text -> viewModel.onTextSelected(text) },
+                onImageClick = { src -> viewModel.onImageClick(src) },
+                bookTitle = book?.title ?: "",
+                bookAuthor = book?.author ?: "",
+                tapActionTopLeft = tapTL,
+                tapActionTopRight = tapTR,
+                tapActionBottomLeft = tapBL,
+                tapActionBottomRight = tapBR,
+                readerStyle = activeStyle,
+                chaptersSize = chapters.size,
+                headerLeft = hdrLeft,
+                headerCenter = hdrCenter,
+                headerRight = hdrRight,
+                footerLeft = ftrLeft,
+                footerCenter = ftrCenter,
+                footerRight = ftrRight,
                 modifier = Modifier.fillMaxSize(),
             )
-        } else {
-        // WebView renderer — fallback for PDF/CBZ or user preference
-        ReaderWebView(
-            content = content,
-            chapterTitle = chapters.getOrNull(currentIndex)?.title ?: "",
-            backgroundColor = readerBg.toArgb(),
-            textColor = readerFg.toArgb(),
-            accentColor = moColors.accent.toArgb(),
-            pageTurnMode = pageTurnMode,
-            fontFamily = readerFontFamily,
-            fontSize = readerFontSize,
-            lineHeight = readerLineHeight,
-            backgroundTexture = bgTexture,
-            customFontUri = customFontUri,
-            startFromLastPage = navigateDirection < 0,
-            showChapterName = showChapterNameSetting,
-            showTimeBattery = showTimeBatterySetting,
-            tapLeftAction = tapLeftAction,
-            paragraphSpacing = paragraphSpacing,
-            marginHorizontal = marginHorizontal,
-            marginTop = marginTopVal,
-            marginBottom = marginBottomVal,
-            customCss = customCss,
-            customBgImage = customBgImage,
-            onTapZone = { zone ->
-                when (zone) {
-                    "prev" -> viewModel.prevChapter()
-                    "next" -> viewModel.nextChapter()
-                    "center" -> viewModel.toggleControls()
-                }
-            },
-            onLongPress = {
-                // Long press always shows controls (escape hatch for fullscreen mode)
-                viewModel.toggleControls()
-            },
-            onSwipeBack = onBack,
-            onProgress = { pct -> viewModel.updateScrollProgress(pct) },
-            onScrollNearBottom = { viewModel.onScrollNearBottom() },
-            onVisibleChapterChanged = { idx -> viewModel.onVisibleChapterChanged(idx) },
-            onTextSelected = { text -> viewModel.onTextSelected(text) },
-            onImageClick = { src -> viewModel.onImageClick(src) },
-            onSpeakSelected = { viewModel.onTextSelected(it); viewModel.speakSelectedText() },
-            ttsScrollProgress = ttsScrollProgress,
-            pageAnim = pageAnim,
-            dualPage = LocalContext.current.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
-                && LocalContext.current.resources.configuration.screenWidthDp >= 600,
-            modifier = Modifier.fillMaxSize(),
-        )
-        } // end else (WebView)
 
         // Loading indicator
         if (loading) {
             CircularProgressIndicator(
                 modifier = Modifier.align(Alignment.Center).size(32.dp),
-                color = moColors.accent,
+                color = MaterialTheme.colorScheme.primary,
                 strokeWidth = 2.dp,
             )
         }
@@ -315,8 +334,8 @@ fun ReaderScreen(
         // Top bar overlay (back button + chapter info)
         AnimatedVisibility(
             visible = showControls,
-            enter = fadeIn() + slideInVertically { -it },
-            exit = fadeOut() + slideOutVertically { -it },
+            enter = fadeIn(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) + slideInVertically(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) { -it },
+            exit = fadeOut(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) + slideOutVertically(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) { -it },
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             ReaderTopBar(
@@ -333,8 +352,8 @@ fun ReaderScreen(
         // Bottom control bar
         AnimatedVisibility(
             visible = showControls,
-            enter = fadeIn() + slideInVertically { it },
-            exit = fadeOut() + slideOutVertically { it },
+            enter = fadeIn(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) + slideInVertically(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) { it },
+            exit = fadeOut(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) + slideOutVertically(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) { it },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             ReaderControlBar(
@@ -346,7 +365,6 @@ fun ReaderScreen(
                 onPrevChapter = viewModel::prevChapter,
                 onNextChapter = viewModel::nextChapter,
                 onTts = {
-                    // Request notification permission on Android 13+ (for TTS notification)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
                             != PackageManager.PERMISSION_GRANTED) {
@@ -370,7 +388,6 @@ fun ReaderScreen(
                 },
                 onAutoPage = {
                     viewModel.hideControls()
-                    // Cycle through intervals: off -> 5s -> 10s -> 15s -> 30s -> off
                     val current = autoPageInterval
                     val next = when (current) {
                         0 -> 5; 5 -> 10; 10 -> 15; 15 -> 30; else -> 0
@@ -385,7 +402,7 @@ fun ReaderScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.4f))
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.4f))
                     .clickable(
                         indication = null,
                         interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
@@ -404,13 +421,15 @@ fun ReaderScreen(
         // Reader settings panel (font, page turn mode, etc.)
         AnimatedVisibility(
             visible = showSettings,
-            enter = slideInVertically { it },
-            exit = slideOutVertically { it },
+            enter = slideInVertically(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) { it },
+            exit = slideOutVertically(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) { it },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             ReaderSettingsPanel(
                 currentMode = pageTurnMode,
                 onModeChange = viewModel::setPageTurnMode,
+                pageAnim = pageAnim,
+                onPageAnimChange = viewModel::setPageAnim,
                 currentFont = fontFamily,
                 onFontChange = viewModel::setFontFamily,
                 currentFontSize = fontSize,
@@ -420,8 +439,8 @@ fun ReaderScreen(
                 customFontName = customFontName,
                 onImportFont = { uri, name -> viewModel.importCustomFont(uri, name) },
                 onClearCustomFont = viewModel::clearCustomFont,
-                allThemes = themeViewModel?.allThemes?.collectAsState()?.value ?: BuiltinThemes.all(),
-                activeThemeId = themeViewModel?.activeTheme?.collectAsState()?.value?.id ?: "",
+                allThemes = themeViewModel?.allThemes?.collectAsStateWithLifecycle()?.value ?: BuiltinThemes.all(),
+                activeThemeId = themeViewModel?.activeTheme?.collectAsStateWithLifecycle()?.value?.id ?: "",
                 onThemeChange = { id -> themeViewModel?.switchTheme(id) },
                 brightness = readerBrightness,
                 onBrightnessChange = viewModel::setReaderBrightness,
@@ -442,12 +461,10 @@ fun ReaderScreen(
                 onStyleChange = viewModel::switchStyle,
                 screenOrientation = screenOrientation,
                 onScreenOrientationChange = viewModel::setScreenOrientation,
-                textSelectable = viewModel.textSelectable.collectAsState().value,
+                textSelectable = viewModel.textSelectable.collectAsStateWithLifecycle().value,
                 onTextSelectableChange = viewModel::setTextSelectable,
-                chineseConvertMode = viewModel.chineseConvertMode.collectAsState().value,
+                chineseConvertMode = viewModel.chineseConvertMode.collectAsStateWithLifecycle().value,
                 onChineseConvertModeChange = viewModel::setChineseConvertMode,
-                readerEngine = viewModel.readerEngine.collectAsState().value,
-                onReaderEngineChange = viewModel::setReaderEngine,
                 onDismiss = viewModel::hideSettingsPanel,
             )
         }
@@ -455,18 +472,18 @@ fun ReaderScreen(
         // TTS overlay panel — collect TTS state only when panel is visible
         AnimatedVisibility(
             visible = showTtsPanel,
-            enter = slideInVertically { it },
-            exit = slideOutVertically { it },
+            enter = slideInVertically(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) { it },
+            exit = slideOutVertically(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) { it },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            val ttsPlaying by viewModel.ttsPlaying.collectAsState()
-            val ttsSpeed by viewModel.ttsSpeed.collectAsState()
-            val ttsEngine by viewModel.ttsEngine.collectAsState()
-            val ttsParagraphIndex by viewModel.ttsParagraphIndex.collectAsState()
-            val ttsTotalParagraphs by viewModel.ttsTotalParagraphs.collectAsState()
-            val ttsSleepMinutes by viewModel.ttsSleepMinutes.collectAsState()
-            val ttsVoices by viewModel.ttsVoices.collectAsState()
-            val ttsVoiceName by viewModel.ttsVoiceName.collectAsState()
+            val ttsPlaying by viewModel.ttsPlaying.collectAsStateWithLifecycle()
+            val ttsSpeed by viewModel.ttsSpeed.collectAsStateWithLifecycle()
+            val ttsEngine by viewModel.ttsEngine.collectAsStateWithLifecycle()
+            val ttsParagraphIndex by viewModel.ttsParagraphIndex.collectAsStateWithLifecycle()
+            val ttsTotalParagraphs by viewModel.ttsTotalParagraphs.collectAsStateWithLifecycle()
+            val ttsSleepMinutes by viewModel.ttsSleepMinutes.collectAsStateWithLifecycle()
+            val ttsVoices by viewModel.ttsVoices.collectAsStateWithLifecycle()
+            val ttsVoiceName by viewModel.ttsVoiceName.collectAsStateWithLifecycle()
             TtsOverlayPanel(
                 bookTitle = book?.title ?: "",
                 chapterTitle = chapters.getOrNull(currentIndex)?.title ?: "",
@@ -493,306 +510,60 @@ fun ReaderScreen(
         }
 
         // Chapter list panel (with search + bookmark tab)
-        AnimatedVisibility(
+        ChapterBookmarkPanel(
             visible = showChapterList || showBookmarks,
-            enter = slideInVertically { it },
-            exit = slideOutVertically { it },
+            chapters = chapters,
+            bookmarks = viewModel.bookmarks.collectAsStateWithLifecycle().value,
+            currentChapter = currentIndex,
+            selectedSideTab = if (showBookmarks) 1 else 0,
+            linkedBooks = linkedBooks,
+            moColors = moColors,
+            onTabChange = { tab ->
+                if (tab == 0) { showBookmarks = false; showChapterList = true }
+                else { showChapterList = false; showBookmarks = true }
+            },
+            onChapterClick = { chapterIndex ->
+                showChapterList = false
+                viewModel.loadChapter(chapterIndex)
+            },
+            onAddBookmark = { viewModel.addBookmark() },
+            onDeleteBookmark = { id -> viewModel.deleteBookmark(id) },
+            onJumpToBookmark = { bm ->
+                showBookmarks = false
+                viewModel.jumpToBookmark(bm)
+            },
+            onLinkedBookClick = { bookId ->
+                showChapterList = false
+                onNavigateToBook(bookId)
+            },
+            onDismiss = { showChapterList = false; showBookmarks = false },
             modifier = Modifier.align(Alignment.BottomCenter),
-        ) {
-            val isBookmarkTab = showBookmarks
-            Surface(
-                modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f),
-                color = moColors.bottomBar.copy(alpha = 0.97f),
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                tonalElevation = 12.dp,
-            ) {
-                Column(modifier = Modifier.navigationBarsPadding().padding(top = 16.dp)) {
-                    // Drag handle
-                    Box(
-                        Modifier
-                            .width(40.dp).height(4.dp)
-                            .background(
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
-                                RoundedCornerShape(2.dp)
-                            )
-                            .align(Alignment.CenterHorizontally)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    // Tab row: 目录 | 书签
-                    Row(modifier = Modifier.padding(horizontal = 16.dp)) {
-                        FilterChip(
-                            selected = !isBookmarkTab,
-                            onClick = { showBookmarks = false; showChapterList = true },
-                            label = { Text("目录 (${chapters.size})") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = moColors.accent.copy(alpha = 0.15f),
-                                selectedLabelColor = moColors.accent),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        FilterChip(
-                            selected = isBookmarkTab,
-                            onClick = { showChapterList = false; showBookmarks = true },
-                            label = {
-                                val bmCount = viewModel.bookmarks.collectAsState().value.size
-                                Text("书签 ($bmCount)")
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = moColors.accent.copy(alpha = 0.15f),
-                                selectedLabelColor = moColors.accent),
-                        )
-                        Spacer(Modifier.weight(1f))
-                        if (!isBookmarkTab) {
-                            // Add bookmark button
-                            IconButton(
-                                onClick = { viewModel.addBookmark() },
-                                modifier = Modifier.size(32.dp),
-                            ) {
-                                Icon(
-                                    Icons.Default.BookmarkAdd, "添加书签",
-                                    tint = moColors.accent, modifier = Modifier.size(20.dp),
-                                )
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
-
-                    if (!isBookmarkTab) {
-                        // Chapter search
-                        var chapterSearch by remember { mutableStateOf("") }
-                        val filteredChapters = remember(chapters, chapterSearch) {
-                            if (chapterSearch.isBlank()) chapters
-                            else chapters.filter { it.title.contains(chapterSearch, ignoreCase = true) }
-                        }
-                        OutlinedTextField(
-                            value = chapterSearch,
-                            onValueChange = { chapterSearch = it },
-                            placeholder = { Text("搜索章节", style = MaterialTheme.typography.bodySmall) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(44.dp),
-                            textStyle = MaterialTheme.typography.bodySmall,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = moColors.accent,
-                                cursorColor = moColors.accent,
-                            ),
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        val listState = rememberLazyListState(
-                            initialFirstVisibleItemIndex = if (chapterSearch.isBlank()) (currentIndex - 2).coerceAtLeast(0) else 0
-                        )
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                        ) {
-                            itemsIndexed(filteredChapters, key = { _, ch -> ch.id }) { _, ch ->
-                                val isCurrent = ch.index == currentIndex
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            showChapterList = false
-                                            viewModel.loadChapter(ch.index)
-                                        }
-                                        .background(
-                                            if (isCurrent) moColors.accent.copy(alpha = 0.08f)
-                                            else androidx.compose.ui.graphics.Color.Transparent,
-                                            RoundedCornerShape(10.dp)
-                                        )
-                                        .padding(horizontal = 12.dp, vertical = 11.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        ch.title,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (isCurrent) moColors.accent
-                                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    if (isCurrent) {
-                                        Text("▶", style = MaterialTheme.typography.labelSmall, color = moColors.accent)
-                                    }
-                                }
-                            }
-                            // Linked books
-                            linkedBooks.forEach { linkedBook ->
-                                item(key = "linked_header_${linkedBook.id}") {
-                                    Text(
-                                        linkedBook.title,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = moColors.accent.copy(alpha = 0.7f),
-                                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 4.dp),
-                                    )
-                                }
-                                item(key = "linked_tap_${linkedBook.id}") {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                showChapterList = false
-                                                onNavigateToBook(linkedBook.id)
-                                            }
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                    ) {
-                                        Text("打开阅读 →", style = MaterialTheme.typography.bodySmall,
-                                            color = moColors.accent.copy(alpha = 0.5f))
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Bookmarks tab
-                        val bookmarkList by viewModel.bookmarks.collectAsState()
-                        if (bookmarkList.isEmpty()) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("暂无书签", style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
-                            }
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                            ) {
-                                items(bookmarkList, key = { it.id }) { bm ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                showBookmarks = false
-                                                viewModel.jumpToBookmark(bm)
-                                            }
-                                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(bm.chapterTitle, style = MaterialTheme.typography.bodySmall,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.onSurface, maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis)
-                                            if (bm.content.isNotEmpty()) {
-                                                Text(bm.content, style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            }
-                                        }
-                                        IconButton(
-                                            onClick = { viewModel.deleteBookmark(bm.id) },
-                                            modifier = Modifier.size(28.dp),
-                                        ) {
-                                            Icon(Icons.Default.Close, "删除",
-                                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                                                modifier = Modifier.size(16.dp))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        )
 
         // Full text search panel
-        AnimatedVisibility(
+        FullTextSearchPanel(
             visible = showFullSearch,
-            enter = slideInVertically { it },
-            exit = slideOutVertically { it },
+            searchResults = viewModel.searchResults.collectAsStateWithLifecycle().value,
+            isSearching = viewModel.searching.collectAsStateWithLifecycle().value,
+            moColors = moColors,
+            onSearch = { query -> viewModel.searchFullText(query) },
+            onResultClick = { result ->
+                showFullSearch = false
+                viewModel.clearSearchResults()
+                viewModel.loadChapter(result.chapterIndex)
+            },
+            onDismiss = { showFullSearch = false },
             modifier = Modifier.align(Alignment.BottomCenter),
-        ) {
-            val searchResults by viewModel.searchResults.collectAsState()
-            val searching by viewModel.searching.collectAsState()
-            var searchQuery by remember { mutableStateOf("") }
-            Surface(
-                modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f),
-                color = moColors.bottomBar.copy(alpha = 0.97f),
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                tonalElevation = 12.dp,
-            ) {
-                Column(modifier = Modifier.navigationBarsPadding().padding(top = 16.dp)) {
-                    Box(
-                        Modifier.width(40.dp).height(4.dp)
-                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f), RoundedCornerShape(2.dp))
-                            .align(Alignment.CenterHorizontally)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text("全文搜索", style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 16.dp))
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text("输入关键词搜索全书", style = MaterialTheme.typography.bodySmall) },
-                        singleLine = true,
-                        trailingIcon = {
-                            IconButton(onClick = { viewModel.searchFullText(searchQuery) }) {
-                                if (searching) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = moColors.accent)
-                                else Icon(Icons.Default.Search, "搜索", tint = moColors.accent, modifier = Modifier.size(18.dp))
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(48.dp),
-                        textStyle = MaterialTheme.typography.bodySmall,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = moColors.accent, cursorColor = moColors.accent),
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    if (searchResults.isEmpty() && !searching && searchQuery.isNotEmpty()) {
-                        Text("未找到结果", style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                            modifier = Modifier.padding(16.dp))
-                    }
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    ) {
-                        items(searchResults, key = { "sr_${it.chapterIndex}_${it.snippet.hashCode()}" }) { result ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth()
-                                    .clickable {
-                                        showFullSearch = false
-                                        viewModel.clearSearchResults()
-                                        viewModel.loadChapter(result.chapterIndex)
-                                    }
-                                    .padding(horizontal = 4.dp, vertical = 8.dp),
-                            ) {
-                                Column {
-                                    Text(result.chapterTitle, style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = moColors.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(result.snippet, style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        )
 
         // Auto page turn indicator
-        if (autoPageInterval > 0) {
-            Surface(
-                modifier = Modifier.align(Alignment.TopEnd).padding(top = 48.dp, end = 12.dp),
-                color = moColors.accent.copy(alpha = 0.85f),
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                Row(
-                    modifier = Modifier.clickable { viewModel.stopAutoPage() }.padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("自动 ${autoPageInterval}s", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.surface)
-                    Spacer(Modifier.width(4.dp))
-                    Icon(Icons.Default.Close, "停止", tint = MaterialTheme.colorScheme.surface, modifier = Modifier.size(14.dp))
-                }
-            }
-        }
+        AutoPageIndicator(
+            visible = autoPageInterval > 0,
+            intervalSeconds = autoPageInterval,
+            accentColor = MaterialTheme.colorScheme.primary,
+            onStop = { viewModel.stopAutoPage() },
+            modifier = Modifier.align(Alignment.TopEnd),
+        )
 
         // Image viewer dialog (full-screen zoomable)
         viewingImageSrc?.let { src ->
@@ -804,24 +575,361 @@ fun ReaderScreen(
 
         // Next book prompt dialog
         nextBookPrompt?.let { nextBook ->
-            AlertDialog(
-                onDismissRequest = { viewModel.dismissNextBookPrompt() },
-                title = { Text("本书已读完") },
-                text = { Text("是否继续阅读《${nextBook.title}》？") },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.dismissNextBookPrompt()
-                        onNavigateToBook(nextBook.id)
-                    }) {
-                        Text("继续阅读", color = moColors.accent)
-                    }
+            NextBookPromptDialog(
+                nextBookTitle = nextBook.title,
+                accentColor = MaterialTheme.colorScheme.primary,
+                onConfirm = {
+                    viewModel.dismissNextBookPrompt()
+                    onNavigateToBook(nextBook.id)
                 },
-                dismissButton = {
-                    TextButton(onClick = { viewModel.dismissNextBookPrompt() }) {
-                        Text("留在这里")
-                    }
-                },
+                onDismiss = { viewModel.dismissNextBookPrompt() },
             )
+        }
+    }
+}
+
+// ── Extracted composables ──────────────────────────────────────────────────────
+
+@Composable
+private fun ChapterBookmarkPanel(
+    visible: Boolean,
+    chapters: List<BookChapter>,
+    bookmarks: List<Bookmark>,
+    currentChapter: Int,
+    selectedSideTab: Int,
+    linkedBooks: List<Book>,
+    moColors: MoRealmColors,
+    onTabChange: (Int) -> Unit,
+    onChapterClick: (Int) -> Unit,
+    onAddBookmark: () -> Unit,
+    onDeleteBookmark: (String) -> Unit,
+    onJumpToBookmark: (Bookmark) -> Unit,
+    onLinkedBookClick: (String) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) { it },
+        exit = slideOutVertically(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) { it },
+        modifier = modifier,
+    ) {
+        val isBookmarkTab = selectedSideTab == 1
+        Surface(
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f),
+            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f),
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            tonalElevation = 12.dp,
+        ) {
+            Column(modifier = Modifier.navigationBarsPadding().padding(top = 16.dp)) {
+                // Drag handle
+                Box(
+                    Modifier
+                        .width(40.dp).height(4.dp)
+                        .background(
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
+                            MaterialTheme.shapes.extraSmall
+                        )
+                        .align(Alignment.CenterHorizontally)
+                )
+                Spacer(Modifier.height(8.dp))
+                // Tab row: 目录 | 书签
+                Row(modifier = Modifier.padding(horizontal = 16.dp)) {
+                    FilterChip(
+                        selected = !isBookmarkTab,
+                        onClick = { onTabChange(0) },
+                        label = { Text("目录 (${chapters.size})") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                            selectedLabelColor = MaterialTheme.colorScheme.primary),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    FilterChip(
+                        selected = isBookmarkTab,
+                        onClick = { onTabChange(1) },
+                        label = { Text("书签 (${bookmarks.size})") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                            selectedLabelColor = MaterialTheme.colorScheme.primary),
+                    )
+                    Spacer(Modifier.weight(1f))
+                    if (!isBookmarkTab) {
+                        // Add bookmark button
+                        IconButton(
+                            onClick = onAddBookmark,
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.BookmarkAdd, "添加书签",
+                                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+
+                if (!isBookmarkTab) {
+                    // Chapter search
+                    var chapterSearch by remember { mutableStateOf("") }
+                    val filteredChapters = remember(chapters, chapterSearch) {
+                        if (chapterSearch.isBlank()) chapters
+                        else chapters.filter { it.title.contains(chapterSearch, ignoreCase = true) }
+                    }
+                    OutlinedTextField(
+                        value = chapterSearch,
+                        onValueChange = { chapterSearch = it },
+                        placeholder = { Text("搜索章节", style = MaterialTheme.typography.bodySmall) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(44.dp),
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            cursorColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    val listState = rememberLazyListState(
+                        initialFirstVisibleItemIndex = if (chapterSearch.isBlank()) (currentChapter - 2).coerceAtLeast(0) else 0
+                    )
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        itemsIndexed(filteredChapters, key = { _, ch -> ch.id }) { _, ch ->
+                            val isCurrent = ch.index == currentChapter
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onChapterClick(ch.index) }
+                                    .background(
+                                        if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                                        else Color.Transparent,
+                                        MaterialTheme.shapes.small
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 11.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    ch.title,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isCurrent) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (isCurrent) {
+                                    Text("▶", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+                        // Linked books
+                        linkedBooks.forEach { linkedBook ->
+                            item(key = "linked_header_${linkedBook.id}") {
+                                Text(
+                                    linkedBook.title,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 4.dp),
+                                )
+                            }
+                            item(key = "linked_tap_${linkedBook.id}") {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onLinkedBookClick(linkedBook.id) }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                ) {
+                                    Text("打开阅读 →", style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Bookmarks tab
+                    if (bookmarks.isEmpty()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("暂无书签", style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        ) {
+                            items(bookmarks, key = { it.id }) { bm ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onJumpToBookmark(bm) }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(bm.chapterTitle, style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface, maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis)
+                                        if (bm.content.isNotEmpty()) {
+                                            Text(bm.content, style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = { onDeleteBookmark(bm.id) },
+                                        modifier = Modifier.size(28.dp),
+                                    ) {
+                                        Icon(Icons.Default.Close, "删除",
+                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                                            modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FullTextSearchPanel(
+    visible: Boolean,
+    searchResults: List<ReaderViewModel.SearchResult>,
+    isSearching: Boolean,
+    moColors: MoRealmColors,
+    onSearch: (String) -> Unit,
+    onResultClick: (ReaderViewModel.SearchResult) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) { it },
+        exit = slideOutVertically(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) { it },
+        modifier = modifier,
+    ) {
+        var searchQuery by remember { mutableStateOf("") }
+        Surface(
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f),
+            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f),
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            tonalElevation = 12.dp,
+        ) {
+            Column(modifier = Modifier.navigationBarsPadding().padding(top = 16.dp)) {
+                Box(
+                    Modifier.width(40.dp).height(4.dp)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f), MaterialTheme.shapes.extraSmall)
+                        .align(Alignment.CenterHorizontally)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text("全文搜索", style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 16.dp))
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("输入关键词搜索全书", style = MaterialTheme.typography.bodySmall) },
+                    singleLine = true,
+                    trailingIcon = {
+                        IconButton(onClick = { onSearch(searchQuery) }) {
+                            if (isSearching) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+                            else Icon(Icons.Default.Search, "搜索", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(48.dp),
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary),
+                )
+                Spacer(Modifier.height(4.dp))
+                if (searchResults.isEmpty() && !isSearching && searchQuery.isNotEmpty()) {
+                    Text("未找到结果", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                        modifier = Modifier.padding(16.dp))
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                ) {
+                    items(searchResults, key = { "sr_${it.chapterIndex}_${it.snippet.hashCode()}" }) { result ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .clickable { onResultClick(result) }
+                                .padding(horizontal = 4.dp, vertical = 8.dp),
+                        ) {
+                            Column {
+                                Text(result.chapterTitle, style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(result.snippet, style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NextBookPromptDialog(
+    nextBookTitle: String,
+    accentColor: Color,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("本书已读完") },
+        text = { Text("是否继续阅读《${nextBookTitle}》？") },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("继续阅读", color = accentColor)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("留在这里")
+            }
+        },
+    )
+}
+
+@Composable
+private fun AutoPageIndicator(
+    visible: Boolean,
+    intervalSeconds: Int,
+    accentColor: Color,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (visible) {
+        Surface(
+            modifier = modifier.padding(top = 48.dp, end = 12.dp),
+            color = accentColor.copy(alpha = 0.85f),
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Row(
+                modifier = Modifier.clickable(onClick = onStop).padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("自动 ${intervalSeconds}s", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.surface)
+                Spacer(Modifier.width(4.dp))
+                Icon(Icons.Default.Close, "停止", tint = MaterialTheme.colorScheme.surface, modifier = Modifier.size(14.dp))
+            }
         }
     }
 }

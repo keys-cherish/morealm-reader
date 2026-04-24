@@ -85,10 +85,17 @@ object CbzParser {
         return null
     }
 
-    /** Pre-extract all images for faster page turns */
-    fun preCacheImages(context: Context, uri: Uri, chapters: List<BookChapter>) {
+    /**
+     * Pre-extract nearby images only (not the entire archive).
+     * For large CBZ (1GB+), extracting all images at once would be too slow
+     * and consume excessive disk space. Cache at most 30 pages around current position.
+     */
+    fun preCacheImages(context: Context, uri: Uri, chapters: List<BookChapter>, aroundIndex: Int = 0) {
+        val start = (aroundIndex - 5).coerceAtLeast(0)
+        val end = (aroundIndex + 30).coerceAtMost(chapters.size)
+        val nearby = chapters.subList(start, end)
         val cacheDir = File(context.cacheDir, "cbz_images/${uri.hashCode()}")
-        val uncached = chapters.filter { ch ->
+        val uncached = nearby.filter { ch ->
             val f = File(cacheDir, ch.url.replace('/', '_').replace('\\', '_'))
             !f.exists()
         }.map { it.url }.toSet()

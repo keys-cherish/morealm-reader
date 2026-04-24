@@ -185,19 +185,16 @@ object EpubParser {
             val startFragment = chapter.url.substringAfter("#", "").takeIf { it.isNotEmpty() }
 
             val elements = org.jsoup.select.Elements()
-            var found = false
-            for (res in contents) {
-                if (!found) {
-                    if (res.href != targetHref) continue
-                    found = true
-                    elements.add(parseBody(res, startFragment, null))
+            // Use href index map for O(1) start lookup instead of linear scan
+            val startIdx = hrefIndexMap?.get(targetHref) ?: contents.indexOfFirst { it.href == targetHref }
+            if (startIdx < 0) return@withEpubBook ""
+
+            elements.add(parseBody(contents[startIdx], startFragment, null))
+            if (nextHref == null || contents[startIdx].href != nextHref) {
+                for (i in (startIdx + 1) until contents.size) {
+                    val res = contents[i]
                     if (nextHref != null && res.href == nextHref) break
-                    continue
-                }
-                if (nextHref == null || res.href != nextHref) {
                     elements.add(parseBody(res, null, null))
-                } else {
-                    break
                 }
             }
             processContent(elements, context, uri, targetHref, book)
@@ -209,9 +206,8 @@ object EpubParser {
     // ── Body parsing & image rewriting ─────────────────
 
     private fun parseBody(res: Resource, startFragment: String?, endFragment: String?): org.jsoup.nodes.Element {
-        if (res.href.contains("titlepage.xhtml") || res.href.contains("cover")) {
-            return Jsoup.parseBodyFragment("<img src=\"cover.jpeg\" />")
-        }
+        // Don't short-circuit cover pages — let them go through normal parsing
+        // so images get properly extracted and resolved
         var body = Jsoup.parse(String(res.data, charset)).body()
         body.select("script, style").remove()
 
@@ -255,18 +251,29 @@ object EpubParser {
     ): String {
         elements.select("title").remove()
         elements.select("[style*=display:none]").remove()
+        // Strip ruby annotations (rp/rt) for cleaner text
+        elements.select("rp, rt").remove()
         elements.select("img").forEach { img ->
             val src = img.attr("src")
-            if (src == "cover.jpeg" || src.isBlank()) return@forEach
+            if (src.isBlank()) return@forEach
             val cached = extractImageFromBook(context, uri, src, book)
             if (cached != null) {
                 img.attr("src", "file://${cached.absolutePath}")
             } else {
-                img.removeAttr("src") // Remove broken image reference
+                img.removeAttr("src")
             }
             img.removeAttr("style"); img.removeAttr("width"); img.removeAttr("height")
         }
-        return elements.outerHtml()
+        var html = elements.outerHtml()
+        // Unescape HTML entities that may have been double-encoded
+        if (html.contains("&amp;") || html.contains("&lt;")) {
+            html = html.replace("&lt;img", "&lt; img")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+        }
+        return html
     }
 
     // ── Image extraction (reuses book instance when available) ──
@@ -325,14 +332,22 @@ object EpubParser {
     private fun chapterCacheFile(context: Context, epubUri: Uri, path: String): File =
         File(context.cacheDir, "epub_chapters/${epubUri.hashCode()}/${path.replace('/', '_')}.html")
 
-    fun preCacheChapters(context: Context, uri: Uri, chapters: List<BookChapter>) {
-        val uncached = chapters.filter { ch ->
+    /**
+     * Pre-cache nearby chapters only (not the entire book).
+     * For large EPUBs (1GB+), caching all chapters at once would be too slow
+     * and consume excessive disk space. Instead, cache at most 20 chapters
+     * around the current reading position. The reader calls this again
+     * when the user navigates to a new area.
+     */
+    fun preCacheChapters(context: Context, uri: Uri, chapters: List<BookChapter>, aroundIndex: Int = 0) {
+        val start = (aroundIndex - 5).coerceAtLeast(0)
+        val end = (aroundIndex + 20).coerceAtMost(chapters.size)
+        val nearby = chapters.subList(start, end)
+        val uncached = nearby.filter { ch ->
             ch.url.isNotEmpty() && !chapterCacheFile(context, uri, ch.url.substringBeforeLast("#")).exists()
         }
         if (uncached.isEmpty()) return
-        // Pre-cache using epublib random access — much faster than ZipInputStream scan
         withEpubBook(context, uri) { book ->
-            val contents = book.contents ?: return@withEpubBook
             for (ch in uncached) {
                 val href = ch.url.substringBeforeLast("#")
                 val content = readChapterFromBook(book, ch, context, uri)
@@ -370,46 +385,70 @@ object EpubParser {
     private var cachedUri: String? = null
     private var cachedBook: EpubBook? = null
     private var cachedPfd: ParcelFileDescriptor? = null
+    // href → index lookup for O(1) content resource finding
+    private var hrefIndexMap: Map<String, Int>? = null
 
     @Synchronized
     private fun <T> withEpubBook(context: Context, uri: Uri, block: (EpubBook) -> T): T? {
+        return withEpubBookInternal(context, uri, block, retried = false)
+    }
+
+    private fun <T> withEpubBookInternal(
+        context: Context, uri: Uri, block: (EpubBook) -> T, retried: Boolean,
+    ): T? {
         val uriStr = uri.toString()
         // Reuse cached instance if same book
         val book = if (uriStr == cachedUri && cachedBook != null) {
             cachedBook!!
         } else {
-            // Close previous
-            cachedPfd?.close()
-            cachedPfd = null
-            cachedBook = null
-            cachedUri = null
-
-            try {
-                val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
-                val zipFile = AndroidZipFile(pfd, uri.lastPathSegment ?: "book.epub")
-                val newBook = EpubReader().readEpubLazy(zipFile, "utf-8")
-                cachedPfd = pfd
-                cachedBook = newBook
-                cachedUri = uriStr
-                newBook
-            } catch (e: Exception) {
-                AppLog.error("EpubParser", "Failed to open EPUB: ${e.message}")
-                return null
-            }
+            openFreshBook(context, uri) ?: return null
         }
         return try {
             block(book)
         } catch (e: Exception) {
+            val msg = e.message ?: ""
+            // EBADF = stale file descriptor (PFD was closed by releaseCache).
+            // Invalidate cache and retry once with a fresh PFD.
+            if (!retried && (msg.contains("EBADF") || msg.contains("Bad file descriptor"))) {
+                AppLog.warn("EpubParser", "Stale fd detected, re-opening: ${e.message}")
+                invalidateCacheLocked()
+                return withEpubBookInternal(context, uri, block, retried = true)
+            }
             AppLog.error("EpubParser", "EpubBook operation failed: ${e.message}")
             null
         }
     }
 
-    /** Release cached book (call when reader closes) */
-    fun releaseCache() {
-        cachedPfd?.close()
+    private fun openFreshBook(context: Context, uri: Uri): EpubBook? {
+        // Close previous
+        invalidateCacheLocked()
+        return try {
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
+            val zipFile = AndroidZipFile(pfd, uri.lastPathSegment ?: "book.epub")
+            val newBook = EpubReader().readEpubLazy(zipFile, "utf-8")
+            cachedPfd = pfd
+            cachedBook = newBook
+            cachedUri = uri.toString()
+            // Build href→index map for O(1) content lookup
+            hrefIndexMap = newBook.contents?.mapIndexed { i, res -> res.href to i }?.toMap()
+            newBook
+        } catch (e: Exception) {
+            AppLog.error("EpubParser", "Failed to open EPUB: ${e.message}")
+            null
+        }
+    }
+
+    private fun invalidateCacheLocked() {
+        try { cachedPfd?.close() } catch (_: Exception) {}
         cachedPfd = null
         cachedBook = null
         cachedUri = null
+        hrefIndexMap = null
+    }
+
+    /** Release cached book (call when reader closes) */
+    @Synchronized
+    fun releaseCache() {
+        invalidateCacheLocked()
     }
 }

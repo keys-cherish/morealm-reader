@@ -2,8 +2,8 @@ package com.morealm.app.presentation.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.morealm.app.domain.db.ReplaceRuleDao
 import com.morealm.app.domain.entity.ReplaceRule
+import com.morealm.app.domain.repository.ReplaceRuleRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
@@ -15,10 +15,10 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ReplaceRuleViewModel @Inject constructor(
-    private val replaceRuleDao: ReplaceRuleDao,
+    private val replaceRuleRepo: ReplaceRuleRepository,
 ) : ViewModel() {
 
-    val allRules: StateFlow<List<ReplaceRule>> = replaceRuleDao.getAllRules()
+    val allRules: StateFlow<List<ReplaceRule>> = replaceRuleRepo.getAllRules()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     fun saveRule(
@@ -39,19 +39,19 @@ class ReplaceRuleViewModel @Inject constructor(
             sortOrder = allRules.value.size,
         )
         viewModelScope.launch(Dispatchers.IO) {
-            replaceRuleDao.insert(rule)
+            replaceRuleRepo.insert(rule)
         }
     }
 
     fun toggleRule(rule: ReplaceRule) {
         viewModelScope.launch(Dispatchers.IO) {
-            replaceRuleDao.insert(rule.copy(enabled = !rule.enabled))
+            replaceRuleRepo.insert(rule.copy(enabled = !rule.enabled))
         }
     }
 
     fun deleteRule(id: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            replaceRuleDao.deleteById(id)
+            replaceRuleRepo.deleteById(id)
         }
     }
 }

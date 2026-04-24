@@ -18,8 +18,49 @@ fun parseColor(hex: String): Color {
     }
 }
 
-fun todayString(): String =
-    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+// ── ThreadLocal date formatters (avoid per-call allocation) ──
+
+private val DATE_FMT_YMD = ThreadLocal.withInitial {
+    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+}
+private val DATE_FMT_YMDHM = ThreadLocal.withInitial {
+    SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault())
+}
+private val DATE_FMT_HMS = ThreadLocal.withInitial {
+    SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+}
+private val DATE_FMT_HM = ThreadLocal.withInitial {
+    SimpleDateFormat("HH:mm", Locale.getDefault())
+}
+
+fun todayString(): String = DATE_FMT_YMD.get()!!.format(Date())
+fun timestampString(): String = DATE_FMT_YMDHM.get()!!.format(Date())
+fun timeHmsString(): String = DATE_FMT_HMS.get()!!.format(Date())
+fun timeHmString(): String = DATE_FMT_HM.get()!!.format(Date())
+fun formatDateYmd(time: Long): String = DATE_FMT_YMD.get()!!.format(Date(time))
+
+/**
+ * Strip HTML tags and decode common entities → plain text.
+ * Uses pre-compiled regex from AppPattern to avoid per-call allocation.
+ */
+fun String.stripHtml(): String {
+    return this
+        .replace(AppPattern.htmlBrRegex, "\n")
+        .replace(AppPattern.htmlPOpenRegex, "\n")
+        .replace(AppPattern.htmlPCloseRegex, "")
+        .replace(AppPattern.htmlTagRegex, "")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+}
+
+/**
+ * Strip HTML tags only (no entity decode). Faster for simple tag removal.
+ */
+fun String.stripHtmlTags(): String = replace(AppPattern.htmlTagRegex, "")
 
 fun Long.toReadableDuration(): String {
     val hours = this / 3600000

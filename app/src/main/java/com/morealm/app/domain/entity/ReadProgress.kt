@@ -12,5 +12,6 @@ data class ReadProgress(
     val chapterPosition: Int = 0,
     val chapterOffset: Float = 0f,
     val totalProgress: Float = 0f,
+    val scrollProgress: Int = 0,
     val updatedAt: Long = System.currentTimeMillis(),
 )
