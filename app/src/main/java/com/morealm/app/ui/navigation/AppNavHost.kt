@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.*
 import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
@@ -12,8 +15,11 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -37,7 +43,7 @@ import com.morealm.app.ui.shelf.ShelfScreen
 import com.morealm.app.ui.source.BookSourceManageScreen
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.theme.ThemeViewModel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun MoRealmNavHost(
@@ -58,22 +64,18 @@ fun MoRealmNavHost(
     val isOnMainTab = currentDestination?.route == "main_tabs" || currentDestination == null
 
     val tabs = BottomTab.entries
+    val scope = rememberCoroutineScope()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    val cachedTabs = remember { mutableStateListOf(0) }
-    val switchTab: (Int) -> Unit = remember {
+    var targetTab by remember { mutableStateOf<Int?>(null) }
+    var tabWidth by remember { mutableIntStateOf(0) }
+    val tabOffset = remember { Animatable(0f) }
+    val cachedTabs = remember { mutableStateListOf<Int>().apply { addAll(tabs.indices.toList()) } }
+    val switchTab: (Int) -> Unit = remember(selectedTab, scope) {
         { index ->
             if (index == selectedTab) return@remember
-            if (index !in cachedTabs) {
-                cachedTabs.add(index)
-            }
             selectedTab = index
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        tabs.indices.drop(1).forEach { index ->
-            delay(250)
-            if (index !in cachedTabs) cachedTabs.add(index)
+            targetTab = null
+            scope.launch { tabOffset.snapTo(0f) }
         }
     }
 
@@ -133,27 +135,73 @@ fun MoRealmNavHost(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .onSizeChanged { tabWidth = it.width }
                         .pointerInput(selectedTab) {
                             detectHorizontalDragGestures(
-                                onDragStart = { dragAmount = 0f },
-                                onHorizontalDrag = { _, amount -> dragAmount += amount },
-                                onDragEnd = {
-                                    val threshold = size.width * 0.18f
-                                    when {
-                                        dragAmount < -threshold && selectedTab < tabs.lastIndex -> switchTab(selectedTab + 1)
-                                        dragAmount > threshold && selectedTab > 0 -> switchTab(selectedTab - 1)
-                                    }
+                                onDragStart = {
                                     dragAmount = 0f
+                                    targetTab = null
+                                    scope.launch { tabOffset.stop() }
                                 },
-                                onDragCancel = { dragAmount = 0f },
+                                onHorizontalDrag = { _, amount ->
+                                    val width = size.width.toFloat().coerceAtLeast(1f)
+                                    val nextOffset = (tabOffset.value + amount).coerceIn(-width, width)
+                                    val nextTarget = when {
+                                        nextOffset < 0f && selectedTab < tabs.lastIndex -> selectedTab + 1
+                                        nextOffset > 0f && selectedTab > 0 -> selectedTab - 1
+                                        else -> null
+                                    }
+                                    if (nextTarget != null && nextTarget !in cachedTabs) cachedTabs.add(nextTarget)
+                                    targetTab = nextTarget
+                                    dragAmount = nextOffset
+                                    scope.launch { tabOffset.snapTo(nextOffset) }
+                                },
+                                onDragEnd = {
+                                    val width = size.width.toFloat().coerceAtLeast(1f)
+                                    val threshold = width * 0.22f
+                                    val destination = targetTab
+                                    scope.launch {
+                                        if (destination != null && kotlin.math.abs(tabOffset.value) > threshold) {
+                                            val settleOffset = if (tabOffset.value < 0f) -width else width
+                                            tabOffset.animateTo(settleOffset, tween(140, easing = FastOutSlowInEasing))
+                                            selectedTab = destination
+                                        }
+                                        tabOffset.snapTo(0f)
+                                        targetTab = null
+                                        dragAmount = 0f
+                                    }
+                                },
+                                onDragCancel = {
+                                    scope.launch {
+                                        tabOffset.animateTo(0f, tween(120, easing = FastOutSlowInEasing))
+                                        targetTab = null
+                                        dragAmount = 0f
+                                    }
+                                },
                             )
                         },
                 ) {
                     tabs.forEachIndexed { page, tab ->
                         if (page !in cachedTabs) return@forEachIndexed
+                        val neighbor = targetTab
+                        val visible = page == selectedTab || page == neighbor
+                        val width = tabWidth.toFloat().coerceAtLeast(1f)
+                        val offsetX = when {
+                            page == selectedTab -> tabOffset.value
+                            page == neighbor && neighbor > selectedTab -> width + tabOffset.value
+                            page == neighbor && neighbor < selectedTab -> -width + tabOffset.value
+                            else -> 0f
+                        }
                         key(tab) {
                             Box(
-                                modifier = if (selectedTab == page) Modifier.fillMaxSize() else Modifier.size(0.dp)
+                                modifier = if (visible) {
+                                    Modifier
+                                        .fillMaxSize()
+                                        .zIndex(if (page == selectedTab) 1f else 0f)
+                                        .graphicsLayer { translationX = offsetX }
+                                } else {
+                                    Modifier.size(0.dp)
+                                }
                             ) {
                                 when (tab) {
                         BottomTab.Shelf -> {

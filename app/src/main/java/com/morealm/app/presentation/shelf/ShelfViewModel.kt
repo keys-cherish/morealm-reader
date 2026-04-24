@@ -26,11 +26,11 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import java.util.UUID
 import javax.inject.Inject
 
@@ -94,13 +94,8 @@ class ShelfViewModel @Inject constructor(
     val resumeLastRead: StateFlow<Boolean> = prefs.resumeLastRead
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    private val initialBooks: List<Book> = runBlocking(Dispatchers.IO) {
-        sortBooks(bookRepo.getAllBooksSync(), "title")
-    }
-
-    private val initialGroups: List<BookGroup> = runBlocking(Dispatchers.IO) {
-        groupRepo.getAllGroupsSync()
-    }
+    private val _booksLoaded = MutableStateFlow(false)
+    val booksLoaded: StateFlow<Boolean> = _booksLoaded.asStateFlow()
 
     private val _folderImportState = MutableStateFlow(FolderImportState())
     val folderImportState: StateFlow<FolderImportState> = _folderImportState.asStateFlow()
@@ -111,11 +106,11 @@ class ShelfViewModel @Inject constructor(
     }
 
     val allGroups: StateFlow<List<BookGroup>> = groupRepo.getAllGroups()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, initialGroups)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val groupNames: StateFlow<Map<String, String>> = groupRepo.getAllGroups()
         .map { groups -> groups.associate { it.id to it.name } }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, initialGroups.associate { it.id to it.name })
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     private val _sortMode = MutableStateFlow("title")
     val sortMode: StateFlow<String> = _sortMode.asStateFlow()
@@ -126,7 +121,8 @@ class ShelfViewModel @Inject constructor(
     @OptIn(ExperimentalCoroutinesApi::class)
     val books: StateFlow<List<Book>> = _sortMode.flatMapLatest { sort ->
         bookRepo.getAllBooks().map { list -> sortBooks(list, sort) }
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, initialBooks)
+    }.onEach { _booksLoaded.value = true }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** Folder book counts — derived from the books flow */
     val folderBookCounts: StateFlow<Map<String, Int>> = books
