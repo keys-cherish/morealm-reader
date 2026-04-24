@@ -49,6 +49,10 @@ fun ScrollRenderer(
     onScrollProgress: (Int) -> Unit = {},
     onNearBottom: () -> Unit = {},
     onTapCenter: () -> Unit = {},
+    resetKey: Int = 0,
+    startFromLastPage: Boolean = false,
+    initialProgress: Int = 0,
+    layoutCompleted: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -56,6 +60,8 @@ fun ScrollRenderer(
 
     // Current page index (the page whose top edge is at or above the viewport top)
     var currentPageIndex by remember { mutableIntStateOf(0) }
+    var lastNearBottomPageCount by remember { mutableIntStateOf(0) }
+    var pendingRestore by remember(resetKey) { mutableStateOf(true) }
 
     // Pixel offset of the current page relative to viewport top.
     // 0 = page top aligned with viewport top
@@ -71,13 +77,26 @@ fun ScrollRenderer(
     val flingAnim = remember { Animatable(0f) }
     var isFling by remember { mutableStateOf(false) }
 
+    LaunchedEffect(resetKey, pageCount, layoutCompleted) {
+        if (!pendingRestore || !layoutCompleted || pageCount <= 0) return@LaunchedEffect
+        currentPageIndex = when {
+            startFromLastPage -> pageCount - 1
+            initialProgress > 0 -> ((initialProgress / 100f) * (pageCount - 1)).toInt().coerceIn(0, pageCount - 1)
+            else -> 0
+        }
+        pageOffset = 0f
+        lastNearBottomPageCount = 0
+        pendingRestore = false
+    }
+
     // Report progress whenever current page changes
-    LaunchedEffect(currentPageIndex, pageCount) {
+    LaunchedEffect(currentPageIndex, pageCount, pendingRestore) {
         if (pageCount > 0) {
-            val progress = ((currentPageIndex + 1) * 100) / pageCount
+            val progress = if (pageCount > 1) (currentPageIndex * 100) / (pageCount - 1) else 100
             onScrollProgress(progress.coerceIn(0, 100))
         }
-        if (currentPageIndex >= pageCount - 2) {
+        if (!pendingRestore && currentPageIndex >= pageCount - 2 && pageCount > lastNearBottomPageCount) {
+            lastNearBottomPageCount = pageCount
             onNearBottom()
         }
     }
@@ -110,6 +129,10 @@ fun ScrollRenderer(
             val minOffset = (viewHeight - curPageHeight).toFloat().coerceAtMost(0f)
             if (pageOffset < minOffset) {
                 pageOffset = minOffset
+                if (pageCount > lastNearBottomPageCount) {
+                    lastNearBottomPageCount = pageCount
+                    onNearBottom()
+                }
             }
             return
         }

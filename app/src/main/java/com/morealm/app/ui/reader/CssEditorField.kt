@@ -40,6 +40,10 @@ fun CssEditorSection(
     css: String,
     onCssChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    liveUpdate: Boolean = false,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    accentColor: Color = MaterialTheme.colorScheme.primary,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.6f),
 ) {
     var expanded by remember { mutableStateOf(css.isNotEmpty()) }
     var textFieldValue by remember(css) { mutableStateOf(TextFieldValue(css)) }
@@ -54,21 +58,21 @@ fun CssEditorSection(
                 .padding(vertical = 4.dp),
         ) {
             Icon(Icons.Default.Code, null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = accentColor,
                 modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text("自定义 CSS", style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                color = contentColor.copy(alpha = 0.7f))
             Spacer(Modifier.weight(1f))
             if (css.isNotEmpty()) {
                 Text("已配置", style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary)
+                    color = accentColor)
                 Spacer(Modifier.width(4.dp))
             }
             Icon(
                 if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                 null, modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+                tint = contentColor.copy(alpha = 0.4f))
         }
 
         if (!expanded) return@Column
@@ -77,7 +81,7 @@ fun CssEditorSection(
 
         // ── Preset snippets (防呆) ──
         Text("快捷插入", style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+            color = contentColor.copy(alpha = 0.5f))
         Spacer(Modifier.height(4.dp))
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -103,8 +107,9 @@ fun CssEditorSection(
                     },
                     label = { Text(preset.label, style = MaterialTheme.typography.labelSmall) },
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                        selectedLabelColor = MaterialTheme.colorScheme.primary),
+                        selectedContainerColor = accentColor.copy(alpha = 0.15f),
+                        selectedLabelColor = accentColor,
+                        labelColor = contentColor.copy(alpha = 0.75f)),
                 )
             }
         }
@@ -113,14 +118,14 @@ fun CssEditorSection(
 
         // ── Syntax-highlighted editor ──
         val colorScheme = MaterialTheme.colorScheme
-        val highlightColors = remember(colorScheme) {
+        val highlightColors = remember(colorScheme, contentColor, accentColor) {
             CssHighlightColors(
-                property = colorScheme.primary,
+                property = accentColor,
                 value = colorScheme.tertiary,
-                punctuation = colorScheme.onSurface.copy(alpha = 0.35f),
-                comment = colorScheme.onSurface.copy(alpha = 0.3f),
+                punctuation = contentColor.copy(alpha = 0.35f),
+                comment = contentColor.copy(alpha = 0.3f),
                 error = colorScheme.error,
-                text = colorScheme.onSurface.copy(alpha = 0.85f),
+                text = contentColor.copy(alpha = 0.85f),
             )
         }
 
@@ -134,7 +139,7 @@ fun CssEditorSection(
                 .fillMaxWidth()
                 .heightIn(min = 80.dp, max = 160.dp)
                 .background(
-                    colorScheme.surfaceContainerHighest.copy(alpha = 0.6f),
+                    containerColor,
                     RoundedCornerShape(8.dp),
                 )
                 .padding(12.dp),
@@ -145,7 +150,7 @@ fun CssEditorSection(
                     style = TextStyle(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,
-                        color = colorScheme.onSurface.copy(alpha = 0.25f),
+                        color = contentColor.copy(alpha = 0.25f),
                     ),
                 )
             }
@@ -153,14 +158,17 @@ fun CssEditorSection(
                 value = textFieldValue,
                 onValueChange = {
                     textFieldValue = it
-                    // Don't call onCssChange here — only apply on explicit "应用" action
+                    if (liveUpdate) {
+                        onCssChange(it.text)
+                    }
                 },
                 textStyle = TextStyle(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
+                    lineHeight = 18.sp,
                     color = Color.Transparent, // hidden — we draw highlighted text on top
                 ),
-                cursorBrush = SolidColor(colorScheme.primary),
+                cursorBrush = SolidColor(accentColor),
                 modifier = Modifier.fillMaxWidth(),
                 decorationBox = { innerTextField ->
                     Box {
@@ -198,13 +206,13 @@ fun CssEditorSection(
             if (validationResult.recognized.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.CheckCircle, null,
-                        tint = colorScheme.primary.copy(alpha = 0.7f),
+                        tint = accentColor.copy(alpha = 0.7f),
                         modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
                     Text(
                         "已识别: ${validationResult.recognized.joinToString(", ")}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = colorScheme.onSurface.copy(alpha = 0.5f),
+                        color = contentColor.copy(alpha = 0.5f),
                     )
                 }
             }
@@ -220,7 +228,7 @@ fun CssEditorSection(
                     label = { Text("应用") },
                     leadingIcon = { Icon(Icons.Default.Check, null, Modifier.size(14.dp)) },
                     colors = FilterChipDefaults.filterChipColors(
-                        containerColor = colorScheme.primary.copy(alpha = 0.15f)),
+                        containerColor = accentColor.copy(alpha = 0.15f)),
                 )
             }
             if (textFieldValue.text.isNotEmpty()) {
@@ -239,14 +247,14 @@ fun CssEditorSection(
         // ── Supported properties reference ──
         Spacer(Modifier.height(8.dp))
         Text("支持的属性", style = MaterialTheme.typography.labelSmall,
-            color = colorScheme.onSurface.copy(alpha = 0.4f))
+            color = contentColor.copy(alpha = 0.4f))
         Text(
             "text-indent · line-height · letter-spacing · text-align\n" +
                 "font-size · paragraph-spacing\n" +
                 "padding-top/bottom/left/right",
             style = MaterialTheme.typography.labelSmall.copy(
                 fontFamily = FontFamily.Monospace, fontSize = 10.sp),
-            color = colorScheme.onSurface.copy(alpha = 0.3f),
+            color = contentColor.copy(alpha = 0.3f),
         )
     }
 }
