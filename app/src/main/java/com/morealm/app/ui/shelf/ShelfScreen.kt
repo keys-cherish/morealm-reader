@@ -32,9 +32,11 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.BookGroup
+import com.morealm.app.presentation.shelf.FolderImportState
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.shelf.ShelfViewModel
 import androidx.activity.compose.BackHandler
+import kotlinx.coroutines.delay
 import java.util.Calendar
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -84,11 +86,33 @@ fun ShelfScreen(
     val allGroups by viewModel.allGroups.collectAsStateWithLifecycle()
     val folderBookCounts by viewModel.folderBookCounts.collectAsStateWithLifecycle()
     val folderCoverUrls by viewModel.folderCoverUrls.collectAsStateWithLifecycle()
+    val folderImportState by viewModel.folderImportState.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
     // Web book long-press cache dialog
     var showCacheBookDialog by remember { mutableStateOf<Book?>(null) }
     val isDownloading by viewModel.isCacheDownloading.collectAsStateWithLifecycle()
     val downloadProgress by viewModel.cacheDownloadProgress.collectAsStateWithLifecycle()
+
+    LaunchedEffect(showSearch, searchQuery) {
+        val query = searchQuery.trim()
+        if (!showSearch || query.isEmpty()) {
+            searchResults = emptyList()
+            return@LaunchedEffect
+        }
+        delay(300)
+        viewModel.searchBooks(query) { results ->
+            if (showSearch && searchQuery.trim() == query) {
+                searchResults = results
+            }
+        }
+    }
+
+    LaunchedEffect(folderImportState.running, folderImportState.message, folderImportState.error) {
+        if (!folderImportState.running && folderImportState.message.isNotBlank()) {
+            delay(3500)
+            viewModel.clearFolderImportMessage()
+        }
+    }
 
     // Derive display books based on current folder
     val displayBooks = remember(allBooks, currentFolderId) {
@@ -259,6 +283,13 @@ fun ShelfScreen(
             },
         )
 
+        if (folderImportState.running || folderImportState.message.isNotBlank()) {
+            FolderImportBanner(
+                state = folderImportState,
+                onDismiss = viewModel::clearFolderImportMessage,
+            )
+        }
+
         // Breadcrumb (like HTML: 全部 / 科幻小说)
         if (currentFolderId != null) {
             Row(
@@ -380,9 +411,7 @@ fun ShelfScreen(
             results = searchResults,
             onQueryChange = { q ->
                 searchQuery = q
-                if (q.length >= 1) {
-                    viewModel.searchBooks(q) { searchResults = it }
-                } else {
+                if (q.isBlank()) {
                     searchResults = emptyList()
                 }
             },
@@ -515,6 +544,69 @@ fun ShelfScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun FolderImportBanner(
+    state: FolderImportState,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = if (state.error == null) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.errorContainer
+        },
+        tonalElevation = 2.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (state.running) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else {
+                Icon(
+                    if (state.error == null) Icons.Default.CheckCircle else Icons.Default.Error,
+                    null,
+                    tint = if (state.error == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    state.message.ifBlank { if (state.running) "正在导入文件夹…" else "导入完成" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                val detail = when {
+                    state.error != null -> state.error
+                    state.running && state.importedCount > 0 -> "已加入 ${state.importedCount} 本，正在继续处理封面/元数据"
+                    state.running -> "请稍候，正在后台扫描和导入"
+                    state.importedCount > 0 -> "共导入 ${state.importedCount} 本书"
+                    else -> "可以换个文件夹再试"
+                }
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                )
+            }
+            if (!state.running) {
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, "关闭")
+                }
+            }
+        }
     }
 }
 

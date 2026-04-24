@@ -80,7 +80,9 @@ class CacheBookService : Service() {
     @Inject lateinit var sourceDao: BookSourceDao
     @Inject lateinit var cacheDao: CacheDao
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val serviceScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + AppLog.coroutineExceptionHandler("CacheService")
+    )
     private var downloadJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null

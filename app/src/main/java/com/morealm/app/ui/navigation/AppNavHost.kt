@@ -1,17 +1,18 @@
-package com.morealm.app.ui.navigation
+﻿package com.morealm.app.ui.navigation
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.material3.*
 import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.navigation.NavType
@@ -36,7 +37,7 @@ import com.morealm.app.ui.shelf.ShelfScreen
 import com.morealm.app.ui.source.BookSourceManageScreen
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.theme.ThemeViewModel
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 @Composable
 fun MoRealmNavHost(
@@ -48,7 +49,6 @@ fun MoRealmNavHost(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
     val moColors = LocalMoRealmColors.current
-    val scope = rememberCoroutineScope()
 
     val isFullscreen = currentDestination?.route?.let { route ->
         route.startsWith("reader") || route == "webdav" || route == "about" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "app_log" || route == "cache_book" || route.startsWith("theme_editor")
@@ -58,12 +58,25 @@ fun MoRealmNavHost(
     val isOnMainTab = currentDestination?.route == "main_tabs" || currentDestination == null
 
     val tabs = BottomTab.entries
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = { tabs.size })
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val cachedTabs = remember { mutableStateListOf(0) }
+    val switchTab: (Int) -> Unit = remember {
+        { index ->
+            if (index == selectedTab) return@remember
+            if (index !in cachedTabs) {
+                cachedTabs.add(index)
+            }
+            selectedTab = index
+        }
+    }
 
-    // Sync pager → bottom bar selection
-    val selectedTab by remember { derivedStateOf { pagerState.currentPage } }
+    LaunchedEffect(Unit) {
+        tabs.indices.drop(1).forEach { index ->
+            delay(250)
+            if (index !in cachedTabs) cachedTabs.add(index)
+        }
+    }
 
-    val useNavRail = windowSizeClass.widthSizeClass >= WindowWidthSizeClass.Medium
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -78,9 +91,7 @@ fun MoRealmNavHost(
                             icon = { Icon(tab.icon, contentDescription = tab.label) },
                             label = { Text(tab.label) },
                             selected = selectedTab == index,
-                            onClick = {
-                                scope.launch { pagerState.animateScrollToPage(index) }
-                            },
+                            onClick = { switchTab(index) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = MaterialTheme.colorScheme.primary,
                                 selectedTextColor = MaterialTheme.colorScheme.primary,
@@ -106,7 +117,7 @@ fun MoRealmNavHost(
                 // Stabilize lambdas to avoid recomposition of child screens
                 val onBookClick = remember { { bookId: String -> navController.safeNavigate("reader/$bookId") } }
                 val onBookLongClick = remember { { bookId: String -> navController.safeNavigate("detail/$bookId") } }
-                val onSearchTab = remember(scope) { { scope.launch { pagerState.animateScrollToPage(1) } ; Unit } }
+                val onSearchTab = remember(switchTab) { { switchTab(1) } }
                 val onToggleDayNight = remember(themeViewModel) { { themeViewModel.toggleDayNight() } }
                 val onNavWebDav = remember { { navController.safeNavigate("webdav") } }
                 val onNavAbout = remember { { navController.safeNavigate("about") } }
@@ -116,31 +127,35 @@ fun MoRealmNavHost(
                 val onNavAppLog = remember { { navController.safeNavigate("app_log") } }
                 val onNavCacheBook = remember { { navController.safeNavigate("cache_book") } }
                 val onNavThemeEditor = remember { { navController.safeNavigate("theme_editor") } }
-                val onSearchBack = remember(scope) { { scope.launch { pagerState.animateScrollToPage(0) } ; Unit } }
+                val onSearchBack = remember(switchTab) { { switchTab(0) } }
 
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier.fillMaxSize(),
-                    beyondViewportPageCount = tabs.size,
-                ) { page ->
-                    // 延迟 compose 非首屏 tab：冷启动首帧只 compose 当前页（Shelf），
-                    // 其余 tab 先显示背景色占位，下一帧再真正 compose 内容。
-                    // 效果等同于 Legado 的 Fragment BEHAVIOR_RESUME_ONLY_CURRENT_FRAGMENT。
-                    val isInitialPage = page == 0
-                    var ready by remember { mutableStateOf(isInitialPage) }
-                    if (!ready) {
-                        LaunchedEffect(Unit) { ready = true }
-                    }
-                    if (!ready) {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.background)
-                        )
-                        return@HorizontalPager
-                    }
-
-                    when (tabs[page]) {
+                var dragAmount by remember { mutableFloatStateOf(0f) }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(selectedTab) {
+                            detectHorizontalDragGestures(
+                                onDragStart = { dragAmount = 0f },
+                                onHorizontalDrag = { _, amount -> dragAmount += amount },
+                                onDragEnd = {
+                                    val threshold = size.width * 0.18f
+                                    when {
+                                        dragAmount < -threshold && selectedTab < tabs.lastIndex -> switchTab(selectedTab + 1)
+                                        dragAmount > threshold && selectedTab > 0 -> switchTab(selectedTab - 1)
+                                    }
+                                    dragAmount = 0f
+                                },
+                                onDragCancel = { dragAmount = 0f },
+                            )
+                        },
+                ) {
+                    tabs.forEachIndexed { page, tab ->
+                        if (page !in cachedTabs) return@forEachIndexed
+                        key(tab) {
+                            Box(
+                                modifier = if (selectedTab == page) Modifier.fillMaxSize() else Modifier.size(0.dp)
+                            ) {
+                                when (tab) {
                         BottomTab.Shelf -> {
                             // Read theme state inside ShelfScreen's scope so changes
                             // only recompose this branch, not the entire Pager
@@ -174,6 +189,9 @@ fun MoRealmNavHost(
                             onNavigateCacheBook = onNavCacheBook,
                             onNavigateThemeEditor = onNavThemeEditor,
                         )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -246,7 +264,7 @@ fun MoRealmNavHost(
 }
 
 /**
- * Safe navigation — guards against "Cannot transition entry that is not in the back stack"
+ * Safe navigation 鈥?guards against "Cannot transition entry that is not in the back stack"
  * crash caused by predictive back gestures in Navigation Compose 2.9.x.
  */
 private fun NavController.safeNavigate(route: String, builder: (androidx.navigation.NavOptionsBuilder.() -> Unit)? = null) {

@@ -11,6 +11,7 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineExceptionHandler
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -59,7 +60,7 @@ data class LogRecord(
 
 interface LogSink {
     val name: String
-    val minLevel: LogLevel
+    var minLevel: LogLevel
     fun write(record: LogRecord)
     fun flush() {}
     fun close() {}
@@ -68,7 +69,7 @@ interface LogSink {
 // ── Built-in Sinks ───────────────────────────────────
 
 /** Logcat output — synchronous, always available */
-class LogcatSink(override val minLevel: LogLevel = LogLevel.VERBOSE) : LogSink {
+class LogcatSink(override var minLevel: LogLevel = LogLevel.VERBOSE) : LogSink {
     override val name = "logcat"
     override fun write(record: LogRecord) {
         val msg = record.message
@@ -86,7 +87,7 @@ class LogcatSink(override val minLevel: LogLevel = LogLevel.VERBOSE) : LogSink {
 
 /** In-memory ring buffer — synchronous, for UI log viewer */
 class MemorySink(
-    override val minLevel: LogLevel = LogLevel.DEBUG,
+    override var minLevel: LogLevel = LogLevel.DEBUG,
     private val maxEntries: Int = 300,
 ) : LogSink {
     override val name = "memory"
@@ -95,6 +96,13 @@ class MemorySink(
     val records: StateFlow<List<LogRecord>> = _flow.asStateFlow()
 
     override fun write(record: LogRecord) {
+        buffer.addLast(record)
+        while (buffer.size > maxEntries) buffer.pollFirst()
+        _flow.value = buffer.toList()
+    }
+
+    /** Force-write bypassing minLevel check (for crash/ANR records) */
+    fun writeForce(record: LogRecord) {
         buffer.addLast(record)
         while (buffer.size > maxEntries) buffer.pollFirst()
         _flow.value = buffer.toList()
@@ -119,6 +127,37 @@ class MemorySink(
         while (buffer.size > maxEntries) buffer.pollFirst()
         _flow.value = buffer.toList()
     }
+
+    /** Load crash file summaries into memory so they appear in the UI log viewer */
+    fun loadCrashFiles(logDir: File) {
+        val crashFiles = logDir.listFiles { f -> f.name.startsWith("crash_") }
+            ?.sortedBy { it.lastModified() } ?: return
+        for (file in crashFiles.takeLast(10)) {
+            val lines = file.readLines()
+            val timeLine = lines.find { it.startsWith("Time:") }
+            val threadLine = lines.find { it.startsWith("Thread:") }
+            val exceptionStart = lines.indexOf("--- Exception ---")
+            val exceptionMsg = if (exceptionStart >= 0 && exceptionStart + 1 < lines.size) {
+                lines.drop(exceptionStart + 1).take(3).joinToString("\n")
+            } else file.name
+            val time = try {
+                timeLine?.substringAfter("Time:")?.trim()?.let {
+                    SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).parse(it)?.time
+                } ?: file.lastModified()
+            } catch (_: Exception) { file.lastModified() }
+            val thread = threadLine?.substringAfter("Thread:")?.trim() ?: "?"
+            buffer.addLast(LogRecord(
+                time = time,
+                level = LogLevel.FATAL,
+                tag = "CRASH",
+                message = "[历史崩溃] $thread: ${exceptionMsg.lines().firstOrNull() ?: file.name}",
+                throwable = exceptionMsg,
+                threadName = thread,
+            ))
+        }
+        while (buffer.size > maxEntries) buffer.pollFirst()
+        _flow.value = buffer.toList()
+    }
 }
 
 /**
@@ -128,11 +167,12 @@ class MemorySink(
  */
 class RollingFileSink(
     private val logDir: File,
-    override val minLevel: LogLevel = LogLevel.INFO,
+    override var minLevel: LogLevel = LogLevel.INFO,
     private val maxFileSize: Long = 2 * 1024 * 1024L,
     private val maxFiles: Int = 10,
     private val async: Boolean = true,
 ) : LogSink {
+
     override val name = "file"
     private val dateFmt = object : ThreadLocal<SimpleDateFormat>() {
         override fun initialValue() = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -249,8 +289,8 @@ object AppLog {
 
         // Register built-in sinks — all use DEBUG as minimum to keep app UI and file in sync
         val logcat = LogcatSink(LogLevel.DEBUG)
-        val memory = MemorySink(LogLevel.WARN, 300)
-        val file = RollingFileSink(logDir, LogLevel.ERROR, maxFileSize = 4 * 1024 * 1024L, maxFiles = 5)
+        val memory = MemorySink(LogLevel.DEBUG, 500)
+        val file = RollingFileSink(logDir, LogLevel.WARN, maxFileSize = 4 * 1024 * 1024L, maxFiles = 5)
 
         memorySink = memory
         fileSink = file
@@ -258,6 +298,8 @@ object AppLog {
 
         deviceInfo = collectDeviceInfo(context)
         file.cleanOld(MAX_LOG_DAYS)
+        // Load previous crash files first so they appear in UI
+        memory.loadCrashFiles(logDir)
         memory.loadFromFile(file.todayFile(), SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()))
 
         installCrashHandler(logDir)
@@ -316,6 +358,25 @@ object AppLog {
     fun getLogDirPath(): String =
         fileSink?.todayFile()?.parentFile?.absolutePath ?: "N/A"
 
+    fun getLogDir(): File? = fileSink?.todayFile()?.parentFile
+
+    /** Check if there are crash files from previous sessions */
+    fun hasPendingCrash(): Boolean = getCrashFiles().isNotEmpty()
+
+    /** Enable/disable detailed file logging (recordLog toggle) */
+    fun setRecordLog(enabled: Boolean) {
+        fileSink?.minLevel = if (enabled) LogLevel.DEBUG else LogLevel.WARN
+    }
+
+    fun coroutineExceptionHandler(tag: String = "Coroutine"): CoroutineExceptionHandler =
+        CoroutineExceptionHandler { context, throwable ->
+            error(tag, "Unhandled coroutine exception in $context", throwable)
+        }
+
+    fun logThreadException(tag: String, thread: Thread, throwable: Throwable) {
+        error(tag, "Uncaught exception on ${thread.name}: ${throwable.message}", throwable)
+    }
+
     // ── Core dispatch ──
 
     private fun dispatch(level: LogLevel, tag: String, msg: String, t: Throwable? = null) {
@@ -328,7 +389,11 @@ object AppLog {
         )
         for (sink in sinks) {
             if (level.priority >= sink.minLevel.priority) {
-                sink.write(record)
+                try {
+                    sink.write(record)
+                } catch (sinkError: Throwable) {
+                    Log.e(TAG, "Log sink '${sink.name}' failed", sinkError)
+                }
             }
         }
     }
@@ -361,12 +426,13 @@ object AppLog {
                 }
                 val ts = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
                 File(logDir, "crash_$ts.txt").writeText(crash)
-                // Synchronous write to daily log
+                // Synchronous write to daily log + memory (so UI shows it if app survives)
                 val record = LogRecord(
                     System.currentTimeMillis(), LogLevel.FATAL, "CRASH",
                     "Uncaught exception on ${thread.name}: ${throwable.message}",
                     throwableToString(throwable),
                 )
+                memorySink?.writeForce(record)
                 fileSink?.writeImmediate(record)
             } catch (_: Exception) {}
             finally { default?.uncaughtException(thread, throwable) }
@@ -392,7 +458,18 @@ object AppLog {
                             val idle = stack.any { it.methodName == "nativePollOnce" || it.methodName == "parkNanos" }
                             if (!idle) {
                                 val trace = stack.joinToString("\n") { "  at $it" }
-                                dispatch(LogLevel.ERROR, "ANR", "Main thread blocked >8s\n$trace")
+                                val record = LogRecord(
+                                    System.currentTimeMillis(), LogLevel.ERROR, "ANR",
+                                    "Main thread blocked >8s\n$trace",
+                                )
+                                // Write to memory directly (ANR means main thread is stuck, dispatch may not work)
+                                memorySink?.writeForce(record)
+                                fileSink?.writeImmediate(record)
+                                for (sink in sinks) {
+                                    if (sink !== memorySink && sink !== fileSink && LogLevel.ERROR.priority >= sink.minLevel.priority) {
+                                        sink.write(record)
+                                    }
+                                }
                             }
                         }
                     }

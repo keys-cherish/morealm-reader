@@ -21,7 +21,7 @@ import com.morealm.app.domain.entity.*
         Cache::class,
         Cookie::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {

@@ -20,6 +20,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import kotlin.math.min
 
@@ -100,7 +102,17 @@ class SearchViewModel @Inject constructor(
         _localResults.value = emptyList()
         _isSearching.value = true
 
-        val searchPool = Executors.newFixedThreadPool(min(threadCount, 16)).asCoroutineDispatcher()
+        val threadIndex = AtomicInteger(1)
+        val searchPool = Executors.newFixedThreadPool(
+            min(threadCount, 16),
+            ThreadFactory { runnable ->
+                Thread(runnable, "SearchPool-${threadIndex.getAndIncrement()}").apply {
+                    uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { thread, throwable ->
+                        AppLog.logThreadException("Search", thread, throwable)
+                    }
+                }
+            }
+        ).asCoroutineDispatcher()
 
         searchJob = viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -148,7 +160,7 @@ class SearchViewModel @Inject constructor(
                             updateSourceStatus(source.bookSourceUrl, SourceStatus.DONE)
                         } catch (e: Exception) {
                             updateSourceStatus(source.bookSourceUrl, SourceStatus.FAILED)
-                            AppLog.warn("Search", "${source.bookSourceName} failed: ${e.message}")
+                            AppLog.warn("Search", "${source.bookSourceName} failed: ${e.message}", e)
                         }
                     }
                 }.forEach { it.join() }

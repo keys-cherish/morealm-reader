@@ -41,7 +41,9 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private var wasPlayingBeforeFocusLoss = false
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val serviceScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main + AppLog.coroutineExceptionHandler("TtsService")
+    )
 
     // WakeLock: keep CPU alive when screen is off (ported from Legado)
     private val wakeLock by lazy {
