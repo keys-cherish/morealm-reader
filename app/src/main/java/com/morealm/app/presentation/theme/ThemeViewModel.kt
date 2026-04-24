@@ -178,6 +178,7 @@ class ThemeViewModel @Inject constructor(
                         bottomBackground = theme.bottomBackground,
                         readerBackground = theme.readerBackground,
                         readerTextColor = theme.readerTextColor,
+                        customCss = theme.customCss,
                     )
                 )
                 context.contentResolver.openOutputStream(outputUri)?.use { out ->
@@ -195,7 +196,18 @@ class ThemeViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val jsonText = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: return@launch
-                val data = json.decodeFromString(ThemeExportData.serializer(), jsonText)
+                val trimmed = jsonText.trim()
+                if (trimmed.startsWith("[") || trimmed.contains("\"themeName\"")) {
+                    val themes = if (trimmed.startsWith("[")) {
+                        themeRepo.importLegadoThemes(trimmed)
+                    } else {
+                        listOf(themeRepo.importLegadoTheme(trimmed))
+                    }
+                    themes.firstOrNull()?.let { themeRepo.activateTheme(it.id) }
+                    AppLog.info("Theme", "Imported Legado themes: ${themes.size}")
+                    return@launch
+                }
+                val data = json.decodeFromString(ThemeExportData.serializer(), trimmed)
                 val theme = ThemeEntity(
                     id = "imported_${data.name.hashCode()}_${System.currentTimeMillis()}",
                     name = data.name,
@@ -210,6 +222,7 @@ class ThemeViewModel @Inject constructor(
                     bottomBackground = data.bottomBackground,
                     readerBackground = data.readerBackground,
                     readerTextColor = data.readerTextColor,
+                    customCss = data.customCss,
                 )
                 themeRepo.saveAndActivate(theme)
                 AppLog.info("Theme", "Imported theme: ${data.name}")
@@ -233,4 +246,5 @@ data class ThemeExportData(
     val bottomBackground: String = "",
     val readerBackground: String = "",
     val readerTextColor: String = "",
+    val customCss: String = "",
 )

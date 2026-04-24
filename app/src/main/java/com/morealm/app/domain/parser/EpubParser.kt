@@ -41,9 +41,22 @@ data class EpubImportResult(
  */
 object EpubParser {
 
+    private const val COVER_IMAGE_SENTINEL = "cover.jpeg"
+    private const val COVER_IMAGE_MARKER = "data-morealm-cover"
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v3"
     private val charset: Charset = Charsets.UTF_8
 
-    // ── Import (metadata + cover) ────────────────────────
+    private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
+    private val espRegex = Regex("(&ensp;|&emsp;)", RegexOption.IGNORE_CASE)
+    private val noPrintRegex = Regex("(&thinsp;|&zwnj;|&zwj;|\u2009|\u200C|\u200D)", RegexOption.IGNORE_CASE)
+    private val blockOpenHtmlRegex = Regex("""<(?:body|section|article|div|p|h\d|li|dd|dl)[^>]*>""", RegexOption.IGNORE_CASE)
+    private val blockCloseHtmlRegex = Regex("""</(?:body|section|article|div|p|h\d|li|dd|dl)>|<br\s*/?>|<hr\s*/?>""", RegexOption.IGNORE_CASE)
+    private val commentRegex = Regex("""<!--[\s\S]*?-->""")
+    private val notImgHtmlRegex = Regex("""</?(?!img)[a-zA-Z]+(?=[ >])[^<>]*>""", RegexOption.IGNORE_CASE)
+    private val formatImageRegex = Regex(
+        """<img[^>]*\s(?:data-src|src)\s*=\s*['"]([^'">]+)['"][^>]*>|<img[^>]*\sdata-[^=>]*=\s*['"]([^'">]*)['"][^>]*>""",
+        RegexOption.IGNORE_CASE,
+    )
 
     fun extractMetadataAndCover(context: Context, uri: Uri): EpubImportResult {
         return withEpubBook(context, uri) { book ->
@@ -183,17 +196,21 @@ object EpubParser {
             val contents = book.contents ?: return@withEpubBook ""
             val nextHref = chapter.nextUrl?.substringBeforeLast("#")
             val startFragment = chapter.url.substringAfter("#", "").takeIf { it.isNotEmpty() }
+            val endFragment = chapter.nextUrl?.substringAfter("#", "")?.takeIf { it.isNotEmpty() }
 
             val elements = org.jsoup.select.Elements()
             // Use href index map for O(1) start lookup instead of linear scan
             val startIdx = hrefIndexMap?.get(targetHref) ?: contents.indexOfFirst { it.href == targetHref }
             if (startIdx < 0) return@withEpubBook ""
 
-            elements.add(parseBody(contents[startIdx], startFragment, null))
+            elements.add(parseBody(contents[startIdx], startFragment, endFragment.takeIf { contents[startIdx].href == nextHref }))
             if (nextHref == null || contents[startIdx].href != nextHref) {
                 for (i in (startIdx + 1) until contents.size) {
                     val res = contents[i]
-                    if (nextHref != null && res.href == nextHref) break
+                    if (nextHref != null && res.href == nextHref) {
+                        if (endFragment != null) elements.add(parseBody(res, null, endFragment))
+                        break
+                    }
                     elements.add(parseBody(res, null, null))
                 }
             }
@@ -206,10 +223,38 @@ object EpubParser {
     // ── Body parsing & image rewriting ─────────────────
 
     private fun parseBody(res: Resource, startFragment: String?, endFragment: String?): org.jsoup.nodes.Element {
-        // Don't short-circuit cover pages — let them go through normal parsing
-        // so images get properly extracted and resolved
+        if (isCoverPage(res.href)) {
+            return Jsoup.parseBodyFragment("<img src=\"$COVER_IMAGE_SENTINEL\" $COVER_IMAGE_MARKER=\"true\" />").body()
+        }
+
         var body = Jsoup.parse(String(res.data, charset)).body()
         body.select("script, style").remove()
+
+        // Convert SVG <image> to <img> (many Japanese EPUBs wrap cover in SVG)
+        body.select("image").forEach { el ->
+            el.tagName("img")
+            val href = el.attr("xlink:href").ifEmpty { el.attr("href") }
+            if (href.isNotEmpty()) el.attr("src", href)
+        }
+        // Convert SVG-wrapped images: extract <img> from <svg> containers
+        body.select("svg").forEach { svg ->
+            val img = svg.selectFirst("img")
+            if (img != null) {
+                svg.replaceWith(img)
+            }
+        }
+        // Resolve relative image paths
+        body.select("img").forEach { img ->
+            val src = img.attr("src").trim()
+            if (src.isNotEmpty()) {
+                try {
+                    val resolved = URLDecoder.decode(URI(res.href).resolve(src).toString(), "UTF-8")
+                    img.attr("src", resolved)
+                } catch (_: Exception) {}
+            }
+        }
+
+        AppLog.debug("EpubParser", "parseBody href=${res.href} imgs=${body.select("img").size} html=${body.outerHtml().take(300)}")
 
         var html = body.outerHtml()
         if (!startFragment.isNullOrBlank()) {
@@ -226,21 +271,6 @@ object EpubParser {
         }
         if (html != body.outerHtml()) body = Jsoup.parse(html).body()
 
-        // Convert SVG <image> to <img>
-        body.select("image").forEach { el ->
-            el.tagName("img")
-            el.attr("src", el.attr("xlink:href"))
-        }
-        // Resolve relative image paths
-        body.select("img").forEach { img ->
-            val src = img.attr("src").trim()
-            if (src.isNotEmpty()) {
-                try {
-                    val resolved = URLDecoder.decode(URI(res.href).resolve(src).toString(), "UTF-8")
-                    img.attr("src", resolved)
-                } catch (_: Exception) {}
-            }
-        }
         return body
     }
 
@@ -253,6 +283,9 @@ object EpubParser {
         elements.select("[style*=display:none]").remove()
         // Strip ruby annotations (rp/rt) for cleaner text
         elements.select("rp, rt").remove()
+        elements.select("img[$COVER_IMAGE_MARKER]").forEachIndexed { i, img ->
+            if (i > 0) img.remove()
+        }
         elements.select("img").forEach { img ->
             val src = img.attr("src")
             if (src.isBlank()) return@forEach
@@ -262,18 +295,76 @@ object EpubParser {
             } else {
                 img.removeAttr("src")
             }
-            img.removeAttr("style"); img.removeAttr("width"); img.removeAttr("height")
+            img.removeAttr("style"); img.removeAttr("width"); img.removeAttr("height"); img.removeAttr(COVER_IMAGE_MARKER)
         }
-        var html = elements.outerHtml()
-        // Unescape HTML entities that may have been double-encoded
-        if (html.contains("&amp;") || html.contains("&lt;")) {
-            html = html.replace("&lt;img", "&lt; img")
-                .replace("&amp;", "&")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&quot;", "\"")
+        return formatKeepImg(elements.outerHtml())
+    }
+
+    private fun formatKeepImg(html: String?): String {
+        html ?: return ""
+        val keepImgHtml = formatHtml(html, notImgHtmlRegex)
+        val builder = StringBuilder(keepImgHtml.length)
+        var appendPos = 0
+        for (match in formatImageRegex.findAll(keepImgHtml)) {
+            builder.append(keepImgHtml, appendPos, match.range.first)
+            val src = match.groups[1]?.value ?: match.groups[2]?.value.orEmpty()
+            if (src.isNotBlank()) {
+                builder.append("<img src=\"").append(src).append("\">")
+            }
+            appendPos = match.range.last + 1
         }
-        return html
+        if (appendPos < keepImgHtml.length) {
+            builder.append(keepImgHtml, appendPos, keepImgHtml.length)
+        }
+        return builder.toString()
+    }
+
+    private fun formatHtml(html: String?, otherRegex: Regex): String {
+        html ?: return ""
+        val text = html
+            .replace(commentRegex, "")
+            .replace(nbspRegex, " ")
+            .replace(espRegex, " ")
+            .replace(noPrintRegex, "")
+            .replace(blockOpenHtmlRegex, "")
+            .replace(blockCloseHtmlRegex, "\n")
+            .replace(otherRegex, "")
+            .lines()
+            .joinToString("\n") { line -> line.trim() }
+            .trim()
+        return mergeVerticalTextRuns(text)
+    }
+
+    private fun mergeVerticalTextRuns(text: String): String {
+        val lines = text.lines()
+        val result = ArrayList<String>(lines.size)
+        val run = ArrayList<String>()
+
+        fun flushRun() {
+            if (run.size >= 3) {
+                result.add(run.joinToString("") { it.trim() })
+            } else {
+                result.addAll(run)
+            }
+            run.clear()
+        }
+
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (isSingleDisplayCharLine(trimmed)) {
+                run.add(trimmed)
+            } else {
+                flushRun()
+                result.add(line)
+            }
+        }
+        flushRun()
+        return result.joinToString("\n").trim()
+    }
+
+    private fun isSingleDisplayCharLine(line: String): Boolean {
+        if (line.isBlank() || line.startsWith("<img", ignoreCase = true)) return false
+        return line.codePointCount(0, line.length) == 1
     }
 
     // ── Image extraction (reuses book instance when available) ──
@@ -286,6 +377,12 @@ object EpubParser {
         val cacheDir = File(context.cacheDir, "epub_images/${epubUri.hashCode()}")
         val cachedFile = File(cacheDir, normalized.replace('/', '_'))
         if (cachedFile.exists()) return cachedFile
+
+        if (normalized == COVER_IMAGE_SENTINEL && book?.coverImage != null) {
+            cacheDir.mkdirs()
+            cachedFile.writeBytes(book.coverImage.data)
+            return cachedFile
+        }
 
         // Try from provided book instance first (fast, no re-open)
         if (book != null) {
@@ -300,11 +397,21 @@ object EpubParser {
 
         // Fallback: open a new book instance
         return withEpubBook(context, epubUri) { b ->
+            if (normalized == COVER_IMAGE_SENTINEL && b.coverImage != null) {
+                cacheDir.mkdirs()
+                cachedFile.writeBytes(b.coverImage.data)
+                return@withEpubBook cachedFile
+            }
             val res = b.resources?.getByHref(normalized)
                 ?: b.resources?.getByHref(java.net.URLDecoder.decode(normalized, "UTF-8"))
             if (res != null) { cacheDir.mkdirs(); cachedFile.writeBytes(res.data); cachedFile }
             else null
         }
+    }
+
+    private fun isCoverPage(href: String): Boolean {
+        val normalized = href.lowercase()
+        return normalized.contains("titlepage.xhtml") || normalized.contains("cover")
     }
 
     fun clearImageCache(context: Context, epubUri: Uri) {
@@ -314,6 +421,7 @@ object EpubParser {
 
     fun clearCache(context: Context, epubUri: Uri) {
         clearImageCache(context, epubUri)
+        File(context.cacheDir, "$CHAPTER_CACHE_DIR/${epubUri.hashCode()}").deleteRecursively()
         File(context.cacheDir, "epub_chapters/${epubUri.hashCode()}").deleteRecursively()
     }
 
@@ -321,7 +429,13 @@ object EpubParser {
 
     private fun readCachedChapter(context: Context, epubUri: Uri, path: String): String? {
         val f = chapterCacheFile(context, epubUri, path)
-        return if (f.exists()) f.readText() else null
+        if (!f.exists()) return null
+        val text = f.readText()
+        if (isStaleChapterCache(path, text)) {
+            f.delete()
+            return null
+        }
+        return text
     }
 
     private fun writeCachedChapter(context: Context, epubUri: Uri, path: String, content: String) {
@@ -330,7 +444,13 @@ object EpubParser {
     }
 
     private fun chapterCacheFile(context: Context, epubUri: Uri, path: String): File =
-        File(context.cacheDir, "epub_chapters/${epubUri.hashCode()}/${path.replace('/', '_')}.html")
+        File(context.cacheDir, "$CHAPTER_CACHE_DIR/${epubUri.hashCode()}/${path.replace('/', '_')}.html")
+
+    private fun isStaleChapterCache(path: String, text: String): Boolean {
+        if (text.contains(COVER_IMAGE_MARKER)) return true
+        if (text.contains("<body", ignoreCase = true) || text.contains("<p", ignoreCase = true) || text.contains("<div", ignoreCase = true)) return true
+        return text.length < 200 && !text.contains("<img") && isCoverPage(path)
+    }
 
     /**
      * Pre-cache nearby chapters only (not the entire book).
@@ -363,19 +483,23 @@ object EpubParser {
         val contents = book.contents ?: return ""
         val nextHref = chapter.nextUrl?.substringBeforeLast("#")
         val startFragment = chapter.url.substringAfter("#", "").takeIf { it.isNotEmpty() }
+        val endFragment = chapter.nextUrl?.substringAfter("#", "")?.takeIf { it.isNotEmpty() }
         val elements = org.jsoup.select.Elements()
         var found = false
         for (res in contents) {
             if (!found) {
                 if (res.href != targetHref) continue
                 found = true
-                elements.add(parseBody(res, startFragment, null))
+                elements.add(parseBody(res, startFragment, endFragment.takeIf { res.href == nextHref }))
                 if (nextHref != null && res.href == nextHref) break
                 continue
             }
             if (nextHref == null || res.href != nextHref) {
                 elements.add(parseBody(res, null, null))
-            } else break
+            } else {
+                if (endFragment != null) elements.add(parseBody(res, null, endFragment))
+                break
+            }
         }
         return processContent(elements, context, uri, targetHref, book)
     }

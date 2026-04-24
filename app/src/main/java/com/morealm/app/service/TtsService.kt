@@ -41,7 +41,9 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private var wasPlayingBeforeFocusLoss = false
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val serviceScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main + AppLog.coroutineExceptionHandler("TtsService")
+    )
 
     // 息屏朗读时保持 CPU 运行
     private val wakeLock by lazy {

@@ -67,6 +67,10 @@ fun CanvasRenderer(
     content: String,
     chapterTitle: String,
     chapterIndex: Int = 0,
+    nextChapterTitle: String = "",
+    nextChapterContent: String = "",
+    prevChapterTitle: String = "",
+    prevChapterContent: String = "",
     backgroundColor: Color,
     textColor: Color,
     accentColor: Color,
@@ -83,14 +87,18 @@ fun CanvasRenderer(
     onProgress: (Int) -> Unit = {},
     onNextChapter: () -> Unit = {},
     onPrevChapter: () -> Unit = {},
+    onScrollNearBottom: () -> Unit = {},
     onCopyText: (String) -> Unit = {},
     onSpeakFromHere: (String) -> Unit = {},
+    onTranslateText: (String) -> Unit = {},
     onLookupWord: (String) -> Unit = {},
     onImageClick: (String) -> Unit = {},
+    onToggleTts: () -> Unit = {},
+    onAddBookmark: () -> Unit = {},
     bookTitle: String = "",
     bookAuthor: String = "",
     // 9-zone tap actions (ported from Legado ReadView.click)
-    // Values: "prev", "next", "menu", "prev_chapter", "next_chapter", "none"
+    // Values: "prev", "next", "menu", "prev_chapter", "next_chapter", "tts", "bookmark", "none"
     tapActionTopLeft: String = "prev",
     tapActionTopRight: String = "next",
     tapActionBottomLeft: String = "prev",
@@ -171,44 +179,29 @@ fun CanvasRenderer(
     }
     val textMeasure = remember(contentPaint) { TextMeasure(contentPaint) }
 
-    // Layout pages — use async streaming layout for faster first-page display
-    var textChapter by remember { mutableStateOf<TextChapter?>(null) }
-    var pageCount by remember { mutableIntStateOf(1) }
-    val scope = rememberCoroutineScope()
+    data class LayoutInputs(
+        val provider: ChapterProvider,
+        val contentPaint: TextPaint,
+        val titlePaint: TextPaint,
+    )
 
-    LaunchedEffect(content, chapterTitle, screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle) {
-        if (content.isBlank()) {
-            val chapter = TextChapter(chapterIndex, chapterTitle, 0).apply {
-                val emptyPage = TextPage(title = chapterTitle)
-                addPage(emptyPage)
-                isCompleted = true
-            }
-            textChapter = chapter
-            pageCount = 1
-        } else {
-            val style = readerStyle
-            // Parse custom CSS overrides from ReaderStyle
-            val cssOverrides = CssParser.parse(style?.customCss ?: "")
-            // Apply CSS overrides: font-size affects paint
-            val effectiveContentPaint = if (cssOverrides.fontSize != null) {
-                TextPaint(contentPaint).apply {
-                    textSize = cssOverrides.fontSize * density.density
-                }
-            } else contentPaint
-            val effectiveTitlePaint = if (cssOverrides.fontSize != null) {
-                TextPaint(titlePaint).apply {
-                    textSize = (cssOverrides.fontSize + 4) * density.density
-                }
-            } else titlePaint
-            // Apply letter-spacing from CSS (value is already in em units)
-            if (cssOverrides.letterSpacing != null) {
-                effectiveContentPaint.letterSpacing = cssOverrides.letterSpacing
-            }
-            val effectiveMeasure = if (cssOverrides.fontSize != null || cssOverrides.letterSpacing != null) {
-                TextMeasure(effectiveContentPaint)
-            } else textMeasure
-
-            val provider = ChapterProvider(
+    val layoutInputs = remember(screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle, contentPaint, titlePaint, textMeasure, density) {
+        val style = readerStyle
+        val cssOverrides = CssParser.parse(style?.customCss ?: "")
+        val effectiveContentPaint = if (cssOverrides.fontSize != null) {
+            TextPaint(contentPaint).apply { textSize = cssOverrides.fontSize * density.density }
+        } else TextPaint(contentPaint)
+        val effectiveTitlePaint = if (cssOverrides.fontSize != null) {
+            TextPaint(titlePaint).apply { textSize = (cssOverrides.fontSize + 4) * density.density }
+        } else TextPaint(titlePaint)
+        if (cssOverrides.letterSpacing != null) {
+            effectiveContentPaint.letterSpacing = cssOverrides.letterSpacing
+        }
+        val effectiveMeasure = if (cssOverrides.fontSize != null || cssOverrides.letterSpacing != null) {
+            TextMeasure(effectiveContentPaint)
+        } else textMeasure
+        LayoutInputs(
+            provider = ChapterProvider(
                 viewWidth = screenWidthPx,
                 viewHeight = screenHeightPx,
                 paddingLeft = cssOverrides.paddingLeft?.let { (it * density.density).toInt() } ?: effectivePadLeft,
@@ -226,12 +219,67 @@ fun CanvasRenderer(
                 paragraphSpacing = cssOverrides.paragraphSpacing ?: style?.paragraphSpacing ?: 8,
                 titleTopSpacing = style?.titleTopSpacing ?: 0,
                 titleBottomSpacing = style?.titleBottomSpacing ?: 0,
-            )
+            ),
+            contentPaint = effectiveContentPaint,
+            titlePaint = effectiveTitlePaint,
+        )
+    }
+
+    // Layout pages — use async streaming layout for faster first-page display
+    var textChapter by remember { mutableStateOf<TextChapter?>(null) }
+    var pageCount by remember { mutableIntStateOf(1) }
+    val scope = rememberCoroutineScope()
+    val prelayoutCache = remember { mutableStateMapOf<String, TextChapter>() }
+    fun chapterCacheKey(index: Int, title: String, body: String): String = "$index|$title|${body.hashCode()}|$screenWidthPx|$screenHeightPx|$fontSizePx|$lineHeight|$effectivePadLeft|$effectivePadRight|$effectivePadTop|$effectivePadBottom|${readerStyle?.hashCode()}"
+
+    LaunchedEffect(screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle) {
+        prelayoutCache.clear()
+    }
+
+    LaunchedEffect(nextChapterContent, nextChapterTitle, prevChapterContent, prevChapterTitle, layoutInputs) {
+        val targets = listOf(
+            Triple(chapterIndex + 1, nextChapterTitle, nextChapterContent),
+            Triple(chapterIndex - 1, prevChapterTitle, prevChapterContent),
+        ).filter { (_, title, body) -> title.isNotBlank() && body.isNotBlank() }
+        targets.forEach { (index, title, body) ->
+            val key = chapterCacheKey(index, title, body)
+            if (!prelayoutCache.containsKey(key)) {
+                val chapter = withContext(Dispatchers.Default) {
+                    val chapter = layoutInputs.provider.layoutChapter(
+                        title = title,
+                        content = body,
+                        chapterIndex = index,
+                        chaptersSize = chaptersSize,
+                    )
+                    chapter
+                }
+                prelayoutCache[key] = chapter
+            }
+        }
+    }
+
+    LaunchedEffect(content, chapterTitle, screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle) {
+        if (content.isBlank()) {
+            val chapter = TextChapter(chapterIndex, chapterTitle, 0).apply {
+                val emptyPage = TextPage(title = chapterTitle)
+                addPage(emptyPage)
+                isCompleted = true
+            }
+            textChapter = chapter
+            pageCount = 1
+        } else {
+            val cachedChapter = prelayoutCache[chapterCacheKey(chapterIndex, chapterTitle, content)]
+            if (cachedChapter != null) {
+                textChapter = cachedChapter
+                pageCount = cachedChapter.pageSize.coerceAtLeast(1)
+                return@LaunchedEffect
+            }
             var handle: com.morealm.app.domain.render.AsyncLayoutHandle? = null
-            handle = provider.layoutChapterAsync(
+            handle = layoutInputs.provider.layoutChapterAsync(
                 title = chapterTitle,
                 content = content,
                 chapterIndex = chapterIndex,
+                chaptersSize = chaptersSize,
                 scope = this,
                 onPageReady = { index, _ ->
                     if (index == 0) {
@@ -393,6 +441,8 @@ fun CanvasRenderer(
                                     }
                                     "prev_chapter" -> onPrevChapter()
                                     "next_chapter" -> onNextChapter()
+                                    "tts" -> onToggleTts()
+                                    "bookmark" -> onAddBookmark()
                                     "menu" -> onTapCenter()
                                     // "none" → do nothing
                                 }
@@ -428,8 +478,12 @@ fun CanvasRenderer(
                 selectionStart = selectionState.startPos,
                 selectionEnd = selectionState.endPos,
                 onScrollProgress = { onProgress(it) },
-                onNearBottom = { onNextChapter() },
+                onNearBottom = onScrollNearBottom,
                 onTapCenter = onTapCenter,
+                resetKey = chapterIndex,
+                startFromLastPage = startFromLastPage,
+                initialProgress = initialProgress,
+                layoutCompleted = chapter?.isCompleted == true,
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -440,12 +494,13 @@ fun CanvasRenderer(
                 simulationParams = simulationParams,
             ) { pageIndex ->
                 PageContentBox(
-                    page = pages.getOrElse(pageIndex) { TextPage() },
+                page = pages.getOrElse(pageIndex) { TextPage() },
                     pageIndex = pageIndex,
                     currentPage = pagerState.currentPage,
                     titlePaint = titlePaint,
                     contentPaint = contentPaint,
                     bgBitmap = bgBitmap,
+                    backgroundColor = backgroundColor,
                     selectionState = selectionState,
                     chapterTitle = chapterTitle,
                     pageCount = pageCount,
@@ -465,6 +520,33 @@ fun CanvasRenderer(
             }
         }
 
+        if (pages.isEmpty() && chapter?.isCompleted != true) {
+            PageContentBox(
+                page = textChapter?.pages?.firstOrNull() ?: TextPage(title = chapterTitle),
+                pageIndex = 0,
+                currentPage = 0,
+                titlePaint = titlePaint,
+                contentPaint = contentPaint,
+                bgBitmap = bgBitmap,
+                backgroundColor = backgroundColor,
+                selectionState = selectionState,
+                chapterTitle = chapterTitle,
+                pageCount = 1,
+                chapterIndex = chapterIndex,
+                chaptersSize = chaptersSize,
+                batteryLevel = batteryLevel,
+                currentTime = currentTime,
+                textColor = textColor,
+                paddingHorizontal = paddingHorizontal,
+                headerLeft = headerLeft,
+                headerCenter = headerCenter,
+                headerRight = headerRight,
+                footerLeft = footerLeft,
+                footerCenter = footerCenter,
+                footerRight = footerRight,
+            )
+        }
+
         // Selection toolbar
         ReaderSelectionToolbar(
             selectionState = selectionState,
@@ -472,6 +554,7 @@ fun CanvasRenderer(
             page = pages.getOrNull(pagerState.currentPage),
             onCopyText = onCopyText,
             onSpeakFromHere = onSpeakFromHere,
+            onTranslateText = onTranslateText,
             onLookupWord = onLookupWord,
             onShareQuote = { text -> shareQuoteText = text },
         )
@@ -731,6 +814,7 @@ private fun PageContentBox(
     titlePaint: TextPaint,
     contentPaint: TextPaint,
     bgBitmap: Bitmap?,
+    backgroundColor: Color,
     selectionState: SelectionState,
     chapterTitle: String,
     pageCount: Int,
@@ -747,7 +831,7 @@ private fun PageContentBox(
     footerCenter: String,
     footerRight: String,
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().background(backgroundColor)) {
         PageCanvas(
             page = page,
             titlePaint = titlePaint,
@@ -811,6 +895,7 @@ private fun ReaderSelectionToolbar(
     page: TextPage?,
     onCopyText: (String) -> Unit,
     onSpeakFromHere: (String) -> Unit,
+    onTranslateText: (String) -> Unit,
     onLookupWord: (String) -> Unit,
     onShareQuote: (String) -> Unit,
 ) {
@@ -824,10 +909,8 @@ private fun ReaderSelectionToolbar(
     SelectionToolbar(
         offset = toolbarOffset,
         onCopy = { onCopyText(selectedText()); selectionState.clear() },
-        onHighlight = { /* TODO: persist highlight */ selectionState.clear() },
-        onNote = { /* TODO: open note input */ selectionState.clear() },
         onSpeak = { onSpeakFromHere(selectedText()); selectionState.clear() },
-        onTranslate = { /* TODO: translate */ selectionState.clear() },
+        onTranslate = { onTranslateText(selectedText()); selectionState.clear() },
         onShare = { onShareQuote(selectedText()); selectionState.clear() },
         onLookup = { onLookupWord(selectedText()); selectionState.clear() },
         onDismiss = { selectionState.clear() },

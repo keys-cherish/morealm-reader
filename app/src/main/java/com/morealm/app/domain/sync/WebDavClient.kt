@@ -1,5 +1,8 @@
 package com.morealm.app.domain.sync
 
+import com.morealm.app.core.log.AppLog
+import com.morealm.app.domain.http.addExceptionLoggingInterceptor
+import com.morealm.app.domain.http.installDispatcherExceptionLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -21,10 +24,19 @@ class WebDavClient(
     private val credential = Credentials.basic(username, password)
     private val client = OkHttpClient.Builder()
         .addInterceptor { chain ->
-            chain.proceed(chain.request().newBuilder()
-                .header("Authorization", credential).build())
+            try {
+                chain.proceed(chain.request().newBuilder()
+                    .header("Authorization", credential).build())
+            } catch (e: java.io.IOException) {
+                throw e
+            } catch (e: Throwable) {
+                AppLog.error("WebDAV", "Unexpected WebDAV interceptor error", e)
+                throw java.io.IOException(e)
+            }
         }
+        .addExceptionLoggingInterceptor("WebDAV")
         .build()
+        .apply { installDispatcherExceptionLogger("WebDAV") }
 
     data class DavFile(
         val name: String, val href: String, val isDirectory: Boolean,

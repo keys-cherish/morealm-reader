@@ -75,6 +75,7 @@ class AppPreferences @Inject constructor(
         val AUTO_BACKUP = booleanPreferencesKey("auto_backup")
         val LAST_AUTO_BACKUP = longPreferencesKey("last_auto_backup")
         val READER_ENGINE = stringPreferencesKey("reader_engine") // "canvas" or "webview"
+        val RECORD_LOG = booleanPreferencesKey("record_log") // detailed file logging
     }
 
     /**
@@ -247,6 +248,9 @@ class AppPreferences @Inject constructor(
 
     val readerEngine: Flow<String> = context.dataStore.data.map { it[Keys.READER_ENGINE] ?: "canvas" }
     suspend fun setReaderEngine(engine: String) = update(Keys.READER_ENGINE, engine)
+
+    val recordLog: Flow<Boolean> = context.dataStore.data.map { it[Keys.RECORD_LOG] ?: false }
+    suspend fun setRecordLog(enabled: Boolean) = update(Keys.RECORD_LOG, enabled)
 
     suspend fun <T> update(key: Preferences.Key<T>, value: T) {
         context.dataStore.edit { it[key] = value }

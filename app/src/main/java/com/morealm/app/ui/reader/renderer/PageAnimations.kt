@@ -35,7 +35,6 @@ import kotlin.math.abs
 /** Cover animation constants */
 private const val COVER_SHADOW_WIDTH = 30f          // 阴影渐变宽度 (px)
 private const val COVER_MAX_SHADOW_ALPHA = 0.4f     // 滑入页左侧阴影最大透明度
-private const val COVER_MAX_DIM_ALPHA = 0.3f        // 被覆盖页最大变暗透明度
 
 /** Simulation (page curl) constants */
 private const val DRAG_DIRECTION_THRESHOLD = 10f    // 判定拖拽方向的最小位移 (px)
@@ -213,13 +212,6 @@ private fun CoverPager(
                                 endX = COVER_SHADOW_WIDTH,
                             ),
                             size = androidx.compose.ui.geometry.Size(COVER_SHADOW_WIDTH, size.height),
-                        )
-                    } else if (offset > 0) {
-                        // Dim the page being covered
-                        val dimAlpha = (offset * COVER_MAX_DIM_ALPHA).coerceIn(0f, COVER_MAX_DIM_ALPHA)
-                        drawRect(
-                            color = Color.Black.copy(alpha = dimAlpha),
-                            size = size,
                         )
                     }
                 }

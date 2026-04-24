@@ -193,9 +193,14 @@ class ReaderTtsController(
         }
     }
 
-    fun ttsPlayPause() {
+    fun ttsPlayPause(
+        displayedContent: String? = null,
+        bookTitle: String? = null,
+        chapterTitle: String? = null,
+        onChapterFinished: (() -> Unit)? = null,
+    ) {
         if (_ttsPlaying.value) ttsPause()
-        else ttsPlay(null, null, null, null)
+        else ttsPlay(displayedContent, bookTitle, chapterTitle, onChapterFinished)
     }
 
     /**

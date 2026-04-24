@@ -30,8 +30,17 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.util.UUID
 import javax.inject.Inject
+
+data class FolderImportState(
+    val running: Boolean = false,
+    val folderName: String = "",
+    val importedCount: Int = 0,
+    val message: String = "",
+    val error: String? = null,
+)
 
 @HiltViewModel
 class ShelfViewModel @Inject constructor(
@@ -54,11 +63,16 @@ class ShelfViewModel @Inject constructor(
     private suspend fun refreshStaleCoverPaths() {
         val allBooks = bookRepo.getAllBooksSync()
         for (book in allBooks) {
-            val cover = book.coverUrl ?: continue
-            // Only check local cache paths (starts with /), not HTTP URLs
-            if (!cover.startsWith("/")) continue
-            if (java.io.File(cover).exists()) continue
-            // Cover file is missing — try to re-extract
+            val cover = book.coverUrl
+            val canExtractCover = book.format == BookFormat.EPUB || book.format == BookFormat.PDF
+            val needsRefresh = when {
+                !canExtractCover -> false
+                cover.isNullOrBlank() -> true
+                cover.startsWith("/") -> !java.io.File(cover).exists()
+                else -> false
+            }
+            if (!needsRefresh) continue
+
             val localPath = book.localPath ?: continue
             val uri = Uri.parse(localPath)
             val newCover = try {
@@ -70,7 +84,7 @@ class ShelfViewModel @Inject constructor(
             } catch (_: Exception) { null }
             if (newCover != null && newCover != cover) {
                 bookRepo.update(book.copy(coverUrl = newCover))
-            } else if (newCover == null) {
+            } else if (newCover == null && !cover.isNullOrBlank() && cover.startsWith("/")) {
                 // Cover can't be re-extracted, clear the stale path
                 bookRepo.update(book.copy(coverUrl = null))
             }
@@ -80,12 +94,28 @@ class ShelfViewModel @Inject constructor(
     val resumeLastRead: StateFlow<Boolean> = prefs.resumeLastRead
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    private val initialBooks: List<Book> = runBlocking(Dispatchers.IO) {
+        sortBooks(bookRepo.getAllBooksSync(), "title")
+    }
+
+    private val initialGroups: List<BookGroup> = runBlocking(Dispatchers.IO) {
+        groupRepo.getAllGroupsSync()
+    }
+
+    private val _folderImportState = MutableStateFlow(FolderImportState())
+    val folderImportState: StateFlow<FolderImportState> = _folderImportState.asStateFlow()
+
+    fun clearFolderImportMessage() {
+        val current = _folderImportState.value
+        if (!current.running) _folderImportState.value = FolderImportState()
+    }
+
     val allGroups: StateFlow<List<BookGroup>> = groupRepo.getAllGroups()
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, initialGroups)
 
     val groupNames: StateFlow<Map<String, String>> = groupRepo.getAllGroups()
         .map { groups -> groups.associate { it.id to it.name } }
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyMap())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, initialGroups.associate { it.id to it.name })
 
     private val _sortMode = MutableStateFlow("title")
     val sortMode: StateFlow<String> = _sortMode.asStateFlow()
@@ -96,7 +126,7 @@ class ShelfViewModel @Inject constructor(
     @OptIn(ExperimentalCoroutinesApi::class)
     val books: StateFlow<List<Book>> = _sortMode.flatMapLatest { sort ->
         bookRepo.getAllBooks().map { list -> sortBooks(list, sort) }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, initialBooks)
 
     /** Folder book counts — derived from the books flow */
     val folderBookCounts: StateFlow<Map<String, Int>> = books
@@ -225,13 +255,19 @@ class ShelfViewModel @Inject constructor(
     }
 
     fun importFolder(uri: Uri) {
+        _folderImportState.value = FolderImportState(running = true, message = "正在打开文件夹…")
         viewModelScope.launch(Dispatchers.IO) {
             val startTime = System.currentTimeMillis()
             tryGrantPermission(uri)
             try {
                 val tree = DocumentFile.fromTreeUri(context, uri)
-                    ?: return@launch AppLog.error("Import", "Failed to open folder: $uri")
+                    ?: run {
+                        _folderImportState.value = FolderImportState(message = "文件夹打开失败", error = "无法读取所选文件夹")
+                        AppLog.error("Import", "Failed to open folder: $uri")
+                        return@launch
+                    }
                 val folderName = tree.name ?: "导入文件夹"
+                _folderImportState.value = FolderImportState(running = true, folderName = folderName, message = "正在扫描：$folderName")
                 AppLog.info("Import", "Scanning folder: $folderName")
 
                 val allChildren = tree.listFiles()
@@ -239,17 +275,25 @@ class ShelfViewModel @Inject constructor(
                 val directFiles = allChildren.filter { !it.isDirectory && detectFormat(it.name ?: "") != BookFormat.UNKNOWN }
                 AppLog.info("Import", "Found ${subFolders.size} sub-folders, ${directFiles.size} direct files")
 
-                when {
+                val importedCount = when {
                     subFolders.isNotEmpty() -> {
-                        importSubFolders(subFolders)
-                        if (directFiles.isNotEmpty()) importAsGroup(directFiles, folderName)
+                        _folderImportState.value = FolderImportState(running = true, folderName = folderName, message = "正在导入 ${subFolders.size} 个子文件夹…")
+                        val subCount = importSubFolders(subFolders)
+                        val directCount = if (directFiles.isNotEmpty()) importAsGroup(directFiles, folderName) else 0
+                        subCount + directCount
                     }
                     directFiles.isNotEmpty() -> importAsGroup(directFiles, folderName)
                     else -> importDeepScan(tree, folderName)
                 }
 
+                _folderImportState.value = FolderImportState(
+                    folderName = folderName,
+                    importedCount = importedCount,
+                    message = if (importedCount > 0) "已导入 $importedCount 本书" else "没有发现可导入的书籍",
+                )
                 AppLog.info("Import", "Folder import '$folderName' completed in ${System.currentTimeMillis() - startTime}ms")
             } catch (e: Exception) {
+                _folderImportState.value = FolderImportState(message = "导入失败", error = e.message ?: "未知错误")
                 AppLog.error("Import", "Folder import failed: ${e.message}", e)
             }
         }
@@ -263,31 +307,41 @@ class ShelfViewModel @Inject constructor(
         }
     }
 
-    private suspend fun importSubFolders(subFolders: List<DocumentFile>) {
+    private suspend fun importSubFolders(subFolders: List<DocumentFile>): Int {
+        var importedCount = 0
         for (folder in subFolders) {
             val files = mutableListOf<DocumentFile>()
             collectBookFiles(folder, files, maxDepth = 6)
             if (files.isEmpty()) continue
+            _folderImportState.value = _folderImportState.value.copy(
+                message = "正在导入：${folder.name ?: "文件夹"}（${files.size} 个文件）",
+            )
             val groupId = UUID.randomUUID().toString()
             groupRepo.insert(BookGroup(id = groupId, name = folder.name ?: "文件夹"))
-            importFilesWithDeferredCovers(files, groupId)
+            importedCount += importFilesWithDeferredCovers(files, groupId)
+            _folderImportState.value = _folderImportState.value.copy(importedCount = importedCount)
         }
+        return importedCount
     }
 
-    private suspend fun importAsGroup(files: List<DocumentFile>, groupName: String) {
+    private suspend fun importAsGroup(files: List<DocumentFile>, groupName: String): Int {
+        _folderImportState.value = _folderImportState.value.copy(message = "正在导入：$groupName（${files.size} 个文件）")
         val groupId = UUID.randomUUID().toString()
         groupRepo.insert(BookGroup(id = groupId, name = groupName))
-        importFilesWithDeferredCovers(files, groupId)
+        val importedCount = importFilesWithDeferredCovers(files, groupId)
+        _folderImportState.value = _folderImportState.value.copy(importedCount = importedCount)
+        return importedCount
     }
 
-    private suspend fun importDeepScan(tree: DocumentFile, folderName: String) {
+    private suspend fun importDeepScan(tree: DocumentFile, folderName: String): Int {
+        _folderImportState.value = _folderImportState.value.copy(message = "正在深度扫描：$folderName")
         val allFiles = mutableListOf<DocumentFile>()
         collectBookFiles(tree, allFiles, maxDepth = 10)
-        if (allFiles.isEmpty()) return
-        importAsGroup(allFiles, folderName)
+        if (allFiles.isEmpty()) return 0
+        return importAsGroup(allFiles, folderName)
     }
 
-    private suspend fun importFilesWithDeferredCovers(files: List<DocumentFile>, folderId: String) {
+    private suspend fun importFilesWithDeferredCovers(files: List<DocumentFile>, folderId: String): Int {
         AppLog.info("Import", "Processing ${files.size} files for group $folderId")
 
         data class PendingBook(val book: Book, val file: DocumentFile, val format: BookFormat)
@@ -313,21 +367,29 @@ class ShelfViewModel @Inject constructor(
         AppLog.info("Import", "${pending.size} books added to shelf")
 
         for (pb in pending) {
-            if (pb.format != BookFormat.EPUB) continue
             try {
-                val result = EpubParser.extractMetadataAndCover(context, pb.file.uri)
-                val updated = pb.book.copy(
-                    title = result.metadata.title.ifBlank { pb.book.title },
-                    author = result.metadata.author,
-                    description = result.metadata.description.ifBlank { null },
-                    coverUrl = result.coverPath,
-                )
+                val updated = when (pb.format) {
+                    BookFormat.EPUB -> {
+                        val result = EpubParser.extractMetadataAndCover(context, pb.file.uri)
+                        pb.book.copy(
+                            title = result.metadata.title.ifBlank { pb.book.title },
+                            author = result.metadata.author,
+                            description = result.metadata.description.ifBlank { null },
+                            coverUrl = result.coverPath,
+                        )
+                    }
+                    BookFormat.PDF -> pb.book.copy(
+                        coverUrl = PdfParser.extractCover(context, pb.file.uri),
+                    )
+                    else -> continue
+                }
                 bookRepo.update(updated)
             } catch (e: Exception) {
                 AppLog.warn("Import", "Metadata failed: ${pb.book.title} - ${e.message}")
             }
         }
         AppLog.info("Import", "All metadata extracted")
+        return pending.size
     }
 
     private fun collectBookFiles(dir: DocumentFile, out: MutableList<DocumentFile>, maxDepth: Int, depth: Int = 0) {

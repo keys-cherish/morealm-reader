@@ -192,7 +192,7 @@ fun drawPageContent(
         if (line.isImage) {
             for (col in line.columns) {
                 if (col is ImageColumn) {
-                    drawImageColumn(canvas, col, line, paddingTop)
+                    drawImageColumn(canvas, col, line)
                 }
             }
         } else {
@@ -299,7 +299,6 @@ private fun drawImageColumn(
     canvas: android.graphics.Canvas,
     col: ImageColumn,
     line: TextLine,
-    paddingTop: Int,
 ) {
     val path = col.src.removePrefix("file://")
     val targetWidth = (col.end - col.start).toInt().coerceAtLeast(1)
@@ -313,7 +312,7 @@ private fun drawImageColumn(
     val drawW = bmpW * scale
     val drawH = bmpH * scale
     val offsetX = col.start + (slotW - drawW) / 2f
-    val offsetY = line.lineTop + paddingTop + (slotH - drawH) / 2f
+    val offsetY = line.lineTop + (slotH - drawH) / 2f
     canvas.drawBitmap(
         bitmap,
         null,

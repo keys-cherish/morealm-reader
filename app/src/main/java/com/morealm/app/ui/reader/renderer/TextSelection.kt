@@ -1,4 +1,4 @@
-package com.morealm.app.ui.reader.renderer
+﻿package com.morealm.app.ui.reader.renderer
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -108,7 +108,7 @@ fun hitTestColumn(page: TextPage, x: Float, y: Float): BaseColumn? {
 
 /**
  * Find word boundaries around a tap position.
- * Ported from Legado ReadView.onLongPress() — uses BreakIterator to find word boundaries
+ * Ported from Legado ReadView.onLongPress() 鈥?uses BreakIterator to find word boundaries
  * across the paragraph containing the tapped position.
  */
 fun findWordRange(page: TextPage, tapPos: TextPos): Pair<TextPos, TextPos> {
@@ -191,18 +191,15 @@ fun getSelectedText(page: TextPage, start: TextPos, end: TextPos): String {
 }
 
 /**
- * Bubble-style selection mini menu — pill shape with arrow, two-row expandable.
+ * Bubble-style selection mini menu 鈥?pill shape with arrow, two-row expandable.
  * Ported from MoRealm HTML prototype.
  *
- * Main row:  复制 | 高亮 | 笔记 | 朗读 | ⋯
- * Extra row: 翻译 | 分享 | 查词  (shown on ⋯ tap)
+ * Main row:  澶嶅埗 | 楂樹寒 | 绗旇 | 鏈楄 | 鈰? * Extra row: 缈昏瘧 | 鍒嗕韩 | 鏌ヨ瘝  (shown on 鈰?tap)
  */
 @Composable
 fun SelectionToolbar(
     offset: Offset,
     onCopy: () -> Unit,
-    onHighlight: () -> Unit,
-    onNote: () -> Unit,
     onSpeak: () -> Unit,
     onTranslate: () -> Unit,
     onShare: () -> Unit,
@@ -240,13 +237,9 @@ fun SelectionToolbar(
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        MenuBtn(Icons.Default.ContentCopy, "复制", onCopy)
+                        MenuBtn(Icons.Default.ContentCopy, "澶嶅埗", onCopy)
                         MenuSep()
-                        MenuBtn(Icons.Default.Edit, "高亮", onHighlight)
-                        MenuSep()
-                        MenuBtn(Icons.Default.ChatBubbleOutline, "笔记", onNote)
-                        MenuSep()
-                        MenuBtn(Icons.Default.VolumeUp, "朗读", onSpeak)
+                        MenuBtn(Icons.Default.VolumeUp, "鏈楄", onSpeak)
                         MenuSep()
                         // More button (icon only)
                         IconButton(
@@ -254,7 +247,7 @@ fun SelectionToolbar(
                             modifier = Modifier.size(32.dp),
                         ) {
                             Icon(
-                                Icons.Default.MoreHoriz, "更多",
+                                Icons.Default.MoreHoriz, "鏇村",
                                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                 modifier = Modifier.size(16.dp),
                             )
@@ -272,11 +265,11 @@ fun SelectionToolbar(
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                MenuBtn(Icons.Default.Translate, "翻译", onTranslate)
+                                MenuBtn(Icons.Default.Translate, "缈昏瘧", onTranslate)
                                 MenuSep()
-                                MenuBtn(Icons.Default.Share, "分享", onShare)
+                                MenuBtn(Icons.Default.Share, "鍒嗕韩", onShare)
                                 MenuSep()
-                                MenuBtn(Icons.Default.Search, "查词", onLookup)
+                                MenuBtn(Icons.Default.Search, "鏌ヨ瘝", onLookup)
                             }
                         }
                     }
@@ -342,7 +335,7 @@ private fun MenuSep() {
 }
 
 /**
- * Cursor handle composable — a small draggable circle.
+ * Cursor handle composable 鈥?a small draggable circle.
  */
 @Composable
 fun CursorHandle(
