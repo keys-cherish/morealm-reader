@@ -1,5 +1,6 @@
 package com.morealm.app.domain.http
 
+import com.morealm.app.core.log.AppLog
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -14,7 +15,10 @@ import okhttp3.Response
 import okhttp3.ResponseBody
 import java.io.IOException
 import java.nio.charset.Charset
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -37,20 +41,52 @@ val okHttpClient: OkHttpClient by lazy {
         .followRedirects(true)
         .followSslRedirects(true)
         .addInterceptor { chain ->
-            val request = chain.request()
-            val builder = request.newBuilder()
-            if (request.header("User-Agent") == null) {
-                builder.addHeader(
-                    "User-Agent",
-                    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-                )
+            try {
+                val request = chain.request()
+                val builder = request.newBuilder()
+                if (request.header("User-Agent") == null) {
+                    builder.addHeader(
+                        "User-Agent",
+                        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                    )
+                }
+                builder.addHeader("Keep-Alive", "300")
+                builder.addHeader("Connection", "Keep-Alive")
+                builder.addHeader("Cache-Control", "no-cache")
+                chain.proceed(builder.build())
+            } catch (e: IOException) {
+                throw e
+            } catch (e: Throwable) {
+                AppLog.error("OkHttp", "Unexpected OkHttp interceptor error", e)
+                throw IOException(e)
             }
-            builder.addHeader("Keep-Alive", "300")
-            builder.addHeader("Connection", "Keep-Alive")
-            builder.addHeader("Cache-Control", "no-cache")
-            chain.proceed(builder.build())
         }
         .build()
+        .apply { installDispatcherExceptionLogger("OkHttp") }
+}
+
+fun OkHttpClient.Builder.addExceptionLoggingInterceptor(tag: String): OkHttpClient.Builder =
+    addInterceptor { chain ->
+        try {
+            chain.proceed(chain.request())
+        } catch (e: IOException) {
+            throw e
+        } catch (e: Throwable) {
+            AppLog.error(tag, "Unexpected OkHttp interceptor error", e)
+            throw IOException(e)
+        }
+    }
+
+fun OkHttpClient.installDispatcherExceptionLogger(tag: String) {
+    val executor = dispatcher.executorService as? ThreadPoolExecutor ?: return
+    val index = AtomicInteger(1)
+    executor.threadFactory = ThreadFactory { runnable ->
+        Thread(runnable, "$tag Dispatcher-${index.getAndIncrement()}").apply {
+            uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { thread, throwable ->
+                AppLog.logThreadException(tag, thread, throwable)
+            }
+        }
+    }
 }
 
 suspend fun OkHttpClient.newCallResponse(

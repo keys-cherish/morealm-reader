@@ -5,9 +5,11 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.HttpTts
 import com.morealm.app.domain.entity.TtsVoice
-import com.morealm.app.core.log.AppLog
+import com.morealm.app.domain.http.addExceptionLoggingInterceptor
+import com.morealm.app.domain.http.installDispatcherExceptionLogger
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -27,7 +29,9 @@ class HttpTtsEngine(private var config: HttpTts) : TtsEngine {
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
+        .addExceptionLoggingInterceptor("HttpTTS")
         .build()
+        .apply { installDispatcherExceptionLogger("HttpTTS") }
 
     private var audioTrack: AudioTrack? = null
 

@@ -161,12 +161,16 @@ fun ProfileScreen(
                     }
                 }
                 // Custom themes section
-                if (customThemes.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    Text("自定义主题（长按删除）",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                    Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(12.dp))
+                Text("自定义主题（长按删除）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                Spacer(Modifier.height(8.dp))
+                if (customThemes.isEmpty()) {
+                    Text("暂无自定义主题，可点击下方创建或导入。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+                } else {
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -341,7 +345,9 @@ fun ThemeGridItem(
     val bgColor = theme.backgroundColor.toComposeColor()
     val accentColor = theme.accentColor.toComposeColor()
     Card(
-        modifier = modifier, shape = MaterialTheme.shapes.medium,
+        modifier = modifier
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        shape = MaterialTheme.shapes.medium,
         border = BorderStroke(
             width = if (isActive) 2.dp else 1.dp,
             color = if (isActive) MaterialTheme.colorScheme.primary
@@ -350,9 +356,7 @@ fun ThemeGridItem(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
         Column(
-            Modifier
-                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-                .padding(10.dp),
+            Modifier.padding(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(Modifier.size(28.dp).clip(CircleShape).background(bgColor), contentAlignment = Alignment.Center) {
@@ -417,7 +421,7 @@ fun SettingsItem(icon: ImageVector, title: String, subtitle: String? = null, onC
             .padding(horizontal = 16.dp, vertical = if (subtitle != null) 12.dp else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = LocalMoRealmColors.current.accent, modifier = Modifier.size(22.dp))
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
@@ -425,7 +429,7 @@ fun SettingsItem(icon: ImageVector, title: String, subtitle: String? = null, onC
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
         }
         Icon(Icons.Default.ChevronRight, null,
-            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f), modifier = Modifier.size(20.dp))
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.size(20.dp))
     }
 }
 

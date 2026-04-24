@@ -5,6 +5,8 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.TtsVoice
+import com.morealm.app.domain.http.addExceptionLoggingInterceptor
+import com.morealm.app.domain.http.installDispatcherExceptionLogger
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -34,7 +36,9 @@ class EdgeTtsEngine : TtsEngine {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
+        .addExceptionLoggingInterceptor(TAG)
         .build()
+        .apply { installDispatcherExceptionLogger(TAG) }
 
     companion object {
         // Primary endpoint with latest known working token

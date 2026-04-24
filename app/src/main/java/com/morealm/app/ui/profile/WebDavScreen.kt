@@ -235,6 +235,6 @@ private fun SyncItem(icon: androidx.compose.ui.graphics.vector.ImageVector, titl
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
         }
         Icon(Icons.Default.ChevronRight, null,
-            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f), modifier = Modifier.size(20.dp))
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.size(20.dp))
     }
 }

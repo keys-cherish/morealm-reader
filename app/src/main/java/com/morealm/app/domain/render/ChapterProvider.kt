@@ -56,6 +56,7 @@ class ChapterProvider(
     private val contentPaintTextHeight: Float = contentPaint.textHeight
     private val contentPaintFontMetrics: FontMetrics = contentPaint.fontMetrics
     private val indentCharWidth: Float = contentPaint.measureText(INDENT_CHAR)
+    private val drawPaddingTop: Int = if (paddingTop > 0) maxOf(0, paddingTop - titlePaintTextHeight.roundToInt() / 2) else 0
 
     private val imgPattern = Regex(IMG_PATTERN.pattern(), RegexOption.IGNORE_CASE)
 
@@ -145,7 +146,7 @@ class ChapterProvider(
             page.chapterSize = chaptersSize
             page.title = title
             page.doublePage = doublePage
-            page.paddingTop = paddingTop
+            page.paddingTop = drawPaddingTop
             page.isCompleted = true
             page.textChapter = textChapter
             page.upLinesPosition()
@@ -277,17 +278,19 @@ class ChapterProvider(
         BitmapFactory.decodeFile(path, opts)
         val intrinsicW = opts.outWidth
         val intrinsicH = opts.outHeight
-        val imgWidth: Int
+        var imgWidth: Int
         var imgHeight: Int
         if (intrinsicW > 0 && intrinsicH > 0) {
             imgWidth = visibleWidth
-            imgHeight = (visibleWidth.toFloat() / intrinsicW * intrinsicH).roundToInt()
-            if (imgHeight > visibleHeight) imgHeight = visibleHeight
+            imgHeight = (intrinsicH.toFloat() * visibleWidth / intrinsicW).roundToInt()
+            if (imgHeight > visibleHeight) {
+                imgWidth = (imgWidth.toFloat() * visibleHeight / imgHeight).roundToInt()
+                imgHeight = visibleHeight
+            }
         } else {
             // Fallback: 4:3 if dimensions unreadable
             imgWidth = visibleWidth
-            imgHeight = (visibleWidth * 0.75f).toInt()
-            if (imgHeight > visibleHeight) imgHeight = visibleHeight
+            imgHeight = (visibleWidth * 0.75f).toInt().coerceAtMost(visibleHeight)
         }
 
         if (durY + imgHeight > visibleHeight) {

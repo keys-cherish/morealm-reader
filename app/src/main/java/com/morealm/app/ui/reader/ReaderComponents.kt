@@ -98,17 +98,21 @@ fun ReaderControlBar(
     val scrollFraction = if (totalChapters > 0) scrollProgress / 100f / totalChapters else 0f
     val progress = (chapterFraction + scrollFraction).coerceIn(0f, 1f)
     val progressPct = (progress * 100).toInt()
+    val barShape = MaterialTheme.shapes.extraLarge
 
     // Floating pill bar like HTML prototype's .r-bar
-    Surface(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.88f),
-        shape = MaterialTheme.shapes.extraLarge,
-        tonalElevation = 8.dp,
-        shadowElevation = 10.dp,
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(barShape)
+            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.88f))
+            .clickable(
+                indication = null,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                onClick = {},
+            ),
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             // Icon row

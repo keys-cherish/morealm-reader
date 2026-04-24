@@ -1,7 +1,10 @@
 package com.morealm.app.ui.reader
 
 import android.Manifest
+import android.app.SearchManager
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.view.KeyEvent
 import android.view.WindowManager
@@ -48,9 +51,11 @@ import com.morealm.app.ui.reader.TtsOverlayPanel
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.Bookmark
+import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.presentation.reader.ReaderViewModel.SearchResult
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.ui.theme.MoRealmColors
+import kotlinx.coroutines.flow.flowOf
 
 @Composable
 fun ReaderScreen(
@@ -64,6 +69,8 @@ fun ReaderScreen(
     val chapters by viewModel.chapters.collectAsStateWithLifecycle()
     val currentIndex by viewModel.currentChapterIndex.collectAsStateWithLifecycle()
     val content by viewModel.chapterContent.collectAsStateWithLifecycle()
+    val nextPreloadedChapter by viewModel.nextPreloadedChapter.collectAsStateWithLifecycle()
+    val prevPreloadedChapter by viewModel.prevPreloadedChapter.collectAsStateWithLifecycle()
     val showControls by viewModel.showControls.collectAsStateWithLifecycle()
     val showTtsPanel by viewModel.showTtsPanel.collectAsStateWithLifecycle()
     val showSettings by viewModel.showSettingsPanel.collectAsStateWithLifecycle()
@@ -101,6 +108,11 @@ fun ReaderScreen(
     val readerStyles by viewModel.allStyles.collectAsStateWithLifecycle()
     val activeStyleId by viewModel.activeStyleId.collectAsStateWithLifecycle()
     val activeStyle by viewModel.activeStyle.collectAsStateWithLifecycle()
+    val activeTheme by (themeViewModel?.activeTheme
+        ?: flowOf<com.morealm.app.domain.entity.ThemeEntity?>(null))
+        .collectAsStateWithLifecycle(null)
+    val allThemes by (themeViewModel?.allThemes ?: flowOf(BuiltinThemes.all()))
+        .collectAsStateWithLifecycle(BuiltinThemes.all())
     val screenOrientation by viewModel.screenOrientation.collectAsStateWithLifecycle()
     val hdrLeft by viewModel.headerLeft.collectAsStateWithLifecycle()
     val hdrCenter by viewModel.headerCenter.collectAsStateWithLifecycle()
@@ -156,6 +168,22 @@ fun ReaderScreen(
     ) { /* granted or not, TTS still works — notification just won't show */ }
 
     val context = LocalContext.current
+
+    fun openWebSearch(query: String) {
+        if (query.isBlank()) return
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_WEB_SEARCH).apply {
+                putExtra(SearchManager.QUERY, query)
+            })
+        }.recoverCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}")))
+        }
+    }
+
+    fun openTranslate(text: String) {
+        if (text.isBlank()) return
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://translate.google.com/?sl=auto&tl=zh-CN&text=${Uri.encode(text)}&op=translate")))
+    }
 
     // Export file picker
     val exportLauncher = rememberLauncherForActivityResult(
@@ -279,6 +307,20 @@ fun ReaderScreen(
         val readerBgImage = customBgImage.ifEmpty {
             (if (isNight) activeStyle?.bgImageUriNight else activeStyle?.bgImageUri) ?: ""
         }
+        val themeCss = activeTheme?.customCss.orEmpty()
+        val currentStyle = activeStyle
+        val effectiveReaderStyle = remember(currentStyle, themeCss) {
+            when {
+                themeCss.isBlank() -> currentStyle
+                currentStyle == null -> ReaderStyle(
+                    id = "theme_css",
+                    name = "Theme CSS",
+                    customCss = themeCss,
+                )
+                currentStyle.customCss.isBlank() -> currentStyle.copy(customCss = themeCss)
+                else -> currentStyle.copy(customCss = "$themeCss\n${currentStyle.customCss}")
+            }
+        }
         val isTxtFormat = book?.format == com.morealm.app.domain.entity.BookFormat.TXT
 
         // Always use Canvas renderer
@@ -286,6 +328,10 @@ fun ReaderScreen(
                 content = content,
                 chapterTitle = chapters.getOrNull(currentIndex)?.title ?: "",
                 chapterIndex = currentIndex,
+                nextChapterTitle = nextPreloadedChapter?.takeIf { it.index == currentIndex + 1 }?.title ?: "",
+                nextChapterContent = nextPreloadedChapter?.takeIf { it.index == currentIndex + 1 }?.content ?: "",
+                prevChapterTitle = prevPreloadedChapter?.takeIf { it.index == currentIndex - 1 }?.title ?: "",
+                prevChapterContent = prevPreloadedChapter?.takeIf { it.index == currentIndex - 1 }?.content ?: "",
                 backgroundColor = readerBg,
                 textColor = readerFg,
                 accentColor = MaterialTheme.colorScheme.primary,
@@ -301,17 +347,27 @@ fun ReaderScreen(
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
                 onNextChapter = { viewModel.nextChapter() },
                 onPrevChapter = { viewModel.prevChapter() },
+                onScrollNearBottom = { viewModel.onScrollNearBottom() },
                 onCopyText = { text -> viewModel.copyTextToClipboard(text) },
                 onSpeakFromHere = { text -> viewModel.onTextSelected(text); viewModel.speakSelectedText() },
-                onLookupWord = { text -> viewModel.onTextSelected(text) },
+                onTranslateText = { text -> openTranslate(text) },
+                onLookupWord = { text -> openWebSearch(text) },
                 onImageClick = { src -> viewModel.onImageClick(src) },
+                onToggleTts = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                        notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    viewModel.toggleTtsPanel()
+                },
+                onAddBookmark = { viewModel.addBookmark() },
                 bookTitle = book?.title ?: "",
                 bookAuthor = book?.author ?: "",
                 tapActionTopLeft = tapTL,
                 tapActionTopRight = tapTR,
                 tapActionBottomLeft = tapBL,
                 tapActionBottomRight = tapBR,
-                readerStyle = activeStyle,
+                readerStyle = effectiveReaderStyle,
                 chaptersSize = chapters.size,
                 headerLeft = hdrLeft,
                 headerCenter = hdrCenter,
@@ -352,8 +408,8 @@ fun ReaderScreen(
         // Bottom control bar
         AnimatedVisibility(
             visible = showControls,
-            enter = fadeIn(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) + slideInVertically(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) { it },
-            exit = fadeOut(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) + slideOutVertically(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) { it },
+            enter = fadeIn(tween(300)),
+            exit = fadeOut(tween(200)),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             ReaderControlBar(
@@ -439,8 +495,8 @@ fun ReaderScreen(
                 customFontName = customFontName,
                 onImportFont = { uri, name -> viewModel.importCustomFont(uri, name) },
                 onClearCustomFont = viewModel::clearCustomFont,
-                allThemes = themeViewModel?.allThemes?.collectAsStateWithLifecycle()?.value ?: BuiltinThemes.all(),
-                activeThemeId = themeViewModel?.activeTheme?.collectAsStateWithLifecycle()?.value?.id ?: "",
+                allThemes = allThemes.ifEmpty { BuiltinThemes.all() },
+                activeThemeId = activeTheme?.id ?: "",
                 onThemeChange = { id -> themeViewModel?.switchTheme(id) },
                 brightness = readerBrightness,
                 onBrightnessChange = viewModel::setReaderBrightness,

@@ -33,6 +33,9 @@ data class ThemeEntity(
     // Background image support
     val backgroundImageUri: String? = null,   // SAF URI to background image
     val transparentBars: Boolean = false,     // Make primary/bottom bar transparent for full image coverage
+
+    // Optional reader CSS bundled with the theme. Reader style CSS can still override it.
+    val customCss: String = "",
 )
 
 /**
@@ -46,6 +49,7 @@ data class LegadoThemeConfig(
     val accentColor: String = "#ff000000",
     val backgroundColor: String = "#ffffffff",
     val bottomBackground: String = "#ffffffff",
+    val customCss: String = "",
 ) {
     fun toThemeEntity(): ThemeEntity = ThemeEntity(
         id = "legado_${themeName.hashCode()}",
@@ -61,5 +65,6 @@ data class LegadoThemeConfig(
         onBackgroundColor = if (isNightTheme) "#FFEDEDEF" else "#FF1A1A1A",
         readerBackground = backgroundColor,
         readerTextColor = if (isNightTheme) "#FFEDEDEF" else "#FF1A1A1A",
+        customCss = customCss,
     )
 }
