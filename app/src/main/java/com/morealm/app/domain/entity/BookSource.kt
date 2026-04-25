@@ -74,6 +74,8 @@ data class BookSource(
 
     fun getKey(): String = bookSourceUrl
 
+    fun getSource(): BookSource = this
+
     fun getSearchRule(): SearchRule {
         ruleSearch?.let { return it }
         val rule = SearchRule(); ruleSearch = rule; return rule

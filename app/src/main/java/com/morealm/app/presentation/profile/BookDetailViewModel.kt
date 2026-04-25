@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.repository.AutoGroupClassifier
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.domain.parser.EpubMetadataWriter
@@ -28,6 +29,7 @@ class BookDetailViewModel @Inject constructor(
     private val bookRepo: BookRepository,
     private val sourceRepo: SourceRepository,
     private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
+    private val autoGroupClassifier: AutoGroupClassifier,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -86,11 +88,14 @@ class BookDetailViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             _saving.value = true
             val current = _book.value ?: return@launch
-            val updated = current.copy(
+            val rawUpdated = current.copy(
                 title = title.ifBlank { current.title },
                 author = author,
                 description = description.ifBlank { null },
             )
+            val updated = if (rawUpdated.folderId == null) {
+                rawUpdated.copy(folderId = autoGroupClassifier.classify(rawUpdated))
+            } else rawUpdated
             bookRepo.update(updated)
             _book.value = updated
 

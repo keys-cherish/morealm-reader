@@ -73,6 +73,7 @@ class SimulationParams(
     val pages: List<TextPage>,
     val titlePaint: TextPaint,
     val contentPaint: TextPaint,
+    val chapterNumPaint: TextPaint? = null,
     val bgColor: Int,
     val bgBitmap: Bitmap? = null,
     val bgMeanColor: Int = bgColor,
@@ -275,6 +276,7 @@ private fun SimulationPager(
                 renderPageToBitmap(
                     viewWidth, viewHeight, params.bgColor,
                     pages[currentPage], params.titlePaint, params.contentPaint,
+                    chapterNumPaint = params.chapterNumPaint,
                     reuseBitmap = null, bgBitmap = params.bgBitmap,
                 )
             }
@@ -294,11 +296,15 @@ private fun SimulationPager(
         // so drawWithContent is not yet reading these bitmaps.
         curBitmap = renderPageToBitmap(
             viewWidth, viewHeight, params.bgColor,
-            curPage, params.titlePaint, params.contentPaint, curBitmap, params.bgBitmap,
+            curPage, params.titlePaint, params.contentPaint,
+            chapterNumPaint = params.chapterNumPaint,
+            reuseBitmap = curBitmap, bgBitmap = params.bgBitmap,
         )
         nextBitmap = renderPageToBitmap(
             viewWidth, viewHeight, params.bgColor,
-            targetPage, params.titlePaint, params.contentPaint, nextBitmap, params.bgBitmap,
+            targetPage, params.titlePaint, params.contentPaint,
+            chapterNumPaint = params.chapterNumPaint,
+            reuseBitmap = nextBitmap, bgBitmap = params.bgBitmap,
         )
     }
 

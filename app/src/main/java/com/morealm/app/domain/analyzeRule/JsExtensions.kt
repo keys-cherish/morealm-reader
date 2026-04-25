@@ -3,6 +3,7 @@ package com.morealm.app.domain.analyzeRule
 import android.util.Base64
 import android.provider.Settings
 import androidx.annotation.Keep
+import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.CookieStore
 import com.morealm.app.domain.http.StrResponse
@@ -30,6 +31,8 @@ object JsExtensions {
     var sourceGetter: (() -> Any?)? = null
     var coroutineContextGetter: (() -> CoroutineContext)? = null
     var ruleDataGetter: (() -> RuleDataInterface?)? = null
+
+    fun getSource(): BookSource? = sourceGetter?.invoke() as? BookSource
 
     // ── Variable get/put (delegated to ruleData, matches AnalyzeUrl API) ──
 

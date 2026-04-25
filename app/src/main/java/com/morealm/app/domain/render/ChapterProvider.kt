@@ -41,21 +41,17 @@ class ChapterProvider(
     val titleTopSpacing: Int = 0,
     val titleBottomSpacing: Int = 0,
     val doublePage: Boolean = false,
+    /** Paint for the chapter-number sub-line (smaller, accent-colored). Null = use titlePaint. */
+    val chapterNumPaint: TextPaint? = null,
 ) {
-    companion object {
-        const val INDENT_CHAR = "\u3000"
-        val IMG_PATTERN = AppPattern.imgSrcPattern
-        private val nonImgTagRegex = Regex("<(?!img)[^>]+>", RegexOption.IGNORE_CASE)
-        private const val chapterTitleMarker = "__MOREALM_CHAPTER_TITLE__"
-        private val chapterNumOpenRegex = Regex("<div\\s+class=[\"']chapter-num[\"']\\s*>", RegexOption.IGNORE_CASE)
-        private val chapterSubOpenRegex = Regex("<div\\s+class=[\"']chapter-sub[\"']\\s*>", RegexOption.IGNORE_CASE)
-    }
 
     val visibleWidth: Int = viewWidth - paddingLeft - paddingRight
     val visibleHeight: Int = viewHeight - paddingTop - paddingBottom
 
     private val titlePaintTextHeight: Float = titlePaint.textHeight
     private val titlePaintFontMetrics: FontMetrics = titlePaint.fontMetrics
+    private val chapterNumPaintTextHeight: Float = chapterNumPaint?.textHeight ?: titlePaintTextHeight
+    private val chapterNumPaintFontMetrics: FontMetrics = chapterNumPaint?.fontMetrics ?: titlePaintFontMetrics
     private val contentPaintTextHeight: Float = contentPaint.textHeight
     private val contentPaintFontMetrics: FontMetrics = contentPaint.fontMetrics
     private val indentCharWidth: Float = contentPaint.measureText(INDENT_CHAR)
@@ -171,23 +167,50 @@ class ChapterProvider(
 
         val pageCountBefore = textPages.size
 
-        // Layout title
+        // Layout title — split into chapter-num line + title line (4.htm style)
         if (titleMode != 2 && !contentProvidesChapterTitle) {
-            title.split("\n").filter { it.isNotBlank() }.forEach { text ->
+            val titleParts = splitChapterNumAndTitle(title)
+            val chapterNumText = titleParts.first   // e.g. "第一章" or null
+            val titleText = titleParts.second        // e.g. "山边小村" or full title
+
+            // 1) Chapter number sub-line (small accent text)
+            if (chapterNumText != null && chapterNumPaint != null) {
+                val result = setTypeText(
+                    absStartX, durY, chapterNumText, textPages, stringBuilder,
+                    chapterNumPaint, chapterNumPaintTextHeight, chapterNumPaintFontMetrics,
+                    floatArray, isTitle = true, isChapterNum = true, forceLeftTitle = true,
+                    emptyContent = paragraphs.isEmpty(),
+                )
+                absStartX = result.first
+                durY = result.second
+                if (textPages.last().lines.isNotEmpty()) {
+                    textPages.last().lines.last().isParagraphEnd = true
+                }
+                stringBuilder.append("\n")
+                // 4.htm: chapter-num margin-bottom: 0.5rem
+                durY += contentPaintTextHeight * 0.45f
+            }
+
+            // 2) Title text (main color, medium weight)
+            val titleLines = titleText.split("\n").filter { it.isNotBlank() }
+            titleLines.forEach { text ->
                 val result = setTypeText(
                     absStartX, durY, text, textPages, stringBuilder,
                     titlePaint, titlePaintTextHeight, titlePaintFontMetrics,
-                    floatArray, isTitle = true,
+                    floatArray, isTitle = true, forceLeftTitle = true,
                     emptyContent = paragraphs.isEmpty(),
                 )
                 absStartX = result.first
                 durY = result.second
             }
+            // Mark the last title line for the decorative accent bar
             if (textPages.last().lines.isNotEmpty()) {
+                textPages.last().lines.last().isTitleEnd = true
                 textPages.last().lines.last().isParagraphEnd = true
             }
             stringBuilder.append("\n")
-            durY += titleBottomSpacing
+            // Reserve room for the decorative line and keep the title block compact.
+            durY += (contentPaintTextHeight * 1.35f).coerceAtLeast(titleBottomSpacing.toFloat() * 0.75f)
         }
 
         // 检查排版过程中是否产生了新页（分页），如果有就 finalize 已完成的页
@@ -206,18 +229,31 @@ class ChapterProvider(
                 if (textPages.last().lines.isNotEmpty()) {
                     durY += titleTopSpacing.coerceAtLeast(paragraphSpacing).toFloat()
                 }
+                val paint = if (paragraph.isChapterNum && chapterNumPaint != null) chapterNumPaint else titlePaint
+                val paintHeight = if (paragraph.isChapterNum && chapterNumPaint != null) chapterNumPaintTextHeight else titlePaintTextHeight
+                val paintFontMetrics = if (paragraph.isChapterNum && chapterNumPaint != null) chapterNumPaintFontMetrics else titlePaintFontMetrics
                 val r = setTypeText(
                     absStartX, durY, para, textPages, stringBuilder,
-                    titlePaint, titlePaintTextHeight, titlePaintFontMetrics,
-                    floatArray, isTitle = true, isVolumeTitle = true,
+                    paint, paintHeight, paintFontMetrics,
+                    floatArray,
+                    isTitle = true,
+                    isChapterNum = paragraph.isChapterNum,
+                    forceLeftTitle = true,
                 )
                 absStartX = r.first
                 durY = r.second
                 if (textPages.last().lines.isNotEmpty()) {
+                    if (paragraph.isChapterSubTitle) {
+                        textPages.last().lines.last().isTitleEnd = true
+                    }
                     textPages.last().lines.last().isParagraphEnd = true
                 }
                 stringBuilder.append("\n")
-                durY += titleBottomSpacing.coerceAtLeast(paragraphSpacing).toFloat()
+                durY += if (paragraph.isChapterNum) {
+                    contentPaintTextHeight * 0.45f
+                } else {
+                    (contentPaintTextHeight * 1.35f).coerceAtLeast(titleBottomSpacing.toFloat() * 0.75f)
+                }
                 flushCompletedPages()
                 continue
             }
@@ -372,6 +408,8 @@ class ChapterProvider(
         isFirstLine: Boolean = true,
         emptyContent: Boolean = false,
         isVolumeTitle: Boolean = false,
+        isChapterNum: Boolean = false,
+        forceLeftTitle: Boolean = false,
     ): Pair<Int, Float> {
         var absStartX = x
         val widthsArray = allocateFloatArray(text.length, floatArray)
@@ -409,7 +447,7 @@ class ChapterProvider(
         }
 
         for (lineIndex in 0 until layout.lineCount) {
-            val textLine = TextLine(isTitle = isTitle)
+            val textLine = TextLine(isTitle = isTitle, isChapterNum = isChapterNum)
             if (durY + textHeight > visibleHeight) {
                 val textPage = textPages.last()
                 if (doublePage && absStartX < viewWidth / 2) {
@@ -440,7 +478,7 @@ class ChapterProvider(
                 lineIndex == layout.lineCount - 1 -> {
                     textLine.text = lineText
                     val startXOffset = if (
-                        isTitle && (isMiddleTitle || emptyContent || isVolumeTitle)
+                        isTitle && !forceLeftTitle && (isMiddleTitle || emptyContent || isVolumeTitle)
                     ) {
                         ((visibleWidth - desiredWidth) / 2).coerceAtLeast(0f)
                     } else 0f
@@ -450,7 +488,7 @@ class ChapterProvider(
                     )
                 }
                 else -> {
-                    if (isTitle && (isMiddleTitle || emptyContent || isVolumeTitle)) {
+                    if (isTitle && !forceLeftTitle && (isMiddleTitle || emptyContent || isVolumeTitle)) {
                         val startXOffset = ((visibleWidth - desiredWidth) / 2).coerceAtLeast(0f)
                         addCharsToLineNatural(
                             absStartX, textLine, words, startXOffset, false, widths,
@@ -686,8 +724,8 @@ class ChapterProvider(
 
     private fun parseHtmlParagraphs(html: String): List<LayoutParagraph> {
         val markedHtml = html
-            .replace(chapterNumOpenRegex, "\n$chapterTitleMarker")
-            .replace(chapterSubOpenRegex, "\n$chapterTitleMarker")
+            .replace(chapterNumOpenRegex, "\n$chapterTitleMarker$chapterNumMarker")
+            .replace(chapterSubOpenRegex, "\n$chapterTitleMarker$chapterSubMarker")
         val text = markedHtml
             .replace(AppPattern.htmlDivCloseRegex, "\n")
             .replace(AppPattern.htmlBrRegex, "\n")
@@ -697,8 +735,19 @@ class ChapterProvider(
         return cleaned.lines().mapNotNull { line ->
             val trimmed = line.trim { it.code <= 0x20 || it == '\u3000' }
             if (trimmed.startsWith(chapterTitleMarker)) {
-                val title = trimmed.removePrefix(chapterTitleMarker).trim()
-                if (title.isEmpty()) null else LayoutParagraph(title, isChapterTitle = true)
+                val markedTitle = trimmed.removePrefix(chapterTitleMarker).trim()
+                val isChapterNum = markedTitle.startsWith(chapterNumMarker)
+                val isChapterSubTitle = markedTitle.startsWith(chapterSubMarker)
+                val title = markedTitle
+                    .removePrefix(chapterNumMarker)
+                    .removePrefix(chapterSubMarker)
+                    .trim()
+                if (title.isEmpty()) null else LayoutParagraph(
+                    title,
+                    isChapterTitle = true,
+                    isChapterNum = isChapterNum,
+                    isChapterSubTitle = isChapterSubTitle,
+                )
             } else {
                 normalizeParagraph(line)?.let(::LayoutParagraph)
             }
@@ -728,8 +777,39 @@ class ChapterProvider(
     private data class LayoutParagraph(
         val text: String,
         val isChapterTitle: Boolean = false,
+        val isChapterNum: Boolean = false,
+        val isChapterSubTitle: Boolean = false,
     )
 
+    /**
+     * Split a chapter title like "第一章 山边小村" into ("第一章", "山边小村").
+     * If no recognizable chapter-number prefix, returns (null, fullTitle).
+     */
+    private fun splitChapterNumAndTitle(title: String): Pair<String?, String> {
+        val trimmed = title.trim()
+        // Match common chapter number patterns: 第X章, 第X节, Chapter X, etc.
+        val match = chapterNumSplitRegex.find(trimmed)
+        if (match != null) {
+            val num = match.value.trim()
+            val rest = trimmed.substring(match.range.last + 1).trim()
+            return if (rest.isNotEmpty()) num to rest else null to trimmed
+        }
+        return null to trimmed
+    }
+
+    companion object {
+        const val INDENT_CHAR = "\u3000"
+        val IMG_PATTERN = AppPattern.imgSrcPattern
+        private val nonImgTagRegex = Regex("<(?!img)[^>]+>", RegexOption.IGNORE_CASE)
+        private const val chapterTitleMarker = "__MOREALM_CHAPTER_TITLE__"
+        private const val chapterNumMarker = "__MOREALM_CHAPTER_NUM__"
+        private const val chapterSubMarker = "__MOREALM_CHAPTER_SUB__"
+        private val chapterNumOpenRegex = Regex("<div\\s+class=[\"']chapter-num[\"']\\s*>", RegexOption.IGNORE_CASE)
+        private val chapterSubOpenRegex = Regex("<div\\s+class=[\"']chapter-sub[\"']\\s*>", RegexOption.IGNORE_CASE)
+        private val chapterNumSplitRegex = Regex(
+            """^(第[零一二三四五六七八九十百千万亿\d]+[章节卷集部篇回话幕折场]|[Cc]hapter\s+\d+|[Vv]ol(?:ume)?\s*\.?\s*\d+|序[章言]|终章|尾声|楔子|番外|引[子章]|\d+[.、]\s*)""",
+        )
+    }
 }
 
 /**

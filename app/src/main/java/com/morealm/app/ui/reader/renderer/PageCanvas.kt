@@ -53,6 +53,7 @@ fun PageCanvas(
     page: TextPage,
     titlePaint: TextPaint,
     contentPaint: TextPaint,
+    chapterNumPaint: TextPaint? = null,
     bgBitmap: Bitmap? = null,
     selectionStart: TextPos? = null,
     selectionEnd: TextPos? = null,
@@ -87,6 +88,7 @@ fun PageCanvas(
                 page = page,
                 titlePaint = titlePaint,
                 contentPaint = contentPaint,
+                chapterNumPaint = chapterNumPaint,
                 selectionStart = selectionStart,
                 selectionEnd = selectionEnd,
                 selColorArgb = selColorArgb,
@@ -108,6 +110,7 @@ fun PageCanvas(
                     page = page,
                     titlePaint = titlePaint,
                     contentPaint = contentPaint,
+                    chapterNumPaint = chapterNumPaint,
                     searchColorArgb = searchColorArgb,
                     hasBookmark = hasBookmark,
                     bmColorArgb = bmColorArgb,
@@ -137,6 +140,7 @@ fun drawPageContent(
     page: TextPage,
     titlePaint: TextPaint,
     contentPaint: TextPaint,
+    chapterNumPaint: TextPaint? = null,
     selectionStart: TextPos? = null,
     selectionEnd: TextPos? = null,
     selColorArgb: Int = DEFAULT_SELECTION_COLOR.toArgb(),
@@ -152,7 +156,11 @@ fun drawPageContent(
     val paddingTop = page.paddingTop
 
     for ((lineIndex, line) in page.lines.withIndex()) {
-        val paint = if (line.isTitle) titlePaint else contentPaint
+        val paint = when {
+            line.isChapterNum && chapterNumPaint != null -> chapterNumPaint
+            line.isTitle -> titlePaint
+            else -> contentPaint
+        }
         val lineTop = line.lineTop + paddingTop
         val lineBottom = line.lineBottom + paddingTop
 
@@ -188,7 +196,18 @@ fun drawPageContent(
             canvas.drawRect(left, lineTop, right, lineBottom, highlightPaint)
         }
 
-        // 4. Draw text / images
+        // 4. Decorative accent bar after title end (4.htm style)
+        if (line.isTitleEnd && chapterNumPaint != null) {
+            val densityScale = (contentPaint.textSize / 18f).coerceIn(1f, 3f)
+            val barWidth = 32f * densityScale
+            val barHeight = 2f
+            val barY = lineBottom + contentPaint.textSize * 0.55f
+            val barX = line.columns.firstOrNull()?.start ?: 0f
+            highlightPaint.color = chapterNumPaint.color
+            canvas.drawRect(barX, barY, barX + barWidth, barY + barHeight, highlightPaint)
+        }
+
+        // 5. Draw text / images
         if (line.isImage) {
             for (col in line.columns) {
                 if (col is ImageColumn) {
@@ -236,6 +255,7 @@ fun drawRecordedPageContent(
     page: TextPage,
     titlePaint: TextPaint,
     contentPaint: TextPaint,
+    chapterNumPaint: TextPaint? = null,
     width: Int,
     height: Int,
     searchColorArgb: Int = DEFAULT_SEARCH_RESULT_COLOR.toArgb(),
@@ -247,6 +267,7 @@ fun drawRecordedPageContent(
             page = page,
             titlePaint = titlePaint,
             contentPaint = contentPaint,
+            chapterNumPaint = chapterNumPaint,
             searchColorArgb = searchColorArgb,
             canvasWidth = canvasWidth,
         )
@@ -278,6 +299,7 @@ fun renderPageToBitmap(
     page: TextPage,
     titlePaint: TextPaint,
     contentPaint: TextPaint,
+    chapterNumPaint: TextPaint? = null,
     reuseBitmap: Bitmap? = null,
     bgBitmap: Bitmap? = null,
 ): Bitmap {
@@ -300,6 +322,7 @@ fun renderPageToBitmap(
         page = page,
         titlePaint = titlePaint,
         contentPaint = contentPaint,
+        chapterNumPaint = chapterNumPaint,
         canvasWidth = width.toFloat(),
     )
     return bmp
