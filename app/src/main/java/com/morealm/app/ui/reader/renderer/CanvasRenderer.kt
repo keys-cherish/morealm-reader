@@ -21,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -86,6 +87,7 @@ fun CanvasRenderer(
     pageAnimType: PageAnimType = PageAnimType.SLIDE,
     onTapCenter: () -> Unit = {},
     onProgress: (Int) -> Unit = {},
+    onVisiblePageChanged: (chapterIndex: Int, title: String, readProgress: String) -> Unit = { _, _, _ -> },
     onNextChapter: () -> Unit = {},
     onPrevChapter: () -> Unit = {},
     onScrollNearBottom: () -> Unit = {},
@@ -107,12 +109,14 @@ fun CanvasRenderer(
     tapActionBottomRight: String = "next",
     readerStyle: ReaderStyle? = null,
     chaptersSize: Int = 0,
-    headerLeft: String = "none",
+    showChapterName: Boolean = true,
+    showTimeBattery: Boolean = true,
+    headerLeft: String = "chapter",
     headerCenter: String = "none",
     headerRight: String = "none",
-    footerLeft: String = "chapter",
+    footerLeft: String = "battery_time",
     footerCenter: String = "none",
-    footerRight: String = "progress",
+    footerRight: String = "page_progress",
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -131,11 +135,12 @@ fun CanvasRenderer(
 
     val padHPx = with(density) { paddingHorizontal.dp.toPx().toInt() }
     val padVPx = with(density) { paddingVertical.dp.toPx().toInt() }
+    val infoBarHeightPx = with(density) { 64.dp.toPx().toInt() }
     // Ensure content padding is at least as large as the cutout insets
     val effectivePadLeft = maxOf(padHPx, cutoutLeft)
     val effectivePadRight = maxOf(padHPx, cutoutRight)
-    val effectivePadTop = maxOf(padVPx, cutoutTop)
-    val effectivePadBottom = maxOf(padVPx, cutoutBottom)
+    val effectivePadTop = maxOf(padVPx, cutoutTop) + infoBarHeightPx
+    val effectivePadBottom = maxOf(padVPx, cutoutBottom) + infoBarHeightPx
     val fontSizePx = with(density) { fontSize.sp.toPx() }
 
     // ── Battery level (ported from Legado ReadBookActivity battery receiver) ──
@@ -330,6 +335,7 @@ fun CanvasRenderer(
     var toolbarOffset by remember { mutableStateOf(Offset.Zero) }
     // Share quote dialog state
     var shareQuoteText by remember { mutableStateOf<String?>(null) }
+    var scrollPageIndex by remember(chapterIndex) { mutableIntStateOf(0) }
 
     // Pager state — always start at 0, then jump after layout completes
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { pageCount })
@@ -500,6 +506,7 @@ fun CanvasRenderer(
                 selectionStart = selectionState.startPos,
                 selectionEnd = selectionState.endPos,
                 onScrollProgress = { if (chapter?.isCompleted == true) onProgress(it) },
+                onScrollPageChanged = { scrollPageIndex = it },
                 onNearBottom = onScrollNearBottom,
                 onReachedBottom = onScrollReachedBottom,
                 onTapCenter = onTapCenter,
@@ -508,6 +515,28 @@ fun CanvasRenderer(
                 initialProgress = initialProgress,
                 layoutCompleted = chapter?.isCompleted == true,
                 modifier = Modifier.fillMaxSize(),
+            )
+            PageReaderInfoOverlay(
+                pages = pages,
+                onCurrentPageChanged = { page -> onVisiblePageChanged(page.chapterIndex, page.title, page.readProgress) },
+                pageIndex = scrollPageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
+                pageCount = pageCount,
+                backgroundColor = backgroundColor,
+                chapterTitle = chapterTitle,
+                chapterIndex = chapterIndex,
+                chaptersSize = chaptersSize,
+                batteryLevel = batteryLevel,
+                currentTime = currentTime,
+                textColor = textColor,
+                paddingHorizontal = paddingHorizontal,
+                showChapterName = showChapterName,
+                showTimeBattery = showTimeBattery,
+                headerLeft = headerLeft,
+                headerCenter = headerCenter,
+                headerRight = headerRight,
+                footerLeft = footerLeft,
+                footerCenter = footerCenter,
+                footerRight = footerRight,
             )
         } else {
             AnimatedPageReader(
@@ -540,6 +569,8 @@ fun CanvasRenderer(
                     footerLeft = footerLeft,
                     footerCenter = footerCenter,
                     footerRight = footerRight,
+                    showChapterName = showChapterName,
+                    showTimeBattery = showTimeBattery,
                 )
             }
         }
@@ -569,6 +600,8 @@ fun CanvasRenderer(
                 footerLeft = footerLeft,
                 footerCenter = footerCenter,
                 footerRight = footerRight,
+                showChapterName = showChapterName,
+                showTimeBattery = showTimeBattery,
             )
         }
 
@@ -606,7 +639,7 @@ fun CanvasRenderer(
 /**
  * Slot content types (matching Legado ReadTipConfig):
  * "none", "chapter", "time", "battery", "battery_pct", "page",
- * "progress", "page_progress", "book_name", "time_battery", "time_battery_pct"
+ * "progress", "page_progress", "book_name", "time_battery", "battery_time", "time_battery_pct"
  */
 @Composable
 private fun ReaderInfoBar(
@@ -616,6 +649,7 @@ private fun ReaderInfoBar(
     chapterTitle: String,
     pageIndex: Int,
     pageCount: Int,
+    currentPage: TextPage? = null,
     chapterIndex: Int,
     chaptersSize: Int,
     batteryLevel: Int,
@@ -640,6 +674,7 @@ private fun ReaderInfoBar(
                 chapterTitle = chapterTitle,
                 pageIndex = pageIndex,
                 pageCount = pageCount,
+                currentPage = currentPage,
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
                 batteryLevel = batteryLevel,
@@ -659,6 +694,7 @@ private fun ReaderInfoBar(
                 chapterTitle = chapterTitle,
                 pageIndex = pageIndex,
                 pageCount = pageCount,
+                currentPage = currentPage,
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
                 batteryLevel = batteryLevel,
@@ -677,6 +713,7 @@ private fun ReaderInfoBar(
                 chapterTitle = chapterTitle,
                 pageIndex = pageIndex,
                 pageCount = pageCount,
+                currentPage = currentPage,
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
                 batteryLevel = batteryLevel,
@@ -689,11 +726,96 @@ private fun ReaderInfoBar(
 }
 
 @Composable
+private fun PageReaderInfoOverlay(
+    pages: List<TextPage>,
+    onCurrentPageChanged: (TextPage) -> Unit = {},
+    pageIndex: Int,
+    pageCount: Int,
+    chapterTitle: String,
+    chapterIndex: Int,
+    chaptersSize: Int,
+    batteryLevel: Int,
+    currentTime: String,
+    textColor: Color,
+    backgroundColor: Color,
+    paddingHorizontal: Int,
+    showChapterName: Boolean,
+    showTimeBattery: Boolean,
+    headerLeft: String,
+    headerCenter: String,
+    headerRight: String,
+    footerLeft: String,
+    footerCenter: String,
+    footerRight: String,
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        val safePageIndex = pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+        val currentPage = pages.getOrNull(safePageIndex) ?: pages.firstOrNull()
+        LaunchedEffect(currentPage) {
+            currentPage?.let(onCurrentPageChanged)
+        }
+        ReaderInfoBar(
+            slotLeft = if (showTimeBattery) headerLeft else "none",
+            slotCenter = if (showChapterName) headerCenter else "none",
+            slotRight = if (showTimeBattery) headerRight else "none",
+            chapterTitle = chapterTitle,
+            pageIndex = safePageIndex,
+            pageCount = pageCount,
+            currentPage = currentPage,
+            chapterIndex = chapterIndex,
+            chaptersSize = chaptersSize,
+            batteryLevel = batteryLevel,
+            currentTime = currentTime,
+            textColor = textColor,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .height(64.dp)
+                .background(
+                    Brush.verticalGradient(
+                        0f to backgroundColor,
+                        0.72f to backgroundColor,
+                        1f to backgroundColor.copy(alpha = 0f),
+                    )
+                )
+                .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
+        )
+        ReaderInfoBar(
+            slotLeft = if (showChapterName) footerLeft else "none",
+            slotCenter = footerCenter,
+            slotRight = footerRight,
+            chapterTitle = chapterTitle,
+            pageIndex = safePageIndex,
+            pageCount = pageCount,
+            currentPage = currentPage,
+            chapterIndex = chapterIndex,
+            chaptersSize = chaptersSize,
+            batteryLevel = batteryLevel,
+            currentTime = currentTime,
+            textColor = textColor,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .height(64.dp)
+                .background(
+                    Brush.verticalGradient(
+                        0f to backgroundColor.copy(alpha = 0f),
+                        0.28f to backgroundColor,
+                        1f to backgroundColor,
+                    )
+                )
+                .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
+        )
+    }
+}
+
+@Composable
 private fun InfoSlotContent(
     slot: String,
     chapterTitle: String,
     pageIndex: Int,
     pageCount: Int,
+    currentPage: TextPage? = null,
     chapterIndex: Int,
     chaptersSize: Int,
     batteryLevel: Int,
@@ -715,24 +837,31 @@ private fun InfoSlotContent(
         "battery_pct" -> Text("$batteryLevel%", style = tipStyle, modifier = modifier)
         "page" -> Text("${pageIndex + 1}/$pageCount", style = tipStyle, modifier = modifier)
         "progress" -> {
-            val pct = if (chaptersSize > 0) {
-                ((chapterIndex + (pageIndex + 1f) / pageCount.coerceAtLeast(1)) / chaptersSize * 100)
-            } else if (pageCount > 1) {
+            val readProgress = currentPage?.readProgress?.takeIf { it.isNotBlank() }
+            if (readProgress != null) {
+                Text(readProgress, style = tipStyle, modifier = modifier)
+                return
+            }
+            val pct = if (pageCount > 1) {
                 (pageIndex.toFloat() / (pageCount - 1) * 100)
             } else 100f
             Text("%.1f%%".format(pct), style = tipStyle, modifier = modifier)
         }
         "page_progress" -> {
-            val pct = if (chaptersSize > 0) {
-                ((chapterIndex + (pageIndex + 1f) / pageCount.coerceAtLeast(1)) / chaptersSize * 100)
-            } else 0f
-            Text("${pageIndex + 1}/$pageCount  ${"%.1f%%".format(pct)}", style = tipStyle, modifier = modifier)
+            val readProgress = currentPage?.readProgress?.takeIf { it.isNotBlank() } ?: "0.0%"
+            val actualPageSize = currentPage?.pageSize?.takeIf { it > 0 } ?: pageCount
+            Text("${pageIndex + 1}/$actualPageSize  $readProgress", style = tipStyle, modifier = modifier)
         }
         "book_name" -> Text("MoRealm", style = tipStyle, modifier = modifier)
         "time_battery" -> Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
             Text(currentTime, style = tipStyle)
             Spacer(Modifier.width(6.dp))
             BatteryIcon(batteryLevel, tipColor)
+        }
+        "battery_time" -> Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
+            BatteryIcon(batteryLevel, tipColor)
+            Spacer(Modifier.width(6.dp))
+            Text(currentTime, style = tipStyle)
         }
         "time_battery_pct" -> Text(
             "$currentTime  $batteryLevel%",
@@ -856,6 +985,8 @@ private fun PageContentBox(
     footerLeft: String,
     footerCenter: String,
     footerRight: String,
+    showChapterName: Boolean,
+    showTimeBattery: Boolean,
 ) {
     Box(modifier = Modifier.fillMaxSize().background(backgroundColor)) {
         PageCanvas(
@@ -872,41 +1003,26 @@ private fun PageContentBox(
             bookmarkColor = MaterialTheme.colorScheme.error,
             modifier = Modifier.fillMaxSize(),
         )
-        // ── Header info bar (ported from Legado PageView) ──
-        ReaderInfoBar(
-            slotLeft = headerLeft,
-            slotCenter = headerCenter,
-            slotRight = headerRight,
-            chapterTitle = chapterTitle,
+        PageReaderInfoOverlay(
+            pages = page.textChapter?.pages ?: listOf(page),
             pageIndex = pageIndex,
             pageCount = pageCount,
+            backgroundColor = backgroundColor,
+            chapterTitle = chapterTitle,
             chapterIndex = chapterIndex,
             chaptersSize = chaptersSize,
             batteryLevel = batteryLevel,
             currentTime = currentTime,
             textColor = textColor,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .padding(horizontal = paddingHorizontal.dp, vertical = 4.dp),
-        )
-        // ── Footer info bar (ported from Legado PageView) ──
-        ReaderInfoBar(
-            slotLeft = footerLeft,
-            slotCenter = footerCenter,
-            slotRight = footerRight,
-            chapterTitle = chapterTitle,
-            pageIndex = pageIndex,
-            pageCount = pageCount,
-            chapterIndex = chapterIndex,
-            chaptersSize = chaptersSize,
-            batteryLevel = batteryLevel,
-            currentTime = currentTime,
-            textColor = textColor,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .padding(horizontal = paddingHorizontal.dp, vertical = 4.dp),
+            paddingHorizontal = paddingHorizontal,
+            showChapterName = showChapterName,
+            showTimeBattery = showTimeBattery,
+            headerLeft = headerLeft,
+            headerCenter = headerCenter,
+            headerRight = headerRight,
+            footerLeft = footerLeft,
+            footerCenter = footerCenter,
+            footerRight = footerRight,
         )
     }
 }
