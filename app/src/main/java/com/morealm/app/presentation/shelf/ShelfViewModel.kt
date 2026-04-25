@@ -11,6 +11,7 @@ import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.BookGroup
 import com.morealm.app.domain.preference.AppPreferences
+import com.morealm.app.domain.repository.AutoGroupClassifier
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.BookGroupRepository
 import com.morealm.app.domain.parser.EpubParser
@@ -46,6 +47,7 @@ data class FolderImportState(
 class ShelfViewModel @Inject constructor(
     private val bookRepo: BookRepository,
     private val groupRepo: BookGroupRepository,
+    private val autoGroupClassifier: AutoGroupClassifier,
     private val prefs: AppPreferences,
     private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
     @ApplicationContext private val context: Context,
@@ -179,7 +181,7 @@ class ShelfViewModel @Inject constructor(
             if (format == BookFormat.UNKNOWN) return@launch AppLog.warn("Import", "Unsupported format: $name")
             if (bookRepo.findByLocalPath(uri.toString()) != null) return@launch AppLog.info("Import", "Already imported: $name")
 
-            val book = buildBookFromFile(uri, name, format)
+            val book = applyAutoGroup(buildBookFromFile(uri, name, format))
             bookRepo.insert(book)
             AppLog.info("Import", "Imported: ${book.title} ($format)")
         }
@@ -381,14 +383,14 @@ class ShelfViewModel @Inject constructor(
             if (format == BookFormat.UNKNOWN) continue
             if (bookRepo.findByLocalPath(file.uri.toString()) != null) continue
 
-            val book = Book(
+            val book = applyAutoGroup(Book(
                 id = UUID.randomUUID().toString(),
                 title = name.substringBeforeLast('.'),
                 localPath = file.uri.toString(),
                 format = format,
                 folderId = folderId,
                 addedAt = System.currentTimeMillis() + idx,
-            )
+            ))
             bookRepo.insert(book)
             pending.add(PendingBook(book, file, format))
         }
@@ -411,7 +413,7 @@ class ShelfViewModel @Inject constructor(
                     )
                     else -> continue
                 }
-                bookRepo.update(updated)
+                bookRepo.update(applyAutoGroup(updated))
             } catch (e: Exception) {
                 AppLog.warn("Import", "Metadata failed: ${pb.book.title} - ${e.message}")
             }
@@ -503,11 +505,34 @@ class ShelfViewModel @Inject constructor(
         }
     }
 
+    fun createGroup(name: String, autoKeywords: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val group = BookGroup(
+                id = UUID.randomUUID().toString(),
+                name = name,
+                autoKeywords = autoKeywords,
+                sortOrder = (allGroups.value.maxOfOrNull { it.sortOrder } ?: 0) + 1,
+            )
+            groupRepo.insert(group)
+            reclassifyUngroupedBooks()
+            AppLog.info("Shelf", "Created group: $name")
+        }
+    }
+
     fun renameGroup(groupId: String, newName: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val group = groupRepo.getById(groupId) ?: return@launch
             groupRepo.insert(group.copy(name = newName))
             AppLog.info("Shelf", "Renamed group $groupId to $newName")
+        }
+    }
+
+    fun updateGroup(groupId: String, newName: String, autoKeywords: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val group = groupRepo.getById(groupId) ?: return@launch
+            groupRepo.insert(group.copy(name = newName, autoKeywords = autoKeywords))
+            reclassifyUngroupedBooks()
+            AppLog.info("Shelf", "Updated group $groupId")
         }
     }
 
@@ -550,5 +575,23 @@ class ShelfViewModel @Inject constructor(
 
     fun stopCacheBook() {
         cacheRepo.stopDownload()
+    }
+
+    fun reclassifyUngroupedBooks() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val groups = groupRepo.getAllGroupsSync()
+            var moved = 0
+            bookRepo.getAllBooksSync().filter { it.folderId == null }.forEach { book ->
+                val target = autoGroupClassifier.matchGroup(book, groups)?.id ?: return@forEach
+                bookRepo.update(book.copy(folderId = target))
+                moved++
+            }
+            AppLog.info("Shelf", "Auto grouped $moved books")
+        }
+    }
+
+    private suspend fun applyAutoGroup(book: Book): Book {
+        val groupId = autoGroupClassifier.classify(book)
+        return if (groupId != null && book.folderId == null) book.copy(folderId = groupId) else book
     }
 }

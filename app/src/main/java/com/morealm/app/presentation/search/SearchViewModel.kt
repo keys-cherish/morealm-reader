@@ -6,6 +6,7 @@ import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.SearchBook
 import com.morealm.app.domain.preference.AppPreferences
+import com.morealm.app.domain.repository.AutoGroupClassifier
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.SearchRepository
 import com.morealm.app.core.log.AppLog
@@ -24,6 +25,7 @@ import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import kotlin.math.min
+import java.io.IOException
 
 data class SearchResult(
     val title: String,
@@ -50,6 +52,7 @@ class SearchViewModel @Inject constructor(
     private val bookRepo: BookRepository,
     private val prefs: AppPreferences,
     private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
+    private val autoGroupClassifier: AutoGroupClassifier,
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
@@ -160,7 +163,11 @@ class SearchViewModel @Inject constructor(
                             updateSourceStatus(source.bookSourceUrl, SourceStatus.DONE)
                         } catch (e: Exception) {
                             updateSourceStatus(source.bookSourceUrl, SourceStatus.FAILED)
-                            AppLog.warn("Search", "${source.bookSourceName} failed: ${e.message}", e)
+                            if (e is IOException) {
+                                AppLog.warn("Search", "${source.bookSourceName} failed: ${e.message}")
+                            } else {
+                                AppLog.warn("Search", "${source.bookSourceName} failed: ${e.message}", e)
+                            }
                         }
                     }
                 }.forEach { it.join() }
@@ -231,7 +238,7 @@ class SearchViewModel @Inject constructor(
                     return@launch
                 }
                 val bookId = java.util.UUID.randomUUID().toString()
-                val book = Book(
+                val rawBook = Book(
                     id = bookId,
                     title = result.title,
                     author = result.author,
@@ -246,6 +253,7 @@ class SearchViewModel @Inject constructor(
                     format = BookFormat.WEB,
                     addedAt = System.currentTimeMillis(),
                 )
+                val book = rawBook.copy(folderId = autoGroupClassifier.classify(rawBook))
                 bookRepo.insert(book)
                 AppLog.info("Search", "Added to shelf: ${result.title} from ${result.sourceName}")
                 withContext(Dispatchers.Main) { onBookReady(bookId) }

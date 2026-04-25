@@ -118,6 +118,8 @@ class AnalyzeUrl(
     /**
      * 执行JS
      */
+    fun getSource(): BookSource? = source
+
     fun evalJS(jsStr: String, result: Any? = null): Any? {
         val bindings = ScriptBindings()
         org.mozilla.javascript.Context.enter()
