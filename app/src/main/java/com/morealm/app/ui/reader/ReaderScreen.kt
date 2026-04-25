@@ -69,6 +69,7 @@ fun ReaderScreen(
     val chapters by viewModel.chapters.collectAsStateWithLifecycle()
     val currentIndex by viewModel.currentChapterIndex.collectAsStateWithLifecycle()
     val content by viewModel.chapterContent.collectAsStateWithLifecycle()
+    val renderedChapter by viewModel.renderedChapter.collectAsStateWithLifecycle()
     val nextPreloadedChapter by viewModel.nextPreloadedChapter.collectAsStateWithLifecycle()
     val prevPreloadedChapter by viewModel.prevPreloadedChapter.collectAsStateWithLifecycle()
     val showControls by viewModel.showControls.collectAsStateWithLifecycle()
@@ -325,9 +326,9 @@ fun ReaderScreen(
 
         // Always use Canvas renderer
         com.morealm.app.ui.reader.renderer.CanvasRenderer(
-                content = content,
-                chapterTitle = chapters.getOrNull(currentIndex)?.title ?: "",
-                chapterIndex = currentIndex,
+                content = renderedChapter.content.ifEmpty { content },
+                chapterTitle = renderedChapter.title.ifEmpty { chapters.getOrNull(currentIndex)?.title ?: "" },
+                chapterIndex = renderedChapter.index,
                 nextChapterTitle = nextPreloadedChapter?.takeIf { it.index == currentIndex + 1 }?.title ?: "",
                 nextChapterContent = nextPreloadedChapter?.takeIf { it.index == currentIndex + 1 }?.content ?: "",
                 prevChapterTitle = prevPreloadedChapter?.takeIf { it.index == currentIndex - 1 }?.title ?: "",
@@ -340,14 +341,15 @@ fun ReaderScreen(
                 paddingHorizontal = marginHorizontal,
                 paddingVertical = marginTopVal,
                 bgImageUri = readerBgImage,
-                startFromLastPage = navigateDirection < 0,
-                initialProgress = scrollProgress,
+                startFromLastPage = false,
+                initialProgress = renderedChapter.initialProgress,
                 pageAnimType = pageAnim.toPageAnimType(),
                 onTapCenter = { viewModel.toggleControls() },
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
                 onNextChapter = { viewModel.nextChapter() },
                 onPrevChapter = { viewModel.prevChapter() },
                 onScrollNearBottom = { viewModel.onScrollNearBottom() },
+                onScrollReachedBottom = { viewModel.onScrollReachedBottom() },
                 onCopyText = { text -> viewModel.copyTextToClipboard(text) },
                 onSpeakFromHere = { text -> viewModel.onTextSelected(text); viewModel.speakSelectedText() },
                 onTranslateText = { text -> openTranslate(text) },
@@ -634,10 +636,7 @@ fun ReaderScreen(
             NextBookPromptDialog(
                 nextBookTitle = nextBook.title,
                 accentColor = MaterialTheme.colorScheme.primary,
-                onConfirm = {
-                    viewModel.dismissNextBookPrompt()
-                    onNavigateToBook(nextBook.id)
-                },
+                onConfirm = { viewModel.openNextLinkedBook() },
                 onDismiss = { viewModel.dismissNextBookPrompt() },
             )
         }

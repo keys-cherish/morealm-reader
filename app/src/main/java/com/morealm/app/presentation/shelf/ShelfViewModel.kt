@@ -51,6 +51,10 @@ class ShelfViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
+    private companion object {
+        const val MAX_FOLDER_IMPORT_DEPTH = 10
+    }
+
     val lastReadBook: StateFlow<Book?> = bookRepo.getLastReadBook()
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
 
@@ -303,28 +307,56 @@ class ShelfViewModel @Inject constructor(
         }
     }
 
-    private suspend fun importSubFolders(subFolders: List<DocumentFile>): Int {
+    private data class FolderChildren(
+        val directFiles: List<DocumentFile>,
+        val subFolders: List<DocumentFile>,
+    )
+
+    private suspend fun importSubFolders(subFolders: List<DocumentFile>, depth: Int = 0): Int {
+        if (depth > MAX_FOLDER_IMPORT_DEPTH) return 0
         var importedCount = 0
         for (folder in subFolders) {
-            val files = mutableListOf<DocumentFile>()
-            collectBookFiles(folder, files, maxDepth = 6)
-            if (files.isEmpty()) continue
+            val folderName = folder.name ?: "文件夹"
+            val children = scanDirectChildren(folder)
+
+            if (children.directFiles.isNotEmpty()) {
+                importedCount += importAsGroup(children.directFiles, folderName)
+                _folderImportState.value = _folderImportState.value.copy(importedCount = importedCount)
+            }
+
+            if (children.subFolders.isEmpty()) continue
+
             _folderImportState.value = _folderImportState.value.copy(
-                message = "正在导入：${folder.name ?: "文件夹"}（${files.size} 个文件）",
+                message = "正在扫描：$folderName（${children.subFolders.size} 个子文件夹）",
             )
-            val groupId = UUID.randomUUID().toString()
-            groupRepo.insert(BookGroup(id = groupId, name = folder.name ?: "文件夹"))
-            importedCount += importFilesWithDeferredCovers(files, groupId)
+            importedCount += importSubFolders(children.subFolders, depth + 1)
             _folderImportState.value = _folderImportState.value.copy(importedCount = importedCount)
         }
         return importedCount
     }
 
+    private fun scanDirectChildren(folder: DocumentFile): FolderChildren {
+        val children = folder.listFiles()
+        return FolderChildren(
+            directFiles = children.filter { !it.isDirectory && detectFormat(it.name ?: "") != BookFormat.UNKNOWN },
+            subFolders = children.filter { it.isDirectory },
+        )
+    }
+
     private suspend fun importAsGroup(files: List<DocumentFile>, groupName: String): Int {
-        _folderImportState.value = _folderImportState.value.copy(message = "正在导入：$groupName（${files.size} 个文件）")
+        val importableFiles = files.filter { file ->
+            val name = file.name ?: return@filter false
+            detectFormat(name) != BookFormat.UNKNOWN && bookRepo.findByLocalPath(file.uri.toString()) == null
+        }
+        if (importableFiles.isEmpty()) return 0
+
+        _folderImportState.value = _folderImportState.value.copy(message = "正在导入：$groupName（${importableFiles.size} 个文件）")
         val groupId = UUID.randomUUID().toString()
         groupRepo.insert(BookGroup(id = groupId, name = groupName))
-        val importedCount = importFilesWithDeferredCovers(files, groupId)
+        val importedCount = importFilesWithDeferredCovers(importableFiles, groupId)
+        if (importedCount == 0) {
+            groupRepo.deleteById(groupId)
+        }
         _folderImportState.value = _folderImportState.value.copy(importedCount = importedCount)
         return importedCount
     }
@@ -501,7 +533,7 @@ class ShelfViewModel @Inject constructor(
             "pdf" -> BookFormat.PDF
             "mobi" -> BookFormat.MOBI
             "azw3", "azw" -> BookFormat.AZW3
-            "cbz", "cbr" -> BookFormat.CBZ
+            "cbz", "zip", "cbr", "rar", "7z" -> BookFormat.CBZ
             "umd" -> BookFormat.UMD
             else -> BookFormat.UNKNOWN
         }

@@ -279,11 +279,11 @@ fun ThemeEditorScreen(
                 color = previewTextColor, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Card(
-                modifier = Modifier.fillMaxWidth().height(200.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp),
                 shape = MaterialTheme.shapes.medium,
                 colors = CardDefaults.cardColors(containerColor = previewBgColor),
             ) {
-                Column(Modifier.padding(20.dp)) {
+                Column(Modifier.fillMaxWidth().padding(20.dp)) {
                     Text("预览效果", style = MaterialTheme.typography.labelSmall,
                         color = previewAccentColor)
                     Spacer(Modifier.height(10.dp))
@@ -299,6 +299,7 @@ fun ThemeEditorScreen(
                         color = previewTextColor,
                         textAlign = previewTextAlign,
                         modifier = Modifier.fillMaxWidth(),
+                        softWrap = true,
                     )
                     if (previewParagraphSpacing > 0.dp) Spacer(Modifier.height(previewParagraphSpacing))
                 }

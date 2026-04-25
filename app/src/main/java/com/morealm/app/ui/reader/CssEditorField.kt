@@ -89,7 +89,7 @@ fun CssEditorSection(
         ) {
             CssPreset.entries.forEach { preset ->
                 FilterChip(
-                    selected = textFieldValue.text.contains(preset.property),
+                    selected = cssPropertyValue(textFieldValue.text, preset.property) == preset.value,
                     onClick = {
                         val current = textFieldValue.text.trim()
                         val newCss = if (current.isEmpty()) preset.css
@@ -261,15 +261,23 @@ fun CssEditorSection(
 
 // ── Preset CSS snippets ──
 
-private enum class CssPreset(val label: String, val property: String, val css: String) {
-    NO_INDENT("取消缩进", "text-indent", "text-indent: 0;"),
-    INDENT_2("首行缩进2字", "text-indent", "text-indent: 2em;"),
-    LINE_HEIGHT_TIGHT("行距紧凑", "line-height", "line-height: 1.5;"),
-    LINE_HEIGHT_LOOSE("行距宽松", "line-height", "line-height: 2.2;"),
-    ALIGN_LEFT("左对齐", "text-align", "text-align: left;"),
-    ALIGN_JUSTIFY("两端对齐", "text-align", "text-align: justify;"),
-    FONT_LARGE("大字体", "font-size", "font-size: 22sp;"),
-    PARA_SPACING("段间距大", "paragraph-spacing", "paragraph-spacing: 15;"),
+private enum class CssPreset(val label: String, val property: String, val value: String) {
+    NO_INDENT("取消缩进", "text-indent", "0"),
+    INDENT_2("首行缩进2字", "text-indent", "2em"),
+    LINE_HEIGHT_TIGHT("行距紧凑", "line-height", "1.5"),
+    LINE_HEIGHT_LOOSE("行距宽松", "line-height", "2.2"),
+    ALIGN_LEFT("左对齐", "text-align", "left"),
+    ALIGN_JUSTIFY("两端对齐", "text-align", "justify"),
+    FONT_LARGE("大字体", "font-size", "22sp"),
+    PARA_SPACING("段间距大", "paragraph-spacing", "15"),
+    ;
+
+    val css: String get() = "$property: $value;"
+}
+
+private fun cssPropertyValue(css: String, property: String): String? {
+    val regex = Regex("""${Regex.escape(property)}\s*:\s*([^;{}]+)""", RegexOption.IGNORE_CASE)
+    return regex.findAll(css).lastOrNull()?.groupValues?.getOrNull(1)?.trim()?.lowercase()
 }
 
 // ── Syntax highlighting ──

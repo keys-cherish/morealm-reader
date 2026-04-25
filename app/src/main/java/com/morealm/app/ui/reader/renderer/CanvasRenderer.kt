@@ -88,6 +88,7 @@ fun CanvasRenderer(
     onNextChapter: () -> Unit = {},
     onPrevChapter: () -> Unit = {},
     onScrollNearBottom: () -> Unit = {},
+    onScrollReachedBottom: () -> Unit = {},
     onCopyText: (String) -> Unit = {},
     onSpeakFromHere: (String) -> Unit = {},
     onTranslateText: (String) -> Unit = {},
@@ -296,7 +297,11 @@ fun CanvasRenderer(
     }
 
     val chapter = textChapter
-    val pages = chapter?.pages ?: emptyList()
+    var lastRenderablePages by remember { mutableStateOf<List<TextPage>>(emptyList()) }
+    if (!chapter?.pages.isNullOrEmpty()) {
+        lastRenderablePages = chapter?.pages ?: emptyList()
+    }
+    val pages = chapter?.pages?.takeIf { it.isNotEmpty() } ?: lastRenderablePages
     // pageCount is driven by async layout via mutableIntStateOf above
 
     // Track whether we've already restored the saved position for this content
@@ -335,7 +340,8 @@ fun CanvasRenderer(
     }
 
     // Report progress
-    LaunchedEffect(pagerState.currentPage, pageCount) {
+    LaunchedEffect(pagerState.currentPage, pageCount, chapter?.isCompleted, progressRestored) {
+        if (chapter?.isCompleted != true || !progressRestored) return@LaunchedEffect
         val pct = if (pageCount > 1) (pagerState.currentPage * 100) / (pageCount - 1) else 100
         onProgress(pct)
     }
@@ -477,8 +483,9 @@ fun CanvasRenderer(
                 bgBitmap = bgBitmap,
                 selectionStart = selectionState.startPos,
                 selectionEnd = selectionState.endPos,
-                onScrollProgress = { onProgress(it) },
+                onScrollProgress = { if (chapter?.isCompleted == true) onProgress(it) },
                 onNearBottom = onScrollNearBottom,
+                onReachedBottom = onScrollReachedBottom,
                 onTapCenter = onTapCenter,
                 resetKey = chapterIndex,
                 startFromLastPage = startFromLastPage,
@@ -522,7 +529,7 @@ fun CanvasRenderer(
 
         if (pages.isEmpty() && chapter?.isCompleted != true) {
             PageContentBox(
-                page = textChapter?.pages?.firstOrNull() ?: TextPage(title = chapterTitle),
+                page = TextPage(title = chapterTitle),
                 pageIndex = 0,
                 currentPage = 0,
                 titlePaint = titlePaint,

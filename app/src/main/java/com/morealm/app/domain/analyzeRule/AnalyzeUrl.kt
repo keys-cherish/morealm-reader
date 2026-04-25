@@ -134,7 +134,17 @@ class AnalyzeUrl(
             org.mozilla.javascript.Context.exit()
         }
         val scope = RhinoScriptEngine.getRuntimeScope(bindings)
-        return RhinoScriptEngine.eval(jsStr, scope, coroutineContext)
+        return RhinoScriptEngine.eval(normalizeJsSnippet(jsStr), scope, coroutineContext)
+    }
+
+    private fun normalizeJsSnippet(jsStr: String): String {
+        val script = jsStr.trim().removePrefix("javascript:").trim()
+        if (script.isEmpty()) return script
+        val looksLikeBlock = script.contains(';') || script.contains('\n') ||
+            script.contains("return ") || script.contains("function") || script.contains("=>") ||
+            script.startsWith("var ") || script.startsWith("let ") || script.startsWith("const ") ||
+            script.startsWith("if") || script.startsWith("for") || script.startsWith("while")
+        return if (looksLikeBlock) script else "($script)"
     }
 
     fun put(key: String, value: String): String {
