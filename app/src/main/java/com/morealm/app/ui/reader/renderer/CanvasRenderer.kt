@@ -74,6 +74,7 @@ fun CanvasRenderer(
     backgroundColor: Color,
     textColor: Color,
     accentColor: Color,
+    isNight: Boolean = false,
     fontSize: Float = 18f,
     lineHeight: Float = 1.8f,
     typeface: Typeface = Typeface.SERIF,
@@ -151,7 +152,8 @@ fun CanvasRenderer(
 
     // Create paints — apply letterSpacing and textBold from ReaderStyle
     val textArgb = textColor.toArgb()
-    val accentArgb = accentColor.toArgb()
+    val chapterTitleColor = if (isNight) 0xFFE0E0E0.toInt() else 0xFF1A1A1A.toInt()
+    val chapterAccentColor = if (isNight) 0xFFCFA875.toInt() else 0xFFBFA175.toInt()
     val styleLetterSpacing = readerStyle?.letterSpacing ?: 0f
     val styleTextBold = readerStyle?.textBold ?: 0
 
@@ -168,14 +170,25 @@ fun CanvasRenderer(
             letterSpacing = styleLetterSpacing
         }
     }
-    val titlePaint = remember(fontSizePx, typeface, accentArgb, styleLetterSpacing) {
+    val titlePaint = remember(fontSizePx, typeface, chapterTitleColor, styleLetterSpacing) {
         TextPaint().apply {
-            color = accentArgb
-            textSize = fontSizePx * 1.2f
+            color = chapterTitleColor
+            textSize = fontSizePx * 1.45f
+            isAntiAlias = true
+            isFakeBoldText = true
+            this.typeface = typeface
+            letterSpacing = styleLetterSpacing + 0.01f
+        }
+    }
+    // Chapter number paint: smaller, accent-colored, with letter-spacing
+    val chapterNumPaint = remember(fontSizePx, typeface, chapterAccentColor, styleLetterSpacing) {
+        TextPaint().apply {
+            color = chapterAccentColor
+            textSize = fontSizePx * 0.85f
             isAntiAlias = true
             isFakeBoldText = true
             this.typeface = Typeface.create(typeface, Typeface.BOLD)
-            letterSpacing = styleLetterSpacing
+            letterSpacing = styleLetterSpacing + 0.04f
         }
     }
     val textMeasure = remember(contentPaint) { TextMeasure(contentPaint) }
@@ -220,6 +233,7 @@ fun CanvasRenderer(
                 paragraphSpacing = cssOverrides.paragraphSpacing ?: style?.paragraphSpacing ?: 8,
                 titleTopSpacing = style?.titleTopSpacing ?: 0,
                 titleBottomSpacing = style?.titleBottomSpacing ?: 0,
+                chapterNumPaint = chapterNumPaint,
             ),
             contentPaint = effectiveContentPaint,
             titlePaint = effectiveTitlePaint,
@@ -364,6 +378,7 @@ fun CanvasRenderer(
                 pages = pages,
                 titlePaint = titlePaint,
                 contentPaint = contentPaint,
+                chapterNumPaint = chapterNumPaint,
                 bgColor = bgArgb,
                 bgBitmap = bgBitmap,
                 bgMeanColor = bgMeanColor,
@@ -479,6 +494,7 @@ fun CanvasRenderer(
                 pages = pages,
                 titlePaint = titlePaint,
                 contentPaint = contentPaint,
+                chapterNumPaint = chapterNumPaint,
                 bgColor = bgArgb,
                 bgBitmap = bgBitmap,
                 selectionStart = selectionState.startPos,
@@ -506,6 +522,7 @@ fun CanvasRenderer(
                     currentPage = pagerState.currentPage,
                     titlePaint = titlePaint,
                     contentPaint = contentPaint,
+                    chapterNumPaint = chapterNumPaint,
                     bgBitmap = bgBitmap,
                     backgroundColor = backgroundColor,
                     selectionState = selectionState,
@@ -534,6 +551,7 @@ fun CanvasRenderer(
                 currentPage = 0,
                 titlePaint = titlePaint,
                 contentPaint = contentPaint,
+                chapterNumPaint = chapterNumPaint,
                 bgBitmap = bgBitmap,
                 backgroundColor = backgroundColor,
                 selectionState = selectionState,
@@ -820,6 +838,7 @@ private fun PageContentBox(
     currentPage: Int,
     titlePaint: TextPaint,
     contentPaint: TextPaint,
+    chapterNumPaint: TextPaint? = null,
     bgBitmap: Bitmap?,
     backgroundColor: Color,
     selectionState: SelectionState,
@@ -843,6 +862,7 @@ private fun PageContentBox(
             page = page,
             titlePaint = titlePaint,
             contentPaint = contentPaint,
+            chapterNumPaint = chapterNumPaint,
             bgBitmap = bgBitmap,
             selectionStart = if (pageIndex == currentPage) selectionState.startPos else null,
             selectionEnd = if (pageIndex == currentPage) selectionState.endPos else null,

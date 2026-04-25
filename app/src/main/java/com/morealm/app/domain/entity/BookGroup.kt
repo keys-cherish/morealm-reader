@@ -13,5 +13,6 @@ data class BookGroup(
     val sortOrder: Int = 0,
     val pinned: Boolean = false,
     val emoji: String? = null,
+    val autoKeywords: String = "",
     val createdAt: Long = System.currentTimeMillis(),
 )

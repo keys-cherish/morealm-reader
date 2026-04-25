@@ -72,7 +72,12 @@ object BookInfo {
             }
         } catch (_: Exception) {}
         coroutineContext.ensureActive()
-        searchBook.tocUrl = analyzeRule.getString(infoRule.tocUrl, isUrl = true)
+        try {
+            searchBook.tocUrl = analyzeRule.getString(infoRule.tocUrl, isUrl = true)
+        } catch (_: Exception) {
+            coroutineContext.ensureActive()
+            searchBook.tocUrl = baseUrl
+        }
         if (searchBook.tocUrl.isEmpty()) searchBook.tocUrl = baseUrl
     }
 }

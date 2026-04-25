@@ -21,6 +21,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -46,8 +47,14 @@ fun CssEditorSection(
     containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.6f),
 ) {
     var expanded by remember { mutableStateOf(css.isNotEmpty()) }
-    var textFieldValue by remember(css) { mutableStateOf(TextFieldValue(css)) }
+    var textFieldValue by remember { mutableStateOf(TextFieldValue(css, selection = TextRange(css.length))) }
     val validationResult = remember(textFieldValue.text) { validateCss(textFieldValue.text) }
+
+    LaunchedEffect(css) {
+        if (css != textFieldValue.text) {
+            textFieldValue = TextFieldValue(css, selection = TextRange(css.length))
+        }
+    }
 
     Column(modifier = modifier) {
         // Header row
@@ -102,7 +109,7 @@ fun CssEditorSection(
                         } else {
                             "$current\n${preset.css}"
                         }
-                        textFieldValue = TextFieldValue(newCss)
+                        textFieldValue = TextFieldValue(newCss, selection = TextRange(newCss.length))
                         onCssChange(newCss)
                     },
                     label = { Text(preset.label, style = MaterialTheme.typography.labelSmall) },

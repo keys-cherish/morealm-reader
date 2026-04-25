@@ -56,6 +56,10 @@ class TextLine(
     var isReadAloud: Boolean = false,
     var isParagraphEnd: Boolean = false,
     var isLeftLine: Boolean = true,
+    /** True for the chapter-number line (e.g. "第一章"), drawn with chapterNumPaint. */
+    var isChapterNum: Boolean = false,
+    /** True for the last title line — triggers the decorative accent bar below it. */
+    var isTitleEnd: Boolean = false,
 ) {
     val columns = arrayListOf<BaseColumn>()
 

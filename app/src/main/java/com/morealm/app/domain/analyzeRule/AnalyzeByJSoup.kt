@@ -30,7 +30,10 @@ class AnalyzeByJSoup(doc: Any) {
         return Jsoup.parse(doc.toString())
     }
 
-    internal fun getElements(rule: String) = getElements(element, rule)
+    internal fun getElements(rule: String): Elements {
+        if (looksLikeJsonPath(rule)) return Elements()
+        return getElements(element, rule)
+    }
 
     internal fun getString(ruleStr: String): String? {
         if (ruleStr.isEmpty()) return null
@@ -83,6 +86,7 @@ class AnalyzeByJSoup(doc: Any) {
     }
     private fun getElements(temp: Element?, rule: String): Elements {
         if (temp == null || rule.isEmpty()) return Elements()
+        if (looksLikeJsonPath(rule)) return Elements()
         val elements = Elements()
         val sourceRule = SourceRule(rule)
         val ruleAnalyzes = RuleAnalyzer(sourceRule.elementsRule)
@@ -90,6 +94,7 @@ class AnalyzeByJSoup(doc: Any) {
         val elementsList = ArrayList<Elements>()
         if (sourceRule.isCss) {
             for (ruleStr in ruleStrS) {
+                if (looksLikeJsonPath(ruleStr)) continue
                 val tempS = temp.select(ruleStr)
                 elementsList.add(tempS)
                 if (tempS.size > 0 && ruleAnalyzes.elementsType == "||") break
@@ -127,6 +132,7 @@ class AnalyzeByJSoup(doc: Any) {
 
     private fun getResultList(ruleStr: String): ArrayList<String>? {
         if (ruleStr.isEmpty()) return null
+        if (looksLikeJsonPath(ruleStr)) return null
         var elements = Elements()
         elements.add(element)
         val rule = RuleAnalyzer(ruleStr)
@@ -292,5 +298,15 @@ class AnalyzeByJSoup(doc: Any) {
         var elementsRule: String = if (ruleStr.startsWith("@CSS:", true)) {
             isCss = true; ruleStr.substring(5).trim { it <= ' ' }
         } else ruleStr
+    }
+
+    private fun looksLikeJsonPath(rule: String): Boolean {
+        val trimmed = rule
+            .trimStart('\uFEFF', '\u200B', '\u200C', '\u200D')
+            .trim()
+            .removePrefix("@Json:")
+            .removePrefix("@json:")
+            .trim()
+        return trimmed.startsWith("$.") || trimmed.startsWith("$[")
     }
 }
