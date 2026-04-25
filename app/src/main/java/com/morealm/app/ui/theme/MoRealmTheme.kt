@@ -1,11 +1,11 @@
 package com.morealm.app.ui.theme
 
-import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateColor
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -49,6 +49,93 @@ private fun Color.hueShift(degrees: Float): Color {
 private fun contrastOn(bg: Color): Color =
     if (bg.luminance() > 0.4f) Color.Black else Color.White
 
+private data class ThemeColorTargets(
+    val primary: Color,
+    val secondary: Color,
+    val background: Color,
+    val surface: Color,
+    val onBackground: Color,
+    val accent: Color,
+    val readerBackground: Color,
+    val readerText: Color,
+    val onPrimary: Color,
+    val onSecondary: Color,
+    val tertiary: Color,
+    val onTertiary: Color,
+    val primaryContainer: Color,
+    val onPrimaryContainer: Color,
+    val secondaryContainer: Color,
+    val onSecondaryContainer: Color,
+    val tertiaryContainer: Color,
+    val onTertiaryContainer: Color,
+    val surfaceVariant: Color,
+    val onSurfaceVariant: Color,
+    val outline: Color,
+    val outlineVariant: Color,
+    val surfaceContainerLowest: Color,
+    val surfaceContainerLow: Color,
+    val surfaceContainer: Color,
+    val surfaceContainerHigh: Color,
+    val surfaceContainerHighest: Color,
+    val surfaceDim: Color,
+    val surfaceBright: Color,
+    val error: Color,
+    val onError: Color,
+    val errorContainer: Color,
+    val onErrorContainer: Color,
+    val inverseSurface: Color,
+    val inverseOnSurface: Color,
+    val inversePrimary: Color,
+)
+
+private fun ThemeEntity.toColorTargets(): ThemeColorTargets {
+    val isNight = isNightTheme
+    val primary = primaryColor.toComposeColor()
+    val secondary = accentColor.toComposeColor()
+    val background = backgroundColor.toComposeColor()
+    val surface = surfaceColor.toComposeColor()
+    val onBackground = onBackgroundColor.toComposeColor()
+    val tertiary = primary.hueShift(60f)
+    val error = if (isNight) Color(0xFFFF897D) else Color(0xFFBA1A1A)
+    return ThemeColorTargets(
+        primary = primary,
+        secondary = secondary,
+        background = background,
+        surface = surface,
+        onBackground = onBackground,
+        accent = secondary,
+        readerBackground = readerBackground.toComposeColor(),
+        readerText = readerTextColor.toComposeColor(),
+        onPrimary = contrastOn(primary),
+        onSecondary = contrastOn(secondary),
+        tertiary = tertiary,
+        onTertiary = contrastOn(tertiary),
+        primaryContainer = if (isNight) primary.mix(surface, 0.75f) else primary.mix(background, 0.85f),
+        onPrimaryContainer = if (isNight) primary.mix(onBackground, 0.4f) else primary.mix(Color.Black, 0.6f),
+        secondaryContainer = if (isNight) secondary.mix(surface, 0.80f) else secondary.mix(background, 0.88f),
+        onSecondaryContainer = if (isNight) secondary.mix(onBackground, 0.4f) else secondary.mix(Color.Black, 0.6f),
+        tertiaryContainer = if (isNight) tertiary.mix(surface, 0.80f) else tertiary.mix(background, 0.88f),
+        onTertiaryContainer = if (isNight) tertiary.mix(onBackground, 0.4f) else tertiary.mix(Color.Black, 0.6f),
+        surfaceVariant = if (isNight) surface.mix(onBackground, 0.08f) else surface.mix(onBackground, 0.06f),
+        onSurfaceVariant = if (isNight) onBackground.mix(surface, 0.30f) else onBackground.mix(background, 0.30f),
+        outline = if (isNight) onBackground.mix(surface, 0.55f) else onBackground.mix(background, 0.62f),
+        outlineVariant = if (isNight) onBackground.mix(surface, 0.80f) else onBackground.mix(background, 0.85f),
+        surfaceContainerLowest = if (isNight) surface.mix(Color.Black, 0.10f) else surface.mix(Color.White, 0.10f),
+        surfaceContainerLow = if (isNight) surface.mix(onBackground, 0.02f) else surface.mix(onBackground, 0.01f),
+        surfaceContainer = if (isNight) surface.mix(onBackground, 0.05f) else surface.mix(onBackground, 0.03f),
+        surfaceContainerHigh = if (isNight) surface.mix(onBackground, 0.08f) else surface.mix(onBackground, 0.05f),
+        surfaceContainerHighest = if (isNight) surface.mix(onBackground, 0.12f) else surface.mix(onBackground, 0.08f),
+        surfaceDim = if (isNight) surface.mix(Color.Black, 0.15f) else surface.mix(Color.Black, 0.06f),
+        surfaceBright = if (isNight) surface.mix(onBackground, 0.15f) else surface.mix(Color.White, 0.10f),
+        error = error,
+        onError = if (isNight) Color(0xFF690005) else Color.White,
+        errorContainer = if (isNight) error.mix(surface, 0.75f) else error.mix(background, 0.85f),
+        onErrorContainer = if (isNight) error.mix(onBackground, 0.4f) else error.mix(Color.Black, 0.6f),
+        inverseSurface = onBackground,
+        inverseOnSurface = background,
+        inversePrimary = if (isNight) primary.mix(Color.Black, 0.3f) else primary.mix(Color.White, 0.3f),
+    )
+}
 @Stable
 data class MoRealmColors(
     val accent: Color,
@@ -74,93 +161,48 @@ fun MoRealmTheme(
     content: @Composable () -> Unit,
 ) {
     val t = theme ?: BuiltinThemes.moRealm
-    val spec = tween<Color>(300)
+    val targets = remember(t) { t.toColorTargets() }
+    val spec = tween<Color>(durationMillis = 420, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f))
+    val transition = updateTransition(targetState = targets, label = "theme")
 
-    // Animate all colors for smooth transition
-    val primary by animateColorAsState(t.primaryColor.toComposeColor(), spec, label = "primary")
-    val secondary by animateColorAsState(t.accentColor.toComposeColor(), spec, label = "secondary")
-    val background by animateColorAsState(t.backgroundColor.toComposeColor(), spec, label = "bg")
-    val surface by animateColorAsState(t.surfaceColor.toComposeColor(), spec, label = "surface")
-    val onBg by animateColorAsState(t.onBackgroundColor.toComposeColor(), spec, label = "onBg")
-    val accent by animateColorAsState(t.accentColor.toComposeColor(), spec, label = "accent")
-    val readerBg by animateColorAsState(t.readerBackground.toComposeColor(), spec, label = "readerBg")
-    val readerText by animateColorAsState(t.readerTextColor.toComposeColor(), spec, label = "readerText")
-
-    // ── Derive full MD3 color roles — compute target values, then animate ALL of them ──
-
-    val isNight = t.isNightTheme
-    val targetPrimary = t.primaryColor.toComposeColor()
-    val targetSecondary = t.accentColor.toComposeColor()
-    val targetBackground = t.backgroundColor.toComposeColor()
-    val targetSurface = t.surfaceColor.toComposeColor()
-    val targetOnBg = t.onBackgroundColor.toComposeColor()
-
-    val targetOnPrimary = contrastOn(targetPrimary)
-    val targetOnSecondary = contrastOn(targetSecondary)
-    val targetTertiary = targetPrimary.hueShift(60f)
-    val targetOnTertiary = contrastOn(targetTertiary)
-
-    val targetPrimaryContainer = if (isNight) targetPrimary.mix(targetSurface, 0.75f) else targetPrimary.mix(targetBackground, 0.85f)
-    val targetOnPrimaryContainer = if (isNight) targetPrimary.mix(targetOnBg, 0.4f) else targetPrimary.mix(Color.Black, 0.6f)
-    val targetSecondaryContainer = if (isNight) targetSecondary.mix(targetSurface, 0.80f) else targetSecondary.mix(targetBackground, 0.88f)
-    val targetOnSecondaryContainer = if (isNight) targetSecondary.mix(targetOnBg, 0.4f) else targetSecondary.mix(Color.Black, 0.6f)
-    val targetTertiaryContainer = if (isNight) targetTertiary.mix(targetSurface, 0.80f) else targetTertiary.mix(targetBackground, 0.88f)
-    val targetOnTertiaryContainer = if (isNight) targetTertiary.mix(targetOnBg, 0.4f) else targetTertiary.mix(Color.Black, 0.6f)
-
-    val targetSurfaceVariant = if (isNight) targetSurface.mix(targetOnBg, 0.08f) else targetSurface.mix(targetOnBg, 0.06f)
-    val targetOnSurfaceVariant = if (isNight) targetOnBg.mix(targetSurface, 0.30f) else targetOnBg.mix(targetBackground, 0.30f)
-    val targetOutline = if (isNight) targetOnBg.mix(targetSurface, 0.55f) else targetOnBg.mix(targetBackground, 0.62f)
-    val targetOutlineVariant = if (isNight) targetOnBg.mix(targetSurface, 0.80f) else targetOnBg.mix(targetBackground, 0.85f)
-
-    val targetSurfaceContainerLowest = if (isNight) targetSurface.mix(Color.Black, 0.10f) else targetSurface.mix(Color.White, 0.10f)
-    val targetSurfaceContainerLow = if (isNight) targetSurface.mix(targetOnBg, 0.02f) else targetSurface.mix(targetOnBg, 0.01f)
-    val targetSurfaceContainer = if (isNight) targetSurface.mix(targetOnBg, 0.05f) else targetSurface.mix(targetOnBg, 0.03f)
-    val targetSurfaceContainerHigh = if (isNight) targetSurface.mix(targetOnBg, 0.08f) else targetSurface.mix(targetOnBg, 0.05f)
-    val targetSurfaceContainerHighest = if (isNight) targetSurface.mix(targetOnBg, 0.12f) else targetSurface.mix(targetOnBg, 0.08f)
-    val targetSurfaceDim = if (isNight) targetSurface.mix(Color.Black, 0.15f) else targetSurface.mix(Color.Black, 0.06f)
-    val targetSurfaceBright = if (isNight) targetSurface.mix(targetOnBg, 0.15f) else targetSurface.mix(Color.White, 0.10f)
-
-    val targetErrorColor = if (isNight) Color(0xFFFF897D) else Color(0xFFBA1A1A)
-    val targetOnError = if (isNight) Color(0xFF690005) else Color.White
-    val targetErrorContainer = if (isNight) targetErrorColor.mix(targetSurface, 0.75f) else targetErrorColor.mix(targetBackground, 0.85f)
-    val targetOnErrorContainer = if (isNight) targetErrorColor.mix(targetOnBg, 0.4f) else targetErrorColor.mix(Color.Black, 0.6f)
-
-    val targetInverseSurface = targetOnBg
-    val targetInverseOnSurface = targetBackground
-    val targetInversePrimary = if (isNight) targetPrimary.mix(Color.Black, 0.3f) else targetPrimary.mix(Color.White, 0.3f)
-
-    // ── Animate every single color role for a unified smooth transition ──
-
-    val onPrimary by animateColorAsState(targetOnPrimary, spec, label = "onPrimary")
-    val onSecondary by animateColorAsState(targetOnSecondary, spec, label = "onSecondary")
-    val tertiary by animateColorAsState(targetTertiary, spec, label = "tertiary")
-    val onTertiary by animateColorAsState(targetOnTertiary, spec, label = "onTertiary")
-    val primaryContainer by animateColorAsState(targetPrimaryContainer, spec, label = "primaryContainer")
-    val onPrimaryContainer by animateColorAsState(targetOnPrimaryContainer, spec, label = "onPrimaryContainer")
-    val secondaryContainer by animateColorAsState(targetSecondaryContainer, spec, label = "secondaryContainer")
-    val onSecondaryContainer by animateColorAsState(targetOnSecondaryContainer, spec, label = "onSecondaryContainer")
-    val tertiaryContainer by animateColorAsState(targetTertiaryContainer, spec, label = "tertiaryContainer")
-    val onTertiaryContainer by animateColorAsState(targetOnTertiaryContainer, spec, label = "onTertiaryContainer")
-    val surfaceVariant by animateColorAsState(targetSurfaceVariant, spec, label = "surfaceVariant")
-    val onSurfaceVariant by animateColorAsState(targetOnSurfaceVariant, spec, label = "onSurfaceVariant")
-    val outline by animateColorAsState(targetOutline, spec, label = "outline")
-    val outlineVariant by animateColorAsState(targetOutlineVariant, spec, label = "outlineVariant")
-    val surfaceContainerLowest by animateColorAsState(targetSurfaceContainerLowest, spec, label = "surfaceContainerLowest")
-    val surfaceContainerLow by animateColorAsState(targetSurfaceContainerLow, spec, label = "surfaceContainerLow")
-    val surfaceContainer by animateColorAsState(targetSurfaceContainer, spec, label = "surfaceContainer")
-    val surfaceContainerHigh by animateColorAsState(targetSurfaceContainerHigh, spec, label = "surfaceContainerHigh")
-    val surfaceContainerHighest by animateColorAsState(targetSurfaceContainerHighest, spec, label = "surfaceContainerHighest")
-    val surfaceDim by animateColorAsState(targetSurfaceDim, spec, label = "surfaceDim")
-    val surfaceBright by animateColorAsState(targetSurfaceBright, spec, label = "surfaceBright")
-    val errorColor by animateColorAsState(targetErrorColor, spec, label = "error")
-    val onError by animateColorAsState(targetOnError, spec, label = "onError")
-    val errorContainer by animateColorAsState(targetErrorContainer, spec, label = "errorContainer")
-    val onErrorContainer by animateColorAsState(targetOnErrorContainer, spec, label = "onErrorContainer")
-    val inverseSurface by animateColorAsState(targetInverseSurface, spec, label = "inverseSurface")
-    val inverseOnSurface by animateColorAsState(targetInverseOnSurface, spec, label = "inverseOnSurface")
-    val inversePrimary by animateColorAsState(targetInversePrimary, spec, label = "inversePrimary")
-
-    // Use a single ColorScheme constructor — no dark/light split needed since all values are explicit
+    // Use the HTML prototype easing: cubic-bezier(.16, 1, .3, 1).
+    val primary by transition.animateColor(transitionSpec = { spec }, label = "primary") { it.primary }
+    val secondary by transition.animateColor(transitionSpec = { spec }, label = "secondary") { it.secondary }
+    val background by transition.animateColor(transitionSpec = { spec }, label = "bg") { it.background }
+    val surface by transition.animateColor(transitionSpec = { spec }, label = "surface") { it.surface }
+    val onBg by transition.animateColor(transitionSpec = { spec }, label = "onBg") { it.onBackground }
+    val accent by transition.animateColor(transitionSpec = { spec }, label = "accent") { it.accent }
+    val readerBg by transition.animateColor(transitionSpec = { spec }, label = "readerBg") { it.readerBackground }
+    val readerText by transition.animateColor(transitionSpec = { spec }, label = "readerText") { it.readerText }
+    val onPrimary by transition.animateColor(transitionSpec = { spec }, label = "onPrimary") { it.onPrimary }
+    val onSecondary by transition.animateColor(transitionSpec = { spec }, label = "onSecondary") { it.onSecondary }
+    val tertiary by transition.animateColor(transitionSpec = { spec }, label = "tertiary") { it.tertiary }
+    val onTertiary by transition.animateColor(transitionSpec = { spec }, label = "onTertiary") { it.onTertiary }
+    val primaryContainer by transition.animateColor(transitionSpec = { spec }, label = "primaryContainer") { it.primaryContainer }
+    val onPrimaryContainer by transition.animateColor(transitionSpec = { spec }, label = "onPrimaryContainer") { it.onPrimaryContainer }
+    val secondaryContainer by transition.animateColor(transitionSpec = { spec }, label = "secondaryContainer") { it.secondaryContainer }
+    val onSecondaryContainer by transition.animateColor(transitionSpec = { spec }, label = "onSecondaryContainer") { it.onSecondaryContainer }
+    val tertiaryContainer by transition.animateColor(transitionSpec = { spec }, label = "tertiaryContainer") { it.tertiaryContainer }
+    val onTertiaryContainer by transition.animateColor(transitionSpec = { spec }, label = "onTertiaryContainer") { it.onTertiaryContainer }
+    val surfaceVariant by transition.animateColor(transitionSpec = { spec }, label = "surfaceVariant") { it.surfaceVariant }
+    val onSurfaceVariant by transition.animateColor(transitionSpec = { spec }, label = "onSurfaceVariant") { it.onSurfaceVariant }
+    val outline by transition.animateColor(transitionSpec = { spec }, label = "outline") { it.outline }
+    val outlineVariant by transition.animateColor(transitionSpec = { spec }, label = "outlineVariant") { it.outlineVariant }
+    val surfaceContainerLowest by transition.animateColor(transitionSpec = { spec }, label = "surfaceContainerLowest") { it.surfaceContainerLowest }
+    val surfaceContainerLow by transition.animateColor(transitionSpec = { spec }, label = "surfaceContainerLow") { it.surfaceContainerLow }
+    val surfaceContainer by transition.animateColor(transitionSpec = { spec }, label = "surfaceContainer") { it.surfaceContainer }
+    val surfaceContainerHigh by transition.animateColor(transitionSpec = { spec }, label = "surfaceContainerHigh") { it.surfaceContainerHigh }
+    val surfaceContainerHighest by transition.animateColor(transitionSpec = { spec }, label = "surfaceContainerHighest") { it.surfaceContainerHighest }
+    val surfaceDim by transition.animateColor(transitionSpec = { spec }, label = "surfaceDim") { it.surfaceDim }
+    val surfaceBright by transition.animateColor(transitionSpec = { spec }, label = "surfaceBright") { it.surfaceBright }
+    val errorColor by transition.animateColor(transitionSpec = { spec }, label = "error") { it.error }
+    val onError by transition.animateColor(transitionSpec = { spec }, label = "onError") { it.onError }
+    val errorContainer by transition.animateColor(transitionSpec = { spec }, label = "errorContainer") { it.errorContainer }
+    val onErrorContainer by transition.animateColor(transitionSpec = { spec }, label = "onErrorContainer") { it.onErrorContainer }
+    val inverseSurface by transition.animateColor(transitionSpec = { spec }, label = "inverseSurface") { it.inverseSurface }
+    val inverseOnSurface by transition.animateColor(transitionSpec = { spec }, label = "inverseOnSurface") { it.inverseOnSurface }
+    val inversePrimary by transition.animateColor(transitionSpec = { spec }, label = "inversePrimary") { it.inversePrimary }
+    // Use a single ColorScheme constructor �?no dark/light split needed since all values are explicit
     val colorScheme = ColorScheme(
         primary = primary,
         onPrimary = onPrimary,

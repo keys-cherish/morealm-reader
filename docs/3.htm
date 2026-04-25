@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modern Reader Layout</title>
+    <style>
+        /* 1. 基础变量与重置 */
+        :root {
+            --bg-color: #f4f1ea;        /* 象牙白纸张色 */
+            --text-main: #2c3e50;      /* 深木炭灰 */
+            --accent-color: #a67c52;   /* 古典铜金 */
+            --secondary-text: #7f8c8d; /* 辅助灰色 */
+            --page-max-width: 700px;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #e0ddd5; /* 底色 */
+            font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", serif;
+            display: flex;
+            justify-content: center;
+        }
+
+        /* 2. 模拟阅读器容器 */
+        .reader-container {
+            background-color: var(--bg-color);
+            width: 100%;
+            max-width: var(--page-max-width);
+            min-height: 100vh;
+            padding: 40px 30px;
+            box-shadow: 0 0 50px rgba(0,0,0,0.05); /* 模拟纸张阴影 */
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        /* 3. 顶部装饰栏 */
+        .reader-header {
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+            margin-bottom: 60px;
+            padding-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            color: var(--secondary-text);
+            letter-spacing: 1px;
+        }
+
+        /* 4. 章节排版 */
+        .chapter-header {
+            text-align: center;
+            margin-bottom: 80px;
+        }
+
+        .chapter-title-cn {
+            font-size: 1.8rem;
+            color: var(--text-main);
+            font-weight: 600;
+            letter-spacing: 0.5rem;
+            margin: 0;
+        }
+
+        .chapter-title-en {
+            font-size: 0.9rem;
+            color: var(--accent-color);
+            text-transform: uppercase;
+            letter-spacing: 4px;
+            margin-top: 10px;
+            display: block;
+            font-family: 'Times New Roman', serif;
+        }
+
+        /* 装饰线条 */
+        .divider {
+            width: 40px;
+            height: 2px;
+            background-color: var(--accent-color);
+            margin: 30px auto;
+            opacity: 0.6;
+        }
+
+        /* 5. 正文内容排版 */
+        .content {
+            font-size: 1.15rem; /* 稍微加大字号提高阅读性 */
+            line-height: 2;    /* 增加行高 */
+            color: var(--text-main);
+            text-align: justify; /* 两端对齐 */
+        }
+
+        .content p {
+            margin-bottom: 1.5em; /* 段落间距 */
+            text-indent: 2em;    /* 首行缩进 */
+        }
+
+        /* 6. 底部注脚 */
+        .reader-footer {
+            margin-top: 100px;
+            text-align: center;
+            font-size: 0.8rem;
+            color: var(--secondary-text);
+        }
+
+        /* 针对手机屏幕的优化 */
+        @media (max-width: 480px) {
+            .reader-container {
+                padding: 30px 20px;
+            }
+            .chapter-title-cn {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="reader-container">
+        <div class="reader-header">
+            <span>OVERLORD - Volume 16</span>
+            <span>2%</span>
+        </div>
+
+        <div class="chapter-header">
+            <h1 class="chapter-title-cn">序章</h1>
+            <span class="chapter-title-en">Prologue</span>
+            <div class="divider"></div>
+        </div>
+
+        <article class="content">
+            <p>位于纳萨力克地下大坟墓第九阶层的、安兹自己的房间。这间在位置上最接近走廊的、被改造建成了办公室的房间里并没有其主人的身影。可明明是这样，屋内却静静回响着纸张的声音。</p>
+
+            <p>在那里的是身为纳萨力克地下大坟墓守护者总管的雅儿贝德。</p>
+
+            <p>在安兹平时所使用的办公桌旁，安放着一张比那要小一号但品质非常良好的桌子。这似乎是专门为了提高行政效率而临时增设的辅助工位。</p>
+        </article>
+
+        <div class="reader-footer">
+            - Page 1 -
+        </div>
+    </div>
+
+</body>
+</html>

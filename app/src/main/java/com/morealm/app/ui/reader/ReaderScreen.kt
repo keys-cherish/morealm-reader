@@ -31,7 +31,6 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.LocalContext
@@ -293,7 +292,7 @@ fun ReaderScreen(
     ) {
         // WebView reader content — handles all touch events internally via JS
         // Resolve reader colors: activeStyle overrides theme defaults
-        val isNight = moColors.readerBackground.luminance() < 0.5f
+        val isNight = moColors.isNight
         val readerBg = activeStyle?.let {
             (if (isNight) it.bgColorNight else it.bgColor).toComposeColor()
         } ?: moColors.readerBackground
@@ -336,6 +335,7 @@ fun ReaderScreen(
                 backgroundColor = readerBg,
                 textColor = readerFg,
                 accentColor = MaterialTheme.colorScheme.primary,
+                isNight = isNight,
                 fontSize = readerFontSize,
                 lineHeight = readerLineHeight,
                 paddingHorizontal = marginHorizontal,

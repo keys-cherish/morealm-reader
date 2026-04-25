@@ -437,9 +437,16 @@ fun ShelfScreen(
 
     // Folder delete/rename confirmation dialog
     showDeleteFolderConfirm?.let { folderId ->
+        val group = allGroups.firstOrNull { it.id == folderId }
         ManageFolderDialog(
             folderName = groupNames[folderId] ?: "文件夹",
+            autoKeywords = group?.autoKeywords.orEmpty(),
             onRename = { showRenameGroupDialog = folderId; showDeleteFolderConfirm = null },
+            onReclassify = {
+                viewModel.reclassifyUngroupedBooks()
+                Toast.makeText(context, "已按关键词重新归类未分组书籍", Toast.LENGTH_SHORT).show()
+                showDeleteFolderConfirm = null
+            },
             onDelete = {
                 viewModel.deleteFolder(folderId)
                 if (currentFolderId == folderId) currentFolderId = null
@@ -466,8 +473,8 @@ fun ShelfScreen(
     // Create group dialog
     if (showCreateGroupDialog) {
         CreateGroupDialog(
-            onConfirm = { name ->
-                viewModel.createGroup(name)
+            onConfirm = { name, keywords ->
+                viewModel.createGroup(name, keywords)
                 showCreateGroupDialog = false
             },
             onDismiss = { showCreateGroupDialog = false },
@@ -490,10 +497,12 @@ fun ShelfScreen(
 
     // Rename group dialog
     showRenameGroupDialog?.let { groupId ->
+        val group = allGroups.firstOrNull { it.id == groupId }
         RenameGroupDialog(
-            currentName = groupNames[groupId] ?: "",
-            onConfirm = { newName ->
-                viewModel.renameGroup(groupId, newName)
+            currentName = group?.name ?: groupNames[groupId] ?: "",
+            currentKeywords = group?.autoKeywords.orEmpty(),
+            onConfirm = { newName, keywords ->
+                viewModel.updateGroup(groupId, newName, keywords)
                 showRenameGroupDialog = null
             },
             onDismiss = { showRenameGroupDialog = null },
@@ -678,7 +687,9 @@ private fun ShelfSearchDialog(
 @Composable
 private fun ManageFolderDialog(
     folderName: String,
+    autoKeywords: String,
     onRename: () -> Unit,
+    onReclassify: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -698,6 +709,26 @@ private fun ManageFolderDialog(
                         tint = MaterialTheme.colorScheme.onSurface)
                     Spacer(Modifier.width(12.dp))
                     Text("重命名", style = MaterialTheme.typography.bodyLarge)
+                }
+                if (autoKeywords.isNotBlank()) {
+                    Text(
+                        "自动关键词：${autoKeywords.lines().joinToString(" / ")}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onReclassify() }
+                        .padding(vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Text("按关键词重新归类", style = MaterialTheme.typography.bodyLarge)
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(
@@ -745,28 +776,43 @@ private fun BatchDeleteDialog(
 
 @Composable
 private fun CreateGroupDialog(
-    onConfirm: (String) -> Unit,
+    onConfirm: (String, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var groupName by remember { mutableStateOf("") }
+    var keywords by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("新建分组") },
         text = {
-            OutlinedTextField(
-                value = groupName,
-                onValueChange = { groupName = it },
-                placeholder = { Text("分组名称") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary,
-                ),
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = groupName,
+                    onValueChange = { groupName = it },
+                    placeholder = { Text("分组名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
+                OutlinedTextField(
+                    value = keywords,
+                    onValueChange = { keywords = it },
+                    placeholder = { Text("自动归类关键词，如：修仙，玄幻，仙侠") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
+                Text("会匹配书名、作者、简介、分类/标签和路径；默认只归类未分组书籍。", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
         },
         confirmButton = {
             TextButton(
-                onClick = { if (groupName.isNotBlank()) onConfirm(groupName.trim()) },
+                onClick = { if (groupName.isNotBlank()) onConfirm(groupName.trim(), keywords.trim()) },
                 enabled = groupName.isNotBlank(),
             ) {
                 Text("创建", color = if (groupName.isNotBlank()) MaterialTheme.colorScheme.primary
@@ -832,27 +878,41 @@ private fun MoveToGroupDialog(
 @Composable
 private fun RenameGroupDialog(
     currentName: String,
-    onConfirm: (String) -> Unit,
+    currentKeywords: String,
+    onConfirm: (String, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var newName by remember { mutableStateOf(currentName) }
+    var keywords by remember { mutableStateOf(currentKeywords) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("重命名分组") },
         text = {
-            OutlinedTextField(
-                value = newName,
-                onValueChange = { newName = it },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary,
-                ),
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
+                OutlinedTextField(
+                    value = keywords,
+                    onValueChange = { keywords = it },
+                    placeholder = { Text("自动归类关键词") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
+            }
         },
         confirmButton = {
             TextButton(
-                onClick = { if (newName.isNotBlank()) onConfirm(newName.trim()) },
+                onClick = { if (newName.isNotBlank()) onConfirm(newName.trim(), keywords.trim()) },
                 enabled = newName.isNotBlank(),
             ) { Text("保存", color = MaterialTheme.colorScheme.primary) }
         },

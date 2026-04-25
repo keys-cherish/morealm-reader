@@ -276,7 +276,9 @@ class AnalyzeRule(
                             Mode.Js -> evalJS(rule, result)
                             Mode.Json -> getAnalyzeByJSonPath(result).getString(rule)
                             Mode.XPath -> getAnalyzeByXPath(result).getString(rule)
-                            Mode.Default -> if (isUrl) {
+                            Mode.Default -> if (isJsonPathRule(rule)) {
+                                getAnalyzeByJSonPath(result).getString(rule)
+                            } else if (isUrl) {
                                 getAnalyzeByJSoup(result).getString0(rule)
                             } else {
                                 getAnalyzeByJSoup(result).getString(rule)
@@ -320,7 +322,11 @@ class AnalyzeRule(
                     Mode.Js -> evalJS(rule, result)
                     Mode.Json -> getAnalyzeByJSonPath(result).getObject(rule)
                     Mode.XPath -> getAnalyzeByXPath(result).getElements(rule)
-                    else -> getAnalyzeByJSoup(result).getElements(rule)
+                    else -> if (isJsonPathRule(rule)) {
+                        getAnalyzeByJSonPath(result).getObject(rule)
+                    } else {
+                        getAnalyzeByJSoup(result).getElements(rule)
+                    }
                 }
                 if (sourceRule.replaceRegex.isNotEmpty()) {
                     result = replaceRegex(result.toString(), sourceRule)
@@ -341,6 +347,7 @@ class AnalyzeRule(
             result = content
             for (sourceRule in ruleList) {
                 putRule(sourceRule.putMap)
+                sourceRule.makeUpRule(result)
                 result ?: continue
                 val rule = sourceRule.rule
                 result = when (sourceRule.mode) {
@@ -348,7 +355,11 @@ class AnalyzeRule(
                     Mode.Js -> evalJS(rule, result)
                     Mode.Json -> getAnalyzeByJSonPath(result).getList(rule)
                     Mode.XPath -> getAnalyzeByXPath(result).getElements(rule)
-                    else -> getAnalyzeByJSoup(result).getElements(rule)
+                    else -> if (isJsonPathRule(rule)) {
+                        getAnalyzeByJSonPath(result).getList(rule)
+                    } else {
+                        getAnalyzeByJSoup(result).getElements(rule)
+                    }
                 }
             }
         }
@@ -360,6 +371,20 @@ class AnalyzeRule(
 
     private fun putRule(map: Map<String, String>) {
         for ((key, value) in map) put(key, getString(value))
+    }
+
+    private fun isJsonPathRule(rule: String): Boolean {
+        val trimmed = cleanJsonPathRule(rule)
+        return trimmed.startsWith("$.") || trimmed.startsWith("$[")
+    }
+
+    private fun cleanJsonPathRule(rule: String): String {
+        return rule
+            .trimStart('\uFEFF', '\u200B', '\u200C', '\u200D')
+            .trim()
+            .removePrefix("@Json:")
+            .removePrefix("@json:")
+            .trim()
     }
 
     fun put(key: String, value: String): String {
@@ -553,11 +578,12 @@ class AnalyzeRule(
         init {
             rule = when {
                 mode == Mode.Js || mode == Mode.Regex -> ruleStr
+                isJsonPathRule(ruleStr) -> { mode = Mode.Json; cleanJsonPathRule(ruleStr) }
                 ruleStr.startsWith("@CSS:", true) -> { mode = Mode.Default; ruleStr }
                 ruleStr.startsWith("@@") -> { mode = Mode.Default; ruleStr.substring(2) }
                 ruleStr.startsWith("@XPath:", true) -> { mode = Mode.XPath; ruleStr.substring(7) }
-                ruleStr.startsWith("@Json:", true) -> { mode = Mode.Json; ruleStr.substring(6) }
-                isJSON || ruleStr.startsWith("$.") || ruleStr.startsWith("$[") -> { mode = Mode.Json; ruleStr }
+                ruleStr.startsWith("@Json:", true) -> { mode = Mode.Json; cleanJsonPathRule(ruleStr.substring(6)) }
+                isJSON -> { mode = Mode.Json; cleanJsonPathRule(ruleStr) }
                 ruleStr.startsWith("/") -> { mode = Mode.XPath; ruleStr }
                 else -> ruleStr
             }

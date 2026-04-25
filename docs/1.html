@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    /* 强制移动端视口，禁止缩放，模拟原生 App 体验 */
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mobile Premium Reader</title>
+    <style>
+        :root {
+            --bg-color: #faf8f5;        /* 更清透的羊皮纸白 */
+            --text-main: #1a1a1a;       /* 极深灰，避免纯黑刺眼 */
+            --accent-gold: #bfa175;     /* 烫金色，提供高级感 */
+            --text-muted: #999999;      /* 弱化文本 */
+            --divider-color: rgba(191, 161, 117, 0.2);
+        }
+
+        * {
+            -webkit-tap-highlight-color: transparent; /* 消除移动端点击的高亮背景 */
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", serif;
+            color: var(--text-main);
+            /* 确保在手机上平滑滚动 */
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* 移动端主容器 */
+        .mobile-reader-app {
+            width: 100vw;
+            min-height: 100vh;
+            padding: 0 8vw 15vh 8vw; /* 极宽的侧边距，底部留足呼吸空间 */
+            box-sizing: border-box;
+        }
+
+        /* =========================================
+           亮点 1：卷名与封面页的高级感重构
+           ========================================= */
+        .volume-header {
+            /* 使用 vh 让标题在第一屏处于黄金分割偏上位置 */
+            margin-top: 18vh;
+            margin-bottom: 12vh;
+            text-align: center;
+        }
+
+        .series-name {
+            font-family: 'Times New Roman', Times, serif;
+            font-size: 0.8rem;
+            color: var(--accent-gold);
+            letter-spacing: 0.4em; /* 极宽字间距，营造史诗感 */
+            text-transform: uppercase;
+            margin-bottom: 1.5rem;
+            display: block;
+        }
+
+        .volume-title {
+            font-size: 1.8rem;
+            color: var(--text-main);
+            font-weight: 400; /* 摒弃傻大黑粗，使用较轻字重 */
+            letter-spacing: 0.1em;
+            margin: 0;
+            line-height: 1.4;
+            position: relative;
+            display: inline-block;
+        }
+
+        /* 标题底部的渐变烫金线 */
+        .volume-title::after {
+            content: '';
+            display: block;
+            width: 60%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--accent-gold), transparent);
+            margin: 1.5rem auto 0;
+        }
+
+        .volume-subtitle {
+            margin-top: 1rem;
+            font-size: 1rem;
+            color: var(--text-muted);
+            letter-spacing: 2px;
+        }
+
+        /* =========================================
+           亮点 2：高呼吸感目录 (TOC)
+           ========================================= */
+        .toc-section {
+            margin-top: 5vh;
+        }
+
+        .toc-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem; /* 列表项之间的基础呼吸感 */
+        }
+
+        .toc-item {
+            display: flex;
+            flex-direction: column;
+            padding: 1.8rem 0 1.8rem 1rem; /* 上下大留白，左侧留出引水线空间 */
+            position: relative;
+            text-decoration: none;
+            border-bottom: 1px solid rgba(0,0,0,0.03);
+        }
+
+        /* 左侧细腻的引水线指示器 */
+        .toc-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 3px;
+            height: 0;
+            background-color: var(--accent-gold);
+            transition: height 0.3s ease;
+            border-radius: 2px;
+        }
+
+        /* 移动端长按或点击时的反馈 */
+        .toc-item:active::before {
+            height: 60%;
+        }
+        .toc-item:active .toc-title {
+            color: var(--accent-gold);
+        }
+
+        .toc-num {
+            font-size: 0.75rem;
+            color: var(--accent-gold);
+            letter-spacing: 2px;
+            margin-bottom: 0.8rem;
+            font-family: 'Times New Roman', Times, serif;
+            opacity: 0.8;
+        }
+
+        .toc-title {
+            font-size: 1.3rem;
+            color: var(--text-main);
+            font-weight: 500;
+            letter-spacing: 1px;
+            transition: color 0.2s ease;
+        }
+
+        /* 特殊章节（序章/过场）弱化处理 */
+        .toc-item.special .toc-title {
+            font-weight: 400;
+            color: var(--text-muted);
+        }
+        .toc-item.special .toc-num {
+            color: var(--text-muted);
+            opacity: 0.5;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="mobile-reader-app">
+
+        <header class="volume-header">
+            <span class="series-name">Overlord</span>
+            <h1 class="volume-title">第一卷 不死者之王</h1>
+        </header>
+
+        <nav class="toc-section">
+            <div class="toc-list">
+
+                <a href="#" class="toc-item special">
+                    <span class="toc-num">Prologue</span>
+                    <span class="toc-title">序章</span>
+                </a>
+
+                <a href="#" class="toc-item">
+                    <span class="toc-num">Chapter 01</span>
+                    <span class="toc-title">开始与结束</span>
+                </a>
+
+                <a href="#" class="toc-item">
+                    <span class="toc-num">Chapter 02</span>
+                    <span class="toc-title">楼层守护者</span>
+                </a>
+
+                <a href="#" class="toc-item special">
+                    <span class="toc-num">Intermission</span>
+                    <span class="toc-title">过场</span>
+                </a>
+
+                <a href="#" class="toc-item">
+                    <span class="toc-num">Chapter 03</span>
+                    <span class="toc-title">卡恩村之战</span>
+                </a>
+
+                <a href="#" class="toc-item">
+                    <span class="toc-num">Chapter 04</span>
+                    <span class="toc-title">冲突</span>
+                </a>
+
+                <a href="#" class="toc-item">
+                    <span class="toc-num">Chapter 05</span>
+                    <span class="toc-title">死之统治者</span>
+                </a>
+
+            </div>
+        </nav>
+
+    </div>
+
+</body>
+</html>

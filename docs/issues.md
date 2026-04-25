@@ -143,3 +143,192 @@
 - [x] 120fps 高刷新率
 - [x] 安全导航（防预测性返回崩溃）
 - [x] 数据库迁移（不再丢数据）
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+问题追加
+
+title=null, nextContentUrl=null, webJs=, sourceRegex=null, replaceRegex=null, imageStyle=0, imageDecode=null, payAction=null), ruleReview=null) 中找不到函数 getSource 。 (<Unknown Source>#1)
+	at org.mozilla.javascript.ScriptRuntime.constructError(ScriptRuntime.java:5235)
+	at org.mozilla.javascript.ScriptRuntime.constructError(ScriptRuntime.java:5216)
+	at org.mozilla.javascript.ScriptRuntime.typeError(ScriptRuntime.java:5248)
+	at org.mozilla.javascript.ScriptRuntime.typeErrorById(ScriptRuntime.java:5253)
+	at org.mozilla.javascript.ScriptRuntime.notFunctionError(ScriptRuntime.java:5367)
+	at org.mozilla.javascript.ScriptRuntime.getPropFunctionAndThisHelper(ScriptRuntime.java:2939)
+	at org.mozilla.javascript.ScriptRuntime.getPropFunctionAndThisInner(ScriptRuntime.java:2907)
+	at org.mozilla.javascript.ScriptRuntime.getPropFunctionAndThis(ScriptRuntime.java:2892)
+	at org.mozilla.javascript.Interpreter.interpretLoop(Interpreter.java:1872)
+	at org.mozilla.javascript.Interpreter.interpret(Interpreter.java:1158)
+	at org.mozilla.javascript.InterpretedFunction.call(InterpretedFunction.java:87)
+	at org.mozilla.javascript.ContextFactory.doTopCall(ContextFactory.java:383)
+	at com.script.rhino.RhinoScriptEngine$1.superDoTopCall(RhinoScriptEngine.kt:386)
+	at com.script.rhino.RhinoScriptEngine$1.doTopCall(RhinoScriptEngine.kt:363)
+	at org.mozilla.javascript.ScriptRuntime.doTopCall(ScriptRuntime.java:4449)
+	at org.mozilla.javascript.InterpretedFunction.exec(InterpretedFunction.java:100)
+	at com.script.rhino.RhinoCompiledScript.eval(RhinoCompiledScript.kt:68)
+	... 10 more
+
+[11:18:16.150] W/Search [SearchPool-4]: 🌸红袖招 failed: Failed to connect to hongxiub.com/23.224.228.84:443
+java.net.ConnectException: Failed to connect to hongxiub.com/23.224.228.84:443
+	at okhttp3.internal.connection.RealConnection.connectSocket(RealConnection.kt:297)
+	at okhttp3.internal.connection.RealConnection.connect(RealConnection.kt:207)
+	at okhttp3.internal.connection.ExchangeFinder.findConnection(ExchangeFinder.kt:226)
+	at okhttp3.internal.connection.ExchangeFinder.findHealthyConnection(ExchangeFinder.kt:106)
+	at okhttp3.internal.connection.ExchangeFinder.find(ExchangeFinder.kt:74)
+	at okhttp3.internal.connection.RealCall.initExchange$okhttp(RealCall.kt:255)
+	at okhttp3.internal.connection.ConnectInterceptor.intercept(ConnectInterceptor.kt:32)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.cache.CacheInterceptor.intercept(CacheInterceptor.kt:95)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.http.BridgeInterceptor.intercept(BridgeInterceptor.kt:83)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.http.RetryAndFollowUpInterceptor.intercept(RetryAndFollowUpInterceptor.kt:76)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at com.morealm.app.domain.http.OkHttpUtilsKt$okHttpClient_delegate$lambda$2$$inlined$-addInterceptor$1.intercept(OkHttpClient.kt:1092)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.connection.RealCall.getResponseWithInterceptorChain$okhttp(RealCall.kt:201)
+	at okhttp3.internal.connection.RealCall$AsyncCall.run(RealCall.kt:517)
+	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1167)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:641)
+	at java.lang.Thread.run(Thread.java:764)
+Caused by: java.net.ConnectException: failed to connect to hongxiub.com/23.224.228.84 (port 443) from /172.16.1.15 (port 47874) after 15000ms: isConnected failed: ECONNREFUSED (Connection refused)
+	at libcore.io.IoBridge.isConnected(IoBridge.java:278)
+	at libcore.io.IoBridge.connectErrno(IoBridge.java:187)
+	at libcore.io.IoBridge.connect(IoBridge.java:129)
+	at java.net.PlainSocketImpl.socketConnect(PlainSocketImpl.java:137)
+	at java.net.AbstractPlainSocketImpl.doConnect(AbstractPlainSocketImpl.java:390)
+	at java.net.AbstractPlainSocketImpl.connectToAddress(AbstractPlainSocketImpl.java:230)
+	at java.net.AbstractPlainSocketImpl.connect(AbstractPlainSocketImpl.java:212)
+	at java.net.SocksSocketImpl.connect(SocksSocketImpl.java:436)
+	at java.net.Socket.connect(Socket.java:621)
+	at okhttp3.internal.platform.AndroidPlatform.connectSocket(AndroidPlatform.kt:63)
+	at okhttp3.internal.connection.RealConnection.connectSocket(RealConnection.kt:295)
+	... 20 more
+Caused by: android.system.ErrnoException: isConnected failed: ECONNREFUSED (Connection refused)
+	at libcore.io.IoBridge.isConnected(IoBridge.java:267)
+	... 30 more
+
+[11:18:16.153] W/Search [SearchPool-4]: 📥搬书匠 failed: unexpected end of stream on http://www.banshujiang.cn/...
+java.io.IOException: unexpected end of stream on http://www.banshujiang.cn/...
+	at okhttp3.internal.http1.Http1ExchangeCodec.readResponseHeaders(Http1ExchangeCodec.kt:210)
+	at okhttp3.internal.connection.Exchange.readResponseHeaders(Exchange.kt:110)
+	at okhttp3.internal.http.CallServerInterceptor.intercept(CallServerInterceptor.kt:93)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.connection.ConnectInterceptor.intercept(ConnectInterceptor.kt:34)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.cache.CacheInterceptor.intercept(CacheInterceptor.kt:95)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.http.BridgeInterceptor.intercept(BridgeInterceptor.kt:83)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.http.RetryAndFollowUpInterceptor.intercept(RetryAndFollowUpInterceptor.kt:76)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at com.morealm.app.domain.http.OkHttpUtilsKt$okHttpClient_delegate$lambda$2$$inlined$-addInterceptor$1.intercept(OkHttpClient.kt:1092)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.connection.RealCall.getResponseWithInterceptorChain$okhttp(RealCall.kt:201)
+	at okhttp3.internal.connection.RealCall$AsyncCall.run(RealCall.kt:517)
+	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1167)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:641)
+	at java.lang.Thread.run(Thread.java:764)
+Caused by: java.io.EOFException: \n not found: limit=0 content=…
+	at okio.RealBufferedSource.readUtf8LineStrict(RealBufferedSource.kt:339)
+	at okhttp3.internal.http1.HeadersReader.readLine(HeadersReader.kt:29)
+	at okhttp3.internal.http1.Http1ExchangeCodec.readResponseHeaders(Http1ExchangeCodec.kt:180)
+	... 18 more
+
+[11:18:16.154] W/Search [SearchPool-4]: 🎈1gtxt failed: Unable to resolve host "www.haitangzhu.com": No address associated with hostname
+java.net.UnknownHostException: Unable to resolve host "www.haitangzhu.com": No address associated with hostname
+	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:157)
+	at java.net.Inet6AddressImpl.lookupAllHostAddr(Inet6AddressImpl.java:105)
+	at java.net.InetAddress.getAllByName(InetAddress.java:1154)
+	at okhttp3.Dns$Companion$DnsSystem.lookup(Dns.kt:49)
+	at okhttp3.internal.connection.RouteSelector.resetNextInetSocketAddress(RouteSelector.kt:169)
+	at okhttp3.internal.connection.RouteSelector.nextProxy(RouteSelector.kt:131)
+	at okhttp3.internal.connection.RouteSelector.next(RouteSelector.kt:73)
+	at okhttp3.internal.connection.ExchangeFinder.findConnection(ExchangeFinder.kt:205)
+	at okhttp3.internal.connection.ExchangeFinder.findHealthyConnection(ExchangeFinder.kt:106)
+	at okhttp3.internal.connection.ExchangeFinder.find(ExchangeFinder.kt:74)
+	at okhttp3.internal.connection.RealCall.initExchange$okhttp(RealCall.kt:255)
+	at okhttp3.internal.connection.ConnectInterceptor.intercept(ConnectInterceptor.kt:32)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.cache.CacheInterceptor.intercept(CacheInterceptor.kt:95)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.http.BridgeInterceptor.intercept(BridgeInterceptor.kt:83)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.http.RetryAndFollowUpInterceptor.intercept(RetryAndFollowUpInterceptor.kt:76)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at com.morealm.app.domain.http.OkHttpUtilsKt$okHttpClient_delegate$lambda$2$$inlined$-addInterceptor$1.intercept(OkHttpClient.kt:1092)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.connection.RealCall.getResponseWithInterceptorChain$okhttp(RealCall.kt:201)
+	at okhttp3.internal.connection.RealCall$AsyncCall.run(RealCall.kt:517)
+	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1167)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:641)
+	at java.lang.Thread.run(Thread.java:764)
+Caused by: android.system.GaiException: android_getaddrinfo failed: EAI_NODATA (No address associated with hostname)
+	at libcore.io.Linux.android_getaddrinfo(Native Method)
+	at libcore.io.BlockGuardOs.android_getaddrinfo(BlockGuardOs.java:172)
+	at java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:137)
+	... 25 more
+
+[11:18:18.706] W/Search [SearchPool-4]: 🌸笔趣阁② failed: Failed to connect to m.ibiquge.net/156.251.255.148:443
+java.net.ConnectException: Failed to connect to m.ibiquge.net/156.251.255.148:443
+	at okhttp3.internal.connection.RealConnection.connectSocket(RealConnection.kt:297)
+	at okhttp3.internal.connection.RealConnection.connect(RealConnection.kt:207)
+	at okhttp3.internal.connection.ExchangeFinder.findConnection(ExchangeFinder.kt:226)
+	at okhttp3.internal.connection.ExchangeFinder.findHealthyConnection(ExchangeFinder.kt:106)
+	at okhttp3.internal.connection.ExchangeFinder.find(ExchangeFinder.kt:74)
+	at okhttp3.internal.connection.RealCall.initExchange$okhttp(RealCall.kt:255)
+	at okhttp3.internal.connection.ConnectInterceptor.intercept(ConnectInterceptor.kt:32)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.cache.CacheInterceptor.intercept(CacheInterceptor.kt:95)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.http.BridgeInterceptor.intercept(BridgeInterceptor.kt:83)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.http.RetryAndFollowUpInterceptor.intercept(RetryAndFollowUpInterceptor.kt:76)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at com.morealm.app.domain.http.OkHttpUtilsKt$okHttpClient_delegate$lambda$2$$inlined$-addInterceptor$1.intercept(OkHttpClient.kt:1092)
+	at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+	at okhttp3.internal.connection.RealCall.getResponseWithInterceptorChain$okhttp(RealCall.kt:201)
+	at okhttp3.internal.connection.RealCall$AsyncCall.run(RealCall.kt:517)
+	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1167)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:641)
+	at java.lang.Thread.run(Thread.java:764)
+Caused by: java.net.ConnectException: failed to connect to m.ibiquge.net/156.251.255.148 (port 443) from /172.16.1.15 (port 34048) after 15000ms: isConnected failed: ECONNREFUSED (Connection refused)
+	at libcore.io.IoBridge.isConnected(IoBridge.java:278)
+	at libcore.io.IoBridge.connectErrno(IoBridge.java:187)
+	at libcore.io.IoBridge.connect(IoBridge.java:129)
+	at java.net.PlainSocketImpl.socketConnect(PlainSocketImpl.java:137)
+	at java.net.AbstractPlainSocketImpl.doConnect(AbstractPlainSocketImpl.java:390)
+	at java.net.AbstractPlainSocketImpl.connectToAddress(AbstractPlainSocketImpl.java:230)
+	at java.net.AbstractPlainSocketImpl.connect(AbstractPlainSocketImpl.java:212)
+	at java.net.SocksSocketImpl.connect(SocksSocketImpl.java:436)
+	at java.net.Socket.connect(Socket.java:621)
+	at okhttp3.internal.platform.AndroidPlatform.connectSocket(AndroidPlatform.kt:63)
+	at okhttp3.internal.connection.RealConnection.connectSocket(RealConnection.kt:295)
+	... 20 more
+Caused by: android.system.ErrnoException: isConnected failed: ECONNREFUSED (Connection refused)
+	at libcore.io.IoBridge.isConnected(IoBridge.java:267)
+	... 30 more
