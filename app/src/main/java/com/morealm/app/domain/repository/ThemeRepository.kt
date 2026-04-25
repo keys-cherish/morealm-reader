@@ -60,8 +60,10 @@ class ThemeRepository @Inject constructor(
 
     suspend fun ensureBuiltinThemes() {
         val builtins = BuiltinThemes.all()
-        // IGNORE strategy — only inserts if theme doesn't exist yet, preserves user's active state
-        themeDao.insertAll(builtins)
+        val activeId = themeDao.getAllSync().firstOrNull { it.isActive }?.id
+        themeDao.upsertAll(builtins.map { theme ->
+            theme.copy(isActive = theme.id == activeId)
+        })
         // Only set default active if no theme is currently active (fresh install)
         if (themeDao.countActiveThemes() == 0) {
             themeDao.activate(builtins.first().id)
