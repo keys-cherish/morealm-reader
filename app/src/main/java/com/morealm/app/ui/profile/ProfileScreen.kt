@@ -1,9 +1,21 @@
 package com.morealm.app.ui.profile
 
+import android.content.ContentValues
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Shader
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import com.morealm.app.presentation.profile.ProfileViewModel
 import com.morealm.app.presentation.profile.AnnualReport
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,17 +39,24 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.presentation.theme.ThemeViewModel
 import com.morealm.app.domain.entity.BuiltinThemes
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.ui.theme.toComposeColor
+import kotlinx.coroutines.delay
+import java.io.File
+import java.io.FileOutputStream
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -444,112 +463,244 @@ private fun AnnualReportDialog(
     accentColor: Color,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
-        },
-        title = null,
-        text = {
+    val context = LocalContext.current
+    var highlightIndex by remember(report) { mutableStateOf(0) }
+    val highlights = remember(report) { report?.annualHighlights().orEmpty() }
+
+    LaunchedEffect(highlights.size) {
+        if (highlights.size <= 1) return@LaunchedEffect
+        while (true) {
+            delay(2200)
+            highlightIndex = (highlightIndex + 1) % highlights.size
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 8.dp,
+        ) {
             if (report == null) {
-                Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(modifier = Modifier.size(32.dp))
                 }
-            } else {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                return@Surface
+            }
+
+            Column(Modifier.padding(18.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("年度总结", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "关闭") }
+                }
+
+                AnnualReportCard(
+                    report = report,
+                    accentColor = accentColor,
+                    highlight = highlights.getOrNull(highlightIndex),
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    // Year label
-                    Text(
-                        "${report.year} 年度阅读报告",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = accentColor,
-                        letterSpacing = 2.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    // Big number
-                    Text(
-                        "${report.totalBooks} 本",
-                        fontSize = 36.sp,
-                        fontWeight = FontWeight.Black,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
-                    )
-                    // Summary line
-                    val wordText = if (report.totalWordsWan > 0) "共 ${report.totalWordsWan} 万字" else ""
-                    val hourText = if (report.totalDurationHours > 0) "${report.totalDurationHours} 小时" else ""
-                    val summary = listOf(wordText, hourText).filter { it.isNotBlank() }.joinToString(" · ")
-                    if (summary.isNotBlank()) {
-                        Text(summary, style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                )
+
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
+                        Text("稍后再看")
                     }
-
-                    Spacer(Modifier.height(16.dp))
-
-                    // Habit row
-                    Surface(
-                        shape = MaterialTheme.shapes.medium,
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        modifier = Modifier.fillMaxWidth(),
+                    Button(
+                        onClick = {
+                            val ok = saveAnnualReportCard(context, report, accentColor)
+                            Toast.makeText(context, if (ok) "已保存到相册" else "保存失败", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f),
                     ) {
-                        Row(
-                            Modifier.padding(12.dp).fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceAround,
-                        ) {
-                            HabitItem("\uD83C\uDF19", "最常 ${report.peakHour}")
-                            HabitItem("⏱", "最长 ${report.longestSessionMin}m")
-                            if (report.favoriteBook.isNotBlank()) {
-                                HabitItem("\uD83C\uDFC6", report.favoriteBook.take(6))
-                            }
-                        }
+                        Icon(Icons.Default.Download, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("保存卡片")
                     }
-
-                    // Tags
-                    if (report.tags.isNotEmpty()) {
-                        Spacer(Modifier.height(14.dp))
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                        ) {
-                            report.tags.forEach { tag ->
-                                Surface(
-                                    shape = MaterialTheme.shapes.small,
-                                    color = accentColor.copy(alpha = 0.1f),
-                                    modifier = Modifier.padding(horizontal = 3.dp),
-                                ) {
-                                    Text(
-                                        tag,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = accentColor,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "墨境 MoRealm · 年度报告",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
-                        letterSpacing = 1.sp,
-                    )
                 }
             }
-        },
-    )
+        }
+    }
 }
 
 @Composable
-private fun HabitItem(emoji: String, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(emoji, fontSize = 16.sp)
-        Spacer(Modifier.height(2.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-            fontSize = 9.sp)
+private fun AnnualReportCard(
+    report: AnnualReport,
+    accentColor: Color,
+    highlight: Pair<String, String>?,
+    modifier: Modifier = Modifier,
+) {
+    val secondary = accentColor.copy(alpha = 0.72f)
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(28.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(accentColor.copy(alpha = 0.95f), secondary, Color(0xFF15131A))
+                )
+            )
+            .padding(22.dp)
+    ) {
+        Box(
+            Modifier.size(130.dp).offset(x = 210.dp, y = (-40).dp)
+                .clip(CircleShape).background(Color.White.copy(alpha = 0.12f))
+        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+            Text("MOREALM READING", color = Color.White.copy(alpha = 0.68f), fontSize = 11.sp, letterSpacing = 2.sp)
+            Spacer(Modifier.height(8.dp))
+            Text("${report.year} 年度阅读报告", color = Color.White, fontWeight = FontWeight.Black, fontSize = 24.sp)
+            Spacer(Modifier.height(18.dp))
+
+            Crossfade(targetState = highlight, label = "annual-highlight") { item ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.height(96.dp)) {
+                    Text(item?.second ?: "${report.totalBooks} 本", color = Color.White, fontWeight = FontWeight.Black, fontSize = 42.sp)
+                    Text(item?.first ?: "陪你走过的书", color = Color.White.copy(alpha = 0.72f), fontSize = 13.sp)
+                }
+            }
+
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AnnualMetric("阅读", "${report.totalDurationHours.coerceAtLeast(0)}h", Modifier.weight(1f))
+                AnnualMetric("文字", "${report.totalWordsWan.coerceAtLeast(0)}万", Modifier.weight(1f))
+                AnnualMetric("活跃", "${report.activeDays}天", Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(14.dp))
+
+            Surface(shape = RoundedCornerShape(18.dp), color = Color.White.copy(alpha = 0.14f), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("你最投入的一本书", color = Color.White.copy(alpha = 0.62f), fontSize = 12.sp)
+                    Text(report.favoriteBook.ifBlank { "还在等待被记录" }, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 2, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(8.dp))
+                    Text("最长单日 ${report.longestSessionMin} 分钟 · 常在 ${report.peakHour} 打开书页", color = Color.White.copy(alpha = 0.62f), fontSize = 11.sp, textAlign = TextAlign.Center)
+                }
+            }
+
+            if (report.tags.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+                    report.tags.take(3).forEach { tag ->
+                        Surface(shape = RoundedCornerShape(50), color = Color.White.copy(alpha = 0.16f), modifier = Modifier.padding(horizontal = 3.dp)) {
+                            Text("#$tag", color = Color.White, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp))
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
+            Text("墨境 MoRealm · 把阅读留在时间里", color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp)
+        }
     }
 }
+
+@Composable
+private fun AnnualMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(shape = RoundedCornerShape(16.dp), color = Color.White.copy(alpha = 0.14f), modifier = modifier) {
+        Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(value, color = Color.White, fontWeight = FontWeight.Black, fontSize = 18.sp)
+            Text(label, color = Color.White.copy(alpha = 0.62f), fontSize = 11.sp)
+        }
+    }
+}
+
+private fun AnnualReport.annualHighlights(): List<Pair<String, String>> = listOfNotNull(
+    "读完/收藏的书" to "$totalBooks 本",
+    if (totalDurationHours > 0) "沉浸阅读时长" to "$totalDurationHours 小时" else null,
+    if (totalWordsWan > 0) "翻过的文字" to "$totalWordsWan 万字" else null,
+    if (activeDays > 0) "有阅读记录的日子" to "$activeDays 天" else null,
+    if (longestSessionMin > 0) "最长一次陪伴" to "$longestSessionMin 分钟" else null,
+)
+
+private fun saveAnnualReportCard(context: Context, report: AnnualReport, accentColor: Color): Boolean {
+    val bitmap = drawAnnualReportBitmap(report, accentColor)
+    val fileName = "MoRealm_Annual_${report.year}_${System.currentTimeMillis()}.png"
+    return try {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return saveAnnualReportLegacy(bitmap, fileName)
+        }
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/MoRealm")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
+        val saved = resolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) } == true
+        values.clear()
+        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        if (!saved) {
+            resolver.delete(uri, null, null)
+        }
+        saved
+    } catch (_: Exception) {
+        false
+    } finally {
+        bitmap.recycle()
+    }
+}
+
+private fun saveAnnualReportLegacy(bitmap: Bitmap, fileName: String): Boolean {
+    return try {
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "MoRealm")
+        if (!dir.exists() && !dir.mkdirs()) return false
+        val file = File(dir, fileName)
+        FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun drawAnnualReportBitmap(report: AnnualReport, accentColor: Color): Bitmap {
+    val width = 1080
+    val height = 1680
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    val accent = accentColor.toArgbCompat()
+    canvas.drawColor(0xFF15131A.toInt())
+    paint.shader = LinearGradient(0f, 0f, 0f, height.toFloat(), accent, 0xFF15131A.toInt(), Shader.TileMode.CLAMP)
+    canvas.drawRoundRect(RectF(70f, 70f, width - 70f, height - 70f), 72f, 72f, paint)
+    paint.shader = null
+    paint.color = 0x22FFFFFF
+    canvas.drawCircle(900f, 170f, 170f, paint)
+    canvas.drawCircle(120f, 1350f, 220f, paint)
+
+    fun text(value: String, x: Float, y: Float, size: Float, color: Int, bold: Boolean = false, align: Paint.Align = Paint.Align.CENTER) {
+        paint.shader = null
+        paint.color = color
+        paint.textSize = size
+        paint.textAlign = align
+        paint.typeface = if (bold) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+        canvas.drawText(value, x, y, paint)
+    }
+
+    text("MOREALM READING", width / 2f, 190f, 34f, 0xAAFFFFFF.toInt(), false)
+    text("${report.year} 年度阅读报告", width / 2f, 280f, 66f, 0xFFFFFFFF.toInt(), true)
+    text("${report.totalBooks} 本", width / 2f, 500f, 128f, 0xFFFFFFFF.toInt(), true)
+    text("陪你走过的书", width / 2f, 570f, 38f, 0xBFFFFFFF.toInt())
+
+    val metrics = listOf("阅读 ${report.totalDurationHours}h", "文字 ${report.totalWordsWan}万", "活跃 ${report.activeDays}天")
+    metrics.forEachIndexed { i, item ->
+        val left = 150f + i * 270f
+        paint.color = 0x26FFFFFF
+        canvas.drawRoundRect(RectF(left, 680f, left + 230f, 820f), 36f, 36f, paint)
+        text(item, left + 115f, 765f, 34f, 0xFFFFFFFF.toInt(), true)
+    }
+
+    paint.color = 0x26FFFFFF
+    canvas.drawRoundRect(RectF(140f, 910f, 940f, 1210f), 48f, 48f, paint)
+    text("你最投入的一本书", width / 2f, 1000f, 34f, 0xAAFFFFFF.toInt())
+    text(report.favoriteBook.ifBlank { "还在等待被记录" }.take(18), width / 2f, 1090f, 52f, 0xFFFFFFFF.toInt(), true)
+    text("最长单日 ${report.longestSessionMin} 分钟 · 常在 ${report.peakHour} 打开书页", width / 2f, 1170f, 30f, 0xAAFFFFFF.toInt())
+    text("墨境 MoRealm · 把阅读留在时间里", width / 2f, 1510f, 34f, 0x99FFFFFF.toInt())
+    return bitmap
+}
+
+private fun Color.toArgbCompat(): Int = android.graphics.Color.argb(
+    (alpha * 255).toInt(),
+    (red * 255).toInt(),
+    (green * 255).toInt(),
+    (blue * 255).toInt(),
+)

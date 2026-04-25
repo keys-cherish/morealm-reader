@@ -55,6 +55,13 @@ data class PreloadedReaderChapter(
     val content: String,
 )
 
+data class RenderedReaderChapter(
+    val index: Int = 0,
+    val title: String = "",
+    val content: String = "",
+    val initialProgress: Int = 0,
+)
+
 @HiltViewModel
 class ReaderViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -181,6 +188,9 @@ class ReaderViewModel @Inject constructor(
     private val _chapterContent = MutableStateFlow("")
     val chapterContent: StateFlow<String> = _chapterContent.asStateFlow()
 
+    private val _renderedChapter = MutableStateFlow(RenderedReaderChapter())
+    val renderedChapter: StateFlow<RenderedReaderChapter> = _renderedChapter.asStateFlow()
+
     private val _nextPreloadedChapter = MutableStateFlow<PreloadedReaderChapter?>(null)
     val nextPreloadedChapter: StateFlow<PreloadedReaderChapter?> = _nextPreloadedChapter.asStateFlow()
 
@@ -190,6 +200,8 @@ class ReaderViewModel @Inject constructor(
     private val _loadedChapterRange = MutableStateFlow(IntRange.EMPTY)
     private var continuousContent = StringBuilder()
     private var isAppendingChapter = false
+    private var pendingAppendChapterIndex: Int? = null
+    private var suppressNextProgressSave = false
 
     private val _showControls = MutableStateFlow(false)
     val showControls: StateFlow<Boolean> = _showControls.asStateFlow()
@@ -334,8 +346,13 @@ class ReaderViewModel @Inject constructor(
 
     fun updateScrollProgress(pct: Int) {
         val old = _scrollProgress.value
-        _scrollProgress.value = pct.coerceIn(0, 100)
-        if (Math.abs(pct - old) >= 10) {
+        val next = pct.coerceIn(0, 100)
+        _scrollProgress.value = next
+        if (suppressNextProgressSave) {
+            suppressNextProgressSave = false
+            return
+        }
+        if (Math.abs(next - old) >= 5) {
             viewModelScope.launch(Dispatchers.IO) { saveProgress() }
         }
     }
@@ -371,7 +388,7 @@ class ReaderViewModel @Inject constructor(
                     val startIndex = (progress?.chapterIndex ?: book.lastReadChapter)
                         .coerceIn(0, (cachedChapters.size - 1).coerceAtLeast(0))
                     lastPreCacheCenter = startIndex
-                    val savedScrollProgress = progress?.scrollProgress ?: 0
+                    val savedScrollProgress = progress?.scrollProgress ?: estimateChapterProgress(book, startIndex, cachedChapters.size)
                     _scrollProgress.value = savedScrollProgress
                     loadChapter(startIndex, restoreProgress = savedScrollProgress)
 
@@ -458,7 +475,7 @@ class ReaderViewModel @Inject constructor(
                 .coerceIn(0, (chapters.size - 1).coerceAtLeast(0))
             lastPreCacheCenter = startIndex
 
-            val savedScrollProgress = progress?.scrollProgress ?: 0
+            val savedScrollProgress = progress?.scrollProgress ?: estimateChapterProgress(book, startIndex, chapters.size)
             _scrollProgress.value = savedScrollProgress
             loadChapter(startIndex, restoreProgress = savedScrollProgress)
 
@@ -484,12 +501,7 @@ class ReaderViewModel @Inject constructor(
         chapterLoadJob?.cancel()
         val loadToken = ++chapterLoadToken
         _loading.value = true
-        _currentChapterIndex.value = index
-        if (restoreProgress > 0) {
-            _scrollProgress.value = restoreProgress
-        } else {
-            _scrollProgress.value = 0
-        }
+        val targetProgress = restoreProgress.coerceIn(0, 100)
         tts.resetParagraphIndex()
         val chapter = chapterList[index]
         val book = _book.value ?: run {
@@ -537,15 +549,31 @@ class ReaderViewModel @Inject constructor(
                     continuousContent = StringBuilder()
                     continuousContent.append(buildChapterBlock(chapter.title, content, index))
                     _loadedChapterRange.value = index..index
-                    _chapterContent.value = continuousContent.toString()
+                    val renderedContent = continuousContent.toString()
+                    _chapterContent.value = renderedContent
+                    _renderedChapter.value = RenderedReaderChapter(
+                        index = index,
+                        title = chapter.title,
+                        content = renderedContent,
+                        initialProgress = targetProgress,
+                    )
                     appendNextChapterForScroll(index + 1)
                 } else {
                     _chapterContent.value = content
+                    _renderedChapter.value = RenderedReaderChapter(
+                        index = index,
+                        title = chapter.title,
+                        content = content,
+                        initialProgress = targetProgress,
+                    )
                 }
+                _currentChapterIndex.value = index
+                _scrollProgress.value = targetProgress
+                suppressNextProgressSave = targetProgress > 0
 
                 AppLog.debug("Reader", "Loaded chapter $index: ${chapter.title}")
                 _navigateDirection.value = 0
-                saveProgress()
+                if (targetProgress == 0) saveProgress()
                 preloadNextChapter(index + 1)
                 preloadPrevChapter(index - 1)
                 maybeRetriggerPreCache(index)
@@ -592,12 +620,19 @@ class ReaderViewModel @Inject constructor(
 
     private fun appendNextChapterForScroll(nextIndex: Int) {
         val chapterList = _chapters.value
-        if (nextIndex >= chapterList.size || isAppendingChapter) return
+        if (nextIndex >= chapterList.size) return
+        if (isAppendingChapter) {
+            pendingAppendChapterIndex = listOfNotNull(pendingAppendChapterIndex, nextIndex).minOrNull()
+            return
+        }
         val range = _loadedChapterRange.value
         if (nextIndex <= range.last) return
 
         isAppendingChapter = true
-        val book = _book.value ?: return
+        val book = _book.value ?: run {
+            isAppendingChapter = false
+            return
+        }
         val isWebBook = book.format == com.morealm.app.domain.entity.BookFormat.WEB
             || (book.localPath == null && book.sourceUrl != null)
 
@@ -616,12 +651,18 @@ class ReaderViewModel @Inject constructor(
                 val content = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode.value)
                 continuousContent.append(buildChapterBlock(chapter.title, content, nextIndex))
                 _loadedChapterRange.value = range.first..nextIndex
-                _chapterContent.value = continuousContent.toString()
+                val renderedContent = continuousContent.toString()
+                _chapterContent.value = renderedContent
+                _renderedChapter.value = _renderedChapter.value.copy(content = renderedContent)
                 AppLog.debug("Reader", "Appended chapter $nextIndex for continuous scroll")
             } catch (e: Exception) {
                 AppLog.error("Reader", "Failed to append chapter $nextIndex", e)
             } finally {
                 isAppendingChapter = false
+                pendingAppendChapterIndex?.let { pending ->
+                    pendingAppendChapterIndex = null
+                    appendNextChapterForScroll(pending)
+                }
             }
         }
     }
@@ -632,12 +673,29 @@ class ReaderViewModel @Inject constructor(
         val nextIdx = range.last + 1
         if (nextIdx < _chapters.value.size) {
             appendNextChapterForScroll(nextIdx)
-        } else {
+        }
+    }
+
+    fun onScrollReachedBottom() {
+        val range = _loadedChapterRange.value
+        if (range.isEmpty() || range.last < _chapters.value.lastIndex) return
+        val progress = _scrollProgress.value
+        if (progress < 98) return
+
+        val linked = _linkedBooks.value
+        if (linked.isNotEmpty()) {
+            _nextBookPrompt.value = linked.first()
+        }
+    }
+
+    fun openNextLinkedBook() {
+        _nextBookPrompt.value?.let { book ->
             val linked = _linkedBooks.value
             val callback = navigateToBookCallback
-            if (linked.isNotEmpty() && callback != null) {
-                AppLog.info("Reader", "Scroll auto-advancing to next linked book: ${linked.first().title}")
-                callback(linked.first().id)
+            if (linked.any { it.id == book.id } && callback != null) {
+                _nextBookPrompt.value = null
+                AppLog.info("Reader", "Opening linked book: ${book.title}")
+                callback(book.id)
             }
         }
     }
@@ -755,7 +813,7 @@ class ReaderViewModel @Inject constructor(
         val nextIdx = _currentChapterIndex.value + 1
         if (nextIdx < _chapters.value.size) {
             _navigateDirection.value = 1
-            loadChapter(nextIdx)
+            loadChapter(nextIdx, restoreProgress = 0)
         } else {
             val linked = _linkedBooks.value
             if (linked.isNotEmpty()) {
@@ -775,7 +833,7 @@ class ReaderViewModel @Inject constructor(
         val prevIdx = _currentChapterIndex.value - 1
         if (prevIdx >= 0) {
             _navigateDirection.value = -1
-            loadChapter(prevIdx)
+            loadChapter(prevIdx, restoreProgress = 0)
         }
     }
 
@@ -1099,5 +1157,12 @@ class ReaderViewModel @Inject constructor(
         } catch (e: Exception) {
             AppLog.error("Reader", "Failed to save progress", e)
         }
+    }
+
+    private fun estimateChapterProgress(book: Book, chapterIndex: Int, chapterCount: Int): Int {
+        if (chapterCount <= 0 || book.readProgress <= 0f) return 0
+        val chapterFloat = book.readProgress.coerceIn(0f, 1f) * chapterCount
+        val inChapter = chapterFloat - chapterIndex
+        return (inChapter * 100f).toInt().coerceIn(0, 100)
     }
 }

@@ -264,6 +264,8 @@ fun ShelfScreen(
                                     "text/plain", "application/epub+zip", "application/pdf",
                                     "application/x-mobipocket-ebook", "application/octet-stream",
                                     "application/x-cbz", "application/vnd.comicbook+zip",
+                                    "application/x-cbr", "application/vnd.comicbook-rar",
+                                    "application/zip", "application/x-rar-compressed", "application/x-7z-compressed",
                                 ))
                             },
                         )
@@ -350,7 +352,7 @@ fun ShelfScreen(
             }
         } else if (!hasContent) {
             EmptyShelf(
-                onImportFile = { filePickerLauncher.launch(arrayOf("text/plain", "application/epub+zip")) },
+                onImportFile = { filePickerLauncher.launch(arrayOf("text/plain", "application/epub+zip", "application/pdf", "application/octet-stream")) },
                 onImportFolder = { folderPickerLauncher.launch(downloadUri) },
                 modifier = Modifier.fillMaxSize(),
             )

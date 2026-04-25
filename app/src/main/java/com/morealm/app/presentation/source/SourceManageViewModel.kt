@@ -21,11 +21,20 @@ class BookSourceManageViewModel @Inject constructor(
     private val sourceRepo: SourceRepository,
 ) : ViewModel() {
 
+    data class ImportProgress(
+        val current: Int = 0,
+        val total: Int = 0,
+        val sourceName: String = "",
+    )
+
     val sources: StateFlow<List<BookSource>> = sourceRepo.getAllSources()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _isImporting = MutableStateFlow(false)
     val isImporting: StateFlow<Boolean> = _isImporting.asStateFlow()
+
+    private val _importProgress = MutableStateFlow(ImportProgress())
+    val importProgress: StateFlow<ImportProgress> = _importProgress.asStateFlow()
 
     private val _importResult = MutableStateFlow<String?>(null)
     val importResult: StateFlow<String?> = _importResult.asStateFlow()
@@ -58,7 +67,7 @@ class BookSourceManageViewModel @Inject constructor(
                     BookSourceImporter.importFromJson(json)
                 }
                 if (imported.isNotEmpty()) {
-                    sourceRepo.importAll(imported)
+                    importSourcesIncrementally(imported)
                     _importResult.value = "成功导入 ${imported.size} 个书源"
                     AppLog.info("SourceManage", "Imported ${imported.size} sources from JSON")
                 } else {
@@ -69,6 +78,7 @@ class BookSourceManageViewModel @Inject constructor(
                 AppLog.error("SourceManage", "Import failed", e)
             } finally {
                 _isImporting.value = false
+                _importProgress.value = ImportProgress()
             }
         }
     }
@@ -90,7 +100,7 @@ class BookSourceManageViewModel @Inject constructor(
                     BookSourceImporter.importFromJson(json)
                 }
                 if (imported.isNotEmpty()) {
-                    sourceRepo.importAll(imported)
+                    importSourcesIncrementally(imported)
                     _importResult.value = "成功导入 ${imported.size} 个书源"
                     AppLog.info("SourceManage", "Imported ${imported.size} sources")
                 } else {
@@ -101,6 +111,21 @@ class BookSourceManageViewModel @Inject constructor(
                 AppLog.error("SourceManage", "Import failed", e)
             } finally {
                 _isImporting.value = false
+                _importProgress.value = ImportProgress()
+            }
+        }
+    }
+
+    private suspend fun importSourcesIncrementally(sources: List<BookSource>) {
+        _importProgress.value = ImportProgress(total = sources.size)
+        withContext(Dispatchers.IO) {
+            sources.forEachIndexed { index, source ->
+                sourceRepo.insert(source)
+                _importProgress.value = ImportProgress(
+                    current = index + 1,
+                    total = sources.size,
+                    sourceName = source.bookSourceName.ifBlank { source.bookSourceUrl },
+                )
             }
         }
     }
