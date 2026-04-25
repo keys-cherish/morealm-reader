@@ -233,12 +233,12 @@ class AppPreferences @Inject constructor(
     suspend fun setTapAction(key: Preferences.Key<String>, action: String) = update(key, action)
 
     // Header/footer slots
-    val headerLeft: Flow<String> = context.dataStore.data.map { it[Keys.HEADER_LEFT] ?: "time" }
+    val headerLeft: Flow<String> = context.dataStore.data.map { it[Keys.HEADER_LEFT] ?: "chapter" }
     val headerCenter: Flow<String> = context.dataStore.data.map { it[Keys.HEADER_CENTER] ?: "none" }
-    val headerRight: Flow<String> = context.dataStore.data.map { it[Keys.HEADER_RIGHT] ?: "battery" }
-    val footerLeft: Flow<String> = context.dataStore.data.map { it[Keys.FOOTER_LEFT] ?: "chapter" }
+    val headerRight: Flow<String> = context.dataStore.data.map { it[Keys.HEADER_RIGHT] ?: "none" }
+    val footerLeft: Flow<String> = context.dataStore.data.map { it[Keys.FOOTER_LEFT] ?: "battery_time" }
     val footerCenter: Flow<String> = context.dataStore.data.map { it[Keys.FOOTER_CENTER] ?: "none" }
-    val footerRight: Flow<String> = context.dataStore.data.map { it[Keys.FOOTER_RIGHT] ?: "progress" }
+    val footerRight: Flow<String> = context.dataStore.data.map { it[Keys.FOOTER_RIGHT] ?: "page_progress" }
     suspend fun setHeaderFooter(key: Preferences.Key<String>, value: String) = update(key, value)
 
     val autoBackup: Flow<Boolean> = context.dataStore.data.map { it[Keys.AUTO_BACKUP] ?: false }

@@ -62,6 +62,12 @@ data class RenderedReaderChapter(
     val initialProgress: Int = 0,
 )
 
+data class VisibleReaderPage(
+    val chapterIndex: Int = 0,
+    val title: String = "",
+    val readProgress: String = "0.0%",
+)
+
 @HiltViewModel
 class ReaderViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -190,6 +196,9 @@ class ReaderViewModel @Inject constructor(
 
     private val _renderedChapter = MutableStateFlow(RenderedReaderChapter())
     val renderedChapter: StateFlow<RenderedReaderChapter> = _renderedChapter.asStateFlow()
+
+    private val _visiblePage = MutableStateFlow(VisibleReaderPage())
+    val visiblePage: StateFlow<VisibleReaderPage> = _visiblePage.asStateFlow()
 
     private val _nextPreloadedChapter = MutableStateFlow<PreloadedReaderChapter?>(null)
     val nextPreloadedChapter: StateFlow<PreloadedReaderChapter?> = _nextPreloadedChapter.asStateFlow()
@@ -700,11 +709,18 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    fun onVisibleChapterChanged(index: Int) {
-        if (index != _currentChapterIndex.value && index >= 0 && index < _chapters.value.size) {
+    fun onVisiblePageChanged(index: Int, title: String, readProgress: String) {
+        if (index !in _chapters.value.indices) return
+        _visiblePage.value = VisibleReaderPage(index, title, readProgress)
+        if (index != _currentChapterIndex.value) {
             _currentChapterIndex.value = index
             viewModelScope.launch(Dispatchers.IO) { saveProgress() }
         }
+    }
+
+    fun onVisibleChapterChanged(index: Int) {
+        val chapter = _chapters.value.getOrNull(index) ?: return
+        onVisiblePageChanged(index, chapter.title, _visiblePage.value.readProgress)
     }
 
     private suspend fun preloadNextChapter(nextIndex: Int) {
