@@ -139,10 +139,36 @@ object BookChapterList {
                 if (title.isNotEmpty()) {
                     val isVip = analyzeRule.getString(vipRule).let { it == "true" || it == "1" }
                     val isPay = analyzeRule.getString(payRule).let { it == "true" || it == "1" }
-                    chapterList.add(ChapterResult(title, url, isVolume, isVip, isPay, tag))
+                    chapterList.add(
+                        ChapterResult(
+                            title = title,
+                            url = getChapterAbsoluteUrl(redirectUrl, url, title, isVolume),
+                            isVolume = isVolume,
+                            isVip = isVip,
+                            isPay = isPay,
+                            tag = tag,
+                        )
+                    )
                 }
             }
         }
         return Pair(chapterList, nextUrlList)
+    }
+
+    private fun getChapterAbsoluteUrl(
+        baseUrl: String,
+        url: String,
+        title: String,
+        isVolume: Boolean,
+    ): String {
+        if (url.startsWith(title) && isVolume) return baseUrl
+        val urlMatcher = AnalyzeUrl.paramPattern.matcher(url)
+        val urlBefore = if (urlMatcher.find()) url.substring(0, urlMatcher.start()) else url
+        val absoluteUrlBefore = AnalyzeRule.getAbsoluteURL(baseUrl, urlBefore)
+        return if (urlBefore.length == url.length) {
+            absoluteUrlBefore
+        } else {
+            "$absoluteUrlBefore," + url.substring(urlMatcher.end())
+        }
     }
 }

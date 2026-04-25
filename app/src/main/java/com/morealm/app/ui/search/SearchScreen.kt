@@ -8,11 +8,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CloudDownload
@@ -163,7 +165,10 @@ fun SearchScreen(
         // Progress card (ring + source tags)
         if (sourceProgress.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
-            SearchProgressCard(sourceProgress)
+            SearchProgressCard(
+                progress = sourceProgress,
+                resultCount = results.size + localResults.size,
+            )
         }
 
         Spacer(Modifier.height(4.dp))
@@ -233,13 +238,21 @@ fun SearchScreen(
 /** Ring progress + source tag chips — matches HTML prototype se-prog */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SearchProgressCard(progress: List<SourceSearchProgress>) {
+private fun SearchProgressCard(
+    progress: List<SourceSearchProgress>,
+    resultCount: Int,
+) {
     val total = progress.size
     val done = remember(progress) {
         progress.count { it.status == SourceStatus.DONE || it.status == SourceStatus.FAILED }
     }
     val fraction = if (total > 0) done.toFloat() / total else 0f
     val isComplete = done >= total && total > 0
+    val failed = remember(progress) { progress.count { it.status == SourceStatus.FAILED } }
+    var expanded by remember { mutableStateOf(false) }
+    val previewCount = 12
+    val visibleProgress = if (expanded) progress else progress.take(previewCount)
+    val hiddenCount = (progress.size - visibleProgress.size).coerceAtLeast(0)
 
     Surface(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -248,38 +261,68 @@ private fun SearchProgressCard(progress: List<SourceSearchProgress>) {
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(Modifier.padding(12.dp)) {
-            // Top row: label + count
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    if (isComplete) "搜索完成" else "正在检索书源…",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (isComplete) "\u641c\u7d22\u5b8c\u6210" else "\u6b63\u5728\u68c0\u7d22\u4e66\u6e90\u2026",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                    Text(
+                        "\u627e\u5230 $resultCount \u6761 \u00b7 \u5931\u8d25 $failed \u4e2a",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.32f),
+                    )
+                }
                 Text(
                     "$done/$total",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary,
                 )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    if (expanded) "\u6536\u8d77" else "\u5c55\u5f00",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(MaterialTheme.shapes.extraSmall)
+                        .clickable { expanded = !expanded }
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                )
             }
 
-            // Ring progress centered
             Spacer(Modifier.height(8.dp))
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 RingProgress(fraction)
             }
 
-            // Source tags
             Spacer(Modifier.height(8.dp))
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp),
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (expanded) {
+                            Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())
+                        } else {
+                            Modifier
+                        }
+                    )
             ) {
-                progress.forEach { src ->
-                    SourceTag(src)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    visibleProgress.forEach { src ->
+                        SourceTag(src)
+                    }
+                    if (hiddenCount > 0) {
+                        MoreSourceTag(hiddenCount)
+                    }
                 }
             }
         }
@@ -346,6 +389,22 @@ private fun SourceTag(source: SourceSearchProgress) {
             modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
             style = MaterialTheme.typography.labelSmall,
             color = textColor,
+        )
+    }
+}
+
+@Composable
+private fun MoreSourceTag(count: Int) {
+    Surface(
+        shape = MaterialTheme.shapes.extraSmall,
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+    ) {
+        Text(
+            "+$count",
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }
