@@ -24,6 +24,7 @@ import com.morealm.app.domain.render.canvasrecorder.recordIfNeeded
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 /**
  * Continuous vertical scroll renderer — ported from Legado's ScrollPageDelegate + ContentTextView.
@@ -51,6 +52,7 @@ fun ScrollRenderer(
     searchResultColor: Color = DEFAULT_SEARCH_RESULT_COLOR,
     onScrollProgress: (Int) -> Unit = {},
     onNearBottom: () -> Unit = {},
+    onReachedBottom: () -> Unit = {},
     onTapCenter: () -> Unit = {},
     resetKey: Int = 0,
     startFromLastPage: Boolean = false,
@@ -63,8 +65,10 @@ fun ScrollRenderer(
 
     // Current page index (the page whose top edge is at or above the viewport top)
     var currentPageIndex by remember { mutableIntStateOf(0) }
+    var lastNearBottomRequestPageCount by remember { mutableIntStateOf(0) }
     var lastNearBottomPageCount by remember { mutableIntStateOf(0) }
     var pendingRestore by remember(resetKey) { mutableStateOf(true) }
+    var hasUserScrolled by remember(resetKey) { mutableStateOf(false) }
 
     // Pixel offset of the current page relative to viewport top.
     // 0 = page top aligned with viewport top
@@ -104,7 +108,7 @@ fun ScrollRenderer(
         }
     }
 
-    LaunchedEffect(resetKey, pageCount, layoutCompleted) {
+    LaunchedEffect(resetKey, layoutCompleted) {
         if (!pendingRestore || !layoutCompleted || pageCount <= 0) return@LaunchedEffect
         currentPageIndex = when {
             startFromLastPage -> pageCount - 1
@@ -112,18 +116,34 @@ fun ScrollRenderer(
             else -> 0
         }
         pageOffset = 0f
+        lastNearBottomRequestPageCount = 0
         lastNearBottomPageCount = 0
         pendingRestore = false
     }
 
-    // Report progress whenever current page changes
-    LaunchedEffect(currentPageIndex, pageCount, pendingRestore) {
-        if (pageCount > 0) {
+    LaunchedEffect(pageCount) {
+        if (pageCount <= 0) return@LaunchedEffect
+        if (currentPageIndex > pageCount - 1) {
+            currentPageIndex = pageCount - 1
+            pageOffset = 0f
+        }
+    }
+
+    // Report progress only after restore/layout is stable. Do not key this effect by
+    // pageCount: appending the next chapter changes the denominator and otherwise
+    // causes the progress indicator to jump briefly.
+    LaunchedEffect(currentPageIndex, pendingRestore, layoutCompleted) {
+        if (!pendingRestore && layoutCompleted && pageCount > 0) {
             val progress = if (pageCount > 1) (currentPageIndex * 100) / (pageCount - 1) else 100
             onScrollProgress(progress.coerceIn(0, 100))
         }
-        if (!pendingRestore && currentPageIndex >= pageCount - 2 && pageCount > lastNearBottomPageCount) {
-            lastNearBottomPageCount = pageCount
+    }
+
+    // Pre-append near the bottom. This remains keyed by pageCount so very short
+    // chapters such as cover/TOC can chain into following chapters naturally.
+    LaunchedEffect(currentPageIndex, pageCount, pendingRestore, layoutCompleted) {
+        if (!pendingRestore && currentPageIndex >= (pageCount - 2).coerceAtLeast(0) && pageCount > lastNearBottomRequestPageCount) {
+            lastNearBottomRequestPageCount = pageCount
             onNearBottom()
         }
     }
@@ -136,6 +156,9 @@ fun ScrollRenderer(
      */
     fun applyScroll(delta: Float) {
         if (pageCount == 0 || viewHeight <= 0) return
+        if (abs(delta) > 0.5f) {
+            hasUserScrolled = true
+        }
 
         pageOffset += delta
 
@@ -156,9 +179,9 @@ fun ScrollRenderer(
             val minOffset = (viewHeight - curPageHeight).toFloat().coerceAtMost(0f)
             if (pageOffset < minOffset) {
                 pageOffset = minOffset
-                if (pageCount > lastNearBottomPageCount) {
+                if (hasUserScrolled && pageCount > lastNearBottomPageCount) {
                     lastNearBottomPageCount = pageCount
-                    onNearBottom()
+                    onReachedBottom()
                 }
             }
             return

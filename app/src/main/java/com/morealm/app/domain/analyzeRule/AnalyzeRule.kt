@@ -132,9 +132,10 @@ class AnalyzeRule(
             }
         }
         // 使用编译缓存：相同 JS 源码只编译一次，后续直接执行已编译脚本
-        val compiled = scriptCache.getOrPut(jsStr) {
+        val script = normalizeJsSnippet(jsStr)
+        val compiled = scriptCache.getOrPut(script) {
             try {
-                RhinoScriptEngine.compile(jsStr)
+                RhinoScriptEngine.compile(script)
             } catch (_: Exception) {
                 null
             }
@@ -142,8 +143,18 @@ class AnalyzeRule(
         return if (compiled != null) {
             compiled.eval(scope, coroutineContext)
         } else {
-            RhinoScriptEngine.eval(jsStr, scope, coroutineContext)
+            RhinoScriptEngine.eval(script, scope, coroutineContext)
         }
+    }
+
+    private fun normalizeJsSnippet(jsStr: String): String {
+        val script = jsStr.trim().removePrefix("javascript:").trim()
+        if (script.isEmpty()) return script
+        val looksLikeBlock = script.contains(';') || script.contains('\n') ||
+            script.contains("return ") || script.contains("function") || script.contains("=>") ||
+            script.startsWith("var ") || script.startsWith("let ") || script.startsWith("const ") ||
+            script.startsWith("if") || script.startsWith("for") || script.startsWith("while")
+        return if (looksLikeBlock) script else "($script)"
     }
 
     // ── 获取文本列表 ──
@@ -482,18 +493,27 @@ class AnalyzeRule(
 
         fun getAbsoluteURL(baseUrl: URL?, relativePath: String): String {
             if (relativePath.isBlank()) return ""
-            if (relativePath.startsWith("http://") || relativePath.startsWith("https://")) return relativePath
-            if (relativePath.startsWith("//")) return "https:$relativePath"
+            normalizeAbsoluteUrl(relativePath)?.let { return it }
             val base = baseUrl ?: return relativePath
             return try { URL(base, relativePath).toString() } catch (_: Exception) { relativePath }
         }
 
         fun getAbsoluteURL(baseUrl: String?, relativePath: String): String {
             if (relativePath.isBlank()) return ""
-            if (relativePath.startsWith("http://") || relativePath.startsWith("https://")) return relativePath
-            if (relativePath.startsWith("//")) return "https:$relativePath"
+            normalizeAbsoluteUrl(relativePath)?.let { return it }
             if (baseUrl.isNullOrBlank()) return relativePath
             return try { URL(URL(baseUrl), relativePath).toString() } catch (_: Exception) { relativePath }
+        }
+
+        private fun normalizeAbsoluteUrl(url: String): String? {
+            val trimmed = url.trim()
+            return when {
+                trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true) -> trimmed
+                trimmed.startsWith("//") -> "https:$trimmed"
+                trimmed.startsWith("www.", true) -> "https://$trimmed"
+                trimmed.matches(Regex("^[A-Za-z0-9.-]+\\.[A-Za-z]{2,}(/.*)?$")) -> "https://$trimmed"
+                else -> null
+            }
         }
 
         fun AnalyzeRule.setCoroutineContext(context: CoroutineContext): AnalyzeRule {

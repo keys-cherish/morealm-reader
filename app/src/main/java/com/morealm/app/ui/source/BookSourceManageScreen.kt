@@ -42,6 +42,7 @@ fun BookSourceManageScreen(
     val clipboardManager = LocalClipboardManager.current
     val sources by viewModel.sources.collectAsStateWithLifecycle()
     val isImporting by viewModel.isImporting.collectAsStateWithLifecycle()
+    val importProgress by viewModel.importProgress.collectAsStateWithLifecycle()
     val importResult by viewModel.importResult.collectAsStateWithLifecycle()
     val isChecking by viewModel.isChecking.collectAsStateWithLifecycle()
     val checkProgress by viewModel.checkProgress.collectAsStateWithLifecycle()
@@ -159,9 +160,26 @@ fun BookSourceManageScreen(
             }
 
             if (isImporting) {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                    color = MaterialTheme.colorScheme.primary)
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    if (importProgress.total > 0) {
+                        Text(
+                            "导入中 ${importProgress.current}/${importProgress.total}" +
+                                if (importProgress.sourceName.isBlank()) "" else " · ${importProgress.sourceName}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
+                    LinearProgressIndicator(
+                        progress = {
+                            if (importProgress.total > 0) importProgress.current.toFloat() / importProgress.total else 0f
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
 
             // Check progress bar

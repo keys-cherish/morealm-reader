@@ -174,6 +174,7 @@ object WebBook {
         val requestUrl = AnalyzeRule.getAbsoluteURL(bookSource.bookSourceUrl, contentUrl)
         val analyzeUrl = AnalyzeUrl(
             mUrl = requestUrl,
+            baseUrl = requestUrl,
             source = bookSource,
             coroutineContext = coroutineContext
         )
