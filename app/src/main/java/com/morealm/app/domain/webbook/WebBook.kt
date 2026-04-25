@@ -171,8 +171,9 @@ object WebBook {
         nextChapterUrl: String? = null,
     ): String {
         if (bookSource.getContentRule().content.isNullOrEmpty()) return contentUrl
+        val requestUrl = AnalyzeRule.getAbsoluteURL(bookSource.bookSourceUrl, contentUrl)
         val analyzeUrl = AnalyzeUrl(
-            mUrl = contentUrl,
+            mUrl = requestUrl,
             source = bookSource,
             coroutineContext = coroutineContext
         )
@@ -186,7 +187,7 @@ object WebBook {
         checkRedirect(bookSource, res)
         return BookContent.analyzeContent(
             bookSource = bookSource,
-            baseUrl = contentUrl,
+            baseUrl = requestUrl,
             redirectUrl = res.url,
             body = res.body,
             nextChapterUrl = nextChapterUrl,

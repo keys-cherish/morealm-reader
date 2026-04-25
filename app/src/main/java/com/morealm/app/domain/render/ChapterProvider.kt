@@ -160,7 +160,7 @@ class ChapterProvider(
             it.startsWith("<") && (it.contains("<p") || it.contains("<div") || it.contains("<img"))
         }
         val paragraphs = if (isHtml) parseHtmlParagraphs(content) else {
-            content.lines().filter { it.isNotBlank() }
+            content.lines().mapNotNull { normalizeParagraph(it) }
         }
 
         val pageCountBefore = textPages.size
@@ -404,7 +404,7 @@ class ChapterProvider(
             val (words, widths) = measureTextSplit(lineText, widthsArray, lineStart)
             val desiredWidth = widths.sum()
             when {
-                lineIndex == 0 && layout.lineCount > 1 && !isTitle -> {
+                lineIndex == 0 && layout.lineCount > 1 && !isTitle && isFirstLine -> {
                     textLine.text = lineText
                     addCharsToLineFirst(
                         absStartX, textLine, words, desiredWidth, widths,
@@ -415,7 +415,7 @@ class ChapterProvider(
                     val startXOffset = if (
                         isTitle && (isMiddleTitle || emptyContent || isVolumeTitle)
                     ) {
-                        (visibleWidth - desiredWidth) / 2
+                        ((visibleWidth - desiredWidth) / 2).coerceAtLeast(0f)
                     } else 0f
                     addCharsToLineNatural(
                         absStartX, textLine, words, startXOffset,
@@ -424,7 +424,7 @@ class ChapterProvider(
                 }
                 else -> {
                     if (isTitle && (isMiddleTitle || emptyContent || isVolumeTitle)) {
-                        val startXOffset = (visibleWidth - desiredWidth) / 2
+                        val startXOffset = ((visibleWidth - desiredWidth) / 2).coerceAtLeast(0f)
                         addCharsToLineNatural(
                             absStartX, textLine, words, startXOffset, false, widths,
                         )
@@ -525,8 +525,16 @@ class ChapterProvider(
         }
         val residualWidth = visibleWidth - desiredWidth
         val spaceSize = words.count { it == " " }
+        if (words.size <= 1 || residualWidth <= 0f || desiredWidth < visibleWidth * 0.65f) {
+            addCharsToLineNatural(absStartX, textLine, words, startX, false, textWidths)
+            return
+        }
         textLine.startX = absStartX + startX
         if (spaceSize > 1) {
+            if (residualWidth > visibleWidth * 0.25f) {
+                addCharsToLineNatural(absStartX, textLine, words, startX, false, textWidths)
+                return
+            }
             val d = residualWidth / spaceSize
             textLine.wordSpacing = d
             var x = startX
@@ -544,8 +552,6 @@ class ChapterProvider(
         } else {
             val gapCount = words.lastIndex
             val d = if (gapCount > 0) residualWidth / gapCount else 0f
-            textLine.extraLetterSpacingOffsetX = -d / 2
-            textLine.extraLetterSpacing = d / textPaint.textSize
             var x = startX
             for (index in words.indices) {
                 val char = words[index]
@@ -658,7 +664,12 @@ class ChapterProvider(
             .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
             .replace("&nbsp;", " ").replace("&quot;", "\"")
         val cleaned = text.replace(nonImgTagRegex, "")
-        return cleaned.lines().map { it.trim() }.filter { it.isNotBlank() }
+        return cleaned.lines().mapNotNull { normalizeParagraph(it) }
+    }
+
+    private fun normalizeParagraph(paragraph: String): String? {
+        val trimmed = paragraph.trim { it.code <= 0x20 || it == '\u3000' }
+        return if (trimmed.isEmpty()) null else paragraphIndent + trimmed
     }
 }
 
