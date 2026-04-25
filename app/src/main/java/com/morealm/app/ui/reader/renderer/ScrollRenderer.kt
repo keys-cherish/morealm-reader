@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Continuous vertical scroll renderer — ported from Legado's ScrollPageDelegate + ContentTextView.
@@ -52,6 +53,7 @@ fun ScrollRenderer(
     aloudColor: Color = DEFAULT_ALOUD_COLOR,
     searchResultColor: Color = DEFAULT_SEARCH_RESULT_COLOR,
     onScrollProgress: (Int) -> Unit = {},
+    onScrollPageChanged: (Int) -> Unit = {},
     onNearBottom: () -> Unit = {},
     onReachedBottom: () -> Unit = {},
     onTapCenter: () -> Unit = {},
@@ -134,10 +136,28 @@ fun ScrollRenderer(
     // Report progress only after restore/layout is stable. Do not key this effect by
     // pageCount: appending the next chapter changes the denominator and otherwise
     // causes the progress indicator to jump briefly.
+    LaunchedEffect(currentPageIndex, pageOffset, pendingRestore, layoutCompleted) {
+        if (!pendingRestore && layoutCompleted && pageCount > 0) {
+            val curPageHeight = pages.getOrNull(currentPageIndex)?.let {
+                val h = it.height.toInt()
+                if (h > 0) h else viewHeight
+            } ?: viewHeight
+            val pageFraction = if (curPageHeight > 0) (-pageOffset / curPageHeight).coerceIn(0f, 1f) else 0f
+            val currentPage = pages.getOrNull(currentPageIndex)
+            val chapterPageSize = currentPage?.pageSize?.takeIf { it > 1 }
+            val chapterPageIndex = currentPage?.index ?: currentPageIndex
+            val progress = if (chapterPageSize != null) {
+                ((chapterPageIndex + pageFraction) * 100f / (chapterPageSize - 1)).roundToInt()
+            } else if (pageCount > 1) {
+                ((currentPageIndex + pageFraction) * 100f / (pageCount - 1)).roundToInt()
+            } else 100
+            onScrollProgress(progress.coerceIn(0, 100))
+        }
+    }
+
     LaunchedEffect(currentPageIndex, pendingRestore, layoutCompleted) {
         if (!pendingRestore && layoutCompleted && pageCount > 0) {
-            val progress = if (pageCount > 1) (currentPageIndex * 100) / (pageCount - 1) else 100
-            onScrollProgress(progress.coerceIn(0, 100))
+            onScrollPageChanged(currentPageIndex.coerceIn(0, pageCount - 1))
         }
     }
 
