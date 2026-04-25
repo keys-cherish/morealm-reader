@@ -187,8 +187,9 @@ class ChapterProvider(
                     textPages.last().lines.last().isParagraphEnd = true
                 }
                 stringBuilder.append("\n")
-                // 4.htm: chapter-num margin-bottom: 0.5rem
-                durY += contentPaintTextHeight * 0.45f
+                // 4.htm: chapter-num margin-bottom: 0.5rem; use the smaller
+                // chapter-number line height so the gap does not balloon with body text.
+                durY += chapterNumPaintTextHeight * 0.20f
             }
 
             // 2) Title text (main color, medium weight)
@@ -250,7 +251,7 @@ class ChapterProvider(
                 }
                 stringBuilder.append("\n")
                 durY += if (paragraph.isChapterNum) {
-                    contentPaintTextHeight * 0.45f
+                    chapterNumPaintTextHeight * 0.20f
                 } else {
                     (contentPaintTextHeight * 1.35f).coerceAtLeast(titleBottomSpacing.toFloat() * 0.75f)
                 }

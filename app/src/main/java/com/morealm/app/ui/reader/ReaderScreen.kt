@@ -69,6 +69,7 @@ fun ReaderScreen(
     val currentIndex by viewModel.currentChapterIndex.collectAsStateWithLifecycle()
     val content by viewModel.chapterContent.collectAsStateWithLifecycle()
     val renderedChapter by viewModel.renderedChapter.collectAsStateWithLifecycle()
+    val visiblePage by viewModel.visiblePage.collectAsStateWithLifecycle()
     val nextPreloadedChapter by viewModel.nextPreloadedChapter.collectAsStateWithLifecycle()
     val prevPreloadedChapter by viewModel.prevPreloadedChapter.collectAsStateWithLifecycle()
     val showControls by viewModel.showControls.collectAsStateWithLifecycle()
@@ -346,6 +347,7 @@ fun ReaderScreen(
                 pageAnimType = pageAnim.toPageAnimType(),
                 onTapCenter = { viewModel.toggleControls() },
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
+                onVisiblePageChanged = { index, title, progress -> viewModel.onVisiblePageChanged(index, title, progress) },
                 onNextChapter = { viewModel.nextChapter() },
                 onPrevChapter = { viewModel.prevChapter() },
                 onScrollNearBottom = { viewModel.onScrollNearBottom() },
@@ -371,6 +373,8 @@ fun ReaderScreen(
                 tapActionBottomRight = tapBR,
                 readerStyle = effectiveReaderStyle,
                 chaptersSize = chapters.size,
+                showChapterName = showChapterNameSetting,
+                showTimeBattery = showTimeBatterySetting,
                 headerLeft = hdrLeft,
                 headerCenter = hdrCenter,
                 headerRight = hdrRight,
@@ -415,9 +419,10 @@ fun ReaderScreen(
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             ReaderControlBar(
-                currentChapter = currentIndex,
+                currentChapter = visiblePage.chapterIndex,
                 totalChapters = chapters.size,
-                chapterTitle = chapters.getOrNull(currentIndex)?.title ?: "",
+                chapterTitle = visiblePage.title.ifBlank { chapters.getOrNull(currentIndex)?.title ?: "" },
+                readProgress = visiblePage.readProgress,
                 scrollProgress = scrollProgress,
                 onBack = onBack,
                 onPrevChapter = viewModel::prevChapter,

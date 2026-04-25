@@ -86,6 +86,7 @@ fun ReaderTopBar(bookTitle: String, onBack: () -> Unit, onExport: () -> Unit = {
 @Composable
 fun ReaderControlBar(
     currentChapter: Int, totalChapters: Int, chapterTitle: String,
+    readProgress: String = "0.0%",
     scrollProgress: Int = 0,
     onBack: () -> Unit, onPrevChapter: () -> Unit, onNextChapter: () -> Unit,
     onTts: () -> Unit, onSettings: () -> Unit, onChapterSelect: () -> Unit,
@@ -97,7 +98,6 @@ fun ReaderControlBar(
     val chapterFraction = if (totalChapters > 0) currentChapter.toFloat() / totalChapters else 0f
     val scrollFraction = if (totalChapters > 0) scrollProgress / 100f / totalChapters else 0f
     val progress = (chapterFraction + scrollFraction).coerceIn(0f, 1f)
-    val progressPct = (progress * 100).toInt()
     val barShape = MaterialTheme.shapes.extraLarge
 
     // Floating pill bar like HTML prototype's .r-bar
@@ -142,7 +142,7 @@ fun ReaderControlBar(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
-                        "第${currentChapter + 1}章 · ${progressPct}%",
+                        "${chapterTitle.ifBlank { "第${currentChapter + 1}章" }} · $readProgress",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                     )
