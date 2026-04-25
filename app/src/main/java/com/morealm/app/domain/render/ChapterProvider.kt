@@ -46,6 +46,9 @@ class ChapterProvider(
         const val INDENT_CHAR = "\u3000"
         val IMG_PATTERN = AppPattern.imgSrcPattern
         private val nonImgTagRegex = Regex("<(?!img)[^>]+>", RegexOption.IGNORE_CASE)
+        private const val chapterTitleMarker = "__MOREALM_CHAPTER_TITLE__"
+        private val chapterNumOpenRegex = Regex("<div\\s+class=[\"']chapter-num[\"']\\s*>", RegexOption.IGNORE_CASE)
+        private val chapterSubOpenRegex = Regex("<div\\s+class=[\"']chapter-sub[\"']\\s*>", RegexOption.IGNORE_CASE)
     }
 
     val visibleWidth: Int = viewWidth - paddingLeft - paddingRight
@@ -160,13 +163,16 @@ class ChapterProvider(
             it.startsWith("<") && (it.contains("<p") || it.contains("<div") || it.contains("<img"))
         }
         val paragraphs = if (isHtml) parseHtmlParagraphs(content) else {
-            content.lines().mapNotNull { normalizeParagraph(it) }
+            content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
         }
+        val contentProvidesChapterTitle = paragraphs.firstOrNull()?.let { first ->
+            first.isChapterTitle || isSameChapterTitle(first.text, title)
+        } == true
 
         val pageCountBefore = textPages.size
 
         // Layout title
-        if (titleMode != 2) {
+        if (titleMode != 2 && !contentProvidesChapterTitle) {
             title.split("\n").filter { it.isNotBlank() }.forEach { text ->
                 val result = setTypeText(
                     absStartX, durY, text, textPages, stringBuilder,
@@ -194,7 +200,28 @@ class ChapterProvider(
         }
 
         // Layout content paragraphs
-        for (para in paragraphs) {
+        for (paragraph in paragraphs) {
+            val para = paragraph.text
+            if (paragraph.isChapterTitle) {
+                if (textPages.last().lines.isNotEmpty()) {
+                    durY += titleTopSpacing.coerceAtLeast(paragraphSpacing).toFloat()
+                }
+                val r = setTypeText(
+                    absStartX, durY, para, textPages, stringBuilder,
+                    titlePaint, titlePaintTextHeight, titlePaintFontMetrics,
+                    floatArray, isTitle = true, isVolumeTitle = true,
+                )
+                absStartX = r.first
+                durY = r.second
+                if (textPages.last().lines.isNotEmpty()) {
+                    textPages.last().lines.last().isParagraphEnd = true
+                }
+                stringBuilder.append("\n")
+                durY += titleBottomSpacing.coerceAtLeast(paragraphSpacing).toFloat()
+                flushCompletedPages()
+                continue
+            }
+
             val imgMatcher = imgPattern.find(para)
             if (imgMatcher != null) {
                 var start = 0
@@ -657,20 +684,52 @@ class ChapterProvider(
 
     // ── HTML parsing ──
 
-    private fun parseHtmlParagraphs(html: String): List<String> {
-        val text = html
+    private fun parseHtmlParagraphs(html: String): List<LayoutParagraph> {
+        val markedHtml = html
+            .replace(chapterNumOpenRegex, "\n$chapterTitleMarker")
+            .replace(chapterSubOpenRegex, "\n$chapterTitleMarker")
+        val text = markedHtml
             .replace(AppPattern.htmlDivCloseRegex, "\n")
             .replace(AppPattern.htmlBrRegex, "\n")
             .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
             .replace("&nbsp;", " ").replace("&quot;", "\"")
         val cleaned = text.replace(nonImgTagRegex, "")
-        return cleaned.lines().mapNotNull { normalizeParagraph(it) }
+        return cleaned.lines().mapNotNull { line ->
+            val trimmed = line.trim { it.code <= 0x20 || it == '\u3000' }
+            if (trimmed.startsWith(chapterTitleMarker)) {
+                val title = trimmed.removePrefix(chapterTitleMarker).trim()
+                if (title.isEmpty()) null else LayoutParagraph(title, isChapterTitle = true)
+            } else {
+                normalizeParagraph(line)?.let(::LayoutParagraph)
+            }
+        }
     }
 
     private fun normalizeParagraph(paragraph: String): String? {
         val trimmed = paragraph.trim { it.code <= 0x20 || it == '\u3000' }
         return if (trimmed.isEmpty()) null else paragraphIndent + trimmed
     }
+
+    private fun isSameChapterTitle(paragraph: String, title: String): Boolean {
+        val normalizedParagraph = normalizeTitleForCompare(paragraph)
+        val normalizedTitle = normalizeTitleForCompare(title)
+        if (normalizedParagraph.isEmpty() || normalizedTitle.isEmpty()) return false
+        return normalizedParagraph == normalizedTitle ||
+            normalizedParagraph.endsWith(normalizedTitle) ||
+            normalizedTitle.endsWith(normalizedParagraph)
+    }
+
+    private fun normalizeTitleForCompare(value: String): String = value
+        .replace(chapterTitleMarker, "")
+        .replace(INDENT_CHAR, "")
+        .replace(AppPattern.whitespaceRegex, "")
+        .trim()
+
+    private data class LayoutParagraph(
+        val text: String,
+        val isChapterTitle: Boolean = false,
+    )
+
 }
 
 /**
