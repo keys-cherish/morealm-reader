@@ -9,9 +9,12 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.BatteryManager
 import android.text.TextPaint
+import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.rememberPagerState
@@ -36,14 +39,21 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.asPaddingValues
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.render.*
+import com.morealm.app.presentation.reader.ReaderViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+private const val VERTICAL_SWIPE_PAGE_THRESHOLD_RATIO = 0.08f
+private const val PAGE_DELEGATE_DRAG_AXIS_RATIO = 1.2f
 
 /**
  * Full-featured Canvas-based text reader.
@@ -84,21 +94,26 @@ fun CanvasRenderer(
     bgImageUri: String = "",
     startFromLastPage: Boolean = false,
     initialProgress: Int = 0,
+    initialChapterPosition: Int = 0,
     pageAnimType: PageAnimType = PageAnimType.SLIDE,
     onTapCenter: () -> Unit = {},
     onProgress: (Int) -> Unit = {},
-    onVisiblePageChanged: (chapterIndex: Int, title: String, readProgress: String) -> Unit = { _, _, _ -> },
+    onVisiblePageChanged: (chapterIndex: Int, title: String, readProgress: String, chapterPosition: Int) -> Unit = { _, _, _, _ -> },
     onNextChapter: () -> Unit = {},
     onPrevChapter: () -> Unit = {},
     onScrollNearBottom: () -> Unit = {},
     onScrollReachedBottom: () -> Unit = {},
     onCopyText: (String) -> Unit = {},
-    onSpeakFromHere: (String) -> Unit = {},
+    onSpeakFromHere: (Int) -> Unit = {},
     onTranslateText: (String) -> Unit = {},
     onLookupWord: (String) -> Unit = {},
     onImageClick: (String) -> Unit = {},
     onToggleTts: () -> Unit = {},
     onAddBookmark: () -> Unit = {},
+    onReadAloudParagraphPositions: (List<Int>) -> Unit = {},
+    onVisibleReadAloudPosition: (chapterIndex: Int, chapterPosition: Int) -> Unit = { _, _ -> },
+    pendingSearchSelection: ReaderViewModel.SearchSelection? = null,
+    onSearchSelectionConsumed: () -> Unit = {},
     bookTitle: String = "",
     bookAuthor: String = "",
     // 9-zone tap actions (ported from Legado ReadView.click)
@@ -117,9 +132,37 @@ fun CanvasRenderer(
     footerLeft: String = "battery_time",
     footerCenter: String = "none",
     footerRight: String = "page_progress",
+    pageTurnCommand: ReaderPageDirection? = null,
+    onPageTurnCommandConsumed: () -> Unit = {},
+    autoPageSeconds: Int = 0,
+    readAloudChapterPosition: Int = -1,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+
+    fun handleColumnClick(column: BaseColumn?): Boolean {
+        return when (column) {
+            is ImageColumn -> {
+                onImageClick(column.src)
+                true
+            }
+            is TextHtmlColumn -> {
+                val link = column.linkUrl?.takeIf { it.isNotBlank() } ?: return false
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+                }.onFailure {
+                    Toast.makeText(context, "无法打开链接", Toast.LENGTH_SHORT).show()
+                }
+                true
+            }
+            is ButtonColumn, is ReviewColumn -> {
+                Toast.makeText(context, "暂不支持该内容操作", Toast.LENGTH_SHORT).show()
+                true
+            }
+            else -> false
+        }
+    }
+
     val density = LocalDensity.current
     val config = LocalConfiguration.current
     val layoutDirection = LocalLayoutDirection.current
@@ -245,12 +288,53 @@ fun CanvasRenderer(
         )
     }
 
+    fun chapterCacheKey(index: Int, title: String, body: String): String = "$index|$title|${body.hashCode()}|$screenWidthPx|$screenHeightPx|$fontSizePx|$lineHeight|$effectivePadLeft|$effectivePadRight|$effectivePadTop|$effectivePadBottom|${readerStyle?.hashCode()}"
+
+    val currentChapterKey: String = remember(
+        chapterIndex,
+        chapterTitle,
+        content,
+        screenWidthPx,
+        screenHeightPx,
+        fontSizePx,
+        effectivePadLeft,
+        effectivePadRight,
+        effectivePadTop,
+        effectivePadBottom,
+        lineHeight,
+        readerStyle,
+    ) {
+        chapterCacheKey(chapterIndex, chapterTitle, content)
+    }
+
+    fun placeholderChapterFor(
+        index: Int,
+        title: String,
+        message: String = title.ifBlank { "加载中..." },
+    ): TextChapter {
+        val chapter = TextChapter(index, title, chaptersSize)
+        val page = TextPage(
+            index = 0,
+            title = title,
+            chapterIndex = index,
+            chapterSize = chaptersSize,
+            paddingTop = effectivePadTop,
+        ).apply {
+            text = message.ifBlank { "加载中..." }
+            textChapter = chapter
+        }.format()
+        chapter.addPage(page)
+        return chapter
+    }
+
+    fun placeholderChapter(message: String = chapterTitle.ifBlank { "加载中..." }): TextChapter =
+        placeholderChapterFor(chapterIndex, chapterTitle, message)
+
     // Layout pages — use async streaming layout for faster first-page display
-    var textChapter by remember { mutableStateOf<TextChapter?>(null) }
+    var textChapter by remember(currentChapterKey) { mutableStateOf<TextChapter?>(placeholderChapter()) }
     var pageCount by remember { mutableIntStateOf(1) }
     val scope = rememberCoroutineScope()
     val prelayoutCache = remember { mutableStateMapOf<String, TextChapter>() }
-    fun chapterCacheKey(index: Int, title: String, body: String): String = "$index|$title|${body.hashCode()}|$screenWidthPx|$screenHeightPx|$fontSizePx|$lineHeight|$effectivePadLeft|$effectivePadRight|$effectivePadTop|$effectivePadBottom|${readerStyle?.hashCode()}"
 
     LaunchedEffect(screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle) {
         prelayoutCache.clear()
@@ -278,17 +362,17 @@ fun CanvasRenderer(
         }
     }
 
-    LaunchedEffect(content, chapterTitle, screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle) {
+    LaunchedEffect(currentChapterKey, layoutInputs) {
+        textChapter = placeholderChapter()
+        pageCount = 1
         if (content.isBlank()) {
-            val chapter = TextChapter(chapterIndex, chapterTitle, 0).apply {
-                val emptyPage = TextPage(title = chapterTitle)
-                addPage(emptyPage)
+            val chapter = placeholderChapter(chapterTitle.ifBlank { "当前章节暂无正文" }).apply {
                 isCompleted = true
             }
             textChapter = chapter
             pageCount = 1
         } else {
-            val cachedChapter = prelayoutCache[chapterCacheKey(chapterIndex, chapterTitle, content)]
+            val cachedChapter = prelayoutCache[currentChapterKey]
             if (cachedChapter != null) {
                 textChapter = cachedChapter
                 pageCount = cachedChapter.pageSize.coerceAtLeast(1)
@@ -316,12 +400,76 @@ fun CanvasRenderer(
     }
 
     val chapter = textChapter
-    var lastRenderablePages by remember { mutableStateOf<List<TextPage>>(emptyList()) }
+    var lastRenderablePages by remember(currentChapterKey) { mutableStateOf<List<TextPage>>(emptyList()) }
     if (!chapter?.pages.isNullOrEmpty()) {
         lastRenderablePages = chapter?.pages ?: emptyList()
     }
-    val pages = chapter?.pages?.takeIf { it.isNotEmpty() } ?: lastRenderablePages
-    // pageCount is driven by async layout via mutableIntStateOf above
+    val currentChapterPages = chapter?.pages?.takeIf { it.isNotEmpty() }
+        ?: lastRenderablePages.ifEmpty { placeholderChapter().pages }
+    val prevTextChapter = if (prevChapterTitle.isNotBlank() && prevChapterContent.isNotBlank()) {
+        prelayoutCache[chapterCacheKey(chapterIndex - 1, prevChapterTitle, prevChapterContent)]
+    } else null
+    val nextTextChapter = if (nextChapterTitle.isNotBlank() && nextChapterContent.isNotBlank()) {
+        prelayoutCache[chapterCacheKey(chapterIndex + 1, nextChapterTitle, nextChapterContent)]
+    } else null
+    var readerPageIndex by remember(chapterIndex) { mutableIntStateOf(0) }
+    LaunchedEffect(pageCount, chapter?.isCompleted) {
+        if (chapter?.isCompleted == true && pageCount > 0 && readerPageIndex > pageCount - 1) {
+            readerPageIndex = pageCount - 1
+        }
+    }
+    val pageFactory = remember(
+        chapter,
+        prevTextChapter,
+        nextTextChapter,
+        currentChapterPages,
+        pageCount,
+        chapter?.isCompleted,
+        prevTextChapter?.pageSize,
+        prevTextChapter?.isCompleted,
+        nextTextChapter?.pageSize,
+        nextTextChapter?.isCompleted,
+        pageAnimType,
+        readerPageIndex,
+    ) {
+        ReaderPageFactory(
+            dataSource = SnapshotReaderDataSource(
+                pageIndex = readerPageIndex,
+                currentChapter = chapter,
+                prevChapter = prevTextChapter,
+                nextChapter = nextTextChapter,
+                isScroll = pageAnimType == PageAnimType.SCROLL,
+                hasNextChapterValue = chapterIndex < chaptersSize - 1,
+                hasPrevChapterValue = chapterIndex > 0,
+                onUpContent = { relativePosition, resetPageOffset ->
+                    AppLog.debug(
+                        "Reader",
+                        "upContent(relativePosition=$relativePosition, resetPageOffset=$resetPageOffset)",
+                    )
+                },
+            ),
+        )
+    }
+
+    val pages = pageFactory.pages
+    val renderPageCount = pageFactory.pageCount
+
+    LaunchedEffect(chapter, readAloudChapterPosition) {
+        chapter?.pages?.forEach { it.removePageAloudSpan() }
+        if (chapter != null && readAloudChapterPosition >= 0) {
+            val aloudPageIndex = chapter.getPageIndexByCharIndex(readAloudChapterPosition)
+            val page = chapter.getPage(aloudPageIndex)
+            val pageStart = chapter.getReadLength(aloudPageIndex)
+            page?.upPageAloudSpan(readAloudChapterPosition - pageStart)
+        }
+    }
+
+    LaunchedEffect(chapter) {
+        val positions = chapter?.getParagraphs(pageSplit = false)
+            ?.map { it.chapterPosition }
+            .orEmpty()
+        onReadAloudParagraphPositions(positions)
+    }
 
     // Track whether we've already restored the saved position for this content
     var progressRestored by remember { mutableStateOf(false) }
@@ -332,37 +480,259 @@ fun CanvasRenderer(
 
     // Selection state
     val selectionState = remember { SelectionState() }
+    var selectedTextPage by remember(chapterIndex) { mutableStateOf<TextPage?>(null) }
+    var scrollRelativePages by remember(chapterIndex) { mutableStateOf<Map<Int, TextPage>>(emptyMap()) }
     var toolbarOffset by remember { mutableStateOf(Offset.Zero) }
     // Share quote dialog state
     var shareQuoteText by remember { mutableStateOf<String?>(null) }
     var scrollPageIndex by remember(chapterIndex) { mutableIntStateOf(0) }
+    var lastSettledDisplayPage by remember(chapterIndex) { mutableIntStateOf(0) }
+    var pendingSettledDirection by remember(chapterIndex) { mutableStateOf<ReaderPageDirection?>(null) }
+    var pendingTurnStartDisplayPage by remember(chapterIndex) { mutableIntStateOf(0) }
+    var ignoredSettledDisplayPage by remember(chapterIndex) { mutableStateOf<Int?>(null) }
+    var lastReaderContent by remember(chapterIndex) { mutableStateOf<ReaderPageContent?>(null) }
+    val pageDelegateState = remember(chapterIndex) { ReaderPageDelegateState() }
+    val autoPagerState = remember(chapterIndex, pageAnimType) { ReaderAutoPagerState() }
+    var autoPageProgress by remember(chapterIndex, pageAnimType) { mutableIntStateOf(0) }
+    var autoScrollDelta by remember(chapterIndex, pageAnimType) { mutableIntStateOf(0) }
 
     // Pager state — always start at 0, then jump after layout completes
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = { pageCount })
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = { renderPageCount })
+
+    LaunchedEffect(currentChapterKey, pageAnimType) {
+        if (pageAnimType != PageAnimType.SCROLL) {
+            ignoredSettledDisplayPage = 0
+            pendingSettledDirection = null
+            lastSettledDisplayPage = 0
+            lastReaderContent = null
+            pagerState.scrollToPage(0)
+        }
+    }
+
+    LaunchedEffect(chapter, pendingSearchSelection) {
+        val selection = pendingSearchSelection ?: return@LaunchedEffect
+        val textChapter = chapter ?: return@LaunchedEffect
+        if (!textChapter.isCompleted || selection.chapterIndex != chapterIndex) return@LaunchedEffect
+        val range = textChapter.searchSelectionRange(
+            contentPosition = selection.queryIndexInChapter,
+            queryLength = selection.queryLength,
+        ) ?: return@LaunchedEffect
+        selectedTextPage = textChapter.getPage(range.pageIndex)
+        selectionState.setSelection(range.start, range.end)
+        readerPageIndex = range.pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+        if (pageAnimType != PageAnimType.SCROLL) {
+            pagerState.scrollToPage(pageFactory.displayIndexForCurrentPage(range.pageIndex).coerceIn(0, renderPageCount - 1))
+        }
+        onSearchSelectionConsumed()
+    }
+
+    fun readerPageStateFor(displayIndex: Int): ReaderPageState {
+        return ReaderPageState(
+            pageFactory = pageFactory,
+            currentDisplayIndex = displayIndex,
+            onBoundaryChapter = { direction ->
+                when (direction) {
+                    ReaderPageDirection.PREV -> {
+                        AppLog.debug("Reader", "Commit prev chapter from fillPage boundary: ${chapterIndex - 1}")
+                        onPrevChapter()
+                    }
+                    ReaderPageDirection.NEXT -> {
+                        AppLog.debug("Reader", "Commit next chapter from fillPage boundary: ${chapterIndex + 1}")
+                        onNextChapter()
+                    }
+                    ReaderPageDirection.NONE -> Unit
+                }
+            },
+        )
+    }
+
+    fun upProgressFrom(content: ReaderPageContent?) {
+        val page = content?.currentPage ?: return
+        if (page.chapterIndex == chapterIndex && pageCount > 0) {
+            onProgress(if (pageCount > 1) (page.index * 100) / (pageCount - 1) else 100)
+        }
+        onVisiblePageChanged(page.chapterIndex, page.title, page.readProgress, page.chapterPosition)
+    }
+
+    fun pageForDisplay(displayIndex: Int): TextPage {
+        val fallback = pages.getOrElse(displayIndex) { TextPage() }
+        val content = lastReaderContent ?: return fallback
+        return content.pageForDisplay(displayIndex, fallback)
+    }
+
+    fun relativePageForDisplay(displayIndex: Int, relativePos: Int): TextPage {
+        val content = lastReaderContent ?: readerPageStateFor(displayIndex).upContent()
+        return content.relativePage(relativePos)
+    }
+
+    fun fillPageFrom(displayIndex: Int, direction: ReaderPageDirection): Int? {
+        val content = readerPageStateFor(displayIndex).fillPage(direction)
+        if (content == null) {
+            pageDelegateState.stopScroll()
+            return null
+        }
+        if (content.boundaryDirection != null) {
+            AppLog.debug(
+                "Reader",
+                "fillPageFrom(start=$displayIndex, direction=$direction) committed chapter boundary",
+            )
+            pageDelegateState.stopScroll()
+            return null
+        }
+        lastReaderContent = content
+        lastSettledDisplayPage = content.currentDisplayIndex
+        pageFactory.currentLocalIndex(content.currentDisplayIndex)?.let { localIndex ->
+            readerPageIndex = localIndex
+        }
+        AppLog.debug(
+            "Reader",
+            "fillPageFrom(start=$displayIndex, direction=$direction, committed=${content.currentDisplayIndex}, local=${pageFactory.currentLocalIndex(content.currentDisplayIndex)}, chapter=${content.currentPage.chapterIndex}, page=${content.currentPage.index})",
+        )
+        upProgressFrom(content)
+        pageDelegateState.stopScroll()
+        return content.currentDisplayIndex
+    }
+
+    fun animateByDirection(direction: ReaderPageDirection) {
+        if (!pageDelegateState.keyTurnPage(direction)) return
+        val startDisplayPage = lastSettledDisplayPage.coerceIn(0, renderPageCount - 1)
+        if (pageAnimType == PageAnimType.NONE) {
+            val committed = fillPageFrom(startDisplayPage, direction)
+            if (committed != null) {
+                scope.launch { pagerState.scrollToPage(committed.coerceIn(0, renderPageCount - 1)) }
+            }
+            return
+        }
+        val target = when (direction) {
+            ReaderPageDirection.PREV -> pageFactory.moveToPrev(startDisplayPage)
+            ReaderPageDirection.NEXT -> pageFactory.moveToNext(startDisplayPage)
+            ReaderPageDirection.NONE -> null
+        }
+        if (target != null) {
+            pendingSettledDirection = direction
+            pendingTurnStartDisplayPage = startDisplayPage
+            scope.launch { pagerState.animateScrollToPage(target) }
+        } else if (
+            (direction == ReaderPageDirection.PREV && pageFactory.hasPrev(startDisplayPage)) ||
+            (direction == ReaderPageDirection.NEXT && pageFactory.hasNext(startDisplayPage))
+        ) {
+            fillPageFrom(startDisplayPage, direction)
+        } else {
+            AppLog.debug("Reader", "keyTurnPage($direction) rejected at display=$startDisplayPage")
+            pageDelegateState.stopScroll()
+        }
+    }
+
+    fun dragByDirection(direction: ReaderPageDirection) {
+        if (!pageDelegateState.startAnim(direction)) return
+        val startDisplayPage = lastSettledDisplayPage.coerceIn(0, renderPageCount - 1)
+        if (pageAnimType == PageAnimType.NONE) {
+            val committed = fillPageFrom(startDisplayPage, direction)
+            if (committed != null) {
+                scope.launch { pagerState.scrollToPage(committed.coerceIn(0, renderPageCount - 1)) }
+            }
+            return
+        }
+        val target = when (direction) {
+            ReaderPageDirection.PREV -> pageFactory.moveToPrev(startDisplayPage)
+            ReaderPageDirection.NEXT -> pageFactory.moveToNext(startDisplayPage)
+            ReaderPageDirection.NONE -> null
+        }
+        if (target != null) {
+            pendingSettledDirection = direction
+            pendingTurnStartDisplayPage = startDisplayPage
+            scope.launch { pagerState.animateScrollToPage(target) }
+        } else if (
+            (direction == ReaderPageDirection.PREV && pageFactory.hasPrev(startDisplayPage)) ||
+            (direction == ReaderPageDirection.NEXT && pageFactory.hasNext(startDisplayPage))
+        ) {
+            fillPageFrom(startDisplayPage, direction)
+        } else {
+            AppLog.debug("Reader", "dragTurnPage($direction) rejected at display=$startDisplayPage")
+            pageDelegateState.stopScroll()
+        }
+    }
+
+    fun stopAutoPager() {
+        autoPagerState.stop()
+        autoPageProgress = 0
+    }
+
+    LaunchedEffect(autoPageSeconds, pageAnimType, screenHeightPx, progressRestored) {
+        if (!progressRestored || autoPageSeconds <= 0) {
+            stopAutoPager()
+            return@LaunchedEffect
+        }
+        autoPagerState.start()
+        while (autoPagerState.isRunning && autoPageSeconds > 0) {
+            withFrameNanos { }
+            val offset = autoPagerState.computeOffset(
+                readSpeedSeconds = autoPageSeconds,
+                height = screenHeightPx,
+                isScroll = pageAnimType == PageAnimType.SCROLL,
+            )
+            if (offset <= 0) continue
+            if (pageAnimType == PageAnimType.SCROLL) {
+                autoScrollDelta += offset
+            } else {
+                autoPageProgress = autoPagerState.progress.coerceIn(0, screenHeightPx)
+                if (autoPagerState.progress >= screenHeightPx) {
+                    val startDisplayPage = lastSettledDisplayPage.coerceIn(0, renderPageCount - 1)
+                    val canTurn = pageFactory.hasNext(startDisplayPage)
+                    if (!canTurn) {
+                        stopAutoPager()
+                    } else {
+                        fillPageFrom(startDisplayPage, ReaderPageDirection.NEXT)?.let { committed ->
+                            pagerState.scrollToPage(committed.coerceIn(0, renderPageCount - 1))
+                        } ?: stopAutoPager()
+                        autoPagerState.reset()
+                        autoPageProgress = 0
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(pageTurnCommand, progressRestored, pageAnimType, renderPageCount) {
+        val direction = pageTurnCommand ?: return@LaunchedEffect
+        if (!progressRestored) return@LaunchedEffect
+        if (pageAnimType == PageAnimType.SCROLL) return@LaunchedEffect
+        onPageTurnCommandConsumed()
+        animateByDirection(direction)
+    }
 
     // Restore saved progress after layout is complete
-    LaunchedEffect(pageCount, chapter?.isCompleted, progressRestored) {
+    LaunchedEffect(renderPageCount, pageCount, chapter?.isCompleted, progressRestored, pageAnimType) {
         if (progressRestored) return@LaunchedEffect
         if (chapter?.isCompleted != true) return@LaunchedEffect
-        if (pageCount <= 1) {
+        if (renderPageCount <= 1) {
             progressRestored = true
             return@LaunchedEffect
         }
-        val targetPage = when {
+        val currentTargetPage = when {
             startFromLastPage -> pageCount - 1
-            initialProgress > 0 -> ((initialProgress / 100f) * (pageCount - 1)).toInt().coerceIn(0, pageCount - 1)
+            initialChapterPosition > 0 -> chapter.getPageIndexByCharIndex(initialChapterPosition)
+                .coerceIn(0, pageCount - 1)
+            initialProgress > 0 -> ((initialProgress / 100f) * (pageCount - 1)).roundToInt().coerceIn(0, pageCount - 1)
             else -> 0
         }
+        val targetPage = pageFactory.displayIndexForCurrentPage(currentTargetPage).coerceIn(0, renderPageCount - 1)
+        readerPageIndex = currentTargetPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         if (targetPage != pagerState.currentPage) {
+            ignoredSettledDisplayPage = targetPage
             pagerState.scrollToPage(targetPage)
         }
+        lastSettledDisplayPage = targetPage
+        lastReaderContent = readerPageStateFor(targetPage).upContent()
+        upProgressFrom(lastReaderContent)
         progressRestored = true
     }
 
     // Report progress
-    LaunchedEffect(pagerState.currentPage, pageCount, chapter?.isCompleted, progressRestored) {
+    LaunchedEffect(pagerState.currentPage, renderPageCount, pageCount, chapter?.isCompleted, progressRestored, pageAnimType) {
         if (chapter?.isCompleted != true || !progressRestored) return@LaunchedEffect
-        val pct = if (pageCount > 1) (pagerState.currentPage * 100) / (pageCount - 1) else 100
+        val localPage = pageFactory.currentLocalIndex(pagerState.currentPage) ?: return@LaunchedEffect
+        val pct = if (pageCount > 1) (localPage * 100) / (pageCount - 1) else 100
         onProgress(pct)
     }
 
@@ -376,9 +746,41 @@ fun CanvasRenderer(
     }
     val bgBitmap = bgEntry?.bitmap
     val bgMeanColor = bgEntry?.meanColor ?: bgArgb
+    val pageInfoOverlaySpec = PageInfoOverlaySpec(
+        chapterTitle = chapterTitle,
+        pageCount = pageCount,
+        chapterIndex = chapterIndex,
+        chaptersSize = chaptersSize,
+        batteryLevel = batteryLevel,
+        currentTime = currentTime,
+        textColorArgb = textColor.toArgb(),
+        backgroundColorArgb = bgArgb,
+        paddingHorizontalPx = with(density) { paddingHorizontal.dp.toPx() },
+        barHeightPx = with(density) { 64.dp.toPx() },
+        verticalPaddingPx = with(density) { 8.dp.toPx() },
+        textSizePx = with(density) { 10.sp.toPx() },
+        showChapterName = showChapterName,
+        showTimeBattery = showTimeBattery,
+        headerLeft = headerLeft,
+        headerCenter = headerCenter,
+        headerRight = headerRight,
+        footerLeft = footerLeft,
+        footerCenter = footerCenter,
+        footerRight = footerRight,
+    )
 
     // SimulationParams for bezier page curl
-    val simulationParams = remember(pages, titlePaint, contentPaint, bgArgb, bgBitmap, bgMeanColor) {
+    val simulationParams = remember(
+        pages,
+        titlePaint,
+        contentPaint,
+        bgArgb,
+        bgBitmap,
+        bgMeanColor,
+        pageInfoOverlaySpec,
+        pageFactory,
+        chapterIndex,
+    ) {
         if (pageAnimType == PageAnimType.SIMULATION && pages.isNotEmpty()) {
             SimulationParams(
                 pages = pages,
@@ -388,17 +790,38 @@ fun CanvasRenderer(
                 bgColor = bgArgb,
                 bgBitmap = bgBitmap,
                 bgMeanColor = bgMeanColor,
-                onPageChanged = { onProgress(if (pageCount > 1) (it * 100) / (pageCount - 1) else 100) },
-                onNextChapter = onNextChapter,
-                onPrevChapter = onPrevChapter,
+                pageInfoOverlay = pageInfoOverlaySpec,
+                pageForTurn = { displayIndex, relativePos ->
+                    pageFactory.pageForTurn(displayIndex, relativePos)
+                },
+                currentDisplayIndex = {
+                    lastSettledDisplayPage.coerceIn(0, (renderPageCount - 1).coerceAtLeast(0))
+                },
+                canTurn = { displayIndex, direction ->
+                    when (direction) {
+                        ReaderPageDirection.PREV -> pageFactory.hasPrev(displayIndex)
+                        ReaderPageDirection.NEXT -> pageFactory.hasNext(displayIndex)
+                        ReaderPageDirection.NONE -> false
+                    }
+                },
+                onPageChanged = { displayIndex ->
+                    val page = pages.getOrNull(displayIndex) ?: return@SimulationParams
+                    if (page.chapterIndex == chapterIndex) {
+                        onProgress(if (pageCount > 1) (page.index * 100) / (pageCount - 1) else 100)
+                    }
+                },
+                onFillPage = { displayIndex, direction ->
+                    fillPageFrom(displayIndex, direction)
+                },
                 onTapCenter = onTapCenter,
                 onLongPress = { offset ->
-                    val page = pages.getOrNull(pagerState.currentPage) ?: return@SimulationParams
+                    val page = pageForDisplay(lastSettledDisplayPage)
                     val col = hitTestColumn(page, offset.x, offset.y)
                     if (col is ImageColumn) { onImageClick(col.src); return@SimulationParams }
                     val pos = hitTestPage(page, offset.x, offset.y)
                     if (pos != null) {
                         val wordRange = findWordRange(page, pos)
+                        selectedTextPage = page
                         selectionState.setSelection(wordRange.first, wordRange.second)
                         toolbarOffset = offset
                     }
@@ -413,6 +836,77 @@ fun CanvasRenderer(
             .background(backgroundColor)
             .then(
                 if (pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
+                    Modifier.pointerInput(selectionState.isActive, pageAnimType, renderPageCount) {
+                        var totalDragX = 0f
+                        var totalDragY = 0f
+                        var dragAxis = 0 // 0 unknown, 1 horizontal, 2 vertical
+                        var turnRequested = false
+                        val slop = viewConfiguration.touchSlop
+                        detectDragGestures(
+                            onDragStart = {
+                                totalDragX = 0f
+                                totalDragY = 0f
+                                dragAxis = 0
+                                turnRequested = false
+                                if (!selectionState.isActive) {
+                                    pageDelegateState.onDown()
+                                }
+                            },
+                            onDrag = { change, dragAmount ->
+                                if (selectionState.isActive) return@detectDragGestures
+                                totalDragX += dragAmount.x
+                                totalDragY += dragAmount.y
+                                if (dragAxis == 0) {
+                                    val absX = abs(totalDragX)
+                                    val absY = abs(totalDragY)
+                                    if (absX > slop || absY > slop) {
+                                        dragAxis = when {
+                                            pageAnimType != PageAnimType.SLIDE_VERTICAL &&
+                                                absX > absY * PAGE_DELEGATE_DRAG_AXIS_RATIO -> 1
+                                            absY > absX * PAGE_DELEGATE_DRAG_AXIS_RATIO -> 2
+                                            else -> 0
+                                        }
+                                    }
+                                }
+                                if (dragAxis != 0) {
+                                    change.consume()
+                                }
+                            },
+                            onDragEnd = {
+                                if (!selectionState.isActive) {
+                                    val horizontalThreshold = (size.width * VERTICAL_SWIPE_PAGE_THRESHOLD_RATIO).coerceAtLeast(48f)
+                                    val verticalThreshold = (size.height * VERTICAL_SWIPE_PAGE_THRESHOLD_RATIO).coerceAtLeast(48f)
+                                    when {
+                                        dragAxis == 1 && abs(totalDragX) > horizontalThreshold -> {
+                                            turnRequested = true
+                                            dragByDirection(if (totalDragX > 0f) ReaderPageDirection.PREV else ReaderPageDirection.NEXT)
+                                        }
+                                        dragAxis == 2 && abs(totalDragY) > verticalThreshold -> {
+                                            turnRequested = true
+                                            dragByDirection(if (totalDragY < 0f) ReaderPageDirection.NEXT else ReaderPageDirection.PREV)
+                                        }
+                                    }
+                                }
+                                totalDragX = 0f
+                                totalDragY = 0f
+                                dragAxis = 0
+                                if (!turnRequested) {
+                                    pageDelegateState.stopScroll()
+                                }
+                            },
+                            onDragCancel = {
+                                totalDragX = 0f
+                                totalDragY = 0f
+                                dragAxis = 0
+                                turnRequested = false
+                                pageDelegateState.abortAnim()
+                            },
+                        )
+                    }
+                } else Modifier
+            )
+            .then(
+                if (pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
                     Modifier.pointerInput(selectionState.isActive) {
                         detectTapGestures(
                             onTap = { offset ->
@@ -420,18 +914,9 @@ fun CanvasRenderer(
                                     selectionState.clear()
                                     return@detectTapGestures
                                 }
-                                // Check if tap landed on an ImageColumn (ported from Legado ContentTextView.click)
-                                val page = pages.getOrNull(pagerState.currentPage)
-                                if (page != null) {
-                                    val col = hitTestColumn(page, offset.x, offset.y)
-                                    if (col is ImageColumn) {
-                                        onImageClick(col.src)
-                                        return@detectTapGestures
-                                    }
-                                }
                                 // 9-zone tap (ported from Legado ReadView.onSingleTapUp + setRect9x)
                                 val w = size.width; val h = size.height
-                                val col = when {
+                                val tapColumn = when {
                                     offset.x < w * 0.33f -> 0  // left
                                     offset.x < w * 0.66f -> 1  // center
                                     else -> 2                   // right
@@ -442,7 +927,7 @@ fun CanvasRenderer(
                                     else -> 2                   // bottom
                                 }
                                 // Determine action for this zone
-                                val action = when (row to col) {
+                                val action = when (row to tapColumn) {
                                     0 to 0 -> tapActionTopLeft      // TL
                                     0 to 1 -> "prev"                // TC: prev page
                                     0 to 2 -> tapActionTopRight     // TR
@@ -454,28 +939,51 @@ fun CanvasRenderer(
                                     2 to 2 -> tapActionBottomRight  // BR
                                     else -> "menu"
                                 }
-                                // Execute action
-                                when (action) {
-                                    "prev" -> scope.launch {
-                                        if (pagerState.currentPage > 0) {
-                                            pagerState.animateScrollToPage(pagerState.currentPage - 1)
-                                        } else onPrevChapter()
-                                    }
-                                    "next" -> scope.launch {
-                                        if (pagerState.currentPage < pageCount - 1) {
-                                            pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                                        } else onNextChapter()
-                                    }
-                                    "prev_chapter" -> onPrevChapter()
-                                    "next_chapter" -> onNextChapter()
-                                    "tts" -> onToggleTts()
-                                    "bookmark" -> onAddBookmark()
-                                    "menu" -> onTapCenter()
-                                    // "none" → do nothing
+                                if (action == "menu") {
+                                    onTapCenter()
+                                    return@detectTapGestures
                                 }
+                                // Execute page-zone actions before image hit testing. Legado's
+                                // PageDelegate treats a moved/page-turn gesture separately from
+                                // ContentTextView.click(), so cover images must not swallow left/right
+                                // page turns or fast horizontal swipes.
+                                when (action) {
+                                    "prev" -> {
+                                        if (pageAnimType != PageAnimType.SCROLL) {
+                                            animateByDirection(ReaderPageDirection.PREV)
+                                        }
+                                        return@detectTapGestures
+                                    }
+                                    "next" -> {
+                                        if (pageAnimType != PageAnimType.SCROLL) {
+                                            animateByDirection(ReaderPageDirection.NEXT)
+                                        }
+                                        return@detectTapGestures
+                                    }
+                                    "prev_chapter" -> {
+                                        onPrevChapter()
+                                        return@detectTapGestures
+                                    }
+                                    "next_chapter" -> {
+                                        onNextChapter()
+                                        return@detectTapGestures
+                                    }
+                                    "tts" -> {
+                                        onToggleTts()
+                                        return@detectTapGestures
+                                    }
+                                    "bookmark" -> {
+                                        onAddBookmark()
+                                        return@detectTapGestures
+                                    }
+                                    "none" -> Unit
+                                }
+                                val page = pageForDisplay(pagerState.currentPage)
+                                val hitColumn = hitTestColumn(page, offset.x, offset.y)
+                                handleColumnClick(hitColumn)
                             },
                             onLongPress = { offset ->
-                                val page = pages.getOrNull(pagerState.currentPage) ?: return@detectTapGestures
+                                val page = pageForDisplay(pagerState.currentPage)
                                 // If long-press on image, show image viewer (ported from Legado)
                                 val col = hitTestColumn(page, offset.x, offset.y)
                                 if (col is ImageColumn) {
@@ -486,6 +994,7 @@ fun CanvasRenderer(
                                 if (pos != null) {
                                     // Word-level selection (ported from Legado ReadView.onLongPress)
                                     val wordRange = findWordRange(page, pos)
+                                    selectedTextPage = page
                                     selectionState.setSelection(wordRange.first, wordRange.second)
                                     toolbarOffset = offset
                                 }
@@ -497,7 +1006,7 @@ fun CanvasRenderer(
     ) {
         if (pageAnimType == PageAnimType.SCROLL) {
             ScrollRenderer(
-                pages = pages,
+                pages = currentChapterPages,
                 titlePaint = titlePaint,
                 contentPaint = contentPaint,
                 chapterNumPaint = chapterNumPaint,
@@ -506,19 +1015,52 @@ fun CanvasRenderer(
                 selectionStart = selectionState.startPos,
                 selectionEnd = selectionState.endPos,
                 onScrollProgress = { if (chapter?.isCompleted == true) onProgress(it) },
-                onScrollPageChanged = { scrollPageIndex = it },
+                onScrollPageChanged = { displayIndex ->
+                    scrollPageIndex = displayIndex
+                    readerPageIndex = displayIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+                },
                 onNearBottom = onScrollNearBottom,
                 onReachedBottom = onScrollReachedBottom,
                 onTapCenter = onTapCenter,
+                onImageClick = onImageClick,
+                onLongPressText = { page, textPos, offset ->
+                    val wordRange = findWordRange(page, textPos)
+                    selectedTextPage = page
+                    scrollRelativePages = scrollRelativePages + (textPos.relativePagePos to page)
+                    selectionState.setSelection(wordRange.first, wordRange.second)
+                    toolbarOffset = offset
+                },
+                onReadAloudVisiblePosition = { page, line ->
+                    onVisibleReadAloudPosition(page.chapterIndex, line.chapterPosition)
+                },
+                onSelectionStartMove = { page, textPos ->
+                    selectedTextPage = page
+                    scrollRelativePages = scrollRelativePages + (textPos.relativePagePos to page)
+                    selectionState.selectStartMove(textPos)
+                },
+                onSelectionEndMove = { page, textPos ->
+                    selectedTextPage = page
+                    scrollRelativePages = scrollRelativePages + (textPos.relativePagePos to page)
+                    selectionState.selectEndMove(textPos)
+                },
+                onRelativePagesChanged = { relativePages ->
+                    scrollRelativePages = relativePages
+                },
                 resetKey = chapterIndex,
                 startFromLastPage = startFromLastPage,
                 initialProgress = initialProgress,
+                initialChapterPosition = initialChapterPosition,
+                initialPageIndex = readerPageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
+                pageTurnCommand = pageTurnCommand,
+                onPageTurnCommandConsumed = onPageTurnCommandConsumed,
+                autoScrollDelta = autoScrollDelta,
+                onAutoScrollDeltaConsumed = { autoScrollDelta = 0 },
                 layoutCompleted = chapter?.isCompleted == true,
                 modifier = Modifier.fillMaxSize(),
             )
             PageReaderInfoOverlay(
-                pages = pages,
-                onCurrentPageChanged = { page -> onVisiblePageChanged(page.chapterIndex, page.title, page.readProgress) },
+                pages = currentChapterPages,
+                onCurrentPageChanged = {},
                 pageIndex = scrollPageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
                 pageCount = pageCount,
                 backgroundColor = backgroundColor,
@@ -544,11 +1086,51 @@ fun CanvasRenderer(
                 animType = pageAnimType,
                 modifier = Modifier.fillMaxSize(),
                 simulationParams = simulationParams,
+                onPageSettled = { settledPage ->
+                    if (pageAnimType == PageAnimType.SIMULATION || pageAnimType == PageAnimType.SCROLL) return@AnimatedPageReader
+                    val ignoredPage = ignoredSettledDisplayPage
+                    if (ignoredPage == settledPage) {
+                        ignoredSettledDisplayPage = null
+                        pendingSettledDirection = null
+                        lastSettledDisplayPage = settledPage
+                        return@AnimatedPageReader
+                    }
+                    if (!progressRestored) {
+                        pendingSettledDirection = null
+                        return@AnimatedPageReader
+                    }
+                    if (settledPage == lastSettledDisplayPage) {
+                        pendingSettledDirection = null
+                        pageDelegateState.stopScroll()
+                        return@AnimatedPageReader
+                    }
+                    val direction = pendingSettledDirection
+                    val turnStartDisplayPage = pendingTurnStartDisplayPage.coerceIn(0, renderPageCount - 1)
+                    pendingSettledDirection = null
+                    if (direction == null) {
+                        lastSettledDisplayPage = settledPage
+                        lastReaderContent = readerPageStateFor(settledPage).upContent()
+                        upProgressFrom(lastReaderContent)
+                        pageDelegateState.stopScroll()
+                        return@AnimatedPageReader
+                    }
+                    val committed = fillPageFrom(turnStartDisplayPage, direction)
+                    if (committed == null) {
+                        lastSettledDisplayPage = settledPage
+                    } else if (committed != settledPage) {
+                        ignoredSettledDisplayPage = committed
+                        scope.launch { pagerState.scrollToPage(committed.coerceIn(0, renderPageCount - 1)) }
+                    }
+                },
             ) { pageIndex ->
-                PageContentBox(
-                page = pages.getOrElse(pageIndex) { TextPage() },
+                    PageContentBox(
+                page = pageForDisplay(pageIndex),
                     pageIndex = pageIndex,
-                    currentPage = pagerState.currentPage,
+                    currentPage = if (pageAnimType == PageAnimType.SIMULATION) {
+                        lastSettledDisplayPage.coerceIn(0, renderPageCount - 1)
+                    } else {
+                        pagerState.currentPage
+                    },
                     titlePaint = titlePaint,
                     contentPaint = contentPaint,
                     chapterNumPaint = chapterNumPaint,
@@ -571,6 +1153,18 @@ fun CanvasRenderer(
                     footerRight = footerRight,
                     showChapterName = showChapterName,
                     showTimeBattery = showTimeBattery,
+                    autoPageOverlayProgress = autoPageProgress,
+                    autoPageNextPage = if (autoPageProgress > 0) relativePageForDisplay(pageIndex, 1) else null,
+                    autoPageAccentColor = accentColor,
+                    onCurrentPageChanged = {},
+                    onSelectionStartMove = { textPos ->
+                        selectedTextPage = pageForDisplay(pageIndex)
+                        selectionState.selectStartMove(textPos)
+                    },
+                    onSelectionEndMove = { textPos ->
+                        selectedTextPage = pageForDisplay(pageIndex)
+                        selectionState.selectEndMove(textPos)
+                    },
                 )
             }
         }
@@ -602,14 +1196,37 @@ fun CanvasRenderer(
                 footerRight = footerRight,
                 showChapterName = showChapterName,
                 showTimeBattery = showTimeBattery,
+                onCurrentPageChanged = { page -> onVisiblePageChanged(page.chapterIndex, page.title, page.readProgress, page.chapterPosition) },
+                onSelectionStartMove = { textPos ->
+                    selectedTextPage = TextPage(title = chapterTitle)
+                    selectionState.selectStartMove(textPos)
+                },
+                onSelectionEndMove = { textPos ->
+                    selectedTextPage = TextPage(title = chapterTitle)
+                    selectionState.selectEndMove(textPos)
+                },
             )
         }
 
         // Selection toolbar
+        val currentDisplayForSelection = if (pageAnimType == PageAnimType.SIMULATION) {
+            lastSettledDisplayPage.coerceIn(0, renderPageCount - 1)
+        } else {
+            pagerState.currentPage
+        }
         ReaderSelectionToolbar(
             selectionState = selectionState,
             toolbarOffset = toolbarOffset,
-            page = pages.getOrNull(pagerState.currentPage),
+            page = selectedTextPage ?: pageForDisplay(currentDisplayForSelection),
+            relativePageProvider = { relativePos ->
+                when (pageAnimType) {
+                    PageAnimType.SCROLL -> scrollRelativePages[relativePos] ?: selectedTextPage?.takeIf {
+                        relativePos == selectionState.startPos?.relativePagePos ||
+                            relativePos == selectionState.endPos?.relativePagePos
+                    }
+                    else -> relativePageForDisplay(currentDisplayForSelection, relativePos)
+                }
+            },
             onCopyText = onCopyText,
             onSpeakFromHere = onSpeakFromHere,
             onTranslateText = onTranslateText,
@@ -751,6 +1368,10 @@ private fun PageReaderInfoOverlay(
     Box(modifier = Modifier.fillMaxSize()) {
         val safePageIndex = pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         val currentPage = pages.getOrNull(safePageIndex) ?: pages.firstOrNull()
+        val actualPageIndex = currentPage?.index ?: safePageIndex
+        val actualPageCount = currentPage?.pageSize?.takeIf { it > 0 } ?: pageCount
+        val actualChapterTitle = currentPage?.title?.takeIf { it.isNotBlank() } ?: chapterTitle
+        val actualChapterIndex = currentPage?.chapterIndex ?: chapterIndex
         LaunchedEffect(currentPage) {
             currentPage?.let(onCurrentPageChanged)
         }
@@ -758,11 +1379,11 @@ private fun PageReaderInfoOverlay(
             slotLeft = if (showTimeBattery) headerLeft else "none",
             slotCenter = if (showChapterName) headerCenter else "none",
             slotRight = if (showTimeBattery) headerRight else "none",
-            chapterTitle = chapterTitle,
-            pageIndex = safePageIndex,
-            pageCount = pageCount,
+            chapterTitle = actualChapterTitle,
+            pageIndex = actualPageIndex,
+            pageCount = actualPageCount,
             currentPage = currentPage,
-            chapterIndex = chapterIndex,
+            chapterIndex = actualChapterIndex,
             chaptersSize = chaptersSize,
             batteryLevel = batteryLevel,
             currentTime = currentTime,
@@ -784,11 +1405,11 @@ private fun PageReaderInfoOverlay(
             slotLeft = if (showChapterName) footerLeft else "none",
             slotCenter = footerCenter,
             slotRight = footerRight,
-            chapterTitle = chapterTitle,
-            pageIndex = safePageIndex,
-            pageCount = pageCount,
+            chapterTitle = actualChapterTitle,
+            pageIndex = actualPageIndex,
+            pageCount = actualPageCount,
             currentPage = currentPage,
-            chapterIndex = chapterIndex,
+            chapterIndex = actualChapterIndex,
             chaptersSize = chaptersSize,
             batteryLevel = batteryLevel,
             currentTime = currentTime,
@@ -987,7 +1608,29 @@ private fun PageContentBox(
     footerRight: String,
     showChapterName: Boolean,
     showTimeBattery: Boolean,
+    autoPageOverlayProgress: Int = 0,
+    autoPageNextPage: TextPage? = null,
+    autoPageAccentColor: Color = Color.Transparent,
+    onCurrentPageChanged: (TextPage) -> Unit = {},
+    onSelectionStartMove: (TextPos) -> Unit = {},
+    onSelectionEndMove: (TextPos) -> Unit = {},
 ) {
+    fun cursorOffsetFor(textPos: TextPos?, startHandle: Boolean): Offset? {
+        val pos = textPos?.takeIf { it.relativePagePos == 0 } ?: return null
+        val line = page.lines.getOrNull(pos.lineIndex) ?: return null
+        if (line.columns.isEmpty()) return null
+        val columnIndex = pos.columnIndex.coerceIn(0, line.columns.lastIndex)
+        val column = line.columns[columnIndex]
+        val x = when {
+            startHandle && pos.columnIndex < line.columns.size -> column.start
+            startHandle -> column.end
+            pos.columnIndex >= 0 -> column.end
+            else -> column.start
+        }
+        return Offset(x, line.lineBottom + page.paddingTop)
+    }
+
+    val isCurrentDisplayPage = pageIndex == currentPage
     Box(modifier = Modifier.fillMaxSize().background(backgroundColor)) {
         PageCanvas(
             page = page,
@@ -995,18 +1638,73 @@ private fun PageContentBox(
             contentPaint = contentPaint,
             chapterNumPaint = chapterNumPaint,
             bgBitmap = bgBitmap,
-            selectionStart = if (pageIndex == currentPage) selectionState.startPos else null,
-            selectionEnd = if (pageIndex == currentPage) selectionState.endPos else null,
+            selectionStart = if (isCurrentDisplayPage) {
+                selectionState.startPos?.takeIf { it.relativePagePos == 0 }
+            } else null,
+            selectionEnd = if (isCurrentDisplayPage) {
+                selectionState.endPos?.takeIf { it.relativePagePos == 0 }
+            } else null,
             selectionColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
             aloudColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
             searchResultColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
             bookmarkColor = MaterialTheme.colorScheme.error,
             modifier = Modifier.fillMaxSize(),
         )
+        if (isCurrentDisplayPage) {
+            val startOffset = cursorOffsetFor(selectionState.startPos, startHandle = true)
+            val endOffset = cursorOffsetFor(selectionState.endPos, startHandle = false)
+            val handlesTooClose = startOffset != null && endOffset != null &&
+                abs(startOffset.x - endOffset.x) < 28f &&
+                abs(startOffset.y - endOffset.y) < 28f
+            startOffset?.let { offset ->
+                val adjustedOffset = if (handlesTooClose) offset.copy(y = offset.y - 18f) else offset
+                CursorHandle(position = adjustedOffset, onDrag = { dragOffset ->
+                    hitTestPageRough(page, dragOffset.x, dragOffset.y)?.let(onSelectionStartMove)
+                })
+            }
+            endOffset?.let { offset ->
+                val adjustedOffset = if (handlesTooClose) offset.copy(y = offset.y + 18f) else offset
+                CursorHandle(position = adjustedOffset, onDrag = { dragOffset ->
+                    hitTestPageRough(page, dragOffset.x, dragOffset.y)?.let(onSelectionEndMove)
+                })
+            }
+        }
+        if (autoPageOverlayProgress > 0 && autoPageNextPage != null && isCurrentDisplayPage) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(with(LocalDensity.current) { autoPageOverlayProgress.toDp() })
+                    .align(Alignment.TopStart),
+            ) {
+                PageCanvas(
+                    page = autoPageNextPage,
+                    titlePaint = titlePaint,
+                    contentPaint = contentPaint,
+                    chapterNumPaint = chapterNumPaint,
+                    bgBitmap = bgBitmap,
+                    selectionStart = null,
+                    selectionEnd = null,
+                    selectionColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
+                    aloudColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
+                    searchResultColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
+                    bookmarkColor = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .align(Alignment.TopStart)
+                    .offset(y = with(LocalDensity.current) { autoPageOverlayProgress.toDp() })
+                .background(autoPageAccentColor),
+            )
+        }
         PageReaderInfoOverlay(
-            pages = page.textChapter?.pages ?: listOf(page),
-            pageIndex = pageIndex,
-            pageCount = pageCount,
+            pages = listOf(page),
+            onCurrentPageChanged = if (isCurrentDisplayPage && page.chapterIndex == chapterIndex) onCurrentPageChanged else { _ -> },
+            pageIndex = 0,
+            pageCount = page.pageSize.takeIf { it > 0 } ?: pageCount,
             backgroundColor = backgroundColor,
             chapterTitle = chapterTitle,
             chapterIndex = chapterIndex,
@@ -1036,8 +1734,9 @@ private fun ReaderSelectionToolbar(
     selectionState: SelectionState,
     toolbarOffset: Offset,
     page: TextPage?,
+    relativePageProvider: (Int) -> TextPage? = { page },
     onCopyText: (String) -> Unit,
-    onSpeakFromHere: (String) -> Unit,
+    onSpeakFromHere: (Int) -> Unit,
     onTranslateText: (String) -> Unit,
     onLookupWord: (String) -> Unit,
     onShareQuote: (String) -> Unit,
@@ -1045,14 +1744,45 @@ private fun ReaderSelectionToolbar(
     if (!selectionState.isActive) return
 
     fun selectedText(): String {
-        if (page == null || selectionState.startPos == null || selectionState.endPos == null) return ""
-        return getSelectedText(page, selectionState.startPos!!, selectionState.endPos!!)
+        val start = selectionState.startPos ?: return ""
+        val end = selectionState.endPos ?: return ""
+        val (actualStart, actualEnd) = if (start.compare(end) <= 0) start to end else end to start
+        if (actualStart.relativePagePos == actualEnd.relativePagePos) {
+            val textPage = relativePageProvider(actualStart.relativePagePos) ?: page ?: return ""
+            return getSelectedText(textPage, actualStart, actualEnd)
+        }
+        val startPage = relativePageProvider(actualStart.relativePagePos) ?: return ""
+        val endPage = relativePageProvider(actualEnd.relativePagePos) ?: return getSelectedText(
+            startPage,
+            actualStart,
+            TextPos(actualStart.relativePagePos, startPage.lines.lastIndex, Int.MAX_VALUE),
+        )
+        val builder = StringBuilder()
+        builder.append(
+            getSelectedText(
+                startPage,
+                actualStart,
+                TextPos(actualStart.relativePagePos, startPage.lines.lastIndex, Int.MAX_VALUE),
+            ),
+        )
+        if (builder.isNotEmpty()) builder.append('\n')
+        builder.append(getSelectedText(endPage, TextPos(actualEnd.relativePagePos, 0, -1), actualEnd))
+        return builder.toString()
+    }
+
+    fun selectedStartChapterPosition(): Int {
+        val textPage = page ?: return 0
+        val start = selectionState.startPos ?: return textPage.chapterPosition
+        val end = selectionState.endPos ?: start
+        val actualStart = if (start.compare(end) <= 0) start else end
+        val startPage = relativePageProvider(actualStart.relativePagePos) ?: textPage
+        return startPage.chapterPosition + startPage.getPosByLineColumn(actualStart.lineIndex, actualStart.columnIndex)
     }
 
     SelectionToolbar(
         offset = toolbarOffset,
         onCopy = { onCopyText(selectedText()); selectionState.clear() },
-        onSpeak = { onSpeakFromHere(selectedText()); selectionState.clear() },
+        onSpeak = { onSpeakFromHere(selectedStartChapterPosition()); selectionState.clear() },
         onTranslate = { onTranslateText(selectedText()); selectionState.clear() },
         onShare = { onShareQuote(selectedText()); selectionState.clear() },
         onLookup = { onLookupWord(selectedText()); selectionState.clear() },

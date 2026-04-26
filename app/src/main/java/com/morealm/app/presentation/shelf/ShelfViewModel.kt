@@ -31,7 +31,10 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import javax.inject.Inject
 
@@ -61,14 +64,22 @@ class ShelfViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
 
     init {
-        // On startup, check for books with stale cover paths (cache cleared)
-        // and re-extract covers from the original files
-        viewModelScope.launch(Dispatchers.IO) { refreshStaleCoverPaths() }
+        // Do not parse EPUB/PDF covers during the launch critical path. LDPlayer
+        // reports null UI roots while startup restore competes with heavy cover
+        // extraction, so refresh stale covers only after the shelf has had time
+        // to draw.
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(8_000L)
+            refreshStaleCoverPaths(maxPerLaunch = 12)
+        }
     }
 
-    private suspend fun refreshStaleCoverPaths() {
+    private suspend fun refreshStaleCoverPaths(maxPerLaunch: Int) {
         val allBooks = bookRepo.getAllBooksSync()
+        var attempted = 0
         for (book in allBooks) {
+            if (attempted >= maxPerLaunch) break
+            yield()
             val cover = book.coverUrl
             val canExtractCover = book.format == BookFormat.EPUB || book.format == BookFormat.PDF
             val needsRefresh = when {
@@ -81,6 +92,7 @@ class ShelfViewModel @Inject constructor(
 
             val localPath = book.localPath ?: continue
             val uri = Uri.parse(localPath)
+            attempted++
             val newCover = try {
                 when (book.format) {
                     BookFormat.EPUB -> EpubParser.extractCover(context, uri)
@@ -115,7 +127,11 @@ class ShelfViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val groupNames: StateFlow<Map<String, String>> = groupRepo.getAllGroups()
-        .map { groups -> groups.associate { it.id to it.name } }
+        .map { groups ->
+            withContext(Dispatchers.Default) {
+                groups.associate { it.id to it.name }
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     private val _sortMode = MutableStateFlow("title")
@@ -126,27 +142,35 @@ class ShelfViewModel @Inject constructor(
     /** All books as a simple Flow, sorted client-side */
     @OptIn(ExperimentalCoroutinesApi::class)
     val books: StateFlow<List<Book>> = _sortMode.flatMapLatest { sort ->
-        bookRepo.getAllBooks().map { list -> sortBooks(list, sort) }
+        bookRepo.getAllBooks().map { list ->
+            withContext(Dispatchers.Default) {
+                sortBooks(list, sort)
+            }
+        }
     }.onEach { _booksLoaded.value = true }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** Folder book counts — derived from the books flow */
     val folderBookCounts: StateFlow<Map<String, Int>> = books
         .map { list ->
-            list.filter { it.folderId != null }
-                .groupBy { it.folderId!! }
-                .mapValues { it.value.size }
+            withContext(Dispatchers.Default) {
+                list.filter { it.folderId != null }
+                    .groupBy { it.folderId!! }
+                    .mapValues { it.value.size }
+            }
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyMap())
 
     /** Folder cover URLs — first 4 cover URLs per folder for mosaic display */
     val folderCoverUrls: StateFlow<Map<String, List<String?>>> = books
         .map { list ->
-            list.filter { it.folderId != null }
-                .groupBy { it.folderId!! }
-                .mapValues { entry ->
-                    entry.value.take(4).map { it.coverUrl }
-                }
+            withContext(Dispatchers.Default) {
+                list.filter { it.folderId != null }
+                    .groupBy { it.folderId!! }
+                    .mapValues { entry ->
+                        entry.value.take(4).map { it.coverUrl }
+                    }
+            }
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyMap())
 

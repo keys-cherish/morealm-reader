@@ -211,7 +211,7 @@ class ChapterProvider(
             }
             stringBuilder.append("\n")
             // Reserve room for the decorative line and keep the title block compact.
-            durY += (contentPaintTextHeight * 1.35f).coerceAtLeast(titleBottomSpacing.toFloat() * 0.75f)
+            durY += (contentPaintTextHeight * 0.75f).coerceAtLeast(titleBottomSpacing.toFloat() * 0.5f)
         }
 
         // 检查排版过程中是否产生了新页（分页），如果有就 finalize 已完成的页
@@ -253,7 +253,7 @@ class ChapterProvider(
                 durY += if (paragraph.isChapterNum) {
                     chapterNumPaintTextHeight * 0.20f
                 } else {
-                    (contentPaintTextHeight * 1.35f).coerceAtLeast(titleBottomSpacing.toFloat() * 0.75f)
+                    (contentPaintTextHeight * 0.75f).coerceAtLeast(titleBottomSpacing.toFloat() * 0.5f)
                 }
                 flushCompletedPages()
                 continue

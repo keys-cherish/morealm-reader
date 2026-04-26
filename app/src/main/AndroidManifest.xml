@@ -27,7 +27,9 @@
 
         <activity
             android:name=".ui.navigation.MainActivity"
+            android:alwaysRetainTaskState="true"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="screenSize|screenLayout|orientation|smallestScreenSize|density"
             android:resizeableActivity="true"
             android:windowSoftInputMode="adjustResize">

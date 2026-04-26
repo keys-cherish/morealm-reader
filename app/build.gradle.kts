@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -6,6 +8,29 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
 }
+
+val localSigningProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.isFile) {
+        file.inputStream().use { load(it) }
+    }
+}
+
+fun releaseSigningValue(name: String): String? =
+    providers.gradleProperty(name).orNull
+        ?: localSigningProperties.getProperty(name)
+        ?: providers.environmentVariable(name).orNull
+
+val releaseStoreFile = releaseSigningValue("RELEASE_STORE_FILE")
+val releaseStorePassword = releaseSigningValue("RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseSigningValue("RELEASE_KEY_ALIAS")
+val releaseKeyPassword = releaseSigningValue("RELEASE_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
 
 android {
     namespace = "com.morealm.app"
@@ -30,11 +55,13 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            storeFile = file("${rootProject.projectDir}/morealm-release.jks")
-            storePassword = "MoRealm@2024Kx9"
-            keyAlias = "morealm"
-            keyPassword = "MoRealm@2024Kx9"
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
         }
     }
 
@@ -46,7 +73,9 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

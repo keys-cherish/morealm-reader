@@ -1,5 +1,6 @@
 package com.morealm.app.ui.navigation
 
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,8 +8,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.presentation.theme.ThemeViewModel
@@ -17,9 +18,11 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    private val continueReadingRequest = mutableIntStateOf(0)
 
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
+        updateContinueReadingRequest(intent)
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
@@ -35,13 +38,24 @@ class MainActivity : ComponentActivity() {
             val windowSizeClass = calculateWindowSizeClass(this)
 
             MoRealmTheme(theme = activeTheme) {
-                val continueReading = intent?.action == "com.morealm.app.CONTINUE_READING"
                 MoRealmNavHost(
                     windowSizeClass = windowSizeClass,
                     themeViewModel = themeViewModel,
-                    continueReading = continueReading,
+                    continueReadingRequest = continueReadingRequest.intValue,
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        updateContinueReadingRequest(intent)
+    }
+
+    private fun updateContinueReadingRequest(intent: Intent?) {
+        if (intent?.action == "com.morealm.app.CONTINUE_READING") {
+            continueReadingRequest.intValue += 1
         }
     }
 }

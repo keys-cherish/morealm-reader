@@ -155,7 +155,7 @@ fun SearchScreen(
         // Source count (when idle)
         if (sourceCount > 0 && sourceProgress.isEmpty()) {
             Text(
-                "已加载 ${sourceCount} 个书源",
+                "已加载 ${sourceCount} 个文本书源",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
@@ -187,22 +187,7 @@ fun SearchScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // Local shelf results
-                if (localResults.isNotEmpty()) {
-                    item {
-                        Text(
-                            "书架 (${localResults.size})",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                            modifier = Modifier.padding(vertical = 4.dp),
-                        )
-                    }
-                    items(localResults, key = { it.id }) { book ->
-                        LocalBookItem(book, onClick = { onNavigateReader(book.id) })
-                    }
-                }
-
-                // Online results
+                // Online results first: Legado search keeps remote results as the primary result stream.
                 if (results.isNotEmpty()) {
                     item {
                         Text(
@@ -217,15 +202,38 @@ fun SearchScreen(
                         OnlineResultItem(
                             result = result,
                             onClick = {
-                                viewModel.addToShelfAndRead(result) { bookId ->
-                                    onNavigateReader(bookId)
+                                if (result.sourceType == 0) {
+                                    viewModel.addToShelfAndRead(result) { bookId ->
+                                        onNavigateReader(bookId)
+                                    }
+                                } else {
+                                    Toast.makeText(ctx, "非文本书源暂不能阅读", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             onDownload = {
-                                viewModel.addToShelfAndDownload(result)
-                                Toast.makeText(ctx, "开始缓存: ${result.title}", Toast.LENGTH_SHORT).show()
+                                if (result.sourceType == 0) {
+                                    viewModel.addToShelfAndDownload(result)
+                                    Toast.makeText(ctx, "开始缓存: ${result.title}", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(ctx, "非文本书源暂不能缓存", Toast.LENGTH_SHORT).show()
+                                }
                             },
                         )
+                    }
+                }
+
+                // Local shelf results
+                if (localResults.isNotEmpty()) {
+                    item {
+                        Text(
+                            "书架 (${localResults.size})",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(top = if (results.isNotEmpty()) 12.dp else 4.dp, bottom = 4.dp),
+                        )
+                    }
+                    items(localResults, key = { it.id }) { book ->
+                        LocalBookItem(book, onClick = { onNavigateReader(book.id) })
                     }
                 }
 
@@ -249,9 +257,17 @@ private fun SearchProgressCard(
     val fraction = if (total > 0) done.toFloat() / total else 0f
     val isComplete = done >= total && total > 0
     val failed = remember(progress) { progress.count { it.status == SourceStatus.FAILED } }
+    val failedDetails = remember(progress) {
+        progress.filter { it.status == SourceStatus.FAILED && !it.errorMessage.isNullOrBlank() }
+    }
     var expanded by remember { mutableStateOf(false) }
     val previewCount = 12
-    val visibleProgress = if (expanded) progress else progress.take(previewCount)
+    val compactCompleteWithResults = isComplete && resultCount > 0 && !expanded
+    val visibleProgress = when {
+        expanded -> progress
+        compactCompleteWithResults -> progress.filter { it.status == SourceStatus.SEARCHING }.take(previewCount)
+        else -> progress.take(previewCount)
+    }
     val hiddenCount = (progress.size - visibleProgress.size).coerceAtLeast(0)
 
     Surface(
@@ -268,12 +284,12 @@ private fun SearchProgressCard(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        if (isComplete) "\u641c\u7d22\u5b8c\u6210" else "\u6b63\u5728\u68c0\u7d22\u4e66\u6e90\u2026",
+                        if (isComplete) "搜索完成" else "正在检索文本书源…",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     )
                     Text(
-                        "\u627e\u5230 $resultCount \u6761 \u00b7 \u5931\u8d25 $failed \u4e2a",
+                        "找到 $resultCount 条 · 失败 $failed 个",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.32f),
                     )
@@ -285,7 +301,7 @@ private fun SearchProgressCard(
                 )
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    if (expanded) "\u6536\u8d77" else "\u5c55\u5f00",
+                    if (expanded) "收起" else "展开",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold,
@@ -296,32 +312,72 @@ private fun SearchProgressCard(
                 )
             }
 
-            Spacer(Modifier.height(8.dp))
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                RingProgress(fraction)
+            if (expanded || resultCount == 0) {
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    RingProgress(fraction)
+                }
             }
 
-            Spacer(Modifier.height(8.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(
-                        if (expanded) {
-                            Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())
-                        } else {
-                            Modifier
-                        }
-                    )
-            ) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalArrangement = Arrangement.spacedBy(5.dp),
+            if (visibleProgress.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (expanded) {
+                                Modifier
+                                    .heightIn(max = if (resultCount > 0) 120.dp else 220.dp)
+                                    .verticalScroll(rememberScrollState())
+                            } else {
+                                Modifier
+                            }
+                        )
                 ) {
-                    visibleProgress.forEach { src ->
-                        SourceTag(src)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        visibleProgress.forEach { src ->
+                            SourceTag(src)
+                        }
+                        if (hiddenCount > 0) {
+                            MoreSourceTag(hiddenCount)
+                        }
                     }
-                    if (hiddenCount > 0) {
-                        MoreSourceTag(hiddenCount)
+                }
+            } else if (compactCompleteWithResults && failed > 0) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "失败详情已折叠，展开后查看",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.42f),
+                )
+            }
+            if (expanded && failedDetails.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 96.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    failedDetails.take(12).forEach { detail ->
+                        Text(
+                            "${detail.sourceName}: ${detail.errorMessage}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (failedDetails.size > 12) {
+                        Text(
+                            "另有 ${failedDetails.size - 12} 个失败来源",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.68f),
+                        )
                     }
                 }
             }
@@ -389,6 +445,8 @@ private fun SourceTag(source: SourceSearchProgress) {
             modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
             style = MaterialTheme.typography.labelSmall,
             color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -416,10 +474,13 @@ private fun OnlineResultItem(
     onClick: () -> Unit,
     onDownload: () -> Unit,
 ) {
+    val isTextSource = result.sourceType == 0
     Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = isTextSource, onClick = onClick),
         shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isTextSource) 0.3f else 0.16f),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
@@ -485,24 +546,32 @@ private fun OnlineResultItem(
                     )
                 }
                 Text(
-                    "来源：${result.sourceName}",
+                    "来源：${result.sourceName}" + if (isTextSource) "" else " · ${sourceTypeLabel(result.sourceType)}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = if (isTextSource) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 3.dp),
                 )
             }
 
             // Download button — default 48dp touch target
-            IconButton(onClick = onDownload) {
+            IconButton(onClick = onDownload, enabled = isTextSource) {
                 Icon(
                     Icons.Default.CloudDownload,
                     contentDescription = "缓存下载",
-                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                    tint = MaterialTheme.colorScheme.primary.copy(alpha = if (isTextSource) 0.5f else 0.18f),
                     modifier = Modifier.size(20.dp),
                 )
             }
         }
     }
+}
+
+private fun sourceTypeLabel(type: Int): String = when (type) {
+    1 -> "音频书源"
+    2 -> "图片书源"
+    3 -> "下载书源"
+    4 -> "视频书源"
+    else -> "非文本书源"
 }
 
 /** Local book result item */
