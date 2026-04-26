@@ -19,6 +19,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -46,7 +50,13 @@ fun ReaderTopBar(bookTitle: String, onBack: () -> Unit, onExport: () -> Unit = {
                 .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.semantics {
+                    contentDescription = "返回书架"
+                    role = Role.Button
+                },
+            ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回",
                     tint = MaterialTheme.colorScheme.onSurface)
             }
@@ -58,13 +68,25 @@ fun ReaderTopBar(bookTitle: String, onBack: () -> Unit, onExport: () -> Unit = {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(onClick = onBookmark) {
+            IconButton(
+                onClick = onBookmark,
+                modifier = Modifier.semantics {
+                    contentDescription = "添加书签"
+                    role = Role.Button
+                },
+            ) {
                 Icon(Icons.Default.BookmarkAdd, "书签",
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(20.dp))
             }
             Box {
-                IconButton(onClick = { showMenu = true }) {
+                IconButton(
+                    onClick = { showMenu = true },
+                    modifier = Modifier.semantics {
+                        contentDescription = "更多操作"
+                        role = Role.Button
+                    },
+                ) {
                     Icon(Icons.Default.MoreVert, "更多",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(20.dp))
@@ -120,18 +142,42 @@ fun ReaderControlBar(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onBack, modifier = Modifier.size(32.dp)) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .semantics {
+                            contentDescription = "返回书架"
+                            role = Role.Button
+                        },
+                ) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(18.dp))
                 }
-                IconButton(onClick = onChapterSelect, modifier = Modifier.size(32.dp)) {
+                IconButton(
+                    onClick = onChapterSelect,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .semantics {
+                            contentDescription = "目录"
+                            role = Role.Button
+                        },
+                ) {
                     @Suppress("DEPRECATION")
                     Icon(Icons.Default.FormatListBulleted, "目录",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(18.dp))
                 }
-                IconButton(onClick = onSearch, modifier = Modifier.size(32.dp)) {
+                IconButton(
+                    onClick = onSearch,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .semantics {
+                            contentDescription = "全文搜索"
+                            role = Role.Button
+                        },
+                ) {
                     Icon(Icons.Default.Search, "搜索",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(18.dp))
@@ -147,17 +193,41 @@ fun ReaderControlBar(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                     )
                 }
-                IconButton(onClick = onTts, modifier = Modifier.size(32.dp)) {
+                IconButton(
+                    onClick = onTts,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .semantics {
+                            contentDescription = "朗读"
+                            role = Role.Button
+                        },
+                ) {
                     Icon(Icons.Default.RecordVoiceOver, "朗读",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(18.dp))
                 }
-                IconButton(onClick = onAutoPage, modifier = Modifier.size(32.dp)) {
+                IconButton(
+                    onClick = onAutoPage,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .semantics {
+                            contentDescription = "自动翻页"
+                            role = Role.Button
+                        },
+                ) {
                     Icon(Icons.Default.Timer, "自动翻页",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(18.dp))
                 }
-                IconButton(onClick = onSettings, modifier = Modifier.size(32.dp)) {
+                IconButton(
+                    onClick = onSettings,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .semantics {
+                            contentDescription = "阅读设置"
+                            role = Role.Button
+                        },
+                ) {
                     Icon(Icons.Default.TextFields, "设置",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(18.dp))
@@ -280,7 +350,12 @@ fun ReaderSettingsPanel(
                         val fg = style.textColor.toComposeColor()
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.clickable { onStyleChange(style.id) },
+                            modifier = Modifier
+                                .semantics {
+                                    contentDescription = "阅读样式：${style.name}"
+                                    role = Role.Button
+                                }
+                                .clickable { onStyleChange(style.id) },
                         ) {
                             Box(
                                 modifier = Modifier
@@ -563,6 +638,10 @@ fun ReaderSettingsPanel(
                                         androidx.compose.ui.graphics.Color.Transparent
                                     ) else Modifier
                                 )
+                                .semantics {
+                                    contentDescription = "主题：${theme.name}"
+                                    role = Role.Button
+                                }
                                 .clickable { onThemeChange(theme.id) },
                             contentAlignment = Alignment.Center,
                         ) {

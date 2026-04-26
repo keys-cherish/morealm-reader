@@ -49,7 +49,7 @@ import kotlinx.coroutines.launch
 fun MoRealmNavHost(
     windowSizeClass: WindowSizeClass,
     themeViewModel: ThemeViewModel,
-    continueReading: Boolean = false,
+    continueReadingRequest: Int = 0,
 ) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -69,10 +69,11 @@ fun MoRealmNavHost(
     var targetTab by remember { mutableStateOf<Int?>(null) }
     var tabWidth by remember { mutableIntStateOf(0) }
     val tabOffset = remember { Animatable(0f) }
-    val cachedTabs = remember { mutableStateListOf<Int>().apply { addAll(tabs.indices.toList()) } }
-    val switchTab: (Int) -> Unit = remember(selectedTab, scope) {
+    val cachedTabs = remember { mutableStateListOf(0) }
+    val switchTab: (Int) -> Unit = remember(selectedTab, scope, cachedTabs) {
         { index ->
             if (index == selectedTab) return@remember
+            if (index !in cachedTabs) cachedTabs.add(index)
             selectedTab = index
             targetTab = null
             scope.launch { tabOffset.snapTo(0f) }
@@ -216,7 +217,7 @@ fun MoRealmNavHost(
                                 onToggleDayNight = onToggleDayNight,
                                 isNightTheme = isNight,
                                 columns = columns,
-                                continueReading = continueReading,
+                                continueReadingRequest = continueReadingRequest,
                             )
                         }
                         BottomTab.Discover -> SearchScreen(
@@ -286,7 +287,7 @@ fun MoRealmNavHost(
                 val bookId = entry.arguments?.getString("bookId") ?: return@composable
                 ReaderScreen(
                     bookId = bookId,
-                    onBack = { navController.safePopBackStack() },
+                    onBack = { navController.safePopBackStackOrHome() },
                     onNavigateToBook = { targetBookId ->
                         navController.safeNavigate("reader/$targetBookId") {
                             popUpTo("reader/$bookId") { inclusive = true }
@@ -324,5 +325,19 @@ private fun NavController.safeNavigate(route: String, builder: (androidx.navigat
 private fun NavController.safePopBackStack(): Boolean {
     return try {
         popBackStack()
+    } catch (_: IllegalStateException) { false }
+}
+
+private fun NavController.safePopBackStackOrHome(): Boolean {
+    return try {
+        if (previousBackStackEntry != null && popBackStack()) {
+            true
+        } else {
+            navigate("main_tabs") {
+                launchSingleTop = true
+                popUpTo("main_tabs") { inclusive = false }
+            }
+            true
+        }
     } catch (_: IllegalStateException) { false }
 }

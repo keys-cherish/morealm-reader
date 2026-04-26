@@ -237,10 +237,30 @@ private fun CacheBookItem(
                     if (stat != null) {
                         val pct = if (stat.totalChapters > 0) stat.cachedChapters * 100 / stat.totalChapters else 0
                         Text(
-                            "已缓存 ${stat.cachedChapters}/${stat.totalChapters} ($pct%)",
+                            if (stat.totalChapters > 0) {
+                                "已缓存 ${stat.cachedChapters}/${stat.totalChapters} ($pct%)"
+                            } else {
+                                "未获取到章节，可能需要换源"
+                            },
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (pct >= 100) MaterialTheme.colorScheme.tertiary
-                            else MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                            color = if (stat.totalChapters == 0) {
+                                MaterialTheme.colorScheme.error
+                            } else if (pct >= 100) {
+                                MaterialTheme.colorScheme.tertiary
+                            } else {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                            },
+                        )
+                    }
+                    if (!isDownloading && downloadProgress != null &&
+                        (downloadProgress.failed > 0 || downloadProgress.message.isNotBlank())
+                    ) {
+                        Text(
+                            downloadProgress.message.ifBlank { "缓存失败 ${downloadProgress.failed} 章" },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }

@@ -7,13 +7,26 @@ import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.CookieStore
 import com.morealm.app.domain.http.StrResponse
+import com.morealm.app.domain.http.addHeaders
+import com.morealm.app.domain.http.newCallStrResponse
+import com.morealm.app.domain.http.okHttpClient
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.apache.commons.text.StringEscapeUtils
+import org.jsoup.Jsoup
+import java.io.File
+import java.net.URL
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.SimpleTimeZone
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -34,15 +47,24 @@ object JsExtensions {
 
     fun getSource(): BookSource? = sourceGetter?.invoke() as? BookSource
 
+    fun getTag(): String? = getSource()?.bookSourceUrl
+
     // ── Variable get/put (delegated to ruleData, matches AnalyzeUrl API) ──
 
     fun put(key: String, value: String): String {
-        ruleDataGetter?.invoke()?.putVariable(key, value)
+        val ruleData = ruleDataGetter?.invoke()
+        if (ruleData != null) {
+            ruleData.putVariable(key, value)
+        } else {
+            getSource()?.put(key, value)
+        }
         return value
     }
 
     fun get(key: String): String {
-        return ruleDataGetter?.invoke()?.getVariable(key)?.takeIf { it.isNotEmpty() } ?: ""
+        return ruleDataGetter?.invoke()?.getVariable(key)?.takeIf { it.isNotEmpty() }
+            ?: getSource()?.get(key)?.takeIf { it.isNotEmpty() }
+            ?: ""
     }
 
     // ── HTTP ──
@@ -50,23 +72,42 @@ object JsExtensions {
     fun ajax(url: Any): String? {
         val urlStr = if (url is List<*>) url.firstOrNull().toString() else url.toString()
         val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
-        val analyzeUrl = AnalyzeUrl(urlStr, coroutineContext = ctx)
+        val analyzeUrl = AnalyzeUrl(
+            urlStr,
+            source = getSource(),
+            ruleData = ruleDataGetter?.invoke(),
+            coroutineContext = ctx,
+        )
         return runCatching {
             runBlocking(ctx) { analyzeUrl.getStrResponseAwait().body }
         }.getOrElse { it.message }
     }
 
+    fun ajax(url: Any, callTimeout: Long?): String? = ajax(url)
+
     /** Legado-compatible: fetch URL and return body string (used by many book sources) */
     fun getString(url: String): String? = ajax(url)
 
-    fun getString(url: String, headers: Any?): String? {
-        // headers param accepted for Legado compat but currently ignored (uses source headers)
-        return ajax(url)
-    }
+    fun getString(url: String, headers: Any?): String? = connect(url, headers).body
 
     fun connect(urlStr: String): StrResponse {
+        return connect(urlStr, null, null)
+    }
+
+    fun connect(urlStr: String, header: Any?): StrResponse {
+        return connect(urlStr, header, null)
+    }
+
+    fun connect(urlStr: String, header: Any?, callTimeout: Long?): StrResponse {
         val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
-        val analyzeUrl = AnalyzeUrl(urlStr, coroutineContext = ctx)
+        val headerMap = headersToMap(header).takeIf { it.isNotEmpty() }
+        val analyzeUrl = AnalyzeUrl(
+            urlStr,
+            source = getSource(),
+            ruleData = ruleDataGetter?.invoke(),
+            coroutineContext = ctx,
+            headerMapF = headerMap,
+        )
         return runCatching {
             runBlocking(ctx) { analyzeUrl.getStrResponseAwait() }
         }.getOrElse { StrResponse(urlStr, it.message ?: "") }
@@ -76,10 +117,86 @@ object JsExtensions {
 
     fun getByteArray(urlStr: String): ByteArray {
         val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
-        val analyzeUrl = AnalyzeUrl(urlStr, coroutineContext = ctx)
+        val analyzeUrl = AnalyzeUrl(
+            urlStr,
+            source = getSource(),
+            ruleData = ruleDataGetter?.invoke(),
+            coroutineContext = ctx,
+        )
         return runCatching {
             runBlocking(ctx) { analyzeUrl.getByteArrayAwait() }
         }.getOrElse { ByteArray(0) }
+    }
+
+    fun ajaxAll(urlList: Array<String>): Array<StrResponse> = ajaxAll(urlList, false)
+
+    fun ajaxAll(urlList: Array<String>, skipRateLimit: Boolean): Array<StrResponse> {
+        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        return runBlocking(ctx) {
+            urlList.map { url -> async { connect(url) } }.awaitAll().toTypedArray()
+        }
+    }
+
+    fun ajaxTestAll(urlList: Array<String>, timeout: Int): Array<StrResponse> {
+        return ajaxTestAll(urlList, timeout, false)
+    }
+
+    fun ajaxTestAll(urlList: Array<String>, timeout: Int, skipRateLimit: Boolean): Array<StrResponse> {
+        return ajaxAll(urlList, skipRateLimit)
+    }
+
+    fun post(urlStr: String, body: String): StrResponse = post(urlStr, body, null)
+
+    fun post(urlStr: String, body: String, headers: Any?): StrResponse {
+        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val headerMap = headersToMap(headers).toMutableMap()
+        if (!headerMap.containsKey("User-Agent")) {
+            headerMap["User-Agent"] = DEFAULT_USER_AGENT
+        }
+        return runCatching {
+            runBlocking(ctx) {
+                okHttpClient.newCallStrResponse {
+                    url(urlStr)
+                    addHeaders(headerMap)
+                    val contentType = headerMap["Content-Type"]
+                    val mediaType = (contentType ?: if (body.trimStart().startsWith("{") || body.trimStart().startsWith("[")) {
+                        "application/json; charset=utf-8"
+                    } else {
+                        "application/x-www-form-urlencoded; charset=utf-8"
+                    }).toMediaType()
+                    post(body.toRequestBody(mediaType))
+                }
+            }
+        }.getOrElse { StrResponse(urlStr, it.message ?: "") }
+    }
+
+    fun get(urlStr: String, headers: Map<String, String>): StrResponse {
+        return connect(urlStr, headers)
+    }
+
+    fun get(urlStr: String, headers: Map<String, String>, timeout: Int?): StrResponse {
+        return connect(urlStr, headers, timeout?.toLong())
+    }
+
+    fun head(urlStr: String, headers: Map<String, String>): StrResponse {
+        return head(urlStr, headers, null)
+    }
+
+    fun head(urlStr: String, headers: Map<String, String>, timeout: Int?): StrResponse {
+        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val headerMap = headers.toMutableMap()
+        if (!headerMap.containsKey("User-Agent")) {
+            headerMap["User-Agent"] = DEFAULT_USER_AGENT
+        }
+        return runCatching {
+            runBlocking(ctx) {
+                okHttpClient.newCallStrResponse {
+                    url(urlStr)
+                    addHeaders(headerMap)
+                    head()
+                }
+            }
+        }.getOrElse { StrResponse(urlStr, it.message ?: "") }
     }
 
     // ── Logging (called by book sources for debugging) ──
@@ -91,6 +208,14 @@ object JsExtensions {
 
     fun logType(any: Any?) {
         com.morealm.app.core.log.AppLog.debug("JsExtensions", "type: ${any?.javaClass?.name}, value: $any")
+    }
+
+    fun toast(msg: Any?) {
+        log(msg)
+    }
+
+    fun longToast(msg: Any?) {
+        log(msg)
     }
 
     // ── Base64 ──
@@ -143,7 +268,7 @@ object JsExtensions {
     }
 
     fun hexEncodeToString(str: String): String {
-        return str.toByteArray().joinToString("") { "%02x".format(it) }
+        return str.toByteArray().joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
     // ── MD5 ──
@@ -151,7 +276,7 @@ object JsExtensions {
     fun md5Encode(str: String): String {
         val md = MessageDigest.getInstance("MD5")
         val digest = md.digest(str.toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }
+        return digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
     fun md5Encode16(str: String): String {
@@ -184,7 +309,7 @@ object JsExtensions {
 
     fun digestHex(data: String, algorithm: String): String {
         val md = MessageDigest.getInstance(algorithm)
-        return md.digest(data.toByteArray()).joinToString("") { "%02x".format(it) }
+        return md.digest(data.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
     // ── Encoding ──
@@ -195,6 +320,18 @@ object JsExtensions {
 
     fun encodeURI(str: String, enc: String): String {
         return try { URLEncoder.encode(str, enc) } catch (_: Exception) { "" }
+    }
+
+    fun htmlFormat(str: String): String {
+        return Jsoup.parse(StringEscapeUtils.unescapeHtml4(str)).text()
+    }
+
+    fun t2s(text: String): String {
+        return runCatching { com.github.liuyueyi.quick.transfer.ChineseUtils.t2s(text) }.getOrDefault(text)
+    }
+
+    fun s2t(text: String): String {
+        return runCatching { com.github.liuyueyi.quick.transfer.ChineseUtils.s2t(text) }.getOrDefault(text)
     }
 
     // ── String/Bytes conversion ──
@@ -228,6 +365,8 @@ object JsExtensions {
         return cookieMap[key] ?: ""
     }
 
+    fun getWebViewUA(): String = DEFAULT_USER_AGENT
+
     // ── QueryTTF (字体反爬解密) ──
 
     fun queryTTF(data: Any?): QueryTTF? {
@@ -245,6 +384,8 @@ object JsExtensions {
             return null
         }
     }
+
+    fun queryBase64TTF(data: String?): QueryTTF? = queryTTF(data)
 
     /**
      * 替换字体反爬文字
@@ -278,9 +419,15 @@ object JsExtensions {
         } catch (_: Exception) { "" }
     }
 
+    fun randomUUID(): String = UUID.randomUUID().toString()
+
     // ── WebView ──
 
     fun webView(html: String?, url: String?, js: String?): String? {
+        return webView(html, url, js, false)
+    }
+
+    fun webView(html: String?, url: String?, js: String?, cacheFirst: Boolean): String? {
         val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
         return runBlocking(ctx) {
             com.morealm.app.domain.http.BackstageWebView(
@@ -290,6 +437,206 @@ object JsExtensions {
             ).getStrResponse().body
         }
     }
+
+    fun webViewGetSource(html: String?, url: String?, js: String?, sourceRegex: String): String? {
+        return webViewGetSource(html, url, js, sourceRegex, false)
+    }
+
+    fun webViewGetSource(html: String?, url: String?, js: String?, sourceRegex: String, cacheFirst: Boolean): String? {
+        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        return runBlocking(ctx) {
+            com.morealm.app.domain.http.BackstageWebView(
+                url = url,
+                html = html,
+                javaScript = js,
+                sourceRegex = sourceRegex,
+                tag = getSource()?.bookSourceUrl,
+            ).getStrResponse().body
+        }
+    }
+
+    fun webViewGetOverrideUrl(html: String?, url: String?, js: String?, overrideUrlRegex: String): String? {
+        return webViewGetOverrideUrl(html, url, js, overrideUrlRegex, false)
+    }
+
+    fun webViewGetOverrideUrl(html: String?, url: String?, js: String?, overrideUrlRegex: String, cacheFirst: Boolean): String? {
+        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        return runBlocking(ctx) {
+            com.morealm.app.domain.http.BackstageWebView(
+                url = url,
+                html = html,
+                javaScript = js,
+                overrideUrlRegex = overrideUrlRegex,
+                tag = getSource()?.bookSourceUrl,
+            ).getStrResponse().body
+        }
+    }
+
+    fun startBrowser(url: String) {
+        startBrowser(url, url, null)
+    }
+
+    fun startBrowser(url: String, title: String) {
+        startBrowser(url, title, null)
+    }
+
+    fun startBrowser(url: String, title: String, html: String?) {
+        com.morealm.app.core.log.AppLog.warn(
+            "JsExtensions",
+            "startBrowser requested by source '${getSource()?.bookSourceName ?: ""}': $title $url",
+        )
+        if (html != null) {
+            webView(html, url, null)
+        }
+    }
+
+    fun startBrowserAwait(url: String): StrResponse {
+        return startBrowserAwait(url, url, true, null)
+    }
+
+    fun startBrowserAwait(url: String, title: String): StrResponse {
+        return startBrowserAwait(url, title, true, null)
+    }
+
+    fun startBrowserAwait(url: String, title: String, refetchAfterSuccess: Boolean): StrResponse {
+        return startBrowserAwait(url, title, refetchAfterSuccess, null)
+    }
+
+    fun startBrowserAwait(url: String, title: String, refetchAfterSuccess: Boolean, html: String?): StrResponse {
+        com.morealm.app.core.log.AppLog.warn(
+            "JsExtensions",
+            "startBrowserAwait fallback for source '${getSource()?.bookSourceName ?: ""}': $title $url",
+        )
+        val body = if (html != null) {
+            webView(html, url, null)
+        } else {
+            connect(url).body
+        }
+        return StrResponse(url, body)
+    }
+
+    fun openVideoPlayer(url: String, title: String) {
+        openVideoPlayer(url, title, false)
+    }
+
+    fun openVideoPlayer(url: String, title: String, isFloat: Boolean) {
+        com.morealm.app.core.log.AppLog.warn(
+            "JsExtensions",
+            "openVideoPlayer requested by source '${getSource()?.bookSourceName ?: ""}': $title $url",
+        )
+    }
+
+    fun openUrl(url: String) {
+        openUrl(url, null)
+    }
+
+    fun openUrl(url: String, mimeType: String? = null) {
+        com.morealm.app.core.log.AppLog.warn(
+            "JsExtensions",
+            "openUrl requested by source '${getSource()?.bookSourceName ?: ""}': $url",
+        )
+    }
+
+    fun importScript(path: String): String = readTxtFile(path)
+
+    fun getVerificationCode(imageUrl: String): String = ""
+
+    fun cacheFile(urlStr: String): String = cacheFile(urlStr, 0)
+
+    fun cacheFile(urlStr: String, saveTime: Int): String {
+        val key = md5Encode16(urlStr)
+        CacheManager.get(key)?.takeIf { File(it).exists() }?.let { return it }
+        val suffix = urlStr.substringBefore('?')
+            .substringAfterLast('.', "cache")
+            .takeIf { it.length in 1..8 }
+            ?: "cache"
+        val file = File(com.morealm.app.MoRealmApp.instance.cacheDir, "source_files/$key.$suffix")
+        file.parentFile?.mkdirs()
+        file.writeBytes(getByteArray(urlStr))
+        CacheManager.put(key, file.absolutePath, saveTime)
+        return file.absolutePath
+    }
+
+    fun downloadFile(url: String): String = cacheFile(url)
+
+    fun downloadFile(content: String, url: String): String {
+        val key = md5Encode16(url)
+        val suffix = url.substringBefore('?')
+            .substringAfterLast('.', "txt")
+            .takeIf { it.length in 1..8 }
+            ?: "txt"
+        val file = File(com.morealm.app.MoRealmApp.instance.cacheDir, "source_files/$key.$suffix")
+        file.parentFile?.mkdirs()
+        file.writeText(content, Charsets.UTF_8)
+        CacheManager.put(key, file.absolutePath, 0)
+        return file.absolutePath
+    }
+
+    fun getFile(path: String): File = File(path)
+
+    fun readFile(path: String): ByteArray? = runCatching { File(path).readBytes() }.getOrNull()
+
+    fun readTxtFile(path: String): String = readTxtFile(path, "UTF-8")
+
+    fun readTxtFile(path: String, charsetName: String): String {
+        return runCatching { File(path).readText(charset(charsetName)) }.getOrDefault("")
+    }
+
+    fun deleteFile(path: String): Boolean = runCatching { File(path).delete() }.getOrDefault(false)
+
+    fun unzipFile(zipPath: String): String = zipPath
+    fun un7zFile(zipPath: String): String = zipPath
+    fun unrarFile(zipPath: String): String = zipPath
+    fun unArchiveFile(zipPath: String): String = zipPath
+    fun getTxtInFolder(path: String): String {
+        return runCatching {
+            File(path).walkTopDown()
+                .filter { it.isFile && it.extension.equals("txt", true) }
+                .joinToString("\n") { it.readText(Charsets.UTF_8) }
+        }.getOrDefault("")
+    }
+
+    fun getZipStringContent(url: String, path: String): String = ""
+    fun getZipStringContent(url: String, path: String, charsetName: String): String = ""
+    fun getRarStringContent(url: String, path: String): String = ""
+    fun getRarStringContent(url: String, path: String, charsetName: String): String = ""
+    fun get7zStringContent(url: String, path: String): String = ""
+    fun get7zStringContent(url: String, path: String, charsetName: String): String = ""
+    fun getZipByteArrayContent(url: String, path: String): ByteArray? = null
+    fun getRarByteArrayContent(url: String, path: String): ByteArray? = null
+    fun get7zByteArrayContent(url: String, path: String): ByteArray? = null
+
+    fun toNumChapter(s: String?): String? = s
+
+    fun toURL(urlStr: String): JsURL = JsURL(urlStr)
+
+    fun toURL(url: String, baseUrl: String? = null): JsURL = JsURL(url, baseUrl)
+
+    fun getReadBookConfig(): String = "{}"
+    fun getReadBookConfigMap(): Map<String, Any> = emptyMap()
+    fun getThemeMode(): String = "followSystem"
+    fun getThemeConfig(): String = "{}"
+    fun getThemeConfigMap(): Map<String, Any?> = emptyMap()
+
+    private fun headersToMap(headers: Any?): Map<String, String> {
+        return when (headers) {
+            null -> emptyMap()
+            is Map<*, *> -> headers.entries.associate { it.key.toString() to it.value.toString() }
+            is org.mozilla.javascript.NativeObject -> headers.ids.associate { key ->
+                key.toString() to org.mozilla.javascript.ScriptableObject.getProperty(headers, key.toString()).toString()
+            }
+            is String -> headers.split('\n', '&')
+                .mapNotNull { line ->
+                    val idx = line.indexOf(':').takeIf { it > 0 } ?: line.indexOf('=').takeIf { it > 0 } ?: return@mapNotNull null
+                    line.substring(0, idx).trim().takeIf { it.isNotEmpty() }?.let { it to line.substring(idx + 1).trim() }
+                }
+                .toMap()
+            else -> emptyMap()
+        }
+    }
+
+    private const val DEFAULT_USER_AGENT =
+        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 }
 
 /**
@@ -333,5 +680,39 @@ class SymmetricCryptoHelper(
 
     fun encryptHex(data: String): String {
         return encrypt(data).joinToString("") { "%02x".format(it) }
+    }
+}
+
+@Keep
+@Suppress("MemberVisibilityCanBePrivate")
+class JsURL(url: String, baseUrl: String? = null) {
+    val searchParams: Map<String, String>?
+    val host: String
+    val origin: String
+    val pathname: String
+
+    init {
+        val parsed = if (!baseUrl.isNullOrEmpty()) {
+            URL(URL(baseUrl), url)
+        } else {
+            URL(url)
+        }
+        host = parsed.host
+        origin = if (parsed.port > 0) {
+            "${parsed.protocol}://$host:${parsed.port}"
+        } else {
+            "${parsed.protocol}://$host"
+        }
+        pathname = parsed.path
+        searchParams = parsed.query?.let { query ->
+            val map = hashMapOf<String, String>()
+            query.split("&").forEach { pair ->
+                val parts = pair.split("=", limit = 2)
+                if (parts.size == 2) {
+                    map[parts[0]] = URLDecoder.decode(parts[1], "utf-8")
+                }
+            }
+            map
+        }
     }
 }

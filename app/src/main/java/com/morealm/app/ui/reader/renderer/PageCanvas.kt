@@ -2,9 +2,11 @@ package com.morealm.app.ui.reader.renderer
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.net.Uri
 import android.text.TextPaint
 import androidx.compose.foundation.Canvas
@@ -16,7 +18,9 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.ImageColumn
+import com.morealm.app.domain.render.TextBaseColumn
 import com.morealm.app.domain.render.TextColumn
+import com.morealm.app.domain.render.TextHtmlColumn
 import com.morealm.app.domain.render.TextLine
 import com.morealm.app.domain.render.TextPage
 import com.morealm.app.domain.render.TextPos
@@ -34,6 +38,35 @@ private const val BOOKMARK_TRIANGLE_SIZE = 40f
 /** Reusable Rect/RectF for background image drawing — avoids allocation per frame. */
 private val sharedSrcRect by lazy { Rect() }
 private val sharedDstRectF by lazy { RectF() }
+private val sharedInfoBgPaint by lazy { Paint(Paint.ANTI_ALIAS_FLAG) }
+private val sharedInfoTextPaint by lazy {
+    TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.LEFT
+    }
+}
+
+data class PageInfoOverlaySpec(
+    val chapterTitle: String,
+    val pageCount: Int,
+    val chapterIndex: Int,
+    val chaptersSize: Int,
+    val batteryLevel: Int,
+    val currentTime: String,
+    val textColorArgb: Int,
+    val backgroundColorArgb: Int,
+    val paddingHorizontalPx: Float,
+    val barHeightPx: Float,
+    val verticalPaddingPx: Float,
+    val textSizePx: Float,
+    val showChapterName: Boolean,
+    val showTimeBattery: Boolean,
+    val headerLeft: String,
+    val headerCenter: String,
+    val headerRight: String,
+    val footerLeft: String,
+    val footerCenter: String,
+    val footerRight: String,
+)
 
 /**
  * Single-page Canvas drawing composable.
@@ -166,7 +199,7 @@ fun drawPageContent(
 
         // 1. Search result highlights
         for (col in line.columns) {
-            if (col is TextColumn && col.isSearchResult) {
+            if (col is TextBaseColumn && col.isSearchResult) {
                 highlightPaint.color = searchColorArgb
                 canvas.drawRect(col.start, lineTop, col.end, lineBottom, highlightPaint)
             }
@@ -189,7 +222,7 @@ fun drawPageContent(
         }
 
         // 3. TTS read-aloud highlight
-        if (lineIndex == aloudLineIndex) {
+        if (line.isReadAloud || lineIndex == aloudLineIndex) {
             val left = line.columns.firstOrNull()?.start ?: 0f
             val right = line.columns.lastOrNull()?.end ?: 0f
             highlightPaint.color = aloudColorArgb
@@ -201,7 +234,7 @@ fun drawPageContent(
             val densityScale = (contentPaint.textSize / 18f).coerceIn(1f, 3f)
             val barWidth = 32f * densityScale
             val barHeight = 2f
-            val barY = lineBottom + contentPaint.textSize * 0.55f
+            val barY = lineBottom + contentPaint.textSize * 0.35f
             val barX = line.columns.firstOrNull()?.start ?: 0f
             highlightPaint.color = chapterNumPaint.color
             canvas.drawRect(barX, barY, barX + barWidth, barY + barHeight, highlightPaint)
@@ -224,12 +257,18 @@ fun drawPageContent(
 
             val lineBase = line.lineBase + paddingTop
             for (col in line.columns) {
-                if (col is TextColumn) {
+                if (col is TextBaseColumn) {
+                    if (col is TextHtmlColumn) {
+                        spacingPaint.set(drawPaint)
+                        spacingPaint.textSize = col.textSize
+                        col.textColor?.let { spacingPaint.color = it }
+                    }
+                    val actualPaint = if (col is TextHtmlColumn) spacingPaint else drawPaint
                     canvas.drawText(
                         col.charData,
                         col.start + line.extraLetterSpacingOffsetX,
                         lineBase,
-                        drawPaint,
+                        actualPaint,
                     )
                 }
             }
@@ -302,6 +341,7 @@ fun renderPageToBitmap(
     chapterNumPaint: TextPaint? = null,
     reuseBitmap: Bitmap? = null,
     bgBitmap: Bitmap? = null,
+    pageInfoOverlay: PageInfoOverlaySpec? = null,
 ): Bitmap {
     val bmp = if (reuseBitmap != null && reuseBitmap.width == width && reuseBitmap.height == height && !reuseBitmap.isRecycled) {
         reuseBitmap.eraseColor(bgColor)
@@ -325,7 +365,153 @@ fun renderPageToBitmap(
         chapterNumPaint = chapterNumPaint,
         canvasWidth = width.toFloat(),
     )
+    pageInfoOverlay?.let { overlay ->
+        drawPageInfoOverlay(canvas, width, height, page, overlay)
+    }
     return bmp
+}
+
+private fun drawPageInfoOverlay(
+    canvas: android.graphics.Canvas,
+    width: Int,
+    height: Int,
+    page: TextPage,
+    spec: PageInfoOverlaySpec,
+) {
+    drawInfoBar(
+        canvas = canvas,
+        width = width,
+        top = 0f,
+        isTop = true,
+        slots = listOf(
+            if (spec.showTimeBattery) spec.headerLeft else "none",
+            if (spec.showChapterName) spec.headerCenter else "none",
+            if (spec.showTimeBattery) spec.headerRight else "none",
+        ),
+        page = page,
+        spec = spec,
+    )
+    drawInfoBar(
+        canvas = canvas,
+        width = width,
+        top = height - spec.barHeightPx,
+        isTop = false,
+        slots = listOf(
+            if (spec.showChapterName) spec.footerLeft else "none",
+            spec.footerCenter,
+            spec.footerRight,
+        ),
+        page = page,
+        spec = spec,
+    )
+}
+
+private fun drawInfoBar(
+    canvas: android.graphics.Canvas,
+    width: Int,
+    top: Float,
+    isTop: Boolean,
+    slots: List<String>,
+    page: TextPage,
+    spec: PageInfoOverlaySpec,
+) {
+    if (slots.all { it == "none" }) return
+    val bottom = top + spec.barHeightPx
+    val bgPaint = sharedInfoBgPaint
+    val fullBg = spec.backgroundColorArgb
+    val clearBg = withAlpha(fullBg, 0)
+    bgPaint.shader = if (isTop) {
+        LinearGradient(
+            0f,
+            top,
+            0f,
+            bottom,
+            intArrayOf(fullBg, fullBg, clearBg),
+            floatArrayOf(0f, 0.72f, 1f),
+            Shader.TileMode.CLAMP,
+        )
+    } else {
+        LinearGradient(
+            0f,
+            top,
+            0f,
+            bottom,
+            intArrayOf(clearBg, fullBg, fullBg),
+            floatArrayOf(0f, 0.28f, 1f),
+            Shader.TileMode.CLAMP,
+        )
+    }
+    canvas.drawRect(0f, top, width.toFloat(), bottom, bgPaint)
+    bgPaint.shader = null
+
+    val textPaint = sharedInfoTextPaint
+    textPaint.color = withAlpha(spec.textColorArgb, ((spec.textColorArgb ushr 24) * 0.4f).toInt().coerceIn(0, 255))
+    textPaint.textSize = spec.textSizePx
+    textPaint.isFakeBoldText = false
+    val contentTop = top + spec.verticalPaddingPx
+    val contentBottom = bottom - spec.verticalPaddingPx
+    val baseline = (contentTop + contentBottom - textPaint.descent() - textPaint.ascent()) / 2f
+    val leftText = infoSlotText(slots[0], page, spec)
+    val centerText = infoSlotText(slots[1], page, spec)
+    val rightText = infoSlotText(slots[2], page, spec)
+
+    leftText?.let {
+        textPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText(ellipsizeForWidth(it, textPaint, width / 2f), spec.paddingHorizontalPx, baseline, textPaint)
+    }
+    centerText?.let {
+        textPaint.textAlign = Paint.Align.CENTER
+        canvas.drawText(ellipsizeForWidth(it, textPaint, width / 2f), width / 2f, baseline, textPaint)
+    }
+    rightText?.let {
+        textPaint.textAlign = Paint.Align.RIGHT
+        canvas.drawText(ellipsizeForWidth(it, textPaint, width / 2f), width - spec.paddingHorizontalPx, baseline, textPaint)
+    }
+}
+
+private fun infoSlotText(slot: String, page: TextPage, spec: PageInfoOverlaySpec): String? {
+    if (slot == "none") return null
+    val actualPageIndex = page.index
+    val actualPageCount = page.pageSize.takeIf { it > 0 } ?: spec.pageCount
+    val actualChapterTitle = page.title.takeIf { it.isNotBlank() } ?: spec.chapterTitle
+    val actualChapterIndex = page.chapterIndex
+    val readProgress = page.readProgress.takeIf { it.isNotBlank() } ?: run {
+        if (actualPageCount > 1) {
+            "%.1f%%".format(actualPageIndex.toFloat() / (actualPageCount - 1) * 100)
+        } else {
+            "100.0%"
+        }
+    }
+    return when (slot) {
+        "chapter" -> actualChapterTitle
+        "time" -> spec.currentTime
+        "battery", "battery_pct" -> "${spec.batteryLevel}%"
+        "page" -> "${actualPageIndex + 1}/$actualPageCount"
+        "progress" -> readProgress
+        "page_progress" -> "${actualPageIndex + 1}/$actualPageCount  $readProgress"
+        "book_name" -> "MoRealm"
+        "time_battery" -> "${spec.currentTime}  ${spec.batteryLevel}%"
+        "battery_time" -> "${spec.batteryLevel}%  ${spec.currentTime}"
+        "time_battery_pct" -> "${spec.currentTime}  ${spec.batteryLevel}%"
+        "chapter_progress" -> if (spec.chaptersSize > 0) "${actualChapterIndex + 1}/${spec.chaptersSize}" else null
+        else -> null
+    }
+}
+
+private fun ellipsizeForWidth(text: String, paint: TextPaint, maxWidth: Float): String {
+    if (paint.measureText(text) <= maxWidth) return text
+    val ellipsis = "..."
+    val ellipsisWidth = paint.measureText(ellipsis)
+    if (ellipsisWidth >= maxWidth) return ellipsis
+    var end = text.length
+    while (end > 0 && paint.measureText(text, 0, end) + ellipsisWidth > maxWidth) {
+        end--
+    }
+    return text.take(end) + ellipsis
+}
+
+private fun withAlpha(color: Int, alpha: Int): Int {
+    return (color and 0x00FFFFFF) or (alpha.coerceIn(0, 255) shl 24)
 }
 
 /**

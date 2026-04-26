@@ -2,6 +2,7 @@ package com.morealm.app.presentation.reader
 
 import android.net.Uri
 import android.content.Context
+import android.widget.Toast
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -20,7 +21,6 @@ import com.morealm.app.domain.parser.LocalBookParser
 import com.morealm.app.domain.webbook.CacheBook
 import com.morealm.app.domain.webbook.ChapterResult
 import com.morealm.app.domain.webbook.WebBook
-import com.morealm.app.core.text.AppPattern
 import com.morealm.app.core.text.stripHtml
 import com.morealm.app.core.text.stripHtmlTags
 import com.morealm.app.core.text.todayString
@@ -31,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.apache.commons.text.StringEscapeUtils
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -49,6 +50,10 @@ enum class PageTurnMode(val key: String, val label: String) {
     FULLSCREEN("fullscreen", "全屏点击翻页"),
 }
 
+private const val TEXT_BOOK_SOURCE_TYPE = 0
+private const val NON_TEXT_WEB_CONTENT_MESSAGE = "（该书源返回的是音频、图片、视频或临时媒体链接，不是可阅读的文本内容）"
+private const val READER_ERROR_CHAPTER_URL_PREFIX = "morealm:error:"
+
 data class PreloadedReaderChapter(
     val index: Int,
     val title: String,
@@ -60,12 +65,14 @@ data class RenderedReaderChapter(
     val title: String = "",
     val content: String = "",
     val initialProgress: Int = 0,
+    val initialChapterPosition: Int = 0,
 )
 
 data class VisibleReaderPage(
     val chapterIndex: Int = 0,
     val title: String = "",
     val readProgress: String = "0.0%",
+    val chapterPosition: Int = 0,
 )
 
 @HiltViewModel
@@ -97,6 +104,7 @@ class ReaderViewModel @Inject constructor(
     val ttsVoices get() = tts.ttsVoices
     val ttsVoiceName get() = tts.ttsVoiceName
     val ttsScrollProgress get() = tts.ttsScrollProgress
+    val ttsChapterPosition get() = tts.ttsChapterPosition
 
     val pageTurnMode get() = settings.pageTurnMode
     val fontFamily get() = settings.fontFamily
@@ -134,11 +142,17 @@ class ReaderViewModel @Inject constructor(
     val activeStyleId get() = settings.activeStyleId
     val activeStyle get() = settings.activeStyle
 
+    private val _readAloudPageTurn = MutableSharedFlow<Int>(extraBufferCapacity = 1)
+    val readAloudPageTurn = _readAloudPageTurn.asSharedFlow()
+
     fun ttsPlayPause() = tts.ttsPlayPause(
         displayedContent = _chapterContent.value,
         bookTitle = _book.value?.title ?: "",
         chapterTitle = _chapters.value.getOrNull(_currentChapterIndex.value)?.title ?: "",
-        onChapterFinished = { nextChapter() },
+        startChapterPosition = visibleReadAloudChapterPosition
+            .takeIf { tts.ttsPlaying.value.not() && it >= 0 },
+        paragraphPositions = readAloudParagraphPositions,
+        onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
     )
     fun ttsStop() { tts.ttsStop(); _showTtsPanel.value = false }
     fun ttsPrevParagraph() = tts.ttsPrevParagraph()
@@ -164,9 +178,11 @@ class ReaderViewModel @Inject constructor(
         prevChapterCache = null
         _nextPreloadedChapter.value = null
         _prevPreloadedChapter.value = null
-        continuousContent = StringBuilder()
-        _loadedChapterRange.value = IntRange.EMPTY
-        loadChapter(_currentChapterIndex.value, restoreProgress = _scrollProgress.value)
+        loadChapter(
+            _currentChapterIndex.value,
+            restoreProgress = _scrollProgress.value,
+            restoreChapterPosition = _visiblePage.value.chapterPosition,
+        )
     }
     fun setTapAction(zone: String, action: String) = settings.setTapAction(zone, action)
     fun setHeaderFooter(slot: String, value: String) = settings.setHeaderFooter(slot, value)
@@ -206,11 +222,11 @@ class ReaderViewModel @Inject constructor(
     private val _prevPreloadedChapter = MutableStateFlow<PreloadedReaderChapter?>(null)
     val prevPreloadedChapter: StateFlow<PreloadedReaderChapter?> = _prevPreloadedChapter.asStateFlow()
 
-    private val _loadedChapterRange = MutableStateFlow(IntRange.EMPTY)
-    private var continuousContent = StringBuilder()
-    private var isAppendingChapter = false
-    private var pendingAppendChapterIndex: Int? = null
     private var suppressNextProgressSave = false
+    private var lastQueuedProgressChapterIndex = -1
+    private var lastQueuedScrollProgress = -1
+    private var lastQueuedVisibleReadProgress = ""
+    private var lastQueuedChapterPosition = -1
 
     private val _showControls = MutableStateFlow(false)
     val showControls: StateFlow<Boolean> = _showControls.asStateFlow()
@@ -247,16 +263,31 @@ class ReaderViewModel @Inject constructor(
     val readerBrightness: StateFlow<Float> = _readerBrightness.asStateFlow()
 
     // ── Full text search ──
-    data class SearchResult(val chapterIndex: Int, val chapterTitle: String, val snippet: String)
+    data class SearchResult(
+        val chapterIndex: Int,
+        val chapterTitle: String,
+        val snippet: String,
+        val query: String = "",
+        val queryIndexInChapter: Int = -1,
+        val queryLength: Int = 0,
+    )
+
+    data class SearchSelection(
+        val chapterIndex: Int,
+        val queryIndexInChapter: Int,
+        val queryLength: Int,
+    )
+
     private val _searchResults = MutableStateFlow<List<SearchResult>>(emptyList())
     val searchResults: StateFlow<List<SearchResult>> = _searchResults.asStateFlow()
+    private val _pendingSearchSelection = MutableStateFlow<SearchSelection?>(null)
+    val pendingSearchSelection: StateFlow<SearchSelection?> = _pendingSearchSelection.asStateFlow()
     private val _searching = MutableStateFlow(false)
     val searching: StateFlow<Boolean> = _searching.asStateFlow()
 
     // ── Auto page turn ──
     private val _autoPageInterval = MutableStateFlow(0)
     val autoPageInterval: StateFlow<Int> = _autoPageInterval.asStateFlow()
-    private var autoPageJob: kotlinx.coroutines.Job? = null
 
     // ── Text selection ──
     private val _selectedText = MutableStateFlow("")
@@ -278,6 +309,8 @@ class ReaderViewModel @Inject constructor(
     private var chapterLoadJob: kotlinx.coroutines.Job? = null
     private var chapterLoadToken: Int = 0
     private var lastPreCacheCenter: Int = -1
+    private var readAloudParagraphPositions: List<Int>? = null
+    private var visibleReadAloudChapterPosition: Int = -1
 
     // Reading time tracking
     private var readingStartTime: Long = 0L
@@ -291,7 +324,10 @@ class ReaderViewModel @Inject constructor(
     }
 
     init {
-        viewModelScope.launch(Dispatchers.IO) { loadBook() }
+        viewModelScope.launch(Dispatchers.IO) {
+            cachedReplaceRules = replaceRuleRepo.getRulesForBook(bookId)
+            loadBook()
+        }
         readingStartTime = System.currentTimeMillis()
         lastStatsSaveTime = readingStartTime
         settings.initialize()
@@ -300,12 +336,9 @@ class ReaderViewModel @Inject constructor(
             getChapterTitle = { _chapters.value.getOrNull(_currentChapterIndex.value)?.title ?: "" },
         )
         tts.collectChapterEvents(
-            onPrev = { prevChapter() },
-            onNext = { nextChapter() },
+            onPrev = { _readAloudPageTurn.tryEmit(-1) },
+            onNext = { _readAloudPageTurn.tryEmit(1) },
         )
-        viewModelScope.launch(Dispatchers.IO) {
-            cachedReplaceRules = replaceRuleRepo.getRulesForBook(bookId)
-        }
     }
 
     override fun onCleared() {
@@ -361,12 +394,121 @@ class ReaderViewModel @Inject constructor(
             suppressNextProgressSave = false
             return
         }
-        if (Math.abs(next - old) >= 5) {
-            viewModelScope.launch(Dispatchers.IO) { saveProgress() }
+        if (next != old) {
+            queueProgressSave()
         }
     }
 
+    private fun queueProgressSave(force: Boolean = false) {
+        val chapterIndex = _currentChapterIndex.value
+        val scrollProgress = _scrollProgress.value
+        val visibleReadProgress = _visiblePage.value.readProgress
+        val chapterPosition = _visiblePage.value.chapterPosition
+        if (!force &&
+            chapterIndex == lastQueuedProgressChapterIndex &&
+            scrollProgress == lastQueuedScrollProgress &&
+            visibleReadProgress == lastQueuedVisibleReadProgress &&
+            chapterPosition == lastQueuedChapterPosition
+        ) {
+            return
+        }
+        lastQueuedProgressChapterIndex = chapterIndex
+        lastQueuedScrollProgress = scrollProgress
+        lastQueuedVisibleReadProgress = visibleReadProgress
+        lastQueuedChapterPosition = chapterPosition
+        viewModelScope.launch(Dispatchers.IO) { saveProgress() }
+    }
+
     // ── Book Loading ──
+
+    private fun isWebBook(book: Book): Boolean {
+        return book.format == com.morealm.app.domain.entity.BookFormat.WEB ||
+            (book.localPath == null && book.sourceUrl != null)
+    }
+
+    private fun readerErrorContent(title: String, detail: String): String {
+        val readableDetail = wrapLongErrorText(
+            applyLoadedReplaceRulesSync(StringEscapeUtils.unescapeHtml4(detail.ifBlank { "当前书源没有返回可阅读内容。" })),
+        )
+        return buildString {
+            append(title)
+            append("\n\n")
+            append(readableDetail)
+            append("\n\n")
+            append("可以返回搜索页换一个书源，或稍后重试。")
+        }
+    }
+
+    private fun Throwable.readerErrorMessage(fallback: String): String {
+        return localizedMessage
+            ?.takeIf { it.isNotBlank() }
+            ?.take(240)
+            ?: fallback
+    }
+
+    private fun webReaderErrorDetail(book: Book, reason: String): String {
+        val sourceName = StringEscapeUtils.unescapeHtml4(book.originName.ifBlank { book.sourceUrl ?: "未知书源" })
+        val title = StringEscapeUtils.unescapeHtml4(book.title)
+        return "书名：$title\n来源：$sourceName\n原因：$reason"
+    }
+
+    private fun wrapLongErrorText(text: String, segmentLength: Int = 48): String {
+        return text.lineSequence().joinToString("\n") { line ->
+            line.split(' ').joinToString(" ") { token ->
+                if (token.length <= segmentLength) token else token.chunked(segmentLength).joinToString("\n")
+            }
+        }
+    }
+
+    private fun applyLoadedReplaceRulesSync(content: String, isTitle: Boolean = false): String {
+        if (cachedReplaceRules.isEmpty()) return content
+        var result = content
+        for (rule in cachedReplaceRules) {
+            if (!rule.enabled || !rule.isValid()) continue
+            if (isTitle && !rule.scopeTitle) continue
+            if (!isTitle && !rule.scopeContent) continue
+            try {
+                result = if (rule.isRegex) {
+                    result.replace(getCachedRegex(rule.pattern), rule.replacement)
+                } else {
+                    result.replace(rule.pattern, rule.replacement)
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return result
+    }
+
+    private fun publishReaderError(title: String, detail: String) {
+        val content = readerErrorContent(title, detail)
+        val errorChapter = BookChapter(
+            id = "${bookId}_reader_error",
+            bookId = bookId,
+            index = 0,
+            title = title,
+            url = READER_ERROR_CHAPTER_URL_PREFIX,
+            variable = content,
+        )
+        chapterLoadJob?.cancel()
+        chapterLoadToken++
+        nextChapterCache = null
+        prevChapterCache = null
+        _nextPreloadedChapter.value = null
+        _prevPreloadedChapter.value = null
+        _chapters.value = listOf(errorChapter)
+        _currentChapterIndex.value = 0
+        _chapterContent.value = content
+        _renderedChapter.value = RenderedReaderChapter(
+            index = 0,
+            title = title,
+            content = content,
+            initialProgress = 0,
+        )
+        _visiblePage.value = VisibleReaderPage(0, title, "0.0%", 0)
+        _scrollProgress.value = 0
+        _navigateDirection.value = 0
+        _loading.value = false
+    }
 
     private suspend fun loadBook() {
         _loading.value = true
@@ -380,8 +522,7 @@ class ReaderViewModel @Inject constructor(
             _book.value = book
             AppLog.info("Reader", "Opened: ${book.title} (${book.format})")
 
-            val isWebBook = book.format == com.morealm.app.domain.entity.BookFormat.WEB
-                || (book.localPath == null && book.sourceUrl != null)
+            val isWebBook = isWebBook(book)
 
             // For web books, try to load cached chapters from DB first for instant display
             if (isWebBook) {
@@ -398,8 +539,9 @@ class ReaderViewModel @Inject constructor(
                         .coerceIn(0, (cachedChapters.size - 1).coerceAtLeast(0))
                     lastPreCacheCenter = startIndex
                     val savedScrollProgress = progress?.scrollProgress ?: estimateChapterProgress(book, startIndex, cachedChapters.size)
+                    val savedChapterPosition = progress?.chapterPosition ?: book.lastReadPosition
                     _scrollProgress.value = savedScrollProgress
-                    loadChapter(startIndex, restoreProgress = savedScrollProgress)
+                    loadChapter(startIndex, restoreProgress = savedScrollProgress, restoreChapterPosition = savedChapterPosition)
 
                     // Refresh chapters in background (non-blocking)
                     viewModelScope.launch(Dispatchers.IO) {
@@ -428,7 +570,21 @@ class ReaderViewModel @Inject constructor(
             }
 
             val chapters: List<BookChapter> = if (isWebBook) {
-                loadWebBookChapters(book)
+                try {
+                    loadWebBookChapters(book)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AppLog.error("Reader", "Failed to load web chapters", e)
+                    publishReaderError(
+                        title = "书源加载失败",
+                        detail = webReaderErrorDetail(
+                            book,
+                            e.readerErrorMessage("目录解析失败"),
+                        ),
+                    )
+                    return
+                }
             } else {
                 val localPath = book.localPath ?: run {
                     AppLog.warn("Reader", "No local path for book ${book.id}")
@@ -467,6 +623,13 @@ class ReaderViewModel @Inject constructor(
 
             if (chapters.isEmpty()) {
                 AppLog.warn("Reader", "No chapters found for book ${book.id}")
+                if (isWebBook) {
+                    publishReaderError(
+                        title = "书源无章节",
+                        detail = webReaderErrorDetail(book, "该书源没有解析到章节目录"),
+                    )
+                    return
+                }
                 _loading.value = false
                 return
             }
@@ -485,8 +648,9 @@ class ReaderViewModel @Inject constructor(
             lastPreCacheCenter = startIndex
 
             val savedScrollProgress = progress?.scrollProgress ?: estimateChapterProgress(book, startIndex, chapters.size)
+            val savedChapterPosition = progress?.chapterPosition ?: book.lastReadPosition
             _scrollProgress.value = savedScrollProgress
-            loadChapter(startIndex, restoreProgress = savedScrollProgress)
+            loadChapter(startIndex, restoreProgress = savedScrollProgress, restoreChapterPosition = savedChapterPosition)
 
             if (book.folderId != null) {
                 val folderBooks = bookRepo.getBooksByFolderId(book.folderId!!)
@@ -497,12 +661,21 @@ class ReaderViewModel @Inject constructor(
             throw e
         } catch (e: Exception) {
             AppLog.error("Reader", "Failed to load book", e)
+            _book.value?.takeIf { isWebBook(it) }?.let { book ->
+                publishReaderError(
+                    title = "书源加载失败",
+                    detail = webReaderErrorDetail(
+                        book,
+                        e.readerErrorMessage("书籍加载失败"),
+                    ),
+                )
+            }
         } finally {
             _loading.value = false
         }
     }
 
-    fun loadChapter(index: Int, restoreProgress: Int = 0) {
+    fun loadChapter(index: Int, restoreProgress: Int = 0, restoreChapterPosition: Int = 0) {
         val chapterList = _chapters.value
         if (index < 0 || index >= chapterList.size) return
 
@@ -511,14 +684,14 @@ class ReaderViewModel @Inject constructor(
         val loadToken = ++chapterLoadToken
         _loading.value = true
         val targetProgress = restoreProgress.coerceIn(0, 100)
+        val targetChapterPosition = restoreChapterPosition.coerceAtLeast(0)
         tts.resetParagraphIndex()
         val chapter = chapterList[index]
         val book = _book.value ?: run {
             _loading.value = false
             return
         }
-        val isWebBook = book.format == com.morealm.app.domain.entity.BookFormat.WEB
-            || (book.localPath == null && book.sourceUrl != null)
+        val isWebBook = isWebBook(book)
 
         chapterLoadJob = viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -555,18 +728,14 @@ class ReaderViewModel @Inject constructor(
 
                 val isScrollMode = pageTurnMode.value == PageTurnMode.SCROLL
                 if (isScrollMode) {
-                    continuousContent = StringBuilder()
-                    continuousContent.append(buildChapterBlock(chapter.title, content, index))
-                    _loadedChapterRange.value = index..index
-                    val renderedContent = continuousContent.toString()
-                    _chapterContent.value = renderedContent
+                    _chapterContent.value = content
                     _renderedChapter.value = RenderedReaderChapter(
                         index = index,
                         title = chapter.title,
-                        content = renderedContent,
+                        content = content,
                         initialProgress = targetProgress,
+                        initialChapterPosition = targetChapterPosition,
                     )
-                    appendNextChapterForScroll(index + 1)
                 } else {
                     _chapterContent.value = content
                     _renderedChapter.value = RenderedReaderChapter(
@@ -574,15 +743,21 @@ class ReaderViewModel @Inject constructor(
                         title = chapter.title,
                         content = content,
                         initialProgress = targetProgress,
+                        initialChapterPosition = targetChapterPosition,
                     )
                 }
                 _currentChapterIndex.value = index
                 _scrollProgress.value = targetProgress
-                suppressNextProgressSave = targetProgress > 0
+                _visiblePage.value = _visiblePage.value.copy(
+                    chapterIndex = index,
+                    title = chapter.title,
+                    chapterPosition = targetChapterPosition,
+                )
+                suppressNextProgressSave = targetProgress > 0 || targetChapterPosition > 0
 
                 AppLog.debug("Reader", "Loaded chapter $index: ${chapter.title}")
                 _navigateDirection.value = 0
-                if (targetProgress == 0) saveProgress()
+                if (targetProgress == 0 && targetChapterPosition == 0) saveProgress()
                 preloadNextChapter(index + 1)
                 preloadPrevChapter(index - 1)
                 maybeRetriggerPreCache(index)
@@ -591,7 +766,27 @@ class ReaderViewModel @Inject constructor(
             } catch (e: Exception) {
                 if (loadToken != chapterLoadToken) return@launch
                 AppLog.error("Reader", "Failed to load chapter $index", e)
-                _chapterContent.value = "加载失败: ${e.message}"
+                val title = if (isWebBook) "正文加载失败" else "加载失败"
+                val detail = if (isWebBook) {
+                    webReaderErrorDetail(
+                        book,
+                        e.readerErrorMessage("正文解析失败"),
+                    )
+                } else {
+                    e.readerErrorMessage("章节读取失败")
+                }
+                val errorContent = readerErrorContent(title, detail)
+                _chapterContent.value = errorContent
+                _renderedChapter.value = RenderedReaderChapter(
+                    index = index,
+                    title = chapter.title.ifBlank { title },
+                    content = errorContent,
+                    initialProgress = 0,
+                    initialChapterPosition = 0,
+                )
+                _currentChapterIndex.value = index
+                _visiblePage.value = VisibleReaderPage(index, chapter.title.ifBlank { title }, "0.0%", 0)
+                _scrollProgress.value = 0
                 _navigateDirection.value = 0
             } finally {
                 if (loadToken == chapterLoadToken) {
@@ -601,93 +796,21 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    private fun buildChapterBlock(title: String, content: String, index: Int): String {
-        val escapedTitle = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        val trimmed = content.trimStart()
-        val isHtml = trimmed.startsWith("<") && (trimmed.contains("<p") || trimmed.contains("<div") || trimmed.contains("<img"))
-        val bodyHtml = if (isHtml) {
-            content
-        } else {
-            val lines = content.lines().filter { it.isNotBlank() }
-            val bodyLines = if (lines.isNotEmpty() && lines[0].trim() == title.trim()) lines.drop(1) else lines
-            bodyLines.joinToString("\n") { line ->
-                val t = line.trim()
-                    .replace(AppPattern.markdownHeadingRegex, "")
-                    .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                if (t.isNotEmpty()) "<p>$t</p>" else ""
-            }
-        }
-        val parts = escapedTitle.split(AppPattern.whitespaceRegex, limit = 2)
-        val titleBlock = if (parts.size == 2) {
-            "<div class=\"chapter-title-block\"><div class=\"chapter-num\">${parts[0]}</div>" +
-            "<div class=\"chapter-sub\">${parts[1]}</div></div>"
-        } else {
-            "<div class=\"chapter-title-block\"><div class=\"chapter-num\">$escapedTitle</div></div>"
-        }
-        return "<div class=\"chapter-block\" data-index=\"$index\">$titleBlock\n$bodyHtml</div>\n"
-    }
-
-    private fun appendNextChapterForScroll(nextIndex: Int) {
-        val chapterList = _chapters.value
-        if (nextIndex >= chapterList.size) return
-        if (isAppendingChapter) {
-            pendingAppendChapterIndex = listOfNotNull(pendingAppendChapterIndex, nextIndex).minOrNull()
-            return
-        }
-        val range = _loadedChapterRange.value
-        if (nextIndex <= range.last) return
-
-        isAppendingChapter = true
-        val book = _book.value ?: run {
-            isAppendingChapter = false
-            return
-        }
-        val isWebBook = book.format == com.morealm.app.domain.entity.BookFormat.WEB
-            || (book.localPath == null && book.sourceUrl != null)
-
-        viewModelScope.launch {
-            try {
-                val chapter = chapterList[nextIndex]
-                val raw = withContext(Dispatchers.IO) {
-                    if (isWebBook) {
-                        loadWebChapterContent(book, chapter, nextIndex)
-                    } else {
-                        val localPath = book.localPath ?: return@withContext ""
-                        LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapter)
-                    }
-                }
-                val replaced = applyReplaceRules(raw)
-                val content = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode.value)
-                continuousContent.append(buildChapterBlock(chapter.title, content, nextIndex))
-                _loadedChapterRange.value = range.first..nextIndex
-                val renderedContent = continuousContent.toString()
-                _chapterContent.value = renderedContent
-                _renderedChapter.value = _renderedChapter.value.copy(content = renderedContent)
-                AppLog.debug("Reader", "Appended chapter $nextIndex for continuous scroll")
-            } catch (e: Exception) {
-                AppLog.error("Reader", "Failed to append chapter $nextIndex", e)
-            } finally {
-                isAppendingChapter = false
-                pendingAppendChapterIndex?.let { pending ->
-                    pendingAppendChapterIndex = null
-                    appendNextChapterForScroll(pending)
-                }
-            }
-        }
-    }
-
     fun onScrollNearBottom() {
-        val range = _loadedChapterRange.value
-        if (range.isEmpty()) return
-        val nextIdx = range.last + 1
-        if (nextIdx < _chapters.value.size) {
-            appendNextChapterForScroll(nextIdx)
+        val nextIdx = _currentChapterIndex.value + 1
+        if (nextIdx < _chapters.value.size && _nextPreloadedChapter.value?.index != nextIdx) {
+            viewModelScope.launch(Dispatchers.IO) {
+                preloadNextChapter(nextIdx)
+            }
         }
     }
 
     fun onScrollReachedBottom() {
-        val range = _loadedChapterRange.value
-        if (range.isEmpty() || range.last < _chapters.value.lastIndex) return
+        if (_currentChapterIndex.value < _chapters.value.lastIndex) {
+            AppLog.debug("Reader", "Scroll reached chapter bottom; move to chapter ${_currentChapterIndex.value + 1}")
+            nextChapter()
+            return
+        }
         val progress = _scrollProgress.value
         if (progress < 98) return
 
@@ -709,18 +832,24 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    fun onVisiblePageChanged(index: Int, title: String, readProgress: String) {
+    fun onVisiblePageChanged(index: Int, title: String, readProgress: String, chapterPosition: Int = 0) {
         if (index !in _chapters.value.indices) return
-        _visiblePage.value = VisibleReaderPage(index, title, readProgress)
-        if (index != _currentChapterIndex.value) {
-            _currentChapterIndex.value = index
-            viewModelScope.launch(Dispatchers.IO) { saveProgress() }
+        val oldVisiblePage = _visiblePage.value
+        val visibleChanged = oldVisiblePage.chapterIndex != index ||
+            oldVisiblePage.title != title ||
+            oldVisiblePage.readProgress != readProgress ||
+            oldVisiblePage.chapterPosition != chapterPosition
+        _visiblePage.value = VisibleReaderPage(index, title, readProgress, chapterPosition)
+        val chapterChanged = index != _currentChapterIndex.value
+        val scrollBoundaryPreview = pageTurnMode.value == PageTurnMode.SCROLL && chapterChanged
+        if (!scrollBoundaryPreview && !chapterChanged && visibleChanged) {
+            queueProgressSave()
         }
     }
 
     fun onVisibleChapterChanged(index: Int) {
         val chapter = _chapters.value.getOrNull(index) ?: return
-        onVisiblePageChanged(index, chapter.title, _visiblePage.value.readProgress)
+        onVisiblePageChanged(index, chapter.title, _visiblePage.value.readProgress, _visiblePage.value.chapterPosition)
     }
 
     private suspend fun preloadNextChapter(nextIndex: Int) {
@@ -729,8 +858,7 @@ class ReaderViewModel @Inject constructor(
         val book = _book.value ?: return
         try {
             withContext(Dispatchers.IO) {
-                val raw = if (book.format == com.morealm.app.domain.entity.BookFormat.WEB
-                    || (book.localPath == null && book.sourceUrl != null)) {
+                val raw = if (isWebBook(book)) {
                     loadWebChapterContent(book, chapterList[nextIndex], nextIndex)
                 } else {
                     val localPath = book.localPath ?: return@withContext
@@ -752,8 +880,7 @@ class ReaderViewModel @Inject constructor(
         val book = _book.value ?: return
         try {
             withContext(Dispatchers.IO) {
-                val raw = if (book.format == com.morealm.app.domain.entity.BookFormat.WEB
-                    || (book.localPath == null && book.sourceUrl != null)) {
+                val raw = if (isWebBook(book)) {
                     loadWebChapterContent(book, chapterList[prevIndex], prevIndex)
                 } else {
                     val localPath = book.localPath ?: return@withContext
@@ -780,8 +907,7 @@ class ReaderViewModel @Inject constructor(
         if (distance < 10) return // still within the cached window
         lastPreCacheCenter = currentIndex
 
-        val isWebBook = book.format == com.morealm.app.domain.entity.BookFormat.WEB
-            || (book.localPath == null && book.sourceUrl != null)
+        val isWebBook = isWebBook(book)
         if (isWebBook) {
             val sourceUrl = book.sourceUrl ?: return
             viewModelScope.launch(Dispatchers.IO) {
@@ -849,7 +975,7 @@ class ReaderViewModel @Inject constructor(
         val prevIdx = _currentChapterIndex.value - 1
         if (prevIdx >= 0) {
             _navigateDirection.value = -1
-            loadChapter(prevIdx, restoreProgress = 0)
+            loadChapter(prevIdx, restoreProgress = 100)
         }
     }
 
@@ -920,8 +1046,7 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val book = _book.value ?: return@launch
-                val isWebBook = book.format == com.morealm.app.domain.entity.BookFormat.WEB
-            || (book.localPath == null && book.sourceUrl != null)
+                val isWebBook = isWebBook(book)
                 val chapterList = _chapters.value
                 val results = mutableListOf<SearchResult>()
                 val lowerQuery = query.lowercase()
@@ -941,7 +1066,16 @@ class ReaderViewModel @Inject constructor(
                         val snippet = (if (start > 0) "..." else "") +
                             plainText.substring(start, end).trim() +
                             (if (end < plainText.length) "..." else "")
-                        results.add(SearchResult(ch.index, ch.title, snippet))
+                        results.add(
+                            SearchResult(
+                                chapterIndex = ch.index,
+                                chapterTitle = ch.title,
+                                snippet = snippet,
+                                query = query,
+                                queryIndexInChapter = idx,
+                                queryLength = query.length,
+                            ),
+                        )
                     }
                     if (results.size >= 50) break
                 }
@@ -956,25 +1090,27 @@ class ReaderViewModel @Inject constructor(
 
     fun clearSearchResults() { _searchResults.value = emptyList() }
 
+    fun openSearchResult(result: SearchResult) {
+        _pendingSearchSelection.value = SearchSelection(
+            chapterIndex = result.chapterIndex,
+            queryIndexInChapter = result.queryIndexInChapter,
+            queryLength = result.queryLength,
+        )
+        loadChapter(result.chapterIndex, restoreChapterPosition = result.queryIndexInChapter)
+    }
+
+    fun consumeSearchSelection() {
+        _pendingSearchSelection.value = null
+    }
+
     // ── Auto Page Turn ──
 
     fun setAutoPageInterval(seconds: Int) {
         _autoPageInterval.value = seconds
-        autoPageJob?.cancel()
-        if (seconds > 0) {
-            autoPageJob = viewModelScope.launch {
-                while (true) {
-                    kotlinx.coroutines.delay(seconds * 1000L)
-                    if (_autoPageInterval.value <= 0) break
-                    nextChapter()
-                }
-            }
-        }
     }
 
     fun stopAutoPage() {
         _autoPageInterval.value = 0
-        autoPageJob?.cancel()
     }
 
     // ── Text Selection ──
@@ -984,6 +1120,7 @@ class ReaderViewModel @Inject constructor(
     fun copyTextToClipboard(text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("MoRealm", text))
+        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
     }
 
     fun clearSelectedText() { _selectedText.value = "" }
@@ -992,6 +1129,28 @@ class ReaderViewModel @Inject constructor(
         val text = _selectedText.value
         tts.speakSelectedText(text)
         _selectedText.value = ""
+    }
+
+    fun readAloudFromPosition(chapterPosition: Int) {
+        tts.readAloudFrom(
+            displayedContent = _chapterContent.value,
+            bookTitle = _book.value?.title ?: "",
+            chapterTitle = _chapters.value.getOrNull(_currentChapterIndex.value)?.title ?: "",
+            startChapterPosition = chapterPosition.coerceAtLeast(0),
+            paragraphPositions = readAloudParagraphPositions,
+            onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
+        )
+        _showTtsPanel.value = true
+    }
+
+    fun updateReadAloudParagraphPositions(positions: List<Int>) {
+        readAloudParagraphPositions = positions.takeIf { it.isNotEmpty() }
+    }
+
+    fun updateVisibleReadAloudPosition(chapterIndex: Int, chapterPosition: Int) {
+        if (chapterIndex == _currentChapterIndex.value) {
+            visibleReadAloudChapterPosition = chapterPosition.coerceAtLeast(0)
+        }
     }
 
     // ── Image Viewer ──
@@ -1039,8 +1198,7 @@ class ReaderViewModel @Inject constructor(
         val book = _book.value ?: return
         val chapterList = _chapters.value
         if (chapterList.isEmpty()) return
-        val isWebBook = book.format == com.morealm.app.domain.entity.BookFormat.WEB
-            || (book.localPath == null && book.sourceUrl != null)
+        val isWebBook = isWebBook(book)
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -1077,6 +1235,10 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) { saveProgress() }
     }
 
+    suspend fun saveProgressNowAndWait() {
+        withContext(Dispatchers.IO) { saveProgress() }
+    }
+
     // ── Web Book Support ──
 
     private suspend fun loadWebBookChapters(book: Book): List<BookChapter> {
@@ -1084,6 +1246,18 @@ class ReaderViewModel @Inject constructor(
         val source = withContext(Dispatchers.IO) {
             sourceRepo.getByUrl(sourceUrl)
         } ?: return emptyList()
+        if (source.bookSourceType != TEXT_BOOK_SOURCE_TYPE) {
+            AppLog.warn("Reader", "Blocked non-text source chapters: ${source.bookSourceName} type=${source.bookSourceType}")
+            return listOf(
+                BookChapter(
+                    id = "${book.id}_0",
+                    bookId = book.id,
+                    index = 0,
+                    title = "非文本书源",
+                    url = book.bookUrl,
+                )
+            )
+        }
         if (book.bookUrl.isBlank()) return emptyList()
 
         // tocUrl may be empty from search results — fetch book info to get it
@@ -1128,28 +1302,80 @@ class ReaderViewModel @Inject constructor(
     }
 
     private suspend fun loadWebChapterContent(book: Book, chapter: BookChapter, index: Int): String {
+        if (chapter.url.startsWith(READER_ERROR_CHAPTER_URL_PREFIX)) {
+            return chapter.variable ?: readerErrorContent(chapter.title, "当前书源没有返回可阅读内容。")
+        }
         val sourceUrl = book.sourceUrl ?: return "（无书源）"
-        // Try CacheBook first
-        val cached = CacheBook.getContent(sourceUrl, chapter.url)
-        if (cached != null) return cached
-
         val source = withContext(Dispatchers.IO) {
             sourceRepo.getByUrl(sourceUrl)
-        } ?: return "（书源未找到）"
+        } ?: run {
+            val cached = CacheBook.getContent(sourceUrl, chapter.url)
+            return cached?.let(::sanitizeWebChapterContent) ?: "（书源未找到）"
+        }
+        if (source.bookSourceType != TEXT_BOOK_SOURCE_TYPE) {
+            AppLog.warn("Reader", "Blocked non-text source content: ${source.bookSourceName} type=${source.bookSourceType}")
+            return NON_TEXT_WEB_CONTENT_MESSAGE
+        }
+
+        // Try CacheBook after source type is confirmed. Old caches may contain media URLs, so sanitize them too.
+        val cached = CacheBook.getContent(sourceUrl, chapter.url)
+        if (cached != null) return sanitizeWebChapterContent(cached)
+
         val nextUrl = _chapters.value.getOrNull(index + 1)?.url
         val content = WebBook.getContentAwait(source, chapter.url, nextUrl)
+        val sanitized = sanitizeWebChapterContent(content)
         // Cache for offline
-        if (content.isNotBlank()) {
+        if (content.isNotBlank() && sanitized == content) {
             CacheBook.putContent(sourceUrl, chapter.url, content)
         }
-        return content
+        return sanitized
+    }
+
+    private fun sanitizeWebChapterContent(content: String): String {
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) return content
+        val lower = trimmed.lowercase(Locale.ROOT)
+        val nonBlankLines = trimmed.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .take(4)
+            .toList()
+        val looksLikeOnlyUrls = nonBlankLines.isNotEmpty() &&
+            nonBlankLines.size <= 3 &&
+            nonBlankLines.all { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+        val looksLikeMediaToken = lower.startsWith("#extm3u") ||
+            lower.contains(".m3u8") ||
+            lower.contains(".mp3") ||
+            lower.contains(".m4a") ||
+            lower.contains(".mp4") ||
+            lower.contains("sound_id=") ||
+            lower.contains("expire_time=") ||
+            lower.contains("token=")
+        return if (looksLikeOnlyUrls && looksLikeMediaToken) {
+            AppLog.warn("Reader", "Blocked media/token URL from WEB content")
+            NON_TEXT_WEB_CONTENT_MESSAGE
+        } else {
+            content
+        }
     }
 
     private suspend fun saveProgress() {
         try {
             val book = _book.value ?: return
             val chapterCount = _chapters.value.size
-            val chapterIdx = _currentChapterIndex.value
+            val visible = _visiblePage.value
+            val currentIndex = _currentChapterIndex.value
+            val visibleIndex = visible.chapterIndex
+            val chapterIdx = when {
+                visibleIndex !in 0 until chapterCount -> currentIndex
+                pageTurnMode.value == PageTurnMode.SCROLL && visibleIndex != currentIndex -> currentIndex
+                else -> visibleIndex
+            }.coerceIn(0, (chapterCount - 1).coerceAtLeast(0))
+            val chapterPosition = if (visibleIndex == chapterIdx) {
+                visible.chapterPosition.coerceAtLeast(0)
+            } else {
+                0
+            }
             val scrollPct = _scrollProgress.value / 100f
             val totalProgress = if (chapterCount > 0) {
                 (chapterIdx.toFloat() + scrollPct) / chapterCount
@@ -1157,16 +1383,22 @@ class ReaderViewModel @Inject constructor(
             val progress = ReadProgress(
                 bookId = book.id,
                 chapterIndex = chapterIdx,
+                chapterPosition = chapterPosition,
                 totalProgress = totalProgress.coerceIn(0f, 1f),
                 scrollProgress = _scrollProgress.value,
             )
             bookRepo.saveProgress(progress)
             bookRepo.update(book.copy(
                 lastReadChapter = chapterIdx,
+                lastReadPosition = chapterPosition,
                 lastReadAt = System.currentTimeMillis(),
                 readProgress = progress.totalProgress,
                 totalChapters = chapterCount,
             ))
+            lastQueuedProgressChapterIndex = chapterIdx
+            lastQueuedScrollProgress = progress.scrollProgress
+            lastQueuedVisibleReadProgress = _visiblePage.value.readProgress
+            lastQueuedChapterPosition = chapterPosition
             flushReadingStats()
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e

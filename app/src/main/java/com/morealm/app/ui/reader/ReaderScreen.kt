@@ -1,13 +1,14 @@
 package com.morealm.app.ui.reader
 
 import android.Manifest
-import android.app.SearchManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.view.KeyEvent
 import android.view.WindowManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,9 +35,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.presentation.theme.ThemeViewModel
@@ -45,6 +49,7 @@ import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.ui.theme.toComposeColor
 import com.morealm.app.presentation.reader.ReaderViewModel
 import com.morealm.app.presentation.reader.PageTurnMode
+import com.morealm.app.ui.reader.renderer.ReaderPageDirection
 import com.morealm.app.ui.reader.renderer.toPageAnimType
 import com.morealm.app.ui.reader.TtsOverlayPanel
 import com.morealm.app.domain.entity.Book
@@ -55,6 +60,7 @@ import com.morealm.app.presentation.reader.ReaderViewModel.SearchResult
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.ui.theme.MoRealmColors
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 
 @Composable
 fun ReaderScreen(
@@ -84,6 +90,7 @@ fun ReaderScreen(
     val linkedBooks by viewModel.linkedBooks.collectAsStateWithLifecycle()
     val nextBookPrompt by viewModel.nextBookPrompt.collectAsStateWithLifecycle()
     val navigateDirection by viewModel.navigateDirection.collectAsStateWithLifecycle()
+    var pageTurnCommand by remember { mutableStateOf<ReaderPageDirection?>(null) }
     val customFontUri by viewModel.customFontUri.collectAsStateWithLifecycle()
     val customFontName by viewModel.customFontName.collectAsStateWithLifecycle()
     val volumeKeyPage by viewModel.volumeKeyPage.collectAsStateWithLifecycle()
@@ -96,6 +103,8 @@ fun ReaderScreen(
     val marginTopVal by viewModel.marginTop.collectAsStateWithLifecycle()
     val marginBottomVal by viewModel.marginBottom.collectAsStateWithLifecycle()
     val autoPageInterval by viewModel.autoPageInterval.collectAsStateWithLifecycle()
+    val ttsChapterPosition by viewModel.ttsChapterPosition.collectAsStateWithLifecycle()
+    val pendingSearchSelection by viewModel.pendingSearchSelection.collectAsStateWithLifecycle()
     val customCss by viewModel.customCss.collectAsStateWithLifecycle()
     val customBgImage by viewModel.customBgImage.collectAsStateWithLifecycle()
     val selectedText by viewModel.selectedText.collectAsStateWithLifecycle()
@@ -112,6 +121,9 @@ fun ReaderScreen(
     val activeTheme by (themeViewModel?.activeTheme
         ?: flowOf<com.morealm.app.domain.entity.ThemeEntity?>(null))
         .collectAsStateWithLifecycle(null)
+    val screenScope = rememberCoroutineScope()
+    var exitingReader by remember { mutableStateOf(false) }
+    var selectionWebPanel by remember { mutableStateOf<Pair<String, String>?>(null) }
     val allThemes by (themeViewModel?.allThemes ?: flowOf(BuiltinThemes.all()))
         .collectAsStateWithLifecycle(BuiltinThemes.all())
     val screenOrientation by viewModel.screenOrientation.collectAsStateWithLifecycle()
@@ -162,6 +174,11 @@ fun ReaderScreen(
             onNavigateToBook(targetBookId)
         }
     }
+    LaunchedEffect(viewModel.readAloudPageTurn) {
+        viewModel.readAloudPageTurn.collect { direction ->
+            pageTurnCommand = if (direction < 0) ReaderPageDirection.PREV else ReaderPageDirection.NEXT
+        }
+    }
 
     // Notification permission for TTS service (Android 13+)
     val notifPermissionLauncher = rememberLauncherForActivityResult(
@@ -172,18 +189,12 @@ fun ReaderScreen(
 
     fun openWebSearch(query: String) {
         if (query.isBlank()) return
-        runCatching {
-            context.startActivity(Intent(Intent.ACTION_WEB_SEARCH).apply {
-                putExtra(SearchManager.QUERY, query)
-            })
-        }.recoverCatching {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}")))
-        }
+        selectionWebPanel = "查词" to "https://www.google.com/search?q=${Uri.encode(query.trim())}"
     }
 
     fun openTranslate(text: String) {
         if (text.isBlank()) return
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://translate.google.com/?sl=auto&tl=zh-CN&text=${Uri.encode(text)}&op=translate")))
+        selectionWebPanel = "翻译" to "https://translate.google.com/?sl=auto&tl=zh-CN&text=${Uri.encode(text.trim())}&op=translate"
     }
 
     // Export file picker
@@ -200,6 +211,16 @@ fun ReaderScreen(
         }
     }
 
+    fun exitReader() {
+        if (exitingReader) return
+        exitingReader = true
+        restoreSystemBars()
+        screenScope.launch {
+            viewModel.saveProgressNowAndWait()
+            onBack()
+        }
+    }
+
     // Back button: dismiss overlays first, then exit
     BackHandler(enabled = true) {
         when {
@@ -208,11 +229,10 @@ fun ReaderScreen(
             showChapterList -> showChapterList = false
             showTtsPanel -> viewModel.hideTtsPanel()
             showSettings -> viewModel.hideSettingsPanel()
+            viewingImageSrc != null -> viewModel.dismissImageViewer()
+            autoPageInterval > 0 -> viewModel.stopAutoPage()
             showControls -> viewModel.hideControls()
-            else -> {
-                restoreSystemBars()
-                onBack()
-            }
+            else -> exitReader()
         }
     }
 
@@ -274,17 +294,18 @@ fun ReaderScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(moColors.readerBackground)
+            .semantics { contentDescription = "阅读器" }
             .onKeyEvent { event ->
                 if (!volumeKeyPage) return@onKeyEvent false
                 if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN) return@onKeyEvent false
                 val isTtsActive = viewModel.ttsPlaying.value
                 when (event.nativeKeyEvent.keyCode) {
                     KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                        if (isTtsActive) viewModel.ttsNextParagraph() else viewModel.nextChapter()
+                        if (isTtsActive) viewModel.ttsNextParagraph() else pageTurnCommand = ReaderPageDirection.NEXT
                         true
                     }
                     KeyEvent.KEYCODE_VOLUME_UP -> {
-                        if (isTtsActive) viewModel.ttsPrevParagraph() else viewModel.prevChapter()
+                        if (isTtsActive) viewModel.ttsPrevParagraph() else pageTurnCommand = ReaderPageDirection.PREV
                         true
                     }
                     else -> false
@@ -323,10 +344,13 @@ fun ReaderScreen(
             }
         }
         val isTxtFormat = book?.format == com.morealm.app.domain.entity.BookFormat.TXT
+        val displayContent = renderedChapter.content.ifEmpty { content }
 
-        // Always use Canvas renderer
-        com.morealm.app.ui.reader.renderer.CanvasRenderer(
-                content = renderedChapter.content.ifEmpty { content },
+        // Keep the last real reader surface on screen. During initial loading, avoid rendering
+        // a synthetic 1/1 empty chapter that shows up as a visible white/loading flicker in LDPlayer.
+        if (displayContent.isNotBlank()) {
+            com.morealm.app.ui.reader.renderer.CanvasRenderer(
+                content = displayContent,
                 chapterTitle = renderedChapter.title.ifEmpty { chapters.getOrNull(currentIndex)?.title ?: "" },
                 chapterIndex = renderedChapter.index,
                 nextChapterTitle = nextPreloadedChapter?.takeIf { it.index == currentIndex + 1 }?.title ?: "",
@@ -342,21 +366,32 @@ fun ReaderScreen(
                 paddingHorizontal = marginHorizontal,
                 paddingVertical = marginTopVal,
                 bgImageUri = readerBgImage,
-                startFromLastPage = false,
+                startFromLastPage = navigateDirection < 0,
                 initialProgress = renderedChapter.initialProgress,
+                initialChapterPosition = renderedChapter.initialChapterPosition,
                 pageAnimType = pageAnim.toPageAnimType(),
                 onTapCenter = { viewModel.toggleControls() },
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
-                onVisiblePageChanged = { index, title, progress -> viewModel.onVisiblePageChanged(index, title, progress) },
+                onVisiblePageChanged = { index, title, progress, chapterPosition ->
+                    viewModel.onVisiblePageChanged(index, title, progress, chapterPosition)
+                },
                 onNextChapter = { viewModel.nextChapter() },
                 onPrevChapter = { viewModel.prevChapter() },
-                onScrollNearBottom = { viewModel.onScrollNearBottom() },
-                onScrollReachedBottom = { viewModel.onScrollReachedBottom() },
+                pageTurnCommand = pageTurnCommand,
+                onPageTurnCommandConsumed = { pageTurnCommand = null },
+                autoPageSeconds = autoPageInterval,
+                readAloudChapterPosition = ttsChapterPosition,
+                onScrollNearBottom = { if (!showControls) viewModel.onScrollNearBottom() },
+                onScrollReachedBottom = { if (!showControls) viewModel.onScrollReachedBottom() },
                 onCopyText = { text -> viewModel.copyTextToClipboard(text) },
-                onSpeakFromHere = { text -> viewModel.onTextSelected(text); viewModel.speakSelectedText() },
+                onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
                 onTranslateText = { text -> openTranslate(text) },
                 onLookupWord = { text -> openWebSearch(text) },
                 onImageClick = { src -> viewModel.onImageClick(src) },
+                onReadAloudParagraphPositions = { positions -> viewModel.updateReadAloudParagraphPositions(positions) },
+                onVisibleReadAloudPosition = { index, position -> viewModel.updateVisibleReadAloudPosition(index, position) },
+                pendingSearchSelection = pendingSearchSelection,
+                onSearchSelectionConsumed = { viewModel.consumeSearchSelection() },
                 onToggleTts = {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -383,9 +418,10 @@ fun ReaderScreen(
                 footerRight = ftrRight,
                 modifier = Modifier.fillMaxSize(),
             )
+        }
 
         // Loading indicator
-        if (loading) {
+        if (loading && displayContent.isBlank()) {
             CircularProgressIndicator(
                 modifier = Modifier.align(Alignment.Center).size(32.dp),
                 color = MaterialTheme.colorScheme.primary,
@@ -402,7 +438,7 @@ fun ReaderScreen(
         ) {
             ReaderTopBar(
                 bookTitle = book?.title ?: "",
-                onBack = onBack,
+                onBack = ::exitReader,
                 onExport = {
                     val fileName = (book?.title ?: "book") + ".txt"
                     exportLauncher.launch(fileName)
@@ -419,12 +455,12 @@ fun ReaderScreen(
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             ReaderControlBar(
-                currentChapter = visiblePage.chapterIndex,
+                currentChapter = currentIndex,
                 totalChapters = chapters.size,
-                chapterTitle = visiblePage.title.ifBlank { chapters.getOrNull(currentIndex)?.title ?: "" },
+                chapterTitle = chapters.getOrNull(currentIndex)?.title ?: visiblePage.title,
                 readProgress = visiblePage.readProgress,
                 scrollProgress = scrollProgress,
-                onBack = onBack,
+                onBack = ::exitReader,
                 onPrevChapter = viewModel::prevChapter,
                 onNextChapter = viewModel::nextChapter,
                 onTts = {
@@ -613,7 +649,7 @@ fun ReaderScreen(
             onResultClick = { result ->
                 showFullSearch = false
                 viewModel.clearSearchResults()
-                viewModel.loadChapter(result.chapterIndex)
+                viewModel.openSearchResult(result)
             },
             onDismiss = { showFullSearch = false },
             modifier = Modifier.align(Alignment.BottomCenter),
@@ -633,6 +669,14 @@ fun ReaderScreen(
             ImageViewerDialog(
                 imageSrc = src,
                 onDismiss = { viewModel.dismissImageViewer() },
+            )
+        }
+
+        selectionWebPanel?.let { (title, url) ->
+            SelectionWebPanel(
+                title = title,
+                url = url,
+                onDismiss = { selectionWebPanel = null },
             )
         }
 
@@ -962,6 +1006,54 @@ private fun NextBookPromptDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("留在这里")
+            }
+        },
+    )
+}
+
+@Composable
+private fun SelectionWebPanel(
+    title: String,
+    url: String,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, modifier = Modifier.weight(1f))
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "关闭")
+                }
+            }
+        },
+        text = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(520.dp),
+            ) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            webViewClient = WebViewClient()
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.loadWithOverviewMode = true
+                            settings.useWideViewPort = true
+                            loadUrl(url)
+                        }
+                    },
+                    update = { webView ->
+                        if (webView.url != url) webView.loadUrl(url)
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("返回阅读")
             }
         },
     )

@@ -50,4 +50,16 @@ class StrResponse {
             }
             return raw.request.url.toString()
         }
+
+    fun body(): String? = body
+
+    fun code(): Int = raw.code
+
+    fun message(): String = raw.message
+
+    fun header(name: String): String? = raw.header(name)
+
+    fun headers(): Headers = raw.headers
+
+    override fun toString(): String = body.orEmpty()
 }

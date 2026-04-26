@@ -30,8 +30,16 @@ class ThemeRepository @Inject constructor(
     }
 
     suspend fun saveAndActivate(theme: ThemeEntity) {
-        themeDao.insert(theme.copy(isActive = false))
-        activateTheme(theme.id)
+        val existingId = if (!theme.isBuiltin && themeDao.getById(theme.id) == null) {
+            themeDao.getAllSync()
+                .firstOrNull { !it.isBuiltin && it.name == theme.name }
+                ?.id
+        } else {
+            null
+        }
+        val savedTheme = theme.copy(id = existingId ?: theme.id, isActive = false)
+        themeDao.insert(savedTheme)
+        activateTheme(savedTheme.id)
     }
 
     suspend fun importLegadoTheme(jsonString: String): ThemeEntity {

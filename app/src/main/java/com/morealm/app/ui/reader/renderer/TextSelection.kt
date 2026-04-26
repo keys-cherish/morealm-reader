@@ -16,13 +16,14 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.morealm.app.domain.render.BaseColumn
-import com.morealm.app.domain.render.TextColumn
+import com.morealm.app.domain.render.TextBaseColumn
 import com.morealm.app.domain.render.TextLine
 import com.morealm.app.domain.render.TextPage
 import com.morealm.app.domain.render.TextPos
@@ -38,17 +39,59 @@ class SelectionState {
     var isActive by mutableStateOf(false)
     var startPos by mutableStateOf<TextPos?>(null)
     var endPos by mutableStateOf<TextPos?>(null)
+    var reverseStartCursor by mutableStateOf(false)
+    var reverseEndCursor by mutableStateOf(false)
 
     fun clear() {
         isActive = false
         startPos = null
         endPos = null
+        reverseStartCursor = false
+        reverseEndCursor = false
     }
 
     fun setSelection(start: TextPos, end: TextPos) {
         startPos = start
         endPos = end
         isActive = true
+    }
+
+    fun selectStartMoveIndex(textPos: TextPos) {
+        startPos = textPos
+        isActive = textPos.isSelected() && endPos?.isSelected() != false
+    }
+
+    fun selectEndMoveIndex(textPos: TextPos) {
+        endPos = textPos
+        isActive = startPos?.isSelected() != false && textPos.isSelected()
+    }
+
+    fun selectStartMove(textPos: TextPos) {
+        val end = endPos
+        if (end == null || textPos.compare(end) <= 0) {
+            reverseStartCursor = false
+            selectStartMoveIndex(textPos)
+        } else {
+            reverseStartCursor = true
+            reverseEndCursor = false
+            endPos = textPos
+            startPos = end
+            isActive = true
+        }
+    }
+
+    fun selectEndMove(textPos: TextPos) {
+        val start = startPos
+        if (start == null || textPos.compare(start) >= 0) {
+            reverseEndCursor = false
+            selectEndMoveIndex(textPos)
+        } else {
+            reverseEndCursor = true
+            reverseStartCursor = false
+            startPos = textPos
+            endPos = start
+            isActive = true
+        }
     }
 }
 
@@ -85,6 +128,27 @@ fun hitTestPage(page: TextPage, x: Float, y: Float): TextPos? {
             abs((col.start + col.end) / 2 - x)
         } ?: 0
         return TextPos(0, closestLine, closest)
+    }
+    return null
+}
+
+/** Legado ContentTextView.touchRough equivalent for selection handles. */
+fun hitTestPageRough(page: TextPage, x: Float, y: Float, relativePagePos: Int = 0): TextPos? {
+    val paddingTop = page.paddingTop
+    for (lineIndex in page.lines.indices) {
+        val line = page.lines[lineIndex]
+        if (line.isTouchY(y - paddingTop)) {
+            for (charIndex in line.columns.indices) {
+                if (line.columns[charIndex].isTouch(x)) {
+                    return TextPos(relativePagePos, lineIndex, charIndex)
+                }
+            }
+            if (line.columns.isNotEmpty()) {
+                val isLast = line.columns.first().start < x
+                val charIndex = if (isLast) line.columns.lastIndex + 1 else -1
+                return TextPos(relativePagePos, lineIndex, charIndex)
+            }
+        }
     }
     return null
 }
@@ -140,7 +204,7 @@ fun findWordRange(page: TextPage, tapPos: TextPos): Pair<TextPos, TextPos> {
         val line = page.lines[li]
         for (ci in line.columns.indices) {
             val col = line.columns[ci]
-            if (col is TextColumn) {
+            if (col is TextBaseColumn) {
                 if (li == tapPos.lineIndex && ci == tapPos.columnIndex) {
                     tapCharIndex = charMap.size
                 }
@@ -176,8 +240,8 @@ fun findWordRange(page: TextPage, tapPos: TextPos): Pair<TextPos, TextPos> {
     val startMapping = charMap.getOrNull(wordStart) ?: return tapPos to tapPos
     val endMapping = charMap.getOrNull((wordEnd - 1).coerceAtLeast(0)) ?: return tapPos to tapPos
 
-    return TextPos(0, startMapping.lineIndex, startMapping.colIndex) to
-            TextPos(0, endMapping.lineIndex, endMapping.colIndex)
+    return TextPos(tapPos.relativePagePos, startMapping.lineIndex, startMapping.colIndex) to
+            TextPos(tapPos.relativePagePos, endMapping.lineIndex, endMapping.colIndex)
 }
 
 /**
@@ -194,7 +258,8 @@ fun getSelectedText(page: TextPage, start: TextPos, end: TextPos): String {
  * Bubble-style selection mini menu 鈥?pill shape with arrow, two-row expandable.
  * Ported from MoRealm HTML prototype.
  *
- * Main row:  澶嶅埗 | 楂樹寒 | 绗旇 | 鏈楄 | 鈰? * Extra row: 缈昏瘧 | 鍒嗕韩 | 鏌ヨ瘝  (shown on 鈰?tap)
+ * Main row: 复制 | 朗读 | 更多
+ * Extra row: 翻译 | 分享 | 查词
  */
 @Composable
 fun SelectionToolbar(
@@ -208,28 +273,43 @@ fun SelectionToolbar(
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
     var expanded by remember { mutableStateOf(false) }
     val arrowColor = MaterialTheme.colorScheme.surfaceContainerHigh
 
     // Position: center on offset, clamp to screen
     val xDp = with(density) { offset.x.toDp() }
     val yDp = with(density) { offset.y.toDp() }
+    val screenWidth = configuration.screenWidthDp.dp
+    val screenHeight = configuration.screenHeightDp.dp
+    val menuWidth = 188.dp
+    val menuHeight = if (expanded) 86.dp else 46.dp
+    val showBelow = yDp - menuHeight - 12.dp < 8.dp
+    val menuX = (xDp - menuWidth / 2).coerceIn(8.dp, screenWidth - menuWidth - 8.dp)
+    val menuY = if (showBelow) {
+        (yDp + 16.dp).coerceAtMost(screenHeight - menuHeight - 16.dp)
+    } else {
+        (yDp - menuHeight - 12.dp).coerceAtLeast(8.dp)
+    }
+    val arrowX = (xDp - menuX - 7.dp).coerceIn(18.dp, menuWidth - 18.dp)
 
     Box(modifier = modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
-                .offset(
-                    x = (xDp - 120.dp).coerceIn(8.dp, 240.dp),
-                    y = (yDp - 56.dp).coerceAtLeast(8.dp),
-                ),
+                .offset(x = menuX, y = menuY)
+                .width(menuWidth),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            if (showBelow) {
+                ToolbarArrow(arrowColor, pointsDown = false, modifier = Modifier.offset(x = arrowX - menuWidth / 2))
+            }
             // Pill body
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 shadowElevation = 12.dp,
                 tonalElevation = 2.dp,
+                modifier = Modifier.widthIn(max = menuWidth),
             ) {
                 Column {
                     // Main row
@@ -237,9 +317,9 @@ fun SelectionToolbar(
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        MenuBtn(Icons.Default.ContentCopy, "澶嶅埗", onCopy)
+                        MenuBtn(Icons.Default.ContentCopy, "复制", onCopy)
                         MenuSep()
-                        MenuBtn(Icons.Default.VolumeUp, "鏈楄", onSpeak)
+                        MenuBtn(Icons.Default.VolumeUp, "朗读", onSpeak)
                         MenuSep()
                         // More button (icon only)
                         IconButton(
@@ -247,7 +327,7 @@ fun SelectionToolbar(
                             modifier = Modifier.size(32.dp),
                         ) {
                             Icon(
-                                Icons.Default.MoreHoriz, "鏇村",
+                                Icons.Default.MoreHoriz, "更多",
                                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                 modifier = Modifier.size(16.dp),
                             )
@@ -265,36 +345,50 @@ fun SelectionToolbar(
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                MenuBtn(Icons.Default.Translate, "缈昏瘧", onTranslate)
+                                MenuBtn(Icons.Default.Translate, "翻译", onTranslate)
                                 MenuSep()
-                                MenuBtn(Icons.Default.Share, "鍒嗕韩", onShare)
+                                MenuBtn(Icons.Default.Share, "分享", onShare)
                                 MenuSep()
-                                MenuBtn(Icons.Default.Search, "鏌ヨ瘝", onLookup)
+                                MenuBtn(Icons.Default.Search, "查词", onLookup)
                             }
                         }
                     }
                 }
             }
             // Arrow pointing down toward selection
-            Box(
-                modifier = Modifier
-                    .width(14.dp)
-                    .height(7.dp)
-                    .drawBehind {
-                        val path = androidx.compose.ui.graphics.Path().apply {
-                            moveTo(0f, 0f)
-                            lineTo(size.width / 2, size.height)
-                            lineTo(size.width, 0f)
-                            close()
-                        }
-                        drawPath(
-                            path,
-                            color = arrowColor,
-                        )
-                    }
-            )
+            if (!showBelow) {
+                ToolbarArrow(arrowColor, pointsDown = true, modifier = Modifier.offset(x = arrowX - menuWidth / 2))
+            }
         }
     }
+}
+
+@Composable
+private fun ToolbarArrow(
+    color: Color,
+    pointsDown: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .width(14.dp)
+            .height(7.dp)
+            .drawBehind {
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    if (pointsDown) {
+                        moveTo(0f, 0f)
+                        lineTo(size.width / 2, size.height)
+                        lineTo(size.width, 0f)
+                    } else {
+                        moveTo(0f, size.height)
+                        lineTo(size.width / 2, 0f)
+                        lineTo(size.width, size.height)
+                    }
+                    close()
+                }
+                drawPath(path, color = color)
+            }
+    )
 }
 
 @Composable

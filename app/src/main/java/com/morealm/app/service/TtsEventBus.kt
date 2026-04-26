@@ -29,7 +29,7 @@ object TtsEventBus {
         data object PrevChapter : Event()
         data object NextChapter : Event()
         data object PlayPause : Event()
-        data object AudioFocusLoss : Event()
+        data class AudioFocusLoss(val resumeOnGain: Boolean) : Event()
         data object AudioFocusGain : Event()
     }
 
