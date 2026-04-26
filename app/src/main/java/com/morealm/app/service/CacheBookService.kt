@@ -72,6 +72,7 @@ class CacheBookService : Service() {
         val completed: Int = 0,
         val failed: Int = 0,
         val cached: Int = 0,
+        val message: String = "",
     ) {
         val isComplete get() = completed + failed + cached >= total && total > 0
     }
@@ -120,6 +121,7 @@ class CacheBookService : Service() {
                 val source = sourceDao.getByUrl(sourceUrl)
                 if (source == null) {
                     AppLog.error("CacheService", "Book source not found: $sourceUrl")
+                    _progress.value = DownloadProgress(bookId = bookId, failed = 1, message = "书源不存在或已禁用")
                     return@launch
                 }
 
@@ -128,6 +130,7 @@ class CacheBookService : Service() {
                 }
                 if (chapters.isEmpty()) {
                     AppLog.warn("CacheService", "No chapters for book: $bookId")
+                    _progress.value = DownloadProgress(bookId = bookId, failed = 1, message = "书源无章节，无法缓存")
                     return@launch
                 }
 
@@ -135,11 +138,22 @@ class CacheBookService : Service() {
                 val targetChapters = chapters.filter { it.index in startIndex..end && it.url.isNotBlank() && !it.isVolume }
 
                 _progress.value = DownloadProgress(bookId = bookId, total = targetChapters.size)
+                if (targetChapters.isEmpty()) {
+                    AppLog.warn("CacheService", "No downloadable chapters for book: $bookId")
+                    _progress.value = DownloadProgress(
+                        bookId = bookId,
+                        total = 0,
+                        failed = 1,
+                        message = "没有可缓存章节：目录为空、章节链接为空或当前选择范围没有正文章节",
+                    )
+                    return@launch
+                }
 
                 val semaphore = Semaphore(3)
                 val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
                 val failedCount = java.util.concurrent.atomic.AtomicInteger(0)
                 val cachedCount = java.util.concurrent.atomic.AtomicInteger(0)
+                val lastError = java.util.concurrent.atomic.AtomicReference("")
 
                 val jobs = targetChapters.map { chapter ->
                     launch {
@@ -163,12 +177,18 @@ class CacheBookService : Service() {
                                 completedCount.incrementAndGet()
                             } else {
                                 failedCount.incrementAndGet()
+                                lastError.compareAndSet(
+                                    "",
+                                    "第 ${chapter.index + 1} 章返回空内容：${chapter.title.ifBlank { chapter.url }}",
+                                )
                             }
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
                             failedCount.incrementAndGet()
-                            AppLog.warn("CacheService", "Download ch${chapter.index} failed: ${e.message}")
+                            val message = readableError(e)
+                            lastError.compareAndSet("", "第 ${chapter.index + 1} 章失败：$message")
+                            AppLog.warn("CacheService", "Download ch${chapter.index} failed: $message")
                         } finally {
                             semaphore.release()
                             updateProgress(bookId, targetChapters.size, completedCount.get(), failedCount.get(), cachedCount.get())
@@ -177,6 +197,10 @@ class CacheBookService : Service() {
                 }
                 jobs.joinAll()
 
+                if (failedCount.get() > 0) {
+                    val detail = lastError.get().ifBlank { "请换源或稍后重试" }
+                    _progress.value = _progress.value.copy(message = "缓存失败：$detail")
+                }
                 AppLog.info("CacheService", "Download complete: ${completedCount.get()} ok, ${failedCount.get()} failed, ${cachedCount.get()} cached")
             } catch (e: CancellationException) {
                 AppLog.info("CacheService", "Download cancelled")
@@ -191,8 +215,19 @@ class CacheBookService : Service() {
     }
 
     private fun updateProgress(bookId: String, total: Int, completed: Int, failed: Int, cached: Int) {
-        _progress.value = DownloadProgress(bookId, total, completed, failed, cached)
+        val currentMessage = _progress.value.takeIf { it.bookId == bookId }?.message.orEmpty()
+        _progress.value = DownloadProgress(bookId, total, completed, failed, cached, currentMessage)
         updateNotification(completed + failed + cached, total)
+    }
+
+    private fun readableError(e: Throwable): String {
+        val raw = e.localizedMessage ?: e.message ?: e::class.java.simpleName
+        return raw
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+            .trim()
+            .ifBlank { e::class.java.simpleName }
+            .take(180)
     }
 
     private fun stopDownload() {

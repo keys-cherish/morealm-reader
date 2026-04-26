@@ -201,7 +201,11 @@ class AnalyzeRule(
                             Mode.Js -> evalJS(rule, result)
                             Mode.Json -> getAnalyzeByJSonPath(result).getStringList(rule)
                             Mode.XPath -> getAnalyzeByXPath(result).getStringList(rule)
-                            Mode.Default -> getAnalyzeByJSoup(result).getStringList(rule)
+                            Mode.Default -> if (isJsonPathRule(rule)) {
+                                getAnalyzeByJSonPath(result).getStringList(rule)
+                            } else {
+                                getAnalyzeByJSoup(result).getStringList(rule)
+                            }
                             else -> rule
                         }
                     }

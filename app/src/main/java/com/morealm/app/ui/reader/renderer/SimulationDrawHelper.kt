@@ -152,8 +152,8 @@ class SimulationDrawHelper {
      * 设置触摸点。由 Compose 的 pageOffset 驱动。
      */
     fun setTouchPoint(x: Float, y: Float) {
-        mTouchX = x.coerceAtLeast(BEZIER_EPSILON)
-        mTouchY = y.coerceAtLeast(BEZIER_EPSILON)
+        mTouchX = x.takeUnless { it == 0f } ?: BEZIER_EPSILON
+        mTouchY = y.takeUnless { it == 0f } ?: BEZIER_EPSILON
     }
 
     /**

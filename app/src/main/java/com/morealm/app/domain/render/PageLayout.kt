@@ -18,8 +18,34 @@ data class TextPos(
     val lineIndex: Int,
     val columnIndex: Int,
 ) {
+    fun compare(pos: TextPos): Int {
+        return when {
+            relativePagePos < pos.relativePagePos -> -3
+            relativePagePos > pos.relativePagePos -> 3
+            lineIndex < pos.lineIndex -> -2
+            lineIndex > pos.lineIndex -> 2
+            columnIndex < pos.columnIndex -> -1
+            columnIndex > pos.columnIndex -> 1
+            else -> 0
+        }
+    }
+
+    fun compare(relativePos: Int, lineIndex: Int, columnIndex: Int): Int {
+        return when {
+            relativePagePos < relativePos -> -3
+            relativePagePos > relativePos -> 3
+            this.lineIndex < lineIndex -> -2
+            this.lineIndex > lineIndex -> 2
+            this.columnIndex < columnIndex -> -1
+            this.columnIndex > columnIndex -> 1
+            else -> 0
+        }
+    }
+
+    fun isSelected(): Boolean = lineIndex >= 0 && columnIndex >= 0
+
     companion object {
-        val EMPTY = TextPos(0, 0, 0)
+        val EMPTY = TextPos(0, -1, -1)
     }
 }
 
@@ -30,22 +56,63 @@ enum class PageDirection { NONE, PREV, NEXT }
 sealed interface BaseColumn {
     var start: Float
     var end: Float
-    fun isTouch(x: Float): Boolean = x in start..end
+    var textLine: TextLine?
+    fun isTouch(x: Float): Boolean = x > start && x < end
+}
+
+sealed interface TextBaseColumn : BaseColumn {
+    val charData: String
+    var selected: Boolean
+    var isSearchResult: Boolean
 }
 
 data class TextColumn(
-    var charData: String,
+    override var charData: String,
     override var start: Float,
     override var end: Float,
-    var selected: Boolean = false,
-    var isSearchResult: Boolean = false,
-) : BaseColumn
+    override var selected: Boolean = false,
+    override var isSearchResult: Boolean = false,
+    override var textLine: TextLine? = null,
+) : TextBaseColumn
+
+data class TextHtmlColumn(
+    override var start: Float,
+    override var end: Float,
+    override val charData: String,
+    val textSize: Float,
+    val textColor: Int?,
+    val linkUrl: String?,
+    override var selected: Boolean = false,
+    override var isSearchResult: Boolean = false,
+    override var textLine: TextLine? = null,
+) : TextBaseColumn
 
 data class ImageColumn(
     override var start: Float,
     override var end: Float,
     val src: String,
+    val height: Float = 0f,
+    val width: Float = end - start,
+    val click: String? = null,
+    override var textLine: TextLine? = null,
+) : BaseColumn {
+    override fun isTouch(x: Float): Boolean = x > start && x < end + 20f
+}
+
+data class ButtonColumn(
+    override var start: Float,
+    override var end: Float,
+    override var textLine: TextLine? = null,
 ) : BaseColumn
+
+data class ReviewColumn(
+    override var start: Float,
+    override var end: Float,
+    val count: Int = 0,
+    override var textLine: TextLine? = null,
+) : BaseColumn {
+    val countText: String get() = if (count > 999) "999" else count.toString()
+}
 
 // ── TextLine ──
 
@@ -80,12 +147,13 @@ class TextLine(
     var exceed: Boolean = false
 
     val charSize: Int get() = columns.sumOf {
-        if (it is TextColumn) it.charData.length else 0
+        if (it is TextBaseColumn) it.charData.length else 0
     }
 
     val lineSize: Int get() = columns.size
 
     fun addColumn(column: BaseColumn) {
+        column.textLine = this
         columns.add(column)
     }
 
@@ -138,6 +206,7 @@ class TextPage(
     var height: Float = 0f
     var leftLineSize: Int = 0
     var textChapter: TextChapter? = null
+    var hasReadAloudSpan: Boolean = false
 
     val lineSize: Int get() = lines.size
 
@@ -194,8 +263,32 @@ class TextPage(
     }
 
     fun removePageAloudSpan(): TextPage {
+        if (!hasReadAloudSpan && lines.none { it.isReadAloud }) return this
+        hasReadAloudSpan = false
         lines.forEach { it.isReadAloud = false }
         return this
+    }
+
+    /** Ported from Legado TextPage.upPageAloudSpan. */
+    fun upPageAloudSpan(aloudSpanStart: Int) {
+        removePageAloudSpan()
+        hasReadAloudSpan = true
+        var lineStart = 0
+        for (index in lines.indices) {
+            val textLine = lines[index]
+            val lineLength = textLine.text.length + if (textLine.isParagraphEnd) 1 else 0
+            if (aloudSpanStart >= lineStart && aloudSpanStart < lineStart + lineLength) {
+                for (i in index - 1 downTo 0) {
+                    if (lines[i].isParagraphEnd) break else lines[i].isReadAloud = true
+                }
+                for (i in index until lines.size) {
+                    lines[i].isReadAloud = true
+                    if (lines[i].isParagraphEnd) break
+                }
+                break
+            }
+            lineStart += lineLength
+        }
     }
 
     /** Group lines into paragraphs by paragraphNum (ported from Legado TextPage.paragraphs). */
@@ -215,14 +308,20 @@ class TextPage(
     }
 
     fun format(): TextPage {
-        if (text.isNotEmpty() && lines.isEmpty()) {
-            // Simple text-only page (e.g., error message)
-            val line = TextLine(text = text)
+        val message = text.ifBlank { title }.ifBlank { "加载中..." }
+        if (lines.isEmpty()) {
+            // Legado treats line-less TextPage instances as message pages. MoRealm
+            // must do the same so chapter-boundary/loading placeholders never draw
+            // as a pure white page during fast page turns.
+            text = message
+            val line = TextLine(text = message, isTitle = title.isNotBlank())
             line.lineTop = paddingTop.toFloat()
             line.lineBase = paddingTop + 30f
             line.lineBottom = paddingTop + 36f
-            line.addColumn(TextColumn(charData = text, start = 16f, end = 300f))
+            line.addColumn(TextColumn(charData = message, start = 16f, end = 300f))
             lines.add(line)
+            height = line.lineBottom
+            isCompleted = true
         }
         return this
     }
@@ -234,15 +333,34 @@ class TextPage(
         val sb = StringBuilder()
         for (li in startLine..endLine.coerceAtMost(lines.lastIndex)) {
             val line = lines[li]
-            val colStart = if (li == startLine) startCol else 0
-            val colEnd = if (li == endLine) endCol else line.columns.lastIndex
+            val colStart = if (li == startLine) startCol.coerceAtLeast(0) else 0
+            val colEnd = if (li == endLine) endCol.coerceAtMost(line.columns.lastIndex) else line.columns.lastIndex
             for (ci in colStart..colEnd.coerceAtMost(line.columns.lastIndex)) {
                 val col = line.columns[ci]
-                if (col is TextColumn) sb.append(col.charData)
+                if (col is TextBaseColumn) sb.append(col.charData)
             }
             if (li < endLine && line.isParagraphEnd) sb.append('\n')
         }
         return sb.toString()
+    }
+
+    /** Ported from Legado TextPage.getPosByLineColumn. */
+    fun getPosByLineColumn(lineIndex: Int, columnIndex: Int): Int {
+        if (lines.isEmpty()) return 0
+        var length = 0
+        val maxIndex = lineIndex.coerceIn(0, lines.lastIndex)
+        for (index in 0 until maxIndex) {
+            length += lines[index].charSize
+            if (lines[index].isParagraphEnd) length++
+        }
+        val columns = lines[maxIndex].columns
+        for (index in 0 until columnIndex.coerceIn(0, columns.size)) {
+            val column = columns[index]
+            if (column is TextBaseColumn) {
+                length += column.charData.length
+            }
+        }
+        return length
     }
 }
 
@@ -267,6 +385,12 @@ data class TextParagraph(
     }
 }
 
+data class SearchSelectionRange(
+    val pageIndex: Int,
+    val start: TextPos,
+    val end: TextPos,
+)
+
 // ── TextChapter ──
 
 class TextChapter(
@@ -274,71 +398,189 @@ class TextChapter(
     val title: String,
     val chaptersSize: Int,
 ) {
+    private val pageLock = Any()
     private val textPages = arrayListOf<TextPage>()
-    val pages: List<TextPage> get() = textPages
+    val pages: List<TextPage> get() = snapshotPages()
 
+    @Volatile
     var isCompleted = false
 
-    fun addPage(page: TextPage) {
-        textPages.add(page)
+    fun snapshotPages(): List<TextPage> {
+        return synchronized(pageLock) { textPages.toList() }
     }
 
-    fun getPage(index: Int): TextPage? = pages.getOrNull(index)
+    fun addPage(page: TextPage) {
+        synchronized(pageLock) { textPages.add(page) }
+    }
 
-    val lastPage: TextPage? get() = pages.lastOrNull()
-    val lastIndex: Int get() = pages.lastIndex
-    val pageSize: Int get() = pages.size
+    fun getPage(index: Int): TextPage? {
+        return synchronized(pageLock) { textPages.getOrNull(index) }
+    }
 
-    fun isLastIndex(index: Int): Boolean = isCompleted && index >= pages.size - 1
+    val lastPage: TextPage? get() = synchronized(pageLock) { textPages.lastOrNull() }
+    val lastIndex: Int get() = synchronized(pageLock) { textPages.lastIndex }
+    val pageSize: Int get() = synchronized(pageLock) { textPages.size }
+
+    fun isLastIndex(index: Int): Boolean = isCompleted && index >= pageSize - 1
 
     fun getReadLength(pageIndex: Int): Int {
         if (pageIndex < 0) return 0
-        return pages[pageIndex.coerceAtMost(lastIndex)].chapterPosition
+        val snapshot = snapshotPages()
+        if (snapshot.isEmpty()) return 0
+        return snapshot[pageIndex.coerceAtMost(snapshot.lastIndex)].chapterPosition
     }
 
     fun getPageIndexByCharIndex(charIndex: Int): Int {
-        if (pages.isEmpty()) return -1
-        for (i in pages.indices) {
-            val page = pages[i]
+        val snapshot = snapshotPages()
+        if (snapshot.isEmpty()) return -1
+        for (i in snapshot.indices) {
+            val page = snapshot[i]
             val pageEnd = page.chapterPosition + page.charSize
             if (charIndex < pageEnd) return i
         }
-        return pages.lastIndex
+        return snapshot.lastIndex
     }
 
     fun getContent(): String {
-        return pages.joinToString("") { it.text }
+        return snapshotPages().joinToString("") { it.text }
     }
 
     fun getUnRead(pageIndex: Int): String {
         val sb = StringBuilder()
-        for (i in pageIndex..pages.lastIndex) {
-            sb.append(pages[i].text)
+        val snapshot = snapshotPages()
+        for (i in pageIndex.coerceAtLeast(0)..snapshot.lastIndex) {
+            sb.append(snapshot[i].text)
         }
         return sb.toString()
     }
 
     fun getNeedReadAloud(pageIndex: Int, startPos: Int = 0): String {
         val sb = StringBuilder()
-        for (i in pageIndex..pages.lastIndex) {
-            sb.append(pages[i].text)
+        val snapshot = snapshotPages()
+        for (i in pageIndex.coerceAtLeast(0)..snapshot.lastIndex) {
+            sb.append(snapshot[i].text)
         }
         return if (startPos < sb.length) sb.substring(startPos) else ""
     }
 
-    val paragraphs: List<TextParagraph> by lazy {
-        val result = arrayListOf<TextParagraph>()
-        for (page in pages) {
-            for (line in page.lines) {
-                if (line.paragraphNum <= 0) continue
-                while (result.size < line.paragraphNum) {
-                    result.add(TextParagraph(result.size + 1))
-                }
-                result[line.paragraphNum - 1].textLines.add(line)
+    /** Ported from Legado TextChapter.getNeedReadAloud(pageSplit). */
+    fun getNeedReadAloud(
+        pageIndex: Int,
+        pageSplit: Boolean,
+        startPos: Int,
+        pageEndIndex: Int = pageSize - 1,
+    ): String {
+        val sb = StringBuilder()
+        val snapshot = snapshotPages()
+        if (snapshot.isNotEmpty()) {
+            for (index in pageIndex.coerceAtLeast(0)..minOf(pageEndIndex, snapshot.lastIndex)) {
+                sb.append(snapshot[index].text.replace(Regex("[袮꧁]"), " "))
+                if (pageSplit && !sb.endsWith("\n")) sb.append("\n")
             }
         }
-        result
+        return if (startPos < sb.length) sb.substring(startPos) else ""
     }
+
+    fun getParagraphs(pageSplit: Boolean): List<TextParagraph> {
+        return if (pageSplit) {
+            if (isCompleted) pageParagraphs else pageParagraphsInternal
+        } else {
+            if (isCompleted) paragraphs else paragraphsInternal
+        }
+    }
+
+    fun getParagraphNum(position: Int, pageSplit: Boolean): Int {
+        val paragraphs = getParagraphs(pageSplit)
+        paragraphs.forEach { paragraph ->
+            if (position in paragraph.chapterIndices) return paragraph.num
+        }
+        return -1
+    }
+
+    fun getLastParagraphPosition(): Int {
+        return pageParagraphs.lastOrNull()?.chapterPosition ?: 0
+    }
+
+    /** Ported from Legado ReadBookViewModel.searchResultPositions. */
+    fun searchSelectionRange(contentPosition: Int, queryLength: Int): SearchSelectionRange? {
+        val snapshot = snapshotPages()
+        if (contentPosition < 0 || queryLength <= 0 || snapshot.isEmpty()) return null
+        var pageIndex = 0
+        var length = snapshot[pageIndex].text.length
+        while (length < contentPosition && pageIndex + 1 < snapshot.size) {
+            pageIndex += 1
+            length += snapshot[pageIndex].text.length
+        }
+        val currentPage = snapshot.getOrNull(pageIndex) ?: return null
+        if (currentPage.lines.isEmpty()) return null
+        var lineIndex = 0
+        var currentLine = currentPage.lines[lineIndex]
+        length = length - currentPage.text.length + currentLine.text.length
+        if (currentLine.isParagraphEnd) length++
+        while (length <= contentPosition && lineIndex + 1 < currentPage.lines.size) {
+            lineIndex += 1
+            currentLine = currentPage.lines[lineIndex]
+            length += currentLine.text.length
+            if (currentLine.isParagraphEnd) length++
+        }
+        var currentLineLength = currentLine.text.length
+        if (currentLine.isParagraphEnd) currentLineLength++
+        length -= currentLineLength
+        val charIndex = contentPosition - length
+        var addLine = 0
+        var charIndex2 = 0
+        if (charIndex + queryLength > currentLineLength) {
+            addLine = 1
+            charIndex2 = charIndex + queryLength - currentLineLength - 1
+        }
+        if (lineIndex + addLine + 1 > currentPage.lines.size) {
+            addLine = -1
+            charIndex2 = charIndex + queryLength - currentLineLength - 1
+        }
+        val start = TextPos(0, lineIndex, charIndex)
+        val end = when (addLine) {
+            0 -> TextPos(0, lineIndex, charIndex + queryLength - 1)
+            1 -> TextPos(0, lineIndex + 1, charIndex2)
+            -1 -> TextPos(1, 0, charIndex2)
+            else -> TextPos(0, lineIndex, charIndex)
+        }
+        return SearchSelectionRange(pageIndex, start, end)
+    }
+
+    val paragraphs: List<TextParagraph> get() = if (isCompleted) completedParagraphs else paragraphsInternal
+
+    val pageParagraphs: List<TextParagraph> get() = if (isCompleted) completedPageParagraphs else pageParagraphsInternal
+
+    private val completedParagraphs: List<TextParagraph> by lazy { paragraphsInternal }
+
+    private val completedPageParagraphs: List<TextParagraph> by lazy { pageParagraphsInternal }
+
+    private val paragraphsInternal: List<TextParagraph>
+        get() {
+            val result = arrayListOf<TextParagraph>()
+            for (page in snapshotPages()) {
+                for (line in page.lines) {
+                    if (line.paragraphNum <= 0) continue
+                    while (result.size < line.paragraphNum) {
+                        result.add(TextParagraph(result.size + 1))
+                    }
+                    result[line.paragraphNum - 1].textLines.add(line)
+                }
+            }
+            return result
+        }
+
+    private val pageParagraphsInternal: List<TextParagraph>
+        get() {
+            val result = arrayListOf<TextParagraph>()
+            for (page in snapshotPages()) {
+                result.addAll(page.paragraphs)
+            }
+            for (index in result.indices) {
+                result[index].num = index + 1
+            }
+            return result
+        }
 
     companion object {
         val EMPTY = TextChapter(-1, "", 0).apply { isCompleted = true }
