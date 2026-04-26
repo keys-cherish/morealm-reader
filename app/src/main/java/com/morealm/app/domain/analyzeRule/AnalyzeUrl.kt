@@ -149,6 +149,55 @@ class AnalyzeUrl(
         return if (looksLikeBlock) script else "($script)"
     }
 
+    fun startBrowser(url: String) {
+        startBrowser(url, url, null)
+    }
+
+    fun startBrowser(url: String, title: String) {
+        startBrowser(url, title, null)
+    }
+
+    fun startBrowser(url: String, title: String, html: String?) {
+        AppLog.warn(
+            "AnalyzeUrl",
+            "startBrowser requested by source '${source?.bookSourceName ?: ""}': $title $url",
+        )
+        if (html != null) {
+            runBlocking(coroutineContext) {
+                BackstageWebView(url = url, html = html, javaScript = null).getStrResponse()
+            }
+        }
+    }
+
+    fun startBrowserAwait(url: String): StrResponse {
+        return startBrowserAwait(url, url, true, null)
+    }
+
+    fun startBrowserAwait(url: String, title: String): StrResponse {
+        return startBrowserAwait(url, title, true, null)
+    }
+
+    fun startBrowserAwait(url: String, title: String, refetchAfterSuccess: Boolean): StrResponse {
+        return startBrowserAwait(url, title, refetchAfterSuccess, null)
+    }
+
+    fun startBrowserAwait(url: String, title: String, refetchAfterSuccess: Boolean, html: String?): StrResponse {
+        AppLog.warn(
+            "AnalyzeUrl",
+            "startBrowserAwait fallback for source '${source?.bookSourceName ?: ""}': $title $url",
+        )
+        val body = if (html != null) {
+            runBlocking(coroutineContext) {
+                BackstageWebView(url = url, html = html, javaScript = null).getStrResponse().body
+            }
+        } else {
+            runBlocking(coroutineContext) {
+                AnalyzeUrl(url, source = source, coroutineContext = coroutineContext).getStrResponseAwait().body
+            }
+        }
+        return StrResponse(url, body)
+    }
+
     fun put(key: String, value: String): String {
         ruleData?.putVariable(key, value)
         return value
@@ -164,6 +213,78 @@ class AnalyzeUrl(
             val ctx = com.morealm.app.MoRealmApp.instance
             android.provider.Settings.Secure.getString(ctx.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: ""
         } catch (_: Exception) { "" }
+    }
+
+    fun ajax(url: Any): String? {
+        return ajax(url, null)
+    }
+
+    fun ajax(url: Any, callTimeout: Long?): String? {
+        val urlStr = if (url is List<*>) {
+            url.firstOrNull().toString()
+        } else {
+            url.toString()
+        }
+        return runCatching {
+            runBlocking(coroutineContext) {
+                AnalyzeUrl(
+                    urlStr,
+                    baseUrl = baseUrl,
+                    source = source,
+                    ruleData = ruleData,
+                    coroutineContext = coroutineContext,
+                ).getStrResponseAwait().body
+            }
+        }.getOrElse { it.message }
+    }
+
+    fun post(urlStr: String, body: String): StrResponse {
+        return post(urlStr, body, null)
+    }
+
+    fun post(urlStr: String, body: String, headers: Any?): StrResponse {
+        val requestHeaders = LinkedHashMap<String, String>()
+        requestHeaders.putAll(headerMap)
+        requestHeaders.putAll(headersToMap(headers))
+        if (!requestHeaders.containsKey("User-Agent")) {
+            requestHeaders["User-Agent"] = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        }
+        val postDomain = getSubDomain(urlStr)
+        CookieStore.getCookie(postDomain).takeIf { it.isNotBlank() }?.let { cookie ->
+            val headerCookie = requestHeaders["Cookie"]
+            requestHeaders["Cookie"] = if (headerCookie.isNullOrBlank()) {
+                cookie
+            } else {
+                mergeCookies(cookie, headerCookie)
+            }
+        }
+        return runCatching {
+            runBlocking(coroutineContext) {
+                okHttpClient.newCallStrResponse {
+                    url(urlStr)
+                    addHeaders(requestHeaders)
+                    val contentType = requestHeaders["Content-Type"]
+                    val mediaType = (contentType ?: if (body.trimStart().startsWith("{") || body.trimStart().startsWith("[")) {
+                        "application/json; charset=utf-8"
+                    } else {
+                        "application/x-www-form-urlencoded; charset=utf-8"
+                    }).toMediaType()
+                    post(body.toRequestBody(mediaType))
+                }.also { saveCookie(it.raw, postDomain) }
+            }
+        }.getOrElse { StrResponse(urlStr, it.message ?: "") }
+    }
+
+    fun md5Encode(str: String): String = JsExtensions.md5Encode(str)
+
+    fun md5Encode16(str: String): String = JsExtensions.md5Encode16(str)
+
+    fun encodeURI(str: String): String {
+        return try { URLEncoder.encode(str, "UTF-8") } catch (_: Exception) { "" }
+    }
+
+    fun encodeURI(str: String, enc: String): String {
+        return try { URLEncoder.encode(str, enc) } catch (_: Exception) { "" }
     }
 
     /**
@@ -320,15 +441,32 @@ class AnalyzeUrl(
     /**
      * 保存响应中的cookie
      */
-    private fun saveCookie(response: okhttp3.Response) {
+    private fun saveCookie(response: okhttp3.Response, cookieDomain: String = domain) {
         val setCookieHeaders = response.headers("Set-Cookie")
         if (setCookieHeaders.isNotEmpty()) {
             val cookieParts = setCookieHeaders.mapNotNull { header ->
                 header.split(";").firstOrNull()?.trim()?.takeIf { it.contains("=") }
             }
             if (cookieParts.isNotEmpty()) {
-                CookieStore.replaceCookie(domain, cookieParts.joinToString("; "))
+                CookieStore.replaceCookie(cookieDomain, cookieParts.joinToString("; "))
             }
+        }
+    }
+
+    private fun headersToMap(headers: Any?): Map<String, String> {
+        return when (headers) {
+            null -> emptyMap()
+            is Map<*, *> -> headers.entries.associate { it.key.toString() to it.value.toString() }
+            is org.mozilla.javascript.NativeObject -> headers.ids.associate { key ->
+                key.toString() to org.mozilla.javascript.ScriptableObject.getProperty(headers, key.toString()).toString()
+            }
+            is String -> headers.split('\n', '&')
+                .mapNotNull { line ->
+                    val idx = line.indexOf(':').takeIf { it > 0 } ?: line.indexOf('=').takeIf { it > 0 } ?: return@mapNotNull null
+                    line.substring(0, idx).trim().takeIf { it.isNotEmpty() }?.let { it to line.substring(idx + 1).trim() }
+                }
+                .toMap()
+            else -> emptyMap()
         }
     }
 
@@ -370,6 +508,7 @@ class AnalyzeUrl(
                     else -> get(urlNoQuery, encodedQuery)
                 }
             }
+            saveCookie(strResponse.raw)
             strResponse
         }
     }

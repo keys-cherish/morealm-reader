@@ -69,7 +69,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         override fun onReceive(context: Context, intent: Intent) {
             if (AudioManager.ACTION_AUDIO_BECOMING_NOISY == intent.action) {
                 AppLog.info("TtsService", "Audio becoming noisy (headphones unplugged) → pausing")
-                TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss)
+                TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss(resumeOnGain = false))
             }
         }
     }
@@ -189,7 +189,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                 when (state) {
                     TelephonyManager.CALL_STATE_RINGING -> {
                         needResumeOnCallIdle = true
-                        TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss)
+                        TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss(resumeOnGain = true))
                         AppLog.info("TtsService", "Incoming call → pausing TTS")
                     }
                     TelephonyManager.CALL_STATE_IDLE -> {
@@ -241,13 +241,16 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                wasPlayingBeforeFocusLoss = true
-                TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss)
+                val resumeOnGain = focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT &&
+                    TtsEventBus.playbackState.value.isPlaying
+                wasPlayingBeforeFocusLoss = resumeOnGain
+                TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss(resumeOnGain = resumeOnGain))
                 AppLog.info("TtsService", "Audio focus lost → pausing TTS")
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                wasPlayingBeforeFocusLoss = true
-                TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss)
+                val resumeOnGain = TtsEventBus.playbackState.value.isPlaying
+                wasPlayingBeforeFocusLoss = resumeOnGain
+                TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss(resumeOnGain = resumeOnGain))
                 AppLog.debug("TtsService", "Audio focus ducking → pausing TTS")
             }
             AudioManager.AUDIOFOCUS_GAIN -> {

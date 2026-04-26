@@ -12,6 +12,7 @@ import com.morealm.app.domain.entity.rule.ExploreRule
 import com.morealm.app.domain.entity.rule.ReviewRule
 import com.morealm.app.domain.entity.rule.SearchRule
 import com.morealm.app.domain.entity.rule.TocRule
+import com.morealm.app.domain.analyzeRule.JsExtensions
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.CookieStore
 import com.script.ScriptBindings
@@ -251,7 +252,9 @@ data class BookSource(
      */
     fun evalJS(jsStr: String): Any? {
         val bindings = ScriptBindings()
-        bindings["java"] = this
+        JsExtensions.sourceGetter = { this }
+        JsExtensions.ruleDataGetter = { null }
+        bindings["java"] = JsExtensions
         bindings["source"] = this
         bindings["baseUrl"] = bookSourceUrl
         bindings["cookie"] = CookieStore

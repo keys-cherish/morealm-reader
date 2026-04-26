@@ -48,18 +48,25 @@ fun ShelfScreen(
     onToggleDayNight: () -> Unit = {},
     isNightTheme: Boolean = true,
     columns: Int = 3,
-    continueReading: Boolean = false,
+    continueReadingRequest: Int = 0,
     viewModel: ShelfViewModel = hiltViewModel(),
 ) {
     val allBooks by viewModel.books.collectAsStateWithLifecycle()
     val booksLoaded by viewModel.booksLoaded.collectAsStateWithLifecycle()
     val lastRead by viewModel.lastReadBook.collectAsStateWithLifecycle()
 
-    // Handle "continue reading" shortcut
-    var handledContinue by remember { mutableStateOf(false) }
-    LaunchedEffect(continueReading, lastRead) {
-        if (continueReading && !handledContinue && lastRead != null) {
-            handledContinue = true
+    // Handle "continue reading" shortcut. A monotonically increasing request
+    // avoids losing repeated singleTask intents after the activity is reused.
+    var handledContinueRequest by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(continueReadingRequest, lastRead, booksLoaded) {
+        if (continueReadingRequest > 0 &&
+            continueReadingRequest != handledContinueRequest &&
+            lastRead != null &&
+            booksLoaded
+        ) {
+            handledContinueRequest = continueReadingRequest
+            withFrameNanos { }
+            delay(250)
             onBookClick(lastRead!!.id)
         }
     }
@@ -134,9 +141,11 @@ fun ShelfScreen(
     // Resume last read book on first launch if setting is enabled
     val resumeLastRead by viewModel.resumeLastRead.collectAsStateWithLifecycle()
     var hasResumed by remember { mutableStateOf(false) }
-    LaunchedEffect(resumeLastRead, lastRead) {
-        if (resumeLastRead && !hasResumed && lastRead != null) {
+    LaunchedEffect(resumeLastRead, lastRead, booksLoaded) {
+        if (resumeLastRead && !hasResumed && lastRead != null && booksLoaded) {
             hasResumed = true
+            withFrameNanos { }
+            delay(500)
             onBookClick(lastRead!!.id)
         }
     }
@@ -655,18 +664,27 @@ private fun ShelfSearchDialog(
                         cursorColor = MaterialTheme.colorScheme.primary,
                     ),
                 )
-                Spacer(Modifier.height(8.dp))
-                results.take(10).forEach { book ->
-                    Text(
-                        book.title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
+                if (results.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onBookClick(book.id) }
-                            .padding(vertical = 8.dp, horizontal = 4.dp),
-                        maxLines = 1,
-                    )
+                            .heightIn(max = 420.dp),
+                        contentPadding = PaddingValues(bottom = 8.dp),
+                    ) {
+                        lazyItems(results, key = { it.id }) { book ->
+                            Text(
+                                book.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onBookClick(book.id) }
+                                    .padding(vertical = 12.dp, horizontal = 4.dp),
+                                maxLines = 1,
+                            )
+                        }
+                    }
                 }
                 if (query.isNotEmpty() && results.isEmpty()) {
                     Text(

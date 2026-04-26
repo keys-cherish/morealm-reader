@@ -51,12 +51,18 @@ class ReaderTtsController(
     private val _ttsScrollProgress = MutableStateFlow(-1f)
     val ttsScrollProgress: StateFlow<Float> = _ttsScrollProgress.asStateFlow()
 
+    private val _ttsChapterPosition = MutableStateFlow(-1)
+    val ttsChapterPosition: StateFlow<Int> = _ttsChapterPosition.asStateFlow()
+
     private var ttsParagraphs: List<String> = emptyList()
+    private var ttsParagraphPositions: List<Int> = emptyList()
     private var ttsJob: Job? = null
     private var sleepTimerJob: Job? = null
     private var ttsServiceStarted = false
     private var ttsPausedByFocusLoss = false
     private var ttsSkipRegex: Regex? = null
+    private var onPrevChapter: (() -> Unit)? = null
+    private var onNextChapter: (() -> Unit)? = null
 
     private val systemTtsEngine by lazy {
         com.morealm.app.domain.tts.SystemTtsEngine(context).also { it.initialize() }
@@ -103,19 +109,22 @@ class ReaderTtsController(
             TtsEventBus.events.collect { event ->
                 when (event) {
                     is TtsEventBus.Event.PlayPause -> ttsPlayPause()
+                    is TtsEventBus.Event.PrevChapter -> onPrevChapter?.invoke()
+                    is TtsEventBus.Event.NextChapter -> onNextChapter?.invoke()
                     is TtsEventBus.Event.AudioFocusLoss -> {
                         if (_ttsPlaying.value) {
-                            ttsPausedByFocusLoss = true
+                            ttsPausedByFocusLoss = event.resumeOnGain
                             ttsPause()
+                        } else {
+                            ttsPausedByFocusLoss = false
                         }
                     }
                     is TtsEventBus.Event.AudioFocusGain -> {
                         if (ttsPausedByFocusLoss) {
                             ttsPausedByFocusLoss = false
-                            // Will be resumed by caller via onTtsEvent
+                            ttsPlay(null, null, null, onChapterFinished = null)
                         }
                     }
-                    else -> {} // PrevChapter/NextChapter handled by ViewModel
                 }
             }
         }
@@ -123,21 +132,8 @@ class ReaderTtsController(
 
     /** Collect TTS events that need ViewModel-level handling (chapter navigation). */
     fun collectChapterEvents(onPrev: () -> Unit, onNext: () -> Unit) {
-        scope.launch {
-            TtsEventBus.events.collect { event ->
-                when (event) {
-                    is TtsEventBus.Event.PrevChapter -> onPrev()
-                    is TtsEventBus.Event.NextChapter -> onNext()
-                    is TtsEventBus.Event.AudioFocusGain -> {
-                        if (ttsPausedByFocusLoss) {
-                            ttsPausedByFocusLoss = false
-                            ttsPlay(null, null, null, null)
-                        }
-                    }
-                    else -> {}
-                }
-            }
-        }
+        onPrevChapter = onPrev
+        onNextChapter = onNext
     }
 
     fun resetParagraphIndex() {
@@ -197,10 +193,12 @@ class ReaderTtsController(
         displayedContent: String? = null,
         bookTitle: String? = null,
         chapterTitle: String? = null,
+        startChapterPosition: Int? = null,
+        paragraphPositions: List<Int>? = null,
         onChapterFinished: (() -> Unit)? = null,
     ) {
         if (_ttsPlaying.value) ttsPause()
-        else ttsPlay(displayedContent, bookTitle, chapterTitle, onChapterFinished)
+        else ttsPlay(displayedContent, bookTitle, chapterTitle, startChapterPosition, paragraphPositions, onChapterFinished)
     }
 
     /**
@@ -214,6 +212,8 @@ class ReaderTtsController(
         displayedContent: String?,
         bookTitle: String?,
         chapterTitle: String?,
+        startChapterPosition: Int? = null,
+        paragraphPositions: List<Int>? = null,
         onChapterFinished: (() -> Unit)?,
     ) {
         ensureTtsService(bookTitle ?: "", chapterTitle ?: "")
@@ -225,7 +225,12 @@ class ReaderTtsController(
             try {
                 if (displayedContent != null) {
                     ttsParagraphs = parseParagraphs(displayedContent)
+                    ttsParagraphPositions = paragraphPositions ?: buildSequentialParagraphPositions(ttsParagraphs)
                     _ttsTotalParagraphs.value = ttsParagraphs.size
+                    startChapterPosition?.let { position ->
+                        _ttsParagraphIndex.value = paragraphIndexForChapterPosition(position)
+                        _ttsChapterPosition.value = position.coerceAtLeast(0)
+                    }
                 }
                 if (ttsParagraphs.isEmpty()) {
                     _ttsPlaying.value = false
@@ -243,6 +248,7 @@ class ReaderTtsController(
                 for (idx in startIdx until ttsParagraphs.size) {
                     if (!_ttsPlaying.value) break
                     _ttsParagraphIndex.value = idx
+                    _ttsChapterPosition.value = chapterPositionForParagraph(idx)
                     TtsEventBus.updatePlayback {
                         copy(paragraphIndex = idx, totalParagraphs = ttsParagraphs.size)
                     }
@@ -289,6 +295,7 @@ class ReaderTtsController(
     fun ttsPause() {
         _ttsPlaying.value = false
         _ttsScrollProgress.value = -1f
+        _ttsChapterPosition.value = -1
         ttsJob?.cancel()
         currentTtsEngine().stop()
         pushTtsState(false)
@@ -297,6 +304,7 @@ class ReaderTtsController(
     fun ttsStop() {
         ttsPause()
         _ttsParagraphIndex.value = 0
+        _ttsChapterPosition.value = -1
         TtsEventBus.updatePlayback { copy(isPlaying = false, paragraphIndex = 0) }
         if (ttsServiceStarted) {
             TtsEventBus.sendCommand(TtsEventBus.Command.StopService)
@@ -307,20 +315,22 @@ class ReaderTtsController(
     fun ttsPrevParagraph() {
         val newIdx = (_ttsParagraphIndex.value - 1).coerceAtLeast(0)
         _ttsParagraphIndex.value = newIdx
+        _ttsChapterPosition.value = chapterPositionForParagraph(newIdx)
         if (_ttsPlaying.value) {
             currentTtsEngine().stop()
             ttsJob?.cancel()
-            ttsPlay(null, null, null, null)
+            ttsPlay(null, null, null, onChapterFinished = null)
         }
     }
 
     fun ttsNextParagraph() {
         val newIdx = (_ttsParagraphIndex.value + 1).coerceAtMost(ttsParagraphs.size - 1)
         _ttsParagraphIndex.value = newIdx
+        _ttsChapterPosition.value = chapterPositionForParagraph(newIdx)
         if (_ttsPlaying.value) {
             currentTtsEngine().stop()
             ttsJob?.cancel()
-            ttsPlay(null, null, null, null)
+            ttsPlay(null, null, null, onChapterFinished = null)
         }
     }
 
@@ -354,7 +364,7 @@ class ReaderTtsController(
                 val savedVoice = _ttsVoiceName.value
                 systemTtsEngine.setVoice(savedVoice)
             }
-            if (wasPlaying) ttsPlay(null, null, null, null)
+            if (wasPlaying) ttsPlay(null, null, null, onChapterFinished = null)
         }
     }
 
@@ -389,6 +399,42 @@ class ReaderTtsController(
             if (engine is com.morealm.app.domain.tts.SystemTtsEngine) engine.awaitReady()
             engine.speak(text, _ttsSpeed.value).collect { }
         }
+    }
+
+    fun readAloudFrom(
+        displayedContent: String,
+        bookTitle: String,
+        chapterTitle: String,
+        startChapterPosition: Int,
+        paragraphPositions: List<Int>? = null,
+        onChapterFinished: (() -> Unit)?,
+    ) {
+        ttsPause()
+        ttsPlay(displayedContent, bookTitle, chapterTitle, startChapterPosition, paragraphPositions, onChapterFinished)
+    }
+
+    private fun chapterPositionForParagraph(index: Int): Int {
+        return ttsParagraphPositions.getOrNull(index) ?: 0
+    }
+
+    private fun paragraphIndexForChapterPosition(position: Int): Int {
+        if (ttsParagraphs.isEmpty() || position <= 0) return 0
+        for (index in ttsParagraphPositions.indices) {
+            val start = ttsParagraphPositions[index]
+            val next = ttsParagraphPositions.getOrNull(index + 1) ?: Int.MAX_VALUE
+            if (position in start until next) return index
+        }
+        return ttsParagraphs.lastIndex.coerceAtLeast(0)
+    }
+
+    private fun buildSequentialParagraphPositions(paragraphs: List<String>): List<Int> {
+        val result = arrayListOf<Int>()
+        var position = 0
+        for (paragraph in paragraphs) {
+            result.add(position)
+            position += paragraph.length + 1
+        }
+        return result
     }
 
     fun shutdown() {
