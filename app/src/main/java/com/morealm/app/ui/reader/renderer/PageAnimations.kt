@@ -291,7 +291,10 @@ private fun CoverPager(
 // 真正的贝塞尔曲线仿真翻页，移植自 Legado SimulationPageDelegate。
 // 不使用 HorizontalPager，而是自己管理手势 + Animatable 驱动 + Bitmap 离屏渲染。
 
-private enum class DragState { IDLE, DRAGGING_NEXT, DRAGGING_PREV }
+// ── Simulation (page curl) animation ──
+// Uses AndroidView wrapping a native SimulationReadView to avoid
+// Compose pointerInput closure staleness issues.
+// See docs/page-turn-bug-analysis.md for why this approach was chosen.
 
 @Composable
 private fun SimulationPager(
@@ -299,489 +302,74 @@ private fun SimulationPager(
     params: SimulationParams,
     currentDisplayPage: Int,
     modifier: Modifier = Modifier,
-    pageContent: @Composable (Int) -> Unit,
+    @Suppress("UNUSED_PARAMETER") pageContent: @Composable (Int) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-
-    // rememberUpdatedState ensures pointerInput closures always read the
-    // latest value, even when the coroutine was created in a prior composition.
-    // This is the standard Compose fix for stale-closure bugs in gesture handlers.
-    // (Legado avoids this entirely by using View fields instead of closures.)
-    val currentParams by rememberUpdatedState(params)
-
     val pages = params.pages
     val pageCount = pages.size.coerceAtLeast(1)
     val displayPage = currentDisplayPage.coerceIn(0, pageCount - 1)
-    val currentPage by rememberUpdatedState(displayPage)
 
-    // 手势状态
-    var dragState by remember { mutableStateOf(DragState.IDLE) }
-    var turnStartDisplayIndex by remember { mutableIntStateOf(displayPage) }
-
-    // 拖拽触摸点同步更新，松手后才交给 Animatable 执行动画。
-    var touchOffset by remember { mutableStateOf(Offset.Zero) }
-    var lastDragTouchOffset by remember { mutableStateOf(Offset.Zero) }
-    var isAnimating by remember { mutableStateOf(false) }
-    var isPointerDown by remember { mutableStateOf(false) }
-    val animOffset = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
-    var turnJob by remember { mutableStateOf<Job?>(null) }
-    var pendingDragBitmapDirection by remember { mutableStateOf<ReaderPageDirection?>(null) }
-
-    // SimulationDrawHelper 实例
-    val drawHelper = remember { SimulationDrawHelper() }
-
-    // Bitmap 缓存：当前页和目标页
-    var curBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var nextBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var bitmapWindow by remember { mutableStateOf<SimulationBitmapWindow?>(null) }
-
-    // 尺寸
-    var viewWidth by remember { mutableIntStateOf(0) }
-    var viewHeight by remember { mutableIntStateOf(0) }
-
-    fun renderPageBitmap(page: TextPage, width: Int, height: Int): Bitmap =
-        renderPageToBitmap(
-            width, height, currentParams.bgColor,
-            page, currentParams.titlePaint, currentParams.contentPaint,
-            chapterNumPaint = currentParams.chapterNumPaint,
-            reuseBitmap = null, bgBitmap = currentParams.bgBitmap,
-            pageInfoOverlay = currentParams.pageInfoOverlay,
+    // Render bitmaps for pages (reusing existing renderPageToBitmap)
+    fun renderBitmap(relativePos: Int): Bitmap? {
+        val page = params.pageForTurn(displayPage, relativePos) ?: return null
+        return renderPageToBitmap(
+            width = params.pages.firstOrNull()?.let {
+                it.canvasRecorder.width.takeIf { w -> w > 0 }
+            } ?: return null,
+            height = params.pages.firstOrNull()?.let {
+                it.canvasRecorder.height.takeIf { h -> h > 0 }
+            } ?: return null,
+            bgColor = params.bgColor,
+            page = page,
+            titlePaint = params.titlePaint,
+            contentPaint = params.contentPaint,
+            chapterNumPaint = params.chapterNumPaint,
+            reuseBitmap = null,
+            bgBitmap = params.bgBitmap,
+            pageInfoOverlay = params.pageInfoOverlay,
         )
+    }
 
-    // 当页面或尺寸变化时，在后台线程预渲染当前/相邻页。
-    // Legado 在页面变化后提交 TextPageRender 任务，仿真翻页开始时只读取稳定的页面快照。
-    LaunchedEffect(displayPage, viewWidth, viewHeight, pages, currentParams.pageInfoOverlay) {
-        if (viewWidth > 0 && viewHeight > 0 && displayPage in pages.indices) {
-            val width = viewWidth
-            val height = viewHeight
-            val pageIndex = displayPage
-            val newWindow = withContext(Dispatchers.Default) {
-                val currentPage = currentParams.pageForTurn(pageIndex, 0) ?: pages[pageIndex]
-                SimulationBitmapWindow(
-                    pageIndex = pageIndex,
-                    width = width,
-                    height = height,
-                    prev = currentParams.pageForTurn(pageIndex, -1)?.let { renderPageBitmap(it, width, height) },
-                    current = renderPageBitmap(currentPage, width, height),
-                    next = currentParams.pageForTurn(pageIndex, 1)?.let { renderPageBitmap(it, width, height) },
-                )
+    // AndroidView wrapping the native SimulationReadView
+    androidx.compose.ui.viewinterop.AndroidView(
+        factory = { context ->
+            SimulationReadView(context)
+        },
+        update = { view ->
+            // Update callbacks every recomposition — View reads fields, always fresh
+            view.canTurnNext = { params.canTurn(displayPage, ReaderPageDirection.NEXT) }
+            view.canTurnPrev = { params.canTurn(displayPage, ReaderPageDirection.PREV) }
+            view.bgMeanColor = params.bgMeanColor
+            view.bitmapProvider = { relativePos -> renderBitmap(relativePos) }
+            view.onTapCenter = { params.onTapCenter() }
+            view.onLongPress = { x, y -> params.onLongPress?.invoke(Offset(x, y)) }
+            view.onTapPrev = {
+                // No prev page available — do nothing or show tip
             }
-            val oldWindow = bitmapWindow
-            val oldCurBitmap = curBitmap
-            val oldNextBitmap = nextBitmap
-            val keepCurBitmap = oldCurBitmap.takeIf { dragState != DragState.IDLE }
-            val keepNextBitmap = oldNextBitmap.takeIf { dragState != DragState.IDLE }
-            bitmapWindow = newWindow
-            if (dragState == DragState.IDLE) {
-                curBitmap = null
-                nextBitmap = null
+            view.onTapNext = {
+                // No next page available — do nothing or show tip
             }
-            oldWindow?.recycleExcept(newWindow.prev, newWindow.current, newWindow.next, keepCurBitmap, keepNextBitmap)
-            recycleBitmapIfDetached(oldCurBitmap, newWindow.prev, newWindow.current, newWindow.next, keepCurBitmap, keepNextBitmap)
-            recycleBitmapIfDetached(oldNextBitmap, newWindow.prev, newWindow.current, newWindow.next, keepCurBitmap, keepNextBitmap)
-        }
-    }
-
-    fun prepareBitmapsForTurn(displayIndex: Int, isNext: Boolean): Boolean {
-        if (viewWidth <= 0 || viewHeight <= 0) return false
-        val window = bitmapWindow
-        if (window?.matches(displayIndex, viewWidth, viewHeight) == true) {
-            val targetBitmap = if (isNext) window.next else window.prev
-            if (targetBitmap != null && !targetBitmap.isRecycled && !window.current.isRecycled) {
-                curBitmap = window.current
-                nextBitmap = targetBitmap
-                return true
-            }
-        }
-        AppLog.debug(
-            "Reader",
-            "Simulation bitmap window not ready display=$displayIndex isNext=$isNext " +
-                "view=${viewWidth}x$viewHeight hasWindow=${window != null}",
-        )
-        return false
-    }
-
-    suspend fun renderBitmapsForTurn(displayIndex: Int, isNext: Boolean): Boolean {
-        if (viewWidth <= 0 || viewHeight <= 0) return false
-        val width = viewWidth
-        val height = viewHeight
-        val pageIndex = displayIndex
-        val curPage = currentParams.pageForTurn(pageIndex, 0) ?: pages.getOrNull(pageIndex) ?: return false
-        val targetPage = currentParams.pageForTurn(pageIndex, if (isNext) 1 else -1) ?: run {
-            AppLog.debug("Reader", "Simulation render target missing display=$pageIndex isNext=$isNext")
-            return false
-        }
-
-        val rendered = withContext(Dispatchers.Default) {
-            renderPageBitmap(curPage, width, height) to renderPageBitmap(targetPage, width, height)
-        }
-        if (currentParams.currentDisplayIndex().coerceIn(0, pageCount - 1) != pageIndex || viewWidth != width || viewHeight != height) {
-            recycleBitmapIfDetached(rendered.first)
-            recycleBitmapIfDetached(rendered.second)
-            AppLog.debug("Reader", "Simulation render discarded display=$pageIndex current=${currentParams.currentDisplayIndex()} view=${viewWidth}x$viewHeight expected=${width}x$height")
-            return false
-        }
-
-        val oldCurBitmap = curBitmap
-        val oldNextBitmap = nextBitmap
-        curBitmap = rendered.first
-        nextBitmap = rendered.second
-        recycleBitmapIfDetached(oldCurBitmap, bitmapWindow?.prev, bitmapWindow?.current, bitmapWindow?.next)
-        recycleBitmapIfDetached(oldNextBitmap, bitmapWindow?.prev, bitmapWindow?.current, bitmapWindow?.next)
-        return true
-    }
-
-    fun beginDragTurn(displayIndex: Int, isNext: Boolean, touch: Offset): Boolean {
-        val direction = if (isNext) ReaderPageDirection.NEXT else ReaderPageDirection.PREV
-        if (!currentParams.canTurn(displayIndex, direction)) {
-            AppLog.debug("Reader", "Simulation drag rejected: canTurn=false display=$displayIndex direction=$direction")
-            return false
-        }
-        if (prepareBitmapsForTurn(displayIndex, isNext)) {
-            turnStartDisplayIndex = displayIndex
-            dragState = if (isNext) DragState.DRAGGING_NEXT else DragState.DRAGGING_PREV
-            touchOffset = touch
-            AppLog.debug("Reader", "Simulation drag started display=$displayIndex direction=$direction")
-            return true
-        }
-        if (pendingDragBitmapDirection == null) {
-            pendingDragBitmapDirection = direction
-            val requestDisplay = displayIndex
-            AppLog.debug("Reader", "Simulation drag waiting for bitmaps display=$requestDisplay direction=$direction")
-            scope.launch {
-                val ready = renderBitmapsForTurn(requestDisplay, isNext)
-                if (ready && isPointerDown && dragState == DragState.IDLE && pendingDragBitmapDirection == direction &&
-                    currentParams.currentDisplayIndex().coerceIn(0, pageCount - 1) == requestDisplay
-                ) {
-                    turnStartDisplayIndex = requestDisplay
-                    dragState = if (isNext) DragState.DRAGGING_NEXT else DragState.DRAGGING_PREV
-                    touchOffset = lastDragTouchOffset
-                    AppLog.debug("Reader", "Simulation drag started after async bitmap render display=$requestDisplay direction=$direction")
-                } else {
-                    AppLog.debug("Reader", "Simulation async bitmap render did not start drag display=$requestDisplay direction=$direction ready=$ready state=$dragState")
-                }
-                if (pendingDragBitmapDirection == direction) {
-                    pendingDragBitmapDirection = null
-                }
-            }
-        }
-        return false
-    }
-
-    fun clearTurnBitmaps() {
-        val oldCurBitmap = curBitmap
-        val oldNextBitmap = nextBitmap
-        curBitmap = null
-        nextBitmap = null
-        recycleBitmapIfDetached(oldCurBitmap, bitmapWindow?.prev, bitmapWindow?.current, bitmapWindow?.next)
-        recycleBitmapIfDetached(oldNextBitmap, bitmapWindow?.prev, bitmapWindow?.current, bitmapWindow?.next)
-    }
-
-    fun turnStartOffset(isNext: Boolean, tapY: Float): Offset {
-        val guardedBottom = viewHeight.toFloat() - TOUCH_EDGE_GUARD
-        return if (isNext) {
-            val y = if (tapY > viewHeight / 2f) viewHeight.toFloat() * 0.9f else TOUCH_EDGE_GUARD
-            Offset(viewWidth.toFloat() * 0.9f, y.coerceIn(TOUCH_EDGE_GUARD, guardedBottom))
-        } else {
-            Offset(TOUCH_EDGE_GUARD, guardedBottom)
-        }
-    }
-
-    fun turnTargetOffset(isNext: Boolean, shouldComplete: Boolean, from: Offset): Offset {
-        val targetX = when {
-            isNext && shouldComplete -> -viewWidth.toFloat()
-            isNext -> viewWidth.toFloat()
-            shouldComplete -> viewWidth.toFloat()
-            else -> -viewWidth.toFloat()
-        }
-        val targetY = if (from.y <= viewHeight / 2f) {
-            TOUCH_EDGE_GUARD
-        } else {
-            viewHeight.toFloat() - TOUCH_EDGE_GUARD
-        }
-        return Offset(targetX, targetY)
-    }
-
-    // ── Programmatic page turn (tap-to-flip) ──
-    // Mimics Legado HorizontalPageDelegate.nextPageByAnim / prevPageByAnim:
-    // render bitmaps, set drag state, animate touch point from edge to completion.
-    fun animatePageTurn(isNext: Boolean, tapY: Float) {
-        if (viewWidth <= 0 || viewHeight <= 0) return
-        // Abort any in-flight animation (matches Legado abortAnim() before keyTurnPage)
-        turnJob?.cancel()
-        if (dragState != DragState.IDLE) {
-            isAnimating = false
-            dragState = DragState.IDLE
-            clearTurnBitmaps()
-        }
-        val startDisplayIndex = currentPage
-        val direction = if (isNext) ReaderPageDirection.NEXT else ReaderPageDirection.PREV
-        if (!currentParams.canTurn(startDisplayIndex, direction)) return
-
-        turnJob?.cancel()
-        turnJob = scope.launch {
-            if (!prepareBitmapsForTurn(startDisplayIndex, isNext) && !renderBitmapsForTurn(startDisplayIndex, isNext)) {
-                AppLog.debug("Reader", "Simulation tap fallback direct commit display=$startDisplayIndex direction=$direction")
-                val committedPage = currentParams.onFillPage(startDisplayIndex, direction)
+            view.onPageTurnCompleted = { isNext ->
+                val direction = if (isNext) ReaderPageDirection.NEXT else ReaderPageDirection.PREV
+                val committedPage = params.onFillPage(displayPage, direction)
                 if (committedPage != null) {
                     val safePage = committedPage.coerceIn(0, pageCount - 1)
-                    pagerState.scrollToPage(safePage)
-                    currentParams.onPageChanged(safePage)
-                    AppLog.debug("Reader", "Simulation tap fallback committed=$safePage direction=$direction")
-                } else {
-                    AppLog.debug("Reader", "Simulation tap fallback rejected (chapter boundary) display=$startDisplayIndex direction=$direction")
-                }
-                return@launch
-            }
-            turnStartDisplayIndex = startDisplayIndex
-            dragState = if (isNext) DragState.DRAGGING_NEXT else DragState.DRAGGING_PREV
-            val start = turnStartOffset(isNext, tapY)
-            val target = turnTargetOffset(isNext, shouldComplete = true, from = start)
-            touchOffset = start
-            isAnimating = true
-            animOffset.snapTo(start)
-            animOffset.animateTo(
-                target,
-                animationSpec = tween(
-                    durationMillis = simulationAnimationDuration(start, target, viewWidth, viewHeight),
-                    easing = LinearEasing,
-                ),
-            )
-            val committedPage = currentParams.onFillPage(startDisplayIndex, direction)
-            if (committedPage != null) {
-                val safePage = committedPage.coerceIn(0, pageCount - 1)
-                pagerState.scrollToPage(safePage)
-                currentParams.onPageChanged(safePage)
-                AppLog.debug("Reader", "Simulation tap animation committed=$safePage direction=$direction")
-            } else {
-                AppLog.debug("Reader", "Simulation tap animation fillPage rejected display=$startDisplayIndex direction=$direction")
-            }
-            touchOffset = target
-            isAnimating = false
-            dragState = DragState.IDLE
-            clearTurnBitmaps()
-        }
-    }
-
-    fun commitPendingDragIfNeeded(): Boolean {
-        val direction = pendingDragBitmapDirection ?: return false
-        val isNext = direction == ReaderPageDirection.NEXT
-        val threshold = viewWidth * PAGE_FLIP_THRESHOLD
-        val shouldComplete = if (isNext) {
-            lastDragTouchOffset.x < viewWidth - threshold
-        } else {
-            lastDragTouchOffset.x > threshold
-        }
-        pendingDragBitmapDirection = null
-        if (!shouldComplete) {
-            AppLog.debug("Reader", "Simulation pending drag cancelled before bitmap ready direction=$direction")
-            return true
-        }
-        val startDisplayIndex = turnStartDisplayIndex.coerceIn(0, pageCount - 1)
-        val committedPage = currentParams.onFillPage(startDisplayIndex, direction)
-        if (committedPage != null) {
-            val safePage = committedPage.coerceIn(0, pageCount - 1)
-            scope.launch { pagerState.scrollToPage(safePage) }
-            currentParams.onPageChanged(safePage)
-            AppLog.debug("Reader", "Simulation pending drag direct committed=$safePage direction=$direction")
-        } else {
-            AppLog.debug("Reader", "Simulation pending drag fillPage rejected display=$startDisplayIndex direction=$direction")
-        }
-        return true
-    }
-
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            // Tap gesture: 3-column zones (left=prev, center=menu, right=next)
-            .pointerInput(Unit) {
-                viewWidth = size.width
-                viewHeight = size.height
-                detectTapGestures(
-                    onTap = { offset ->
-                        val third = size.width / 3f
-                        when {
-                            offset.x < third -> animatePageTurn(false, offset.y)
-                            offset.x > third * 2 -> animatePageTurn(true, offset.y)
-                            else -> currentParams.onTapCenter()
-                        }
-                    },
-                    onLongPress = { offset -> currentParams.onLongPress?.invoke(offset) },
-                )
-            }
-            // Drag gesture: bezier page curl
-            .pointerInput(Unit) {
-                viewWidth = size.width
-                viewHeight = size.height
-                drawHelper.setViewSize(size.width, size.height)
-
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        // Matches Legado ACTION_DOWN → abortAnim() + onDown():
-                        // Always abort any in-flight animation and fully reset state.
-                        // Legado never gates onDown() on dragState — every touch starts clean.
-                        turnJob?.cancel()
-                        isAnimating = false
-                        dragState = DragState.IDLE
-                        isPointerDown = true
-                        turnStartDisplayIndex = currentPage
-                        pendingDragBitmapDirection = null
-                        clearTurnBitmaps()
-                        lastDragTouchOffset = Offset(
-                            offset.x.coerceIn(TOUCH_EDGE_GUARD, viewWidth.toFloat() - TOUCH_EDGE_GUARD),
-                            offset.y.coerceIn(TOUCH_EDGE_GUARD, viewHeight.toFloat() - TOUCH_EDGE_GUARD),
-                        )
-                        touchOffset = lastDragTouchOffset
-                    },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-
-                        if (!isAnimating) {
-                            lastDragTouchOffset = Offset(
-                                change.position.x.coerceIn(TOUCH_EDGE_GUARD, viewWidth.toFloat() - TOUCH_EDGE_GUARD),
-                                change.position.y.coerceIn(TOUCH_EDGE_GUARD, viewHeight.toFloat() - TOUCH_EDGE_GUARD),
-                            )
-                            if (dragState == DragState.IDLE) {
-                                val dominantVertical = abs(dragAmount.y) > DRAG_DIRECTION_THRESHOLD &&
-                                    abs(dragAmount.y) > abs(dragAmount.x)
-                                val requestNext = dragAmount.x < -DRAG_DIRECTION_THRESHOLD ||
-                                    (dominantVertical && dragAmount.y < 0f)
-                                val requestPrev = dragAmount.x > DRAG_DIRECTION_THRESHOLD ||
-                                    (dominantVertical && dragAmount.y > 0f)
-                                if (requestNext) {
-                                    beginDragTurn(turnStartDisplayIndex, true, lastDragTouchOffset)
-                                } else if (requestPrev) {
-                                    beginDragTurn(turnStartDisplayIndex, false, lastDragTouchOffset)
-                                }
-                            }
-
-                            if (dragState != DragState.IDLE) {
-                                touchOffset = lastDragTouchOffset
-                            }
-                        }
-                    },
-                    onDragEnd = {
-                        isPointerDown = false
-                        if (dragState != DragState.IDLE) {
-                            val isNext = dragState == DragState.DRAGGING_NEXT
-                            val start = touchOffset
-                            val curX = start.x
-                            val threshold = viewWidth * PAGE_FLIP_THRESHOLD
-
-                            // 判断是否完成翻页
-                            val shouldComplete = if (isNext) {
-                                curX < viewWidth - threshold
-                            } else {
-                                curX > threshold
-                            }
-
-                            val target = turnTargetOffset(isNext, shouldComplete, start)
-
-                            turnJob?.cancel()
-                            turnJob = scope.launch {
-                                isAnimating = true
-                                animOffset.snapTo(start)
-                                animOffset.animateTo(
-                                    target,
-                                    animationSpec = tween(
-                                        durationMillis = simulationAnimationDuration(start, target, viewWidth, viewHeight),
-                                        easing = LinearEasing,
-                                    ),
-                                )
-                                if (shouldComplete) {
-                                    val direction = if (isNext) ReaderPageDirection.NEXT else ReaderPageDirection.PREV
-                                    val committedPage = currentParams.onFillPage(turnStartDisplayIndex, direction)
-                                    if (committedPage != null) {
-                                        val safePage = committedPage.coerceIn(0, pageCount - 1)
-                                        pagerState.scrollToPage(safePage)
-                                        currentParams.onPageChanged(safePage)
-                                        AppLog.debug("Reader", "Simulation drag committed=$safePage direction=$direction")
-                                    } else {
-                                        AppLog.debug("Reader", "Simulation drag fillPage rejected display=$turnStartDisplayIndex direction=$direction")
-                                    }
-                                } else {
-                                    AppLog.debug("Reader", "Simulation drag cancelled by threshold display=$turnStartDisplayIndex isNext=$isNext")
-                                }
-                                touchOffset = target
-                                isAnimating = false
-                                dragState = DragState.IDLE
-                                clearTurnBitmaps()
-                            }
-                        } else {
-                            commitPendingDragIfNeeded()
-                        }
-                    },
-                    onDragCancel = {
-                        isPointerDown = false
-                        pendingDragBitmapDirection = null
-                        if (dragState != DragState.IDLE) {
-                            val isNext = dragState == DragState.DRAGGING_NEXT
-                            val start = touchOffset
-                            val target = turnTargetOffset(isNext, shouldComplete = false, from = start)
-                            turnJob?.cancel()
-                            turnJob = scope.launch {
-                                isAnimating = true
-                                animOffset.snapTo(start)
-                                animOffset.animateTo(
-                                    target,
-                                    animationSpec = tween(
-                                        durationMillis = simulationAnimationDuration(start, target, viewWidth, viewHeight),
-                                        easing = LinearEasing,
-                                    ),
-                                )
-                                touchOffset = target
-                                isAnimating = false
-                                dragState = DragState.IDLE
-                                clearTurnBitmaps()
-                            }
-                        }
-                    },
-                )
-            }
-            .drawWithContent {
-                val newWidth = size.width.toInt()
-                val newHeight = size.height.toInt()
-                if (viewWidth != newWidth || viewHeight != newHeight) {
-                    viewWidth = newWidth
-                    viewHeight = newHeight
-                    drawHelper.setViewSize(viewWidth, viewHeight)
-                }
-
-                if (dragState != DragState.IDLE) {
-                    // 正在拖拽或动画中 — 用 SimulationDrawHelper 绘制贝塞尔翻页
-                    val isNext = dragState == DragState.DRAGGING_NEXT
-                    val turnOffset = if (isAnimating) animOffset.value else touchOffset
-                    val touchX = turnOffset.x
-                    val touchY = turnOffset.y
-                    drawHelper.setDirectionAware(touchX, touchY, isNext)
-                    drawHelper.bgMeanColor = currentParams.bgMeanColor
-
-                    drawIntoCanvas { composeCanvas ->
-                        val nativeCanvas = composeCanvas.nativeCanvas
-                        if (isNext) {
-                            drawHelper.onDraw(nativeCanvas, curBitmap, nextBitmap)
-                        } else {
-                            drawHelper.onDraw(nativeCanvas, nextBitmap, curBitmap)
-                        }
-                    }
-                } else {
-                    drawContent()
+                    scope.launch { pagerState.scrollToPage(safePage) }
+                    params.onPageChanged(safePage)
                 }
             }
-    ) {
-        pageContent(displayPage)
-    }
 
-    // 清理 bitmap
-    DisposableEffect(Unit) {
-        onDispose {
-            turnJob?.cancel()
-            bitmapWindow?.recycleExcept()
-            recycleBitmapIfDetached(curBitmap)
-            recycleBitmapIfDetached(nextBitmap)
-        }
-    }
+            // Update idle bitmap when displayPage changes
+            val idleBmp = renderBitmap(0)
+            view.setIdleBitmap(idleBmp)
+        },
+        modifier = modifier.fillMaxSize(),
+    )
+
 }
+
+// Old Compose-based SimulationPager removed — replaced by AndroidView + SimulationReadView.
+// See docs/page-turn-bug-analysis.md for rationale.
 
 // ── Vertical scroll animation ──
 // Continuous vertical scrolling through pages using LazyColumn.
