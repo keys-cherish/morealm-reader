@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MoRealm Reader</title>
+    <style>
+        /* ==================== 设计系统 ==================== */
+        /* 灵感：纸张质感 + 书房氛围 + 内容优先 */
+        :root {
+            --bg: #0C0C0F;
+            --bg-card: #161619;
+            --bg-card-hover: #1C1C20;
+            --text-1: #E8E6E3;
+            --text-2: #8A8680;
+            --text-3: #4A4744;
+            --accent: #C4956A;
+            --accent-dim: rgba(196, 149, 106, 0.12);
+            --accent-text: #E8D5C4;
+            --border: rgba(255, 255, 255, 0.06);
+            --border-hover: rgba(255, 255, 255, 0.12);
+            --danger: #E85D5D;
+            --success: #5DAE8B;
+            --nav-bg: rgba(12, 12, 15, 0.92);
+            --r: 14px;
+        }
+
+        [data-theme="paper"] {
+            --bg: #F5F0E8;
+            --bg-card: #FFFDF8;
+            --bg-card-hover: #FFF9F0;
+            --text-1: #2C2520;
+            --text-2: #8C7E72;
+            --text-3: #C4B8AA;
+            --accent: #A0714A;
+            --accent-dim: rgba(160, 113, 74, 0.10);
+            --accent-text: #6B4D32;
+            --border: rgba(0, 0, 0, 0.06);
+            --border-hover: rgba(0, 0, 0, 0.12);
+            --nav-bg: rgba(245, 240, 232, 0.94);
+        }
+
+        /* ==================== 基础 ==================== */
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+            background: var(--bg);
+            color: var(--text-1);
+            display: flex; justify-content: center;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            transition: background 0.4s, color 0.4s;
+        }
+
+        .app { width: 100%; max-width: 430px; min-height: 100vh; padding-bottom: 100px; }
+        .page { display: none; padding: 24px 20px; }
+        .page.active { display: block; animation: fadeUp 0.3s ease both; }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } }
+
+        /* ==================== 书架页 ==================== */
+        .shelf-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 28px; padding-top: 8px;
+        }
+        .shelf-header h1 {
+            font-size: 24px; font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+        .shelf-header .actions { display: flex; gap: 16px; }
+        .shelf-header .actions svg { width: 22px; height: 22px; stroke: var(--text-2); stroke-width: 1.8; fill: none; cursor: pointer; transition: stroke 0.2s; }
+        .shelf-header .actions svg:hover { stroke: var(--text-1); }
+
+        /* 继续阅读 */
+        .continue-card {
+            display: flex; gap: 16px; padding: 16px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--r); margin-bottom: 28px;
+            cursor: pointer; transition: all 0.25s;
+        }
+        .continue-card:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
+        .continue-cover {
+            width: 52px; height: 72px; border-radius: 6px;
+            background: linear-gradient(135deg, #3A2E28, #5C4A3D);
+            flex-shrink: 0; position: relative; overflow: hidden;
+        }
+        .continue-cover::after {
+            content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 3px;
+            background: linear-gradient(to right, rgba(0,0,0,0.15), rgba(0,0,0,0.05));
+        }
+        .continue-info { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+        .continue-label { font-size: 11px; color: var(--accent); font-weight: 500; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px; }
+        .continue-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; line-height: 1.3; }
+        .continue-progress { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+        .continue-progress-fill { height: 100%; background: var(--accent); border-radius: 2px; width: 45%; transition: width 0.3s; }
+        .continue-meta { font-size: 11px; color: var(--text-2); margin-top: 6px; }
+
+        /* 书架网格 */
+        .shelf-section-title { font-size: 13px; color: var(--text-2); font-weight: 500; margin-bottom: 14px; letter-spacing: 0.3px; }
+        .book-grid {
+            display: grid; grid-template-columns: repeat(3, 1fr);
+            gap: 16px 14px;
+        }
+        .book-item { cursor: pointer; }
+        .book-cover {
+            aspect-ratio: 3/4.2; border-radius: 8px;
+            position: relative; overflow: hidden;
+            margin-bottom: 8px; transition: transform 0.2s;
+        }
+        .book-item:hover .book-cover { transform: scale(1.02); }
+        .book-cover::after {
+            content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 4px;
+            background: linear-gradient(to right, rgba(0,0,0,0.2), rgba(0,0,0,0));
+        }
+        .book-cover::before {
+            content: ''; position: absolute; inset: 0;
+            background: linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.3));
+        }
+        .book-title { font-size: 12px; font-weight: 500; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .book-author { font-size: 10px; color: var(--text-2); margin-top: 2px; }
+
+        /* ==================== 搜索/发现页 ==================== */
+        .search-bar {
+            display: flex; align-items: center; gap: 10px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 100px; padding: 10px 16px; margin-bottom: 20px;
+            transition: border-color 0.2s;
+        }
+        .search-bar:focus-within { border-color: var(--accent); }
+        .search-bar svg { width: 18px; height: 18px; stroke: var(--text-3); stroke-width: 2; fill: none; flex-shrink: 0; }
+        .search-bar input { flex: 1; background: none; border: none; outline: none; color: var(--text-1); font-size: 14px; }
+        .search-bar input::placeholder { color: var(--text-3); }
+        .search-btn { background: var(--accent); color: #fff; padding: 6px 14px; border-radius: 100px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; white-space: nowrap; }
+
+        /* 搜索状态面板 */
+        .search-status {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--r); padding: 16px; margin-bottom: 24px;
+        }
+        .search-status-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+        .search-status-header h4 { font-size: 13px; font-weight: 600; }
+        .search-status-header p { font-size: 11px; color: var(--text-2); margin-top: 2px; }
+        .search-stats { font-size: 12px; color: var(--accent); font-weight: 600; }
+
+        .source-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+        .tag {
+            padding: 3px 10px; border-radius: 100px; font-size: 10px; font-weight: 500;
+            border: 1px solid var(--border); color: var(--text-2);
+            display: flex; align-items: center; gap: 5px;
+        }
+        .tag .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+        .tag.ok { border-color: var(--success); color: var(--success); }
+        .tag.fail { border-color: var(--danger); color: var(--danger); opacity: 0.7; }
+        .tag.loading { border-color: var(--accent); color: var(--accent); animation: pulse 1.8s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+        .error-logs { display: flex; flex-direction: column; gap: 4px; }
+        .error-log { font-size: 10px; font-family: 'SF Mono', monospace; color: var(--danger); opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* 搜索结果 */
+        .result-item {
+            display: flex; align-items: center; gap: 14px;
+            padding: 14px 16px; background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--r); margin-bottom: 10px;
+            cursor: pointer; transition: all 0.2s;
+        }
+        .result-item:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
+        .result-cover { width: 44px; height: 60px; border-radius: 5px; flex-shrink: 0; }
+        .result-info { flex: 1; min-width: 0; }
+        .result-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+        .result-desc { font-size: 11px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .result-source { font-size: 10px; color: var(--accent); margin-top: 4px; }
+        .result-action svg { width: 20px; height: 20px; stroke: var(--accent); stroke-width: 2; fill: none; }
+
+        /* ==================== 听书页 ==================== */
+        .listen-center { display: flex; flex-direction: column; align-items: center; padding-top: 60px; gap: 24px; }
+        .listen-cover {
+            width: 200px; height: 200px; border-radius: 20px;
+            background: linear-gradient(135deg, #2C2520, #4A3D32);
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .listen-cover svg { width: 48px; height: 48px; stroke: var(--accent); stroke-width: 1.5; fill: none; }
+        .listen-title { font-size: 18px; font-weight: 600; text-align: center; }
+        .listen-sub { font-size: 13px; color: var(--text-2); text-align: center; }
+        .listen-progress { width: 100%; height: 3px; background: var(--border); border-radius: 2px; margin-top: 8px; }
+        .listen-controls { display: flex; align-items: center; gap: 32px; margin-top: 16px; }
+        .listen-controls svg { width: 28px; height: 28px; stroke: var(--text-2); stroke-width: 2; fill: none; cursor: pointer; }
+        .play-btn {
+            width: 56px; height: 56px; border-radius: 50%;
+            background: var(--accent); display: flex; align-items: center; justify-content: center;
+            cursor: pointer; box-shadow: 0 8px 24px rgba(196, 149, 106, 0.25);
+        }
+        .play-btn svg { width: 24px; height: 24px; fill: #fff; stroke: none; }
+
+        /* ==================== 我的页 ==================== */
+        .stats-row {
+            display: grid; grid-template-columns: 1fr 1.3fr 1fr;
+            gap: 12px; margin-bottom: 32px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--r); padding: 20px 16px; text-align: center;
+        }
+        .stat-val { font-size: 22px; font-weight: 700; line-height: 1.2; }
+        .stat-val.main { font-size: 28px; color: var(--accent); }
+        .stat-label { font-size: 11px; color: var(--text-2); margin-top: 4px; }
+
+        .settings-section { margin-bottom: 24px; }
+        .settings-title { font-size: 13px; color: var(--text-2); font-weight: 500; margin-bottom: 12px; }
+        .theme-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .theme-item {
+            display: flex; flex-direction: column; align-items: center; gap: 8px;
+            padding: 14px 8px; background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 12px; cursor: pointer; transition: all 0.2s;
+        }
+        .theme-item.active { border-color: var(--accent); background: var(--accent-dim); }
+        .theme-dot {
+            width: 28px; height: 28px; border-radius: 50%;
+            border: 2px solid var(--border);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .theme-dot-inner { width: 10px; height: 10px; border-radius: 50%; }
+        .theme-name { font-size: 11px; color: var(--text-2); font-weight: 500; }
+        .theme-item.active .theme-name { color: var(--accent); }
+
+        /* ==================== 底部导航 ==================== */
+        .bottom-nav-wrap {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            width: calc(100% - 48px); max-width: 382px; z-index: 100;
+        }
+        .bottom-nav {
+            display: flex; justify-content: space-around;
+            padding: 10px 0; border-radius: 100px;
+            background: var(--nav-bg);
+            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+        }
+        .nav-item {
+            display: flex; flex-direction: column; align-items: center; gap: 3px;
+            color: var(--text-3); cursor: pointer; width: 56px; position: relative;
+            transition: color 0.2s;
+        }
+        .nav-item svg { width: 22px; height: 22px; stroke: currentColor; stroke-width: 1.8; fill: none; }
+        .nav-item span { font-size: 10px; font-weight: 500; }
+        .nav-item.active { color: var(--accent); }
+        .nav-item.active::after {
+            content: ''; position: absolute; bottom: -6px;
+            width: 4px; height: 4px; border-radius: 50%;
+            background: var(--accent); opacity: 0.8;
+        }
+
+        /* ==================== 通用 ==================== */
+        .section-title { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-top: 8px; }
+        .header h1 { font-size: 22px; font-weight: 700; }
+    </style>
+</head>
+<body>
+    <div class="app">
+
+        <!-- ═══════ 书架 ═══════ -->
+        <div id="page-shelf" class="page active">
+            <div class="shelf-header">
+                <div>
+                    <h1>书架</h1>
+                    <p style="font-size: 12px; color: var(--text-2); margin-top: 2px;">4 本书 · 今日已读 42 分钟</p>
+                </div>
+                <div class="actions">
+                    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                </div>
+            </div>
+
+            <div class="continue-card">
+                <div class="continue-cover"></div>
+                <div class="continue-info">
+                    <div class="continue-label">继续阅读</div>
+                    <div class="continue-title">OVERLORD 不死者之王</div>
+                    <div class="continue-progress"><div class="continue-progress-fill"></div></div>
+                    <div class="continue-meta">第四卷 · 序章 Prologue · 45%</div>
+                </div>
+            </div>
+
+            <div class="shelf-section-title">全部书籍</div>
+            <div class="book-grid">
+                <div class="book-item"><div class="book-cover" style="background: linear-gradient(135deg, #2D3748, #4A5568);"></div><div class="book-title">都重生了谁还谈恋爱啊</div><div class="book-author">巫马行</div></div>
+                <div class="book-item"><div class="book-cover" style="background: linear-gradient(135deg, #553C2B, #7B5B43);"></div><div class="book-title">OVERLORD 不死者之王</div><div class="book-author">丸山くがね</div></div>
+                <div class="book-item"><div class="book-cover" style="background: linear-gradient(135deg, #1A365D, #2B6CB0);"></div><div class="book-title">凡人修仙传</div><div class="book-author">忘语</div></div>
+                <div class="book-item"><div class="book-cover" style="background: linear-gradient(135deg, #44337A, #6B46C1);"></div><div class="book-title">诡秘之主</div><div class="book-author">爱潜水的乌贼</div></div>
+            </div>
+        </div>
+
+        <!-- ═══════ 发现 ═══════ -->
+        <div id="page-discover" class="page">
+            <div class="header"><h1>发现</h1></div>
+
+            <div class="search-bar">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" value="凡人" placeholder="搜索书名、作者...">
+                <div class="search-btn">搜索</div>
+            </div>
+
+            <div class="search-status">
+                <div class="search-status-header">
+                    <div>
+                        <h4>正在检索书源...</h4>
+                        <p>找到 14 条 · 失败 8 个</p>
+                    </div>
+                    <div class="search-stats">33/64</div>
+                </div>
+                <div class="source-tags">
+                    <div class="tag ok"><span class="dot"></span>晋江文学</div>
+                    <div class="tag loading"><span class="dot"></span>七猫</div>
+                    <div class="tag fail"><span class="dot"></span>红袖招</div>
+                    <div class="tag"><span class="dot"></span>宝书网</div>
+                    <div class="tag ok"><span class="dot"></span>长佩文学</div>
+                    <div class="tag loading"><span class="dot"></span>番茄小说</div>
+                    <div class="tag fail"><span class="dot"></span>mjj</div>
+                    <div class="tag"><span class="dot"></span>玫瑰小说</div>
+                    <div class="tag loading"><span class="dot"></span>神书网</div>
+                </div>
+                <div class="error-logs">
+                    <div class="error-log">晋江文学: org.jsoup.nodes.Element cannot be cast…</div>
+                    <div class="error-log">mjj: org.mozilla.javascript.EcmaError…</div>
+                    <div class="error-log">红袖招: 网络错误: connection closed</div>
+                </div>
+            </div>
+
+            <div class="section-title">在线资源 (14)</div>
+            <div class="result-item">
+                <div class="result-cover" style="background: #4B5563;"></div>
+                <div class="result-info">
+                    <div class="result-title">凡人</div>
+                    <div class="result-desc">[美] 菲利普·罗斯; 彭伦译</div>
+                    <div class="result-source">超星图书</div>
+                </div>
+                <div class="result-action"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
+            </div>
+            <div class="result-item">
+                <div class="result-cover" style="background: #7F5539;"></div>
+                <div class="result-info">
+                    <div class="result-title">凡人修仙传</div>
+                    <div class="result-desc">忘语 · 仙侠玄幻</div>
+                    <div class="result-source">七猫</div>
+                </div>
+                <div class="result-action"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
+            </div>
+        </div>
+
+        <!-- ═══════ 听书 ═══════ -->
+        <div id="page-listen" class="page">
+            <div class="header" style="justify-content: center;"><h1>听书</h1></div>
+            <div class="listen-center">
+                <div class="listen-cover">
+                    <svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                </div>
+                <div class="listen-title">未在播放</div>
+                <div class="listen-sub" style="width: 80%;">从书架选择一本书，点击朗读开始</div>
+                <div class="listen-progress" style="width: 80%;"></div>
+                <div class="listen-controls">
+                    <svg viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+                    <div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21"/></svg></div>
+                    <svg viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════ 我的 ═══════ -->
+        <div id="page-mine" class="page">
+            <div class="header"><h1>我的</h1></div>
+
+            <div class="stats-row">
+                <div><div class="stat-val">29</div><div class="stat-label">本书</div></div>
+                <div><div class="stat-val main">21<span style="font-size: 16px; font-weight: 400;">h</span></div><div class="stat-label">总时长</div></div>
+                <div><div class="stat-val">8</div><div class="stat-label">连续天数</div></div>
+            </div>
+
+            <div class="settings-section">
+                <div class="settings-title">主题</div>
+                <div class="theme-grid">
+                    <div class="theme-item active" onclick="setTheme('default', this)">
+                        <div class="theme-dot" style="background: #0C0C0F;"><div class="theme-dot-inner" style="background: #C4956A;"></div></div>
+                        <span class="theme-name">墨夜</span>
+                    </div>
+                    <div class="theme-item" onclick="setTheme('paper', this)">
+                        <div class="theme-dot" style="background: #F5F0E8;"><div class="theme-dot-inner" style="background: #A0714A;"></div></div>
+                        <span class="theme-name">纸上</span>
+                    </div>
+                    <div class="theme-item" onclick="setTheme('cyber', this)">
+                        <div class="theme-dot" style="background: #030308;"><div class="theme-dot-inner" style="background: #FF0055;"></div></div>
+                        <span class="theme-name">赛博</span>
+                    </div>
+                    <div class="theme-item" onclick="setTheme('forest', this)">
+                        <div class="theme-dot" style="background: #0A120E;"><div class="theme-dot-inner" style="background: #10B981;"></div></div>
+                        <span class="theme-name">森林</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════ 底部导航 ═══════ -->
+        <div class="bottom-nav-wrap">
+            <div class="bottom-nav">
+                <div class="nav-item active" onclick="go('page-shelf', this)">
+                    <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                    <span>书架</span>
+                </div>
+                <div class="nav-item" onclick="go('page-discover', this)">
+                    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <span>发现</span>
+                </div>
+                <div class="nav-item" onclick="go('page-listen', this)">
+                    <svg viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+                    <span>听书</span>
+                </div>
+                <div class="nav-item" onclick="go('page-mine', this)">
+                    <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    <span>我的</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function go(id, el) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            el.classList.add('active');
+        }
+        function setTheme(name, el) {
+            if (name === 'default') document.documentElement.removeAttribute('data-theme');
+            else document.documentElement.setAttribute('data-theme', name);
+            document.querySelectorAll('.theme-item').forEach(t => t.classList.remove('active'));
+            el.classList.add('active');
+        }
+    </script>
+</body>
+</html>
