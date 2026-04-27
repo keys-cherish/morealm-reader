@@ -309,27 +309,6 @@ private fun SimulationPager(
     val pageCount = pages.size.coerceAtLeast(1)
     val displayPage = currentDisplayPage.coerceIn(0, pageCount - 1)
 
-    // Render bitmaps for pages (reusing existing renderPageToBitmap)
-    fun renderBitmap(relativePos: Int): Bitmap? {
-        val page = params.pageForTurn(displayPage, relativePos) ?: return null
-        return renderPageToBitmap(
-            width = params.pages.firstOrNull()?.let {
-                it.canvasRecorder.width.takeIf { w -> w > 0 }
-            } ?: return null,
-            height = params.pages.firstOrNull()?.let {
-                it.canvasRecorder.height.takeIf { h -> h > 0 }
-            } ?: return null,
-            bgColor = params.bgColor,
-            page = page,
-            titlePaint = params.titlePaint,
-            contentPaint = params.contentPaint,
-            chapterNumPaint = params.chapterNumPaint,
-            reuseBitmap = null,
-            bgBitmap = params.bgBitmap,
-            pageInfoOverlay = params.pageInfoOverlay,
-        )
-    }
-
     // AndroidView wrapping the native SimulationReadView
     androidx.compose.ui.viewinterop.AndroidView(
         factory = { context ->
@@ -337,10 +316,23 @@ private fun SimulationPager(
         },
         update = { view ->
             // Update callbacks every recomposition — View reads fields, always fresh
+            view.setBackgroundColor(params.bgColor)
             view.canTurnNext = { params.canTurn(displayPage, ReaderPageDirection.NEXT) }
             view.canTurnPrev = { params.canTurn(displayPage, ReaderPageDirection.PREV) }
             view.bgMeanColor = params.bgMeanColor
-            view.bitmapProvider = { relativePos -> renderBitmap(relativePos) }
+            // Bitmap provider uses the View's own dimensions (not canvasRecorder which may be 0)
+            view.bitmapProvider = { relativePos, w, h ->
+                val page = params.pageForTurn(displayPage, relativePos)
+                if (page != null && w > 0 && h > 0) {
+                    renderPageToBitmap(
+                        w, h, params.bgColor, page,
+                        params.titlePaint, params.contentPaint,
+                        chapterNumPaint = params.chapterNumPaint,
+                        reuseBitmap = null, bgBitmap = params.bgBitmap,
+                        pageInfoOverlay = params.pageInfoOverlay,
+                    )
+                } else null
+            }
             view.onTapCenter = { params.onTapCenter() }
             view.onLongPress = { x, y -> params.onLongPress?.invoke(Offset(x, y)) }
             view.onTapPrev = {
@@ -359,9 +351,20 @@ private fun SimulationPager(
                 }
             }
 
-            // Update idle bitmap when displayPage changes
-            val idleBmp = renderBitmap(0)
-            view.setIdleBitmap(idleBmp)
+            // Update idle bitmap when displayPage changes (use View's own dimensions)
+            val w = view.width
+            val h = view.height
+            if (w > 0 && h > 0) {
+                val page = params.pageForTurn(displayPage, 0)
+                val idleBmp = if (page != null) renderPageToBitmap(
+                    w, h, params.bgColor, page,
+                    params.titlePaint, params.contentPaint,
+                    chapterNumPaint = params.chapterNumPaint,
+                    reuseBitmap = null, bgBitmap = params.bgBitmap,
+                    pageInfoOverlay = params.pageInfoOverlay,
+                ) else null
+                view.setIdleBitmap(idleBmp)
+            }
         },
         modifier = modifier.fillMaxSize(),
     )

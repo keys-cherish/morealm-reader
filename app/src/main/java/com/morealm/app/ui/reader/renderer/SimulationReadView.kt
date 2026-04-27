@@ -59,9 +59,10 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     var canTurnPrev: (() -> Boolean)? = null
     var bgMeanColor: Int = 0xFFFFFFFF.toInt()
 
-    // Bitmap provider: (displayIndex, relativePos) -> Bitmap?
+    // Bitmap provider: (relativePos, viewWidth, viewHeight) -> Bitmap?
     // relativePos: -1=prev, 0=current, 1=next
-    var bitmapProvider: ((relativePos: Int) -> Bitmap?)? = null
+    // Uses the View's own dimensions to ensure correct bitmap size
+    var bitmapProvider: ((relativePos: Int, width: Int, height: Int) -> Bitmap?)? = null
 
     // ── Idle page bitmap (shown when not animating) ──
     private var idleBitmap: Bitmap? = null
@@ -80,6 +81,10 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         drawHelper.setViewSize(w, h)
+        // Refresh idle bitmap now that we have real dimensions
+        if (w > 0 && h > 0 && idleBitmap == null) {
+            idleBitmap = bitmapProvider?.invoke(0, w, h)
+        }
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -172,11 +177,11 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         directionSet = true
         setBitmaps()
 
-        val tapY = if (touchY > height / 2f) height.toFloat() * 0.9f else height.toFloat() * 0.1f
+        val tapY = if (touchY > height / 2f) height.toFloat() * TAP_START_RATIO else height.toFloat() * TAP_START_RATIO_FAR
         if (isNext) {
-            drawHelper.setDirectionAware(width.toFloat() * 0.9f, tapY, true)
+            drawHelper.setDirectionAware(width.toFloat() * TAP_START_RATIO, tapY, true)
         } else {
-            drawHelper.setDirectionAware(width.toFloat() * 0.1f, tapY, false)
+            drawHelper.setDirectionAware(width.toFloat() * TAP_START_RATIO_FAR, tapY, false)
         }
         isMoved = true
         isCancel = false
@@ -362,12 +367,15 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     // ── Bitmap setup — Legado SimulationPageDelegate.setBitmap ──
     private fun setBitmaps() {
         val provider = bitmapProvider ?: return
+        val w = width
+        val h = height
+        if (w <= 0 || h <= 0) return
         if (isNext) {
-            curBitmap = provider(0)
-            nextBitmap = provider(1)
+            curBitmap = provider(0, w, h)
+            nextBitmap = provider(1, w, h)
         } else {
-            curBitmap = provider(0)
-            prevBitmap = provider(-1)
+            curBitmap = provider(0, w, h)
+            prevBitmap = provider(-1, w, h)
         }
         drawHelper.bgMeanColor = bgMeanColor
     }
@@ -391,6 +399,11 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     }
 
     companion object {
-        private const val ANIM_SPEED = 300 // Legado ReadView.defaultAnimationSpeed
+        /** Animation duration factor (px per ms). Matches Legado ReadView.defaultAnimationSpeed. */
+        private const val ANIM_SPEED = 300
+        /** Tap start position ratio from edge (0.0 = edge, 1.0 = center). */
+        private const val TAP_START_RATIO = 0.9f
+        /** Tap start position ratio for the opposite edge. */
+        private const val TAP_START_RATIO_FAR = 0.1f
     }
 }
