@@ -443,7 +443,7 @@ fun CanvasRenderer(
                 hasPrevChapterValue = chapterIndex > 0,
                 onUpContent = { relativePosition, resetPageOffset ->
                     AppLog.debug(
-                        "Reader",
+                        "PageTurn",
                         "upContent(relativePosition=$relativePosition, resetPageOffset=$resetPageOffset)",
                     )
                 },
@@ -535,11 +535,11 @@ fun CanvasRenderer(
             onBoundaryChapter = { direction ->
                 when (direction) {
                     ReaderPageDirection.PREV -> {
-                        AppLog.debug("Reader", "Commit prev chapter from fillPage boundary: ${chapterIndex - 1}")
+                        AppLog.debug("PageTurn", "Commit prev chapter from fillPage boundary: ${chapterIndex - 1}")
                         onPrevChapter()
                     }
                     ReaderPageDirection.NEXT -> {
-                        AppLog.debug("Reader", "Commit next chapter from fillPage boundary: ${chapterIndex + 1}")
+                        AppLog.debug("PageTurn", "Commit next chapter from fillPage boundary: ${chapterIndex + 1}")
                         onNextChapter()
                     }
                     ReaderPageDirection.NONE -> Unit
@@ -568,7 +568,7 @@ fun CanvasRenderer(
     }
 
     fun fillPageFrom(displayIndex: Int, direction: ReaderPageDirection): Int? {
-        AppLog.debug("Reader", "fillPageFrom ENTER | displayIndex=$displayIndex | direction=$direction | lastSettled=$lastSettledDisplayPage | pager=${pagerState.currentPage} | readerPageIndex=$readerPageIndex | renderPageCount=$renderPageCount")
+        AppLog.debug("PageTurn", "fillPageFrom ENTER | displayIndex=$displayIndex | direction=$direction | lastSettled=$lastSettledDisplayPage | pager=${pagerState.currentPage} | readerPageIndex=$readerPageIndex | renderPageCount=$renderPageCount")
         val content = readerPageStateFor(displayIndex).fillPage(direction)
         if (content == null) {
             pageDelegateState.stopScroll()
@@ -576,7 +576,7 @@ fun CanvasRenderer(
         }
         if (content.boundaryDirection != null) {
             AppLog.debug(
-                "Reader",
+                "PageTurn",
                 "fillPageFrom(start=$displayIndex, direction=$direction) committed chapter boundary",
             )
             pageDelegateState.stopScroll()
@@ -588,7 +588,7 @@ fun CanvasRenderer(
             readerPageIndex = localIndex
         }
         AppLog.debug(
-            "Reader",
+            "PageTurn",
             "fillPageFrom(start=$displayIndex, direction=$direction, committed=${content.currentDisplayIndex}, local=${pageFactory.currentLocalIndex(content.currentDisplayIndex)}, chapter=${content.currentPage.chapterIndex}, page=${content.currentPage.index})",
         )
         upProgressFrom(content)
@@ -605,7 +605,7 @@ fun CanvasRenderer(
         }
         if (!canCommitBoundary) {
             AppLog.debug(
-                "Reader",
+                "PageTurn",
                 "Scroll boundary $direction rejected by PageFactory at display=$startDisplayPage " +
                     "pageCount=$renderPageCount chapter=$chapterIndex completed=${chapter?.isCompleted}",
             )
@@ -644,7 +644,7 @@ fun CanvasRenderer(
         ) {
             fillPageFrom(startDisplayPage, direction)
         } else {
-            AppLog.debug("Reader", "keyTurnPage($direction) rejected at display=$startDisplayPage")
+            AppLog.debug("PageTurn", "keyTurnPage($direction) rejected at display=$startDisplayPage")
             pageDelegateState.stopScroll()
         }
     }
@@ -678,7 +678,7 @@ fun CanvasRenderer(
         ) {
             fillPageFrom(startDisplayPage, direction)
         } else {
-            AppLog.debug("Reader", "dragTurnPage($direction) rejected at display=$startDisplayPage")
+            AppLog.debug("PageTurn", "dragTurnPage($direction) rejected at display=$startDisplayPage")
             pageDelegateState.stopScroll()
         }
     }

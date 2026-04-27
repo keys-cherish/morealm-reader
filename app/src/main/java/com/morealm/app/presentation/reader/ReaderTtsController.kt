@@ -169,9 +169,9 @@ class ReaderTtsController(
             }
             ttsServiceStarted = true
             TtsEventBus.sendCommand(TtsEventBus.Command.UpdateMeta(bookTitle, chapterTitle))
-            AppLog.info("Reader", "TTS service started")
+            AppLog.info("TTS", "TTS service started")
         } catch (e: Exception) {
-            AppLog.error("Reader", "Failed to start TTS service", e)
+            AppLog.error("TTS", "Failed to start TTS service", e)
         }
     }
 
@@ -262,16 +262,16 @@ class ReaderTtsController(
                         throw e
                     } catch (e: Exception) {
                         consecutiveErrors++
-                        AppLog.warn("Reader", "TTS speak error on paragraph $idx", e)
+                        AppLog.warn("TTS", "TTS speak error on paragraph $idx", e)
                         if (consecutiveErrors >= 3) {
                             if (_ttsEngine.value != "system") {
-                                AppLog.info("Reader", "Edge TTS failing, falling back to system TTS")
+                                AppLog.info("TTS", "Edge TTS failing, falling back to system TTS")
                                 _ttsEngine.value = "system"
                                 systemTtsEngine.awaitReady()
                                 consecutiveErrors = 0
                                 continue
                             }
-                            AppLog.error("Reader", "TTS engine failing repeatedly, stopping")
+                            AppLog.error("TTS", "TTS engine failing repeatedly, stopping")
                             _ttsPlaying.value = false
                             pushTtsState(false)
                             return@launch
@@ -285,7 +285,7 @@ class ReaderTtsController(
                 }
             } catch (_: CancellationException) {
             } catch (e: Exception) {
-                AppLog.error("Reader", "TTS error", e)
+                AppLog.error("TTS", "TTS error", e)
                 _ttsPlaying.value = false
                 pushTtsState(false)
             }
@@ -386,7 +386,7 @@ class ReaderTtsController(
                 delay(minutes * 60_000L)
                 ttsStop()
                 _ttsSleepMinutes.value = 0
-                AppLog.info("Reader", "TTS sleep timer expired")
+                AppLog.info("TTS", "TTS sleep timer expired")
             }
         }
     }

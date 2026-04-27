@@ -162,9 +162,9 @@ class ReaderSettingsController(
                 )
                 prefs.setCustomFont(uri.toString(), name)
                 prefs.setReaderFontFamily("custom")
-                AppLog.info("Reader", "Imported custom font: $name")
+                AppLog.info("Settings", "Imported custom font: $name")
             } catch (e: Exception) {
-                AppLog.error("Reader", "Failed to import font", e)
+                AppLog.error("Settings", "Failed to import font", e)
             }
         }
     }

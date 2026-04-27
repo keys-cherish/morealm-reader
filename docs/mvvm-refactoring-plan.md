@@ -230,6 +230,40 @@ ReaderViewModel (胶水层 ~150行)
 
 ---
 
+---
+
+## Part 5: Legado 功能差距（需后续补齐）
+
+通过直接对比两个代码库确认的差距：
+
+### 缺失功能（❌）
+
+| 功能 | Legado 实现 | MoRealm 状态 | 优先级 |
+|------|------------|-------------|--------|
+| 换源（已加入书架的书换书源） | `ChangBookSourceDialog` + `ChangeChapterSourceDialog` | 完全缺失 | P0 |
+| RSS/订阅阅读 | `RssSource` + `RssArticle` + 完整 UI | 完全缺失 | P1 |
+| Web 端阅读服务 | `HttpReadAloudService` + NanoHTTPD | 有依赖但无实现 | P2 |
+| 阅读进度云同步 | `AppWebDav` 进度同步 | 有 WebDAV 备份但无进度同步 | P1 |
+| 词典规则 | `DictRule` + 划词查询 | 完全缺失 | P2 |
+
+### 部分实现（🟡）
+
+| 功能 | 差距 | 优先级 |
+|------|------|--------|
+| 书源调试 UI | 有 `SourceDebug.kt` 后端但 UI 不完整 | P0 |
+| 书源登录/验证码 | 有 Cookie 管理但无 WebView 登录 UI | P0 |
+| 发现页/探索 | 有 `ExploreRule` 但 UI 未完整暴露 | P1 |
+| 替换规则导入导出 | 有管理 UI 但缺少批量导入导出 | P1 |
+| TXT 目录规则管理 | 有自动检测但缺少手动规则管理 UI | P1 |
+
+### 已完成（✅）
+
+书架、搜索、本地书导入（TXT/EPUB/PDF/MOBI/CBZ）、阅读器核心、TTS、
+书源导入（Legado 格式兼容）、主题导入导出、WebDAV 备份恢复、替换规则管理、
+WiFi 传书、年度报告
+
+---
+
 ## 验证清单
 
 - [ ] 日志：每个模块前缀在 logcat 中可过滤

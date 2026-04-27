@@ -38,7 +38,7 @@ class ReaderScrollState {
             ReaderPageDirection.NONE -> return
         }
         AppLog.debug(
-            "Reader",
+            "Scroll",
             "ReaderScrollState.commitChapterShift" +
                 " | direction=$direction" +
                 " | chapter=$oldIndex→$committedChapterIndex" +
