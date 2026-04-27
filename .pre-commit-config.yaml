@@ -179,3 +179,41 @@ repos:
         language: system
         files: '\.kt$'
         pass_filenames: false
+
+      - id: compose-pointer-input-stale-closure
+        name: Compose pointerInput 闭包陈旧值检查
+        entry: "bash -c '
+          ERRORS=0;
+          # pointerInput(Unit) 的闭包在整个 Composable 生命周期内不重建，
+          # 内部引用的外部 val 会被值捕获而陈旧。必须用 rememberUpdatedState 包装。
+          # 详见 docs/page-turn-bug-analysis.md
+          for f in $(grep -rl \"pointerInput\" app/src/main/java/com/morealm/app/ui/ --include=\"*.kt\" 2>/dev/null); do
+            HAS_RUS=$(grep -c \"rememberUpdatedState\" \"$f\" 2>/dev/null || echo 0);
+            HAS_PI=$(grep -c \"pointerInput(Unit)\" \"$f\" 2>/dev/null || echo 0);
+            if [ \"$HAS_PI\" -gt 0 ] && [ \"$HAS_RUS\" -eq 0 ]; then
+              echo \"ERROR [$f]: pointerInput(Unit) 但无 rememberUpdatedState — 闭包将捕获陈旧值\";
+              ERRORS=$((ERRORS+1));
+            fi;
+          done;
+          [ $ERRORS -eq 0 ]
+        '"
+        language: system
+        files: '\.kt$'
+        pass_filenames: false
+
+      - id: compose-drag-state-guard-check
+        name: Compose 拖拽状态守卫检查
+        entry: "bash -c '
+          # onDragStart 中不应用 if(state==IDLE) 守卫跳过状态重置。
+          # 应无条件 abort + 重置（移植自 Legado ACTION_DOWN → abortAnim() + onDown()）
+          HITS=$(grep -rn \"onDragStart\" app/src/main/java/com/morealm/app/ui/ --include=\"*.kt\" -A8 \
+            | grep -i \"if.*dragState.*IDLE\\|if.*state.*==.*IDLE\");
+          if [ -n \"$HITS\" ]; then
+            echo \"WARNING: onDragStart 使用 IDLE 守卫跳过重置 — 应无条件 abort (Legado 模式)\";
+            echo \"$HITS\";
+          fi;
+          true
+        '"
+        language: system
+        files: '\.kt$'
+        pass_filenames: false
