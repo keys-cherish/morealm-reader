@@ -56,7 +56,7 @@ import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.Bookmark
 import com.morealm.app.domain.entity.ReaderStyle
-import com.morealm.app.presentation.reader.ReaderViewModel.SearchResult
+import com.morealm.app.presentation.reader.ReaderSearchController
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.ui.theme.MoRealmColors
 import kotlinx.coroutines.flow.flowOf
@@ -904,11 +904,11 @@ private fun ChapterBookmarkPanel(
 @Composable
 private fun FullTextSearchPanel(
     visible: Boolean,
-    searchResults: List<ReaderViewModel.SearchResult>,
+    searchResults: List<ReaderSearchController.SearchResult>,
     isSearching: Boolean,
     moColors: MoRealmColors,
     onSearch: (String) -> Unit,
-    onResultClick: (ReaderViewModel.SearchResult) -> Unit,
+    onResultClick: (ReaderSearchController.SearchResult) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {

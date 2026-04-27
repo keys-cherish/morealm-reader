@@ -42,7 +42,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.render.*
-import com.morealm.app.presentation.reader.ReaderViewModel
+import com.morealm.app.presentation.reader.ReaderSearchController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -112,7 +112,7 @@ fun CanvasRenderer(
     onAddBookmark: () -> Unit = {},
     onReadAloudParagraphPositions: (List<Int>) -> Unit = {},
     onVisibleReadAloudPosition: (chapterIndex: Int, chapterPosition: Int) -> Unit = { _, _ -> },
-    pendingSearchSelection: ReaderViewModel.SearchSelection? = null,
+    pendingSearchSelection: ReaderSearchController.SearchSelection? = null,
     onSearchSelectionConsumed: () -> Unit = {},
     bookTitle: String = "",
     bookAuthor: String = "",
