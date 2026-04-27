@@ -55,22 +55,22 @@ fun PillNavigationBar(
     val accent = moColors.accent
     val unselected = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
     val pillShape = RoundedCornerShape(100.dp)
-    val navBg = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
-    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f)
+    val navBg = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.1f)
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
+            .padding(start = 24.dp, end = 24.dp, bottom = 16.dp),
         contentAlignment = Alignment.BottomCenter,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(56.dp)
-                .shadow(12.dp, pillShape)
-                .clip(pillShape)
-                .background(navBg)
+                .height(64.dp)
+                // shadow BEFORE clip+background to avoid black rectangle
+                .shadow(16.dp, pillShape)
+                .background(navBg, pillShape)
                 .border(1.dp, borderColor, pillShape),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
@@ -86,6 +86,7 @@ fun PillNavigationBar(
                 Column(
                     modifier = Modifier
                         .weight(1f)
+                        .height(64.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -97,28 +98,28 @@ fun PillNavigationBar(
                         imageVector = tab.icon,
                         contentDescription = tab.label,
                         tint = color,
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(20.dp),
                     )
                     Text(
                         text = tab.label,
                         color = color,
-                        fontSize = 10.sp,
+                        fontSize = 9.sp,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                        modifier = Modifier.padding(top = 2.dp),
+                        lineHeight = 12.sp,
+                        modifier = Modifier.padding(top = 1.dp),
                     )
-                    // Selected indicator dot
-                    if (selected) {
-                        Box(
-                            modifier = Modifier
-                                .padding(top = 3.dp)
-                                .size(4.dp)
-                                .clip(CircleShape)
-                                .background(accent.copy(alpha = 0.8f)),
-                        )
-                    } else {
-                        // Spacer to keep consistent height
-                        Box(modifier = Modifier.padding(top = 3.dp).size(4.dp))
-                    }
+                    // Indicator dot (always present for stable layout, invisible when not selected)
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .size(4.dp)
+                            .then(
+                                if (selected) Modifier
+                                    .clip(CircleShape)
+                                    .background(accent.copy(alpha = 0.8f))
+                                else Modifier
+                            ),
+                    )
                 }
             }
         }
