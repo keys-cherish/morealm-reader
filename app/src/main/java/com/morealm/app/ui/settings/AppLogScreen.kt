@@ -159,9 +159,7 @@ private fun LogListTab(
             contentPadding = PaddingValues(8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            val reversedLogs = logs.reversed()
-            items(reversedLogs.size, key = { idx -> "${reversedLogs[idx].time}_${idx}" }) { idx ->
-                val record = reversedLogs[idx]
+            items(logs.reversed(), key = { it.id }) { record ->
                 val color = when (record.level) {
                     LogLevel.FATAL -> MaterialTheme.colorScheme.error
                     LogLevel.ERROR -> MaterialTheme.colorScheme.error
