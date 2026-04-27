@@ -560,7 +560,7 @@ fun CanvasRenderer(
                     if (!canTurn) {
                         stopAutoPager()
                     } else {
-                        coordinator.fillPageFrom(startDisplayPage, ReaderPageDirection.NEXT) { readerPageIndex = it }?.let { committed ->
+                        coordinator.commitPageTurn(startDisplayPage, ReaderPageDirection.NEXT) { readerPageIndex = it }?.let { committed ->
                             pagerState.scrollToPage(committed.coerceIn(0, renderPageCount - 1))
                         } ?: stopAutoPager()
                         autoPagerState.reset()
@@ -576,7 +576,7 @@ fun CanvasRenderer(
         if (!progressRestored) return@LaunchedEffect
         if (pageAnimType == PageAnimType.SCROLL) return@LaunchedEffect
         onPageTurnCommandConsumed()
-        coordinator.animateByDirection(direction) { readerPageIndex = it }
+        coordinator.turnPageByTap(direction) { readerPageIndex = it }
     }
 
     // Restore saved progress after layout is complete
@@ -601,8 +601,8 @@ fun CanvasRenderer(
             pagerState.scrollToPage(targetPage)
         }
         coordinator.lastSettledDisplayPage = targetPage
-        coordinator.lastReaderContent = coordinator.readerPageStateFor(targetPage).upContent()
-        coordinator.upProgressFrom(coordinator.lastReaderContent)
+        coordinator.lastReaderContent = coordinator.createPageState(targetPage).upContent()
+        coordinator.reportProgress(coordinator.lastReaderContent)
         progressRestored = true
     }
 
@@ -689,11 +689,11 @@ fun CanvasRenderer(
                     }
                 },
                 onFillPage = { displayIndex, direction ->
-                    coordinator.fillPageFrom(displayIndex, direction) { readerPageIndex = it }
+                    coordinator.commitPageTurn(displayIndex, direction) { readerPageIndex = it }
                 },
                 onTapCenter = onTapCenter,
                 onLongPress = { offset ->
-                    val page = coordinator.pageForDisplay(coordinator.lastSettledDisplayPage)
+                    val page = coordinator.getPageAt(coordinator.lastSettledDisplayPage)
                     val col = hitTestColumn(page, offset.x, offset.y)
                     if (col is ImageColumn) { onImageClick(col.src); return@SimulationParams }
                     val pos = hitTestPage(page, offset.x, offset.y)
@@ -757,11 +757,11 @@ fun CanvasRenderer(
                                     when {
                                         dragAxis == 1 && abs(totalDragX) > horizontalThreshold -> {
                                             turnRequested = true
-                                            coordinator.dragByDirection(if (totalDragX > 0f) ReaderPageDirection.PREV else ReaderPageDirection.NEXT) { readerPageIndex = it }
+                                            coordinator.turnPageByDrag(if (totalDragX > 0f) ReaderPageDirection.PREV else ReaderPageDirection.NEXT) { readerPageIndex = it }
                                         }
                                         dragAxis == 2 && abs(totalDragY) > verticalThreshold -> {
                                             turnRequested = true
-                                            coordinator.dragByDirection(if (totalDragY < 0f) ReaderPageDirection.NEXT else ReaderPageDirection.PREV) { readerPageIndex = it }
+                                            coordinator.turnPageByDrag(if (totalDragY < 0f) ReaderPageDirection.NEXT else ReaderPageDirection.PREV) { readerPageIndex = it }
                                         }
                                     }
                                 }
@@ -833,13 +833,13 @@ fun CanvasRenderer(
                                 when (action) {
                                     "prev" -> {
                                         if (pageAnimType != PageAnimType.SCROLL) {
-                                            coordinator.animateByDirection(ReaderPageDirection.PREV) { readerPageIndex = it }
+                                            coordinator.turnPageByTap(ReaderPageDirection.PREV) { readerPageIndex = it }
                                         }
                                         return@detectTapGestures
                                     }
                                     "next" -> {
                                         if (pageAnimType != PageAnimType.SCROLL) {
-                                            coordinator.animateByDirection(ReaderPageDirection.NEXT) { readerPageIndex = it }
+                                            coordinator.turnPageByTap(ReaderPageDirection.NEXT) { readerPageIndex = it }
                                         }
                                         return@detectTapGestures
                                     }
@@ -861,12 +861,12 @@ fun CanvasRenderer(
                                     }
                                     "none" -> Unit
                                 }
-                                val page = coordinator.pageForDisplay(pagerState.currentPage)
+                                val page = coordinator.getPageAt(pagerState.currentPage)
                                 val hitColumn = hitTestColumn(page, offset.x, offset.y)
                                 handleColumnClick(hitColumn)
                             },
                             onLongPress = { offset ->
-                                val page = coordinator.pageForDisplay(pagerState.currentPage)
+                                val page = coordinator.getPageAt(pagerState.currentPage)
                                 // If long-press on image, show image viewer (ported from Legado)
                                 val col = hitTestColumn(page, offset.x, offset.y)
                                 if (col is ImageColumn) {
@@ -916,7 +916,7 @@ fun CanvasRenderer(
                 },
                 onNearBottom = onScrollNearBottom,
                 onReachedBottom = onScrollReachedBottom,
-                onBoundaryPageTurn = { direction, displayIndex -> coordinator.fillScrollBoundaryPage(direction, displayIndex) { readerPageIndex = it } },
+                onBoundaryPageTurn = { direction, displayIndex -> coordinator.commitScrollChapterBoundary(direction, displayIndex) { readerPageIndex = it } },
                 onTapCenter = onTapCenter,
                 onImageClick = onImageClick,
                 onLongPressText = { page, textPos, offset ->
@@ -988,11 +988,11 @@ fun CanvasRenderer(
                         coordinator.pendingSettledDirection = null
                         return@AnimatedPageReader
                     }
-                    coordinator.onPageSettled(settledPage) { readerPageIndex = it }
+                    coordinator.handlePagerSettled(settledPage) { readerPageIndex = it }
                 },
             ) { pageIndex ->
                     PageContentBox(
-                page = coordinator.pageForDisplay(pageIndex),
+                page = coordinator.getPageAt(pageIndex),
                     pageIndex = pageIndex,
                     currentPage = if (pageAnimType == PageAnimType.SIMULATION) {
                         coordinator.lastSettledDisplayPage.coerceIn(0, renderPageCount - 1)
@@ -1022,15 +1022,15 @@ fun CanvasRenderer(
                     showChapterName = showChapterName,
                     showTimeBattery = showTimeBattery,
                     autoPageOverlayProgress = autoPageProgress,
-                    autoPageNextPage = if (autoPageProgress > 0) coordinator.relativePageForDisplay(pageIndex, 1) else null,
+                    autoPageNextPage = if (autoPageProgress > 0) coordinator.getRelativePage(pageIndex, 1) else null,
                     autoPageAccentColor = accentColor,
                     onCurrentPageChanged = {},
                     onSelectionStartMove = { textPos ->
-                        selectedTextPage = coordinator.pageForDisplay(pageIndex)
+                        selectedTextPage = coordinator.getPageAt(pageIndex)
                         selectionState.selectStartMove(textPos)
                     },
                     onSelectionEndMove = { textPos ->
-                        selectedTextPage = coordinator.pageForDisplay(pageIndex)
+                        selectedTextPage = coordinator.getPageAt(pageIndex)
                         selectionState.selectEndMove(textPos)
                     },
                 )
@@ -1085,14 +1085,14 @@ fun CanvasRenderer(
         ReaderSelectionToolbar(
             selectionState = selectionState,
             toolbarOffset = toolbarOffset,
-            page = selectedTextPage ?: coordinator.pageForDisplay(currentDisplayForSelection),
+            page = selectedTextPage ?: coordinator.getPageAt(currentDisplayForSelection),
             relativePageProvider = { relativePos ->
                 when (pageAnimType) {
                     PageAnimType.SCROLL -> scrollRelativePages[relativePos] ?: selectedTextPage?.takeIf {
                         relativePos == selectionState.startPos?.relativePagePos ||
                             relativePos == selectionState.endPos?.relativePagePos
                     }
-                    else -> coordinator.relativePageForDisplay(currentDisplayForSelection, relativePos)
+                    else -> coordinator.getRelativePage(currentDisplayForSelection, relativePos)
                 }
             },
             onCopyText = onCopyText,
