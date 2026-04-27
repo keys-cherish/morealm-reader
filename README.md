@@ -6,14 +6,14 @@
 
 <p align="center">
   <strong>一款现代化的 Android 电子书阅读器</strong><br>
-  基于 Jetpack Compose · 兼容 Legado 书源 · MIT 开源
+  基于 Jetpack Compose · 兼容 Legado 书源 · GPL-3.0 + 商业双许可
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Android-3DDC84?logo=android&logoColor=white" />
   <img src="https://img.shields.io/badge/Kotlin-2.0-7F52FF?logo=kotlin&logoColor=white" />
   <img src="https://img.shields.io/badge/Compose-Material3-4285F4?logo=jetpackcompose&logoColor=white" />
-  <img src="https://img.shields.io/badge/License-MIT-green" />
+  <img src="https://img.shields.io/badge/License-GPL--3.0-blue" />
 </p>
 
 ---
@@ -108,4 +108,9 @@ APK 输出：`app/build/outputs/apk/debug/app-debug.apk`
 
 ## 许可证
 
-[MIT License](LICENSE)
+本项目采用 **双许可模式**：
+
+- **开源使用** — [GPL-3.0](LICENSE)：个人、学习、开源项目免费使用，但衍生作品必须开源
+- **商业使用** — 需获取商业许可：闭源分发、商业产品等场景请联系作者
+
+详见 [LICENSE](LICENSE)
