@@ -302,14 +302,16 @@ private fun SimulationPager(
     params: SimulationParams,
     currentDisplayPage: Int,
     modifier: Modifier = Modifier,
-    @Suppress("UNUSED_PARAMETER") pageContent: @Composable (Int) -> Unit,
+    pageContent: @Composable (Int) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val pages = params.pages
     val pageCount = pages.size.coerceAtLeast(1)
     val displayPage = currentDisplayPage.coerceIn(0, pageCount - 1)
 
-    // AndroidView wrapping the native SimulationReadView
+    // Single-layer: SimulationReadView handles both idle display and animation.
+    // Idle state draws idleBitmap (rendered with correct theme bgColor).
+    // No Compose/View layering — avoids transparency and z-order issues.
     androidx.compose.ui.viewinterop.AndroidView(
         factory = { context ->
             SimulationReadView(context).apply {
@@ -318,13 +320,10 @@ private fun SimulationPager(
             }
         },
         update = { view ->
-            // Update callbacks every recomposition — View reads fields, always fresh
             view.setBackgroundColor(params.bgColor)
             view.bgMeanColor = params.bgMeanColor
             view.canTurnNext = { params.canTurn(displayPage, ReaderPageDirection.NEXT) }
             view.canTurnPrev = { params.canTurn(displayPage, ReaderPageDirection.PREV) }
-            view.bgMeanColor = params.bgMeanColor
-            // Bitmap provider uses the View's own dimensions (not canvasRecorder which may be 0)
             view.bitmapProvider = { relativePos, w, h ->
                 val page = params.pageForTurn(displayPage, relativePos)
                 if (page != null && w > 0 && h > 0) {
@@ -339,12 +338,6 @@ private fun SimulationPager(
             }
             view.onTapCenter = { params.onTapCenter() }
             view.onLongPress = { x, y -> params.onLongPress?.invoke(Offset(x, y)) }
-            view.onTapPrev = {
-                // No prev page available — do nothing or show tip
-            }
-            view.onTapNext = {
-                // No next page available — do nothing or show tip
-            }
             view.onPageTurnCompleted = { isNext ->
                 val direction = if (isNext) ReaderPageDirection.NEXT else ReaderPageDirection.PREV
                 val committedPage = params.onFillPage(displayPage, direction)
@@ -354,20 +347,18 @@ private fun SimulationPager(
                     params.onPageChanged(safePage)
                 }
             }
-
-            // Update idle bitmap when displayPage changes (use View's own dimensions)
+            // Render idle bitmap with correct theme background color
             val w = view.width
             val h = view.height
             if (w > 0 && h > 0) {
                 val page = params.pageForTurn(displayPage, 0)
-                val idleBmp = if (page != null) renderPageToBitmap(
+                view.setIdleBitmap(if (page != null) renderPageToBitmap(
                     w, h, params.bgColor, page,
                     params.titlePaint, params.contentPaint,
                     chapterNumPaint = params.chapterNumPaint,
                     reuseBitmap = null, bgBitmap = params.bgBitmap,
                     pageInfoOverlay = params.pageInfoOverlay,
-                ) else null
-                view.setIdleBitmap(idleBmp)
+                ) else null)
             }
         },
         modifier = modifier.fillMaxSize(),
