@@ -315,12 +315,10 @@ fun ReaderScreen(
         // WebView reader content — handles all touch events internally via JS
         // Resolve reader colors: activeStyle overrides theme defaults
         val isNight = moColors.isNight
-        val readerBg = activeStyle?.let {
-            (if (isNight) it.bgColorNight else it.bgColor).toComposeColor()
-        } ?: moColors.readerBackground
-        val readerFg = activeStyle?.let {
-            (if (isNight) it.textColorNight else it.textColor).toComposeColor()
-        } ?: moColors.readerText
+        // Reader bg/fg follow the THEME color, not the activeStyle.
+        // The user expects: dark theme → dark bg, light theme → light bg.
+        val readerBg = moColors.readerBackground
+        val readerFg = moColors.readerText
         val readerFontSize = activeStyle?.textSize?.toFloat() ?: fontSize
         val readerLineHeight = activeStyle?.lineHeight ?: lineHeight
         val readerFontFamily = activeStyle?.fontFamily ?: fontFamily

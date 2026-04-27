@@ -64,14 +64,11 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     // Uses the View's own dimensions to ensure correct bitmap size
     var bitmapProvider: ((relativePos: Int, width: Int, height: Int) -> Bitmap?)? = null
 
-    // ── Idle page bitmap (shown when not animating) ──
     private var idleBitmap: Bitmap? = null
 
     fun setIdleBitmap(bitmap: Bitmap?) {
         idleBitmap = bitmap
-        if (!isMoved && !isRunning) {
-            postInvalidate()
-        }
+        if (!isMoved && !isRunning) postInvalidate()
     }
 
     // ── Long press detection ──
@@ -81,10 +78,6 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         drawHelper.setViewSize(w, h)
-        // Refresh idle bitmap now that we have real dimensions
-        if (w > 0 && h > 0 && idleBitmap == null) {
-            idleBitmap = bitmapProvider?.invoke(0, w, h)
-        }
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -382,9 +375,9 @@ class SimulationReadView(context: Context) : android.view.View(context) {
 
     // ── Draw — Legado SimulationPageDelegate.onDraw ──
     override fun onDraw(canvas: Canvas) {
-        // Always fill with theme background first (prevents white flash on first frame)
-        canvas.drawColor(bgMeanColor)
         if (isMoved || isRunning) {
+            // During page turn animation: fill bg then draw bezier curl
+            canvas.drawColor(bgMeanColor)
             drawHelper.bgMeanColor = bgMeanColor
             if (isNext) {
                 drawHelper.onDraw(canvas, curBitmap, nextBitmap)
@@ -392,7 +385,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
                 drawHelper.onDraw(canvas, prevBitmap, curBitmap)
             }
         } else {
-            // Idle — draw current page bitmap
+            canvas.drawColor(bgMeanColor)
             val bmp = idleBitmap
             if (bmp != null && !bmp.isRecycled) {
                 canvas.drawBitmap(bmp, 0f, 0f, null)
