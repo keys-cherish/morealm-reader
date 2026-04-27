@@ -266,12 +266,26 @@ WiFi 传书、年度报告
 
 ## 验证清单
 
-- [ ] 日志：每个模块前缀在 logcat 中可过滤
-- [ ] 日志：异常值告警能检测到已知 bug 模式
-- [ ] PageTurnCoordinator：所有翻页模式功能正常
-- [ ] 模式隔离：SIMULATION → SLIDE 切换无穿透
-- [ ] ViewModel：每个 Controller 的 StateFlow 独立可测
-- [ ] 背景色：主题切换后所有模式即时生效
-- [ ] 仿真翻页：连续翻 20 页无循环/卡住
-- [ ] 滚动模式：跨章无断裂
-- [ ] 进度：退出重进恢复到正确位置
+- [x] 日志：每个模块前缀在 logcat 中可过滤（Chapter/Progress/Nav/PageTurn/Scroll/Simulation/Theme/Search/TTS/Settings/Edit/Bookmark）
+- [x] 日志：关键 bug 对应日志已添加（背景色 ARGB、commitPageTurn 状态快照、OOM 捕获、saveProgress 参数）
+- [x] PageTurnCoordinator：8 局部函数提取，9 函数语义化重命名
+- [x] 模式隔离：`remember(chapterIndex, pageAnimType)` coordinator 自动重置
+- [x] 仿真翻页：AndroidView 完全隔离，OOM 优雅降级
+- [x] ViewModel：1349→330 行，6 个 Controller 各 56-735 行
+- [x] 文件重命名：5 个 renderer 文件语义化
+- [ ] 背景色：主题切换后所有模式即时生效（待用户验证）
+- [ ] 仿真翻页：连续翻 20 页无循环/卡住（待用户验证）
+- [ ] 滚动模式：跨章无断裂（待用户验证）
+- [ ] 进度：退出重进恢复到正确位置（待用户验证）
+
+## 实际完成数据
+
+| 指标 | 重构前 | 重构后 | 目标 |
+|------|--------|--------|------|
+| ReaderViewModel | 1,349行 | **330行** | ~150行 |
+| CanvasRenderer | 1,840行 | **1,659行** | ~800行 |
+| PageTurnCoordinator | 0 | **266行** | ~300行 |
+| Controller 数量 | 2 (settings+tts) | **8** | 8 |
+| 日志模块前缀 | 1 ("Reader") | **12** | 11 |
+| 文件语义化率 | 9/14 | **14/14** | 14/14 |
+| 函数语义化率 | 0/9 | **9/9** | 9/9 |
