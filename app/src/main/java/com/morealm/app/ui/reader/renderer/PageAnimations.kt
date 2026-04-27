@@ -312,11 +312,15 @@ private fun SimulationPager(
     // AndroidView wrapping the native SimulationReadView
     androidx.compose.ui.viewinterop.AndroidView(
         factory = { context ->
-            SimulationReadView(context)
+            SimulationReadView(context).apply {
+                setBackgroundColor(params.bgColor)
+                bgMeanColor = params.bgMeanColor
+            }
         },
         update = { view ->
             // Update callbacks every recomposition — View reads fields, always fresh
             view.setBackgroundColor(params.bgColor)
+            view.bgMeanColor = params.bgMeanColor
             view.canTurnNext = { params.canTurn(displayPage, ReaderPageDirection.NEXT) }
             view.canTurnPrev = { params.canTurn(displayPage, ReaderPageDirection.PREV) }
             view.bgMeanColor = params.bgMeanColor

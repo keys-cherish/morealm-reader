@@ -382,6 +382,8 @@ class SimulationReadView(context: Context) : android.view.View(context) {
 
     // ── Draw — Legado SimulationPageDelegate.onDraw ──
     override fun onDraw(canvas: Canvas) {
+        // Always fill with theme background first (prevents white flash on first frame)
+        canvas.drawColor(bgMeanColor)
         if (isMoved || isRunning) {
             drawHelper.bgMeanColor = bgMeanColor
             if (isNext) {
