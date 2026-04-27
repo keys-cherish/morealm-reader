@@ -93,7 +93,7 @@ internal class ReaderPageState(
                     return upContent().copy(boundaryDirection = ReaderPageDirection.NEXT)
                 }
             }
-            AppLog.debug("Reader", "fillPage($direction) rejected at display=$currentDisplayIndex")
+            AppLog.debug("PageTurn", "fillPage($direction) rejected at display=$currentDisplayIndex")
             return null
         }
         currentDisplayIndex = target

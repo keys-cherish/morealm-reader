@@ -316,10 +316,10 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     // ── Animation complete — Legado SimulationPageDelegate.onAnimStop ──
     private fun onAnimStop() {
         if (!isCancel) {
-            AppLog.debug("Reader", "SimulationView onAnimStop commit isNext=$isNext")
+            AppLog.debug("Simulation", "SimulationView onAnimStop commit isNext=$isNext")
             onPageTurnCompleted?.invoke(isNext)
         } else {
-            AppLog.debug("Reader", "SimulationView onAnimStop cancelled")
+            AppLog.debug("Simulation", "SimulationView onAnimStop cancelled")
         }
     }
 
@@ -341,7 +341,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         if (!scroller.isFinished) {
             scroller.abortAnimation()
             if (!isCancel && directionSet) {
-                AppLog.debug("Reader", "SimulationView abortAnim force-commit isNext=$isNext")
+                AppLog.debug("Simulation", "SimulationView abortAnim force-commit isNext=$isNext")
                 onPageTurnCompleted?.invoke(isNext)
             }
         }
