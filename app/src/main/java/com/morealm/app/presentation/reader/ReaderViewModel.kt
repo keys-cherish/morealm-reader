@@ -441,12 +441,12 @@ class ReaderViewModel @Inject constructor(
         try {
             val book = bookRepo.getById(bookId)
             if (book == null) {
-                AppLog.error("Reader", "Book not found: $bookId")
+                AppLog.error("Chapter", "Book not found: $bookId")
                 _loading.value = false
                 return
             }
             _book.value = book
-            AppLog.info("Reader", "Opened: ${book.title} (${book.format})")
+            AppLog.info("Chapter", "Opened: ${book.title} (${book.format})")
 
             val isWebBook = isWebBook(book)
 
@@ -457,7 +457,7 @@ class ReaderViewModel @Inject constructor(
                 }
                 if (cachedChapters.isNotEmpty()) {
                     _chapters.value = cachedChapters
-                    AppLog.info("Reader", "Loaded ${cachedChapters.size} cached chapters from DB")
+                    AppLog.info("Chapter", "Loaded ${cachedChapters.size} cached chapters from DB")
 
                     // Show chapters immediately, load first chapter
                     val progress = bookRepo.getProgress(bookId)
@@ -479,10 +479,10 @@ class ReaderViewModel @Inject constructor(
                                 if (book.totalChapters != freshChapters.size) {
                                     bookRepo.update(book.copy(totalChapters = freshChapters.size))
                                 }
-                                AppLog.info("Reader", "Refreshed chapters: ${freshChapters.size}")
+                                AppLog.info("Chapter", "Refreshed chapters: ${freshChapters.size}")
                             }
                         } catch (e: Exception) {
-                            AppLog.warn("Reader", "Background chapter refresh failed: ${e.message}")
+                            AppLog.warn("Chapter", "Background chapter refresh failed: ${e.message}")
                         }
                     }
 
@@ -501,7 +501,7 @@ class ReaderViewModel @Inject constructor(
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    AppLog.error("Reader", "Failed to load web chapters", e)
+                    AppLog.error("Chapter", "Failed to load web chapters", e)
                     publishReaderError(
                         title = "书源加载失败",
                         detail = webReaderErrorDetail(
@@ -513,7 +513,7 @@ class ReaderViewModel @Inject constructor(
                 }
             } else {
                 val localPath = book.localPath ?: run {
-                    AppLog.warn("Reader", "No local path for book ${book.id}")
+                    AppLog.warn("Chapter", "No local path for book ${book.id}")
                     _loading.value = false
                     return
                 }
@@ -528,9 +528,9 @@ class ReaderViewModel @Inject constructor(
                     viewModelScope.launch(Dispatchers.IO) {
                         try {
                             com.morealm.app.domain.parser.EpubParser.preCacheChapters(context, uri, mapped)
-                            AppLog.info("Reader", "EPUB chapters pre-cached")
+                            AppLog.info("Chapter", "EPUB chapters pre-cached")
                         } catch (e: Exception) {
-                            AppLog.warn("Reader", "EPUB pre-cache failed", e)
+                            AppLog.warn("Chapter", "EPUB pre-cache failed", e)
                         }
                     }
                 }
@@ -538,9 +538,9 @@ class ReaderViewModel @Inject constructor(
                     viewModelScope.launch(Dispatchers.IO) {
                         try {
                             com.morealm.app.domain.parser.CbzParser.preCacheImages(context, uri, mapped)
-                            AppLog.info("Reader", "CBZ images pre-cached")
+                            AppLog.info("Chapter", "CBZ images pre-cached")
                         } catch (e: Exception) {
-                            AppLog.warn("Reader", "CBZ pre-cache failed", e)
+                            AppLog.warn("Chapter", "CBZ pre-cache failed", e)
                         }
                     }
                 }
@@ -548,7 +548,7 @@ class ReaderViewModel @Inject constructor(
             }
 
             if (chapters.isEmpty()) {
-                AppLog.warn("Reader", "No chapters found for book ${book.id}")
+                AppLog.warn("Chapter", "No chapters found for book ${book.id}")
                 if (isWebBook) {
                     publishReaderError(
                         title = "书源无章节",
@@ -562,7 +562,7 @@ class ReaderViewModel @Inject constructor(
 
             _chapters.value = chapters
             bookRepo.saveChapters(bookId, chapters)
-            AppLog.info("Reader", "Parsed ${chapters.size} chapters")
+            AppLog.info("Chapter", "Parsed ${chapters.size} chapters")
 
             if (book.totalChapters != chapters.size) {
                 bookRepo.update(book.copy(totalChapters = chapters.size))
@@ -586,7 +586,7 @@ class ReaderViewModel @Inject constructor(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            AppLog.error("Reader", "Failed to load book", e)
+            AppLog.error("Chapter", "Failed to load book", e)
             _book.value?.takeIf { isWebBook(it) }?.let { book ->
                 publishReaderError(
                     title = "书源加载失败",
@@ -670,7 +670,7 @@ class ReaderViewModel @Inject constructor(
                 )
                 suppressNextProgressSave = targetProgress > 0 || targetChapterPosition > 0
 
-                AppLog.debug("Reader", buildString {
+                AppLog.debug("Chapter", buildString {
                     append("loadChapter completed")
                     append(" | chapter=$index/${chapterList.size}")
                     append(" | title=${chapter.title.take(20)}")
@@ -690,7 +690,7 @@ class ReaderViewModel @Inject constructor(
                 throw e
             } catch (e: Exception) {
                 if (loadToken != chapterLoadToken) return@launch
-                AppLog.error("Reader", "Failed to load chapter $index", e)
+                AppLog.error("Chapter", "Failed to load chapter $index", e)
                 val title = if (isWebBook) "正文加载失败" else "加载失败"
                 val detail = if (isWebBook) {
                     webReaderErrorDetail(
@@ -733,7 +733,7 @@ class ReaderViewModel @Inject constructor(
     fun onScrollReachedBottom() {
         if (_currentChapterIndex.value < _chapters.value.lastIndex) {
             AppLog.debug(
-                "Reader",
+                "Chapter",
                 "Scroll reached temporary chapter bottom at ${_currentChapterIndex.value}; " +
                     "chapter boundary must be committed by ReaderPageFactory",
             )
@@ -755,7 +755,7 @@ class ReaderViewModel @Inject constructor(
             val callback = navigateToBookCallback
             if (linked.any { it.id == book.id } && callback != null) {
                 _nextBookPrompt.value = null
-                AppLog.info("Reader", "Opening linked book: ${book.title}")
+                AppLog.info("Nav", "Opening linked book: ${book.title}")
                 callback(book.id)
             }
         }
@@ -799,7 +799,7 @@ class ReaderViewModel @Inject constructor(
                 _nextPreloadedChapter.value = PreloadedReaderChapter(nextIndex, chapterList[nextIndex].title, converted)
             }
         } catch (e: Exception) {
-            AppLog.warn("Reader", "Preload next chapter $nextIndex failed", e)
+            AppLog.warn("Chapter", "Preload next chapter $nextIndex failed", e)
         }
     }
 
@@ -821,7 +821,7 @@ class ReaderViewModel @Inject constructor(
                 _prevPreloadedChapter.value = PreloadedReaderChapter(prevIndex, chapterList[prevIndex].title, converted)
             }
         } catch (e: Exception) {
-            AppLog.warn("Reader", "Preload prev chapter $prevIndex failed", e)
+            AppLog.warn("Chapter", "Preload prev chapter $prevIndex failed", e)
         }
     }
 
@@ -846,9 +846,9 @@ class ReaderViewModel @Inject constructor(
                         ChapterResult(title = ch.title, url = ch.url)
                     }
                     CacheBook.preload(source, webChapters, currentIndex, preloadCount = 5)
-                    AppLog.debug("Reader", "Web book pre-cache around chapter $currentIndex")
+                    AppLog.debug("Chapter", "Web book pre-cache around chapter $currentIndex")
                 } catch (e: Exception) {
-                    AppLog.warn("Reader", "Web pre-cache failed", e)
+                    AppLog.warn("Chapter", "Web pre-cache failed", e)
                 }
             }
             return
@@ -871,9 +871,9 @@ class ReaderViewModel @Inject constructor(
                         com.morealm.app.domain.parser.CbzParser.preCacheImages(context, uri, chapters, currentIndex)
                     else -> {}
                 }
-                AppLog.debug("Reader", "Re-triggered pre-cache around chapter $currentIndex")
+                AppLog.debug("Chapter", "Re-triggered pre-cache around chapter $currentIndex")
             } catch (e: Exception) {
-                AppLog.warn("Reader", "Pre-cache re-trigger failed", e)
+                AppLog.warn("Chapter", "Pre-cache re-trigger failed", e)
             }
         }
     }
@@ -882,7 +882,7 @@ class ReaderViewModel @Inject constructor(
 
     fun nextChapter() {
         val nextIdx = _currentChapterIndex.value + 1
-        AppLog.debug("Reader", "nextChapter | from=${_currentChapterIndex.value} | to=$nextIdx | total=${_chapters.value.size}")
+        AppLog.debug("Nav", "nextChapter | from=${_currentChapterIndex.value} | to=$nextIdx | total=${_chapters.value.size}")
         if (nextIdx < _chapters.value.size) {
             _navigateDirection.value = 1
             loadChapter(nextIdx, restoreProgress = 0)
@@ -892,7 +892,7 @@ class ReaderViewModel @Inject constructor(
                 val nextBook = linked.first()
                 val callback = navigateToBookCallback
                 if (callback != null) {
-                    AppLog.info("Reader", "Auto-advancing to next linked book: ${nextBook.title}")
+                    AppLog.info("Nav", "Auto-advancing to next linked book: ${nextBook.title}")
                     callback(nextBook.id)
                 } else {
                     _nextBookPrompt.value = nextBook
@@ -903,7 +903,7 @@ class ReaderViewModel @Inject constructor(
 
     fun prevChapter() {
         val prevIdx = _currentChapterIndex.value - 1
-        AppLog.debug("Reader", "prevChapter | from=${_currentChapterIndex.value} | to=$prevIdx")
+        AppLog.debug("Nav", "prevChapter | from=${_currentChapterIndex.value} | to=$prevIdx")
         if (prevIdx >= 0) {
             _navigateDirection.value = -1
             loadChapter(prevIdx, restoreProgress = 100)
@@ -936,7 +936,7 @@ class ReaderViewModel @Inject constructor(
                 val href = chapter.url.substringBeforeLast("#")
                 val cacheFile = java.io.File(cacheDir, href.replace('/', '_') + ".html")
                 cacheFile.writeText(newContent)
-                AppLog.info("Reader", "Saved edited content for chapter ${chapter.index}")
+                AppLog.info("Edit", "Saved edited content for chapter ${chapter.index}")
             }
         }
     }
@@ -1012,7 +1012,7 @@ class ReaderViewModel @Inject constructor(
                 }
                 _searchResults.value = results
             } catch (e: Exception) {
-                AppLog.error("Reader", "Full text search failed", e)
+                AppLog.error("Search", "Full text search failed", e)
             } finally {
                 _searching.value = false
             }
@@ -1153,9 +1153,9 @@ class ReaderViewModel @Inject constructor(
                     }
                     writer.flush()
                 }
-                AppLog.info("Reader", "Exported ${chapterList.size} chapters to TXT")
+                AppLog.info("Edit", "Exported ${chapterList.size} chapters to TXT")
             } catch (e: Exception) {
-                AppLog.error("Reader", "Export failed", e)
+                AppLog.error("Edit", "Export failed", e)
             }
         }
     }
@@ -1178,7 +1178,7 @@ class ReaderViewModel @Inject constructor(
             sourceRepo.getByUrl(sourceUrl)
         } ?: return emptyList()
         if (source.bookSourceType != TEXT_BOOK_SOURCE_TYPE) {
-            AppLog.warn("Reader", "Blocked non-text source chapters: ${source.bookSourceName} type=${source.bookSourceType}")
+            AppLog.warn("Chapter", "Blocked non-text source chapters: ${source.bookSourceName} type=${source.bookSourceType}")
             return listOf(
                 BookChapter(
                     id = "${book.id}_0",
@@ -1217,9 +1217,9 @@ class ReaderViewModel @Inject constructor(
                 )
                 bookRepo.update(updated)
                 _book.value = updated
-                AppLog.info("Reader", "Fetched book info, tocUrl=${detailed.tocUrl}")
+                AppLog.info("Chapter", "Fetched book info, tocUrl=${detailed.tocUrl}")
             } catch (e: Exception) {
-                AppLog.warn("Reader", "Failed to fetch book info: ${e.message}")
+                AppLog.warn("Chapter", "Failed to fetch book info: ${e.message}")
             }
         }
 
@@ -1244,7 +1244,7 @@ class ReaderViewModel @Inject constructor(
             return cached?.let(::sanitizeWebChapterContent) ?: "（书源未找到）"
         }
         if (source.bookSourceType != TEXT_BOOK_SOURCE_TYPE) {
-            AppLog.warn("Reader", "Blocked non-text source content: ${source.bookSourceName} type=${source.bookSourceType}")
+            AppLog.warn("Chapter", "Blocked non-text source content: ${source.bookSourceName} type=${source.bookSourceType}")
             return NON_TEXT_WEB_CONTENT_MESSAGE
         }
 
@@ -1283,7 +1283,7 @@ class ReaderViewModel @Inject constructor(
             lower.contains("expire_time=") ||
             lower.contains("token=")
         return if (looksLikeOnlyUrls && looksLikeMediaToken) {
-            AppLog.warn("Reader", "Blocked media/token URL from WEB content")
+            AppLog.warn("Chapter", "Blocked media/token URL from WEB content")
             NON_TEXT_WEB_CONTENT_MESSAGE
         } else {
             content
@@ -1313,7 +1313,7 @@ class ReaderViewModel @Inject constructor(
                 totalProgress = totalProgress.coerceIn(0f, 1f),
                 scrollProgress = _scrollProgress.value,
             )
-            AppLog.debug("Reader", buildString {
+            AppLog.debug("Progress", buildString {
                 append("saveProgress")
                 append(" | chapter=$chapterIdx/$chapterCount")
                 append(" | position=$chapterPosition")
@@ -1336,7 +1336,7 @@ class ReaderViewModel @Inject constructor(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            AppLog.error("Reader", "Failed to save progress", e)
+            AppLog.error("Progress", "Failed to save progress", e)
         }
     }
 

@@ -314,7 +314,7 @@ fun ScrollRenderer(
     fun submitBoundaryTurn(direction: ReaderPageDirection, reason: String): Boolean {
         if (pendingBoundaryTurn != null) return true
         AppLog.debug(
-            "Reader",
+            "Scroll",
             "Scroll boundary turn request direction=$direction reason=$reason " +
                 "page=$currentPageIndex/$pageCount offset=$pageOffset layoutCompleted=$layoutCompleted",
         )
@@ -322,9 +322,9 @@ fun ScrollRenderer(
         if (accepted) {
             pendingBoundaryTurn = direction
             scrollDelegateState.abortAnim()
-            AppLog.debug("Reader", "Scroll boundary turn accepted direction=$direction")
+            AppLog.debug("PageTurn", "Scroll boundary turn accepted direction=$direction")
         } else {
-            AppLog.debug("Reader", "Scroll boundary turn rejected direction=$direction reason=$reason")
+            AppLog.debug("PageTurn", "Scroll boundary turn rejected direction=$direction reason=$reason")
         }
         return accepted
     }
@@ -364,7 +364,7 @@ fun ScrollRenderer(
             if (hasUserScrolled) {
                 lastNearBottomPageCount = pageCount
                 AppLog.debug(
-                    "Reader",
+                    "Scroll",
                     "Scroll reached true bottom page=$currentPageIndex/$pageCount " +
                         "offset=$pageOffset minOffset=$minOffset height=$curPageHeight viewHeight=$viewHeight",
                 )
@@ -450,7 +450,7 @@ fun ScrollRenderer(
         if (!pendingRestore && currentPageIndex >= (pageCount - 2).coerceAtLeast(0) && pageCount > lastNearBottomRequestPageCount) {
             lastNearBottomRequestPageCount = pageCount
             AppLog.debug(
-                "Reader",
+                "Scroll",
                 "Scroll near bottom page=$currentPageIndex/$pageCount layoutCompleted=$layoutCompleted",
             )
             onNearBottom()
@@ -467,7 +467,7 @@ fun ScrollRenderer(
             if (lastPageBottom < viewHeight * 0.3f) {
                 val scrollInto = -(pageOffset + pageHeight(currentPageIndex))
                 AppLog.debug(
-                    "Reader",
+                    "Scroll",
                     "Scroll cross-chapter commit NEXT | page=$currentPageIndex/$pageCount | scrollInto=$scrollInto",
                 )
                 onChapterCommit(ReaderPageDirection.NEXT, scrollInto.coerceAtLeast(0f))
@@ -480,7 +480,7 @@ fun ScrollRenderer(
             if (scrollIntoPrev > viewHeight * 0.7f && scrollIntoPrev < totalPrevHeight) {
                 val offsetInPrev = totalPrevHeight - scrollIntoPrev
                 AppLog.debug(
-                    "Reader",
+                    "Scroll",
                     "Scroll cross-chapter commit PREV | page=$currentPageIndex/$pageCount | offsetInPrev=$offsetInPrev",
                 )
                 onChapterCommit(ReaderPageDirection.PREV, -offsetInPrev)
