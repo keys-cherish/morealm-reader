@@ -82,42 +82,42 @@ fun ReaderScreen(
     val showTtsPanel by viewModel.showTtsPanel.collectAsStateWithLifecycle()
     val showSettings by viewModel.showSettingsPanel.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
-    val pageTurnMode by viewModel.pageTurnMode.collectAsStateWithLifecycle()
-    val fontFamily by viewModel.fontFamily.collectAsStateWithLifecycle()
-    val fontSize by viewModel.fontSize.collectAsStateWithLifecycle()
-    val lineHeight by viewModel.lineHeight.collectAsStateWithLifecycle()
+    val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
+    val fontFamily by viewModel.settings.fontFamily.collectAsStateWithLifecycle()
+    val fontSize by viewModel.settings.fontSize.collectAsStateWithLifecycle()
+    val lineHeight by viewModel.settings.lineHeight.collectAsStateWithLifecycle()
     val scrollProgress by viewModel.scrollProgress.collectAsStateWithLifecycle()
     val linkedBooks by viewModel.linkedBooks.collectAsStateWithLifecycle()
     val nextBookPrompt by viewModel.nextBookPrompt.collectAsStateWithLifecycle()
     val navigateDirection by viewModel.navigateDirection.collectAsStateWithLifecycle()
     var pageTurnCommand by remember { mutableStateOf<ReaderPageDirection?>(null) }
-    val customFontUri by viewModel.customFontUri.collectAsStateWithLifecycle()
-    val customFontName by viewModel.customFontName.collectAsStateWithLifecycle()
-    val volumeKeyPage by viewModel.volumeKeyPage.collectAsStateWithLifecycle()
-    val screenTimeout by viewModel.screenTimeout.collectAsStateWithLifecycle()
-    val showChapterNameSetting by viewModel.showChapterName.collectAsStateWithLifecycle()
-    val showTimeBatterySetting by viewModel.showTimeBattery.collectAsStateWithLifecycle()
-    val tapLeftAction by viewModel.tapLeftAction.collectAsStateWithLifecycle()
-    val paragraphSpacing by viewModel.paragraphSpacing.collectAsStateWithLifecycle()
-    val marginHorizontal by viewModel.marginHorizontal.collectAsStateWithLifecycle()
-    val marginTopVal by viewModel.marginTop.collectAsStateWithLifecycle()
-    val marginBottomVal by viewModel.marginBottom.collectAsStateWithLifecycle()
+    val customFontUri by viewModel.settings.customFontUri.collectAsStateWithLifecycle()
+    val customFontName by viewModel.settings.customFontName.collectAsStateWithLifecycle()
+    val volumeKeyPage by viewModel.settings.volumeKeyPage.collectAsStateWithLifecycle()
+    val screenTimeout by viewModel.settings.screenTimeout.collectAsStateWithLifecycle()
+    val showChapterNameSetting by viewModel.settings.showChapterName.collectAsStateWithLifecycle()
+    val showTimeBatterySetting by viewModel.settings.showTimeBattery.collectAsStateWithLifecycle()
+    val tapLeftAction by viewModel.settings.tapLeftAction.collectAsStateWithLifecycle()
+    val paragraphSpacing by viewModel.settings.paragraphSpacing.collectAsStateWithLifecycle()
+    val marginHorizontal by viewModel.settings.marginHorizontal.collectAsStateWithLifecycle()
+    val marginTopVal by viewModel.settings.marginTop.collectAsStateWithLifecycle()
+    val marginBottomVal by viewModel.settings.marginBottom.collectAsStateWithLifecycle()
     val autoPageInterval by viewModel.autoPageInterval.collectAsStateWithLifecycle()
-    val ttsChapterPosition by viewModel.ttsChapterPosition.collectAsStateWithLifecycle()
+    val ttsChapterPosition by viewModel.tts.ttsChapterPosition.collectAsStateWithLifecycle()
     val pendingSearchSelection by viewModel.pendingSearchSelection.collectAsStateWithLifecycle()
-    val customCss by viewModel.customCss.collectAsStateWithLifecycle()
-    val customBgImage by viewModel.customBgImage.collectAsStateWithLifecycle()
+    val customCss by viewModel.settings.customCss.collectAsStateWithLifecycle()
+    val customBgImage by viewModel.settings.customBgImage.collectAsStateWithLifecycle()
     val selectedText by viewModel.selectedText.collectAsStateWithLifecycle()
     val viewingImageSrc by viewModel.viewingImageSrc.collectAsStateWithLifecycle()
-    val ttsScrollProgress by viewModel.ttsScrollProgress.collectAsStateWithLifecycle()
-    val pageAnim by viewModel.pageAnim.collectAsStateWithLifecycle()
-    val tapTL by viewModel.tapActionTopLeft.collectAsStateWithLifecycle()
-    val tapTR by viewModel.tapActionTopRight.collectAsStateWithLifecycle()
-    val tapBL by viewModel.tapActionBottomLeft.collectAsStateWithLifecycle()
-    val tapBR by viewModel.tapActionBottomRight.collectAsStateWithLifecycle()
-    val readerStyles by viewModel.allStyles.collectAsStateWithLifecycle()
-    val activeStyleId by viewModel.activeStyleId.collectAsStateWithLifecycle()
-    val activeStyle by viewModel.activeStyle.collectAsStateWithLifecycle()
+    val ttsScrollProgress by viewModel.tts.ttsScrollProgress.collectAsStateWithLifecycle()
+    val pageAnim by viewModel.settings.pageAnim.collectAsStateWithLifecycle()
+    val tapTL by viewModel.settings.tapActionTopLeft.collectAsStateWithLifecycle()
+    val tapTR by viewModel.settings.tapActionTopRight.collectAsStateWithLifecycle()
+    val tapBL by viewModel.settings.tapActionBottomLeft.collectAsStateWithLifecycle()
+    val tapBR by viewModel.settings.tapActionBottomRight.collectAsStateWithLifecycle()
+    val readerStyles by viewModel.settings.allStyles.collectAsStateWithLifecycle()
+    val activeStyleId by viewModel.settings.activeStyleId.collectAsStateWithLifecycle()
+    val activeStyle by viewModel.settings.activeStyle.collectAsStateWithLifecycle()
     val activeTheme by (themeViewModel?.activeTheme
         ?: flowOf<com.morealm.app.domain.entity.ThemeEntity?>(null))
         .collectAsStateWithLifecycle(null)
@@ -126,13 +126,13 @@ fun ReaderScreen(
     var selectionWebPanel by remember { mutableStateOf<Pair<String, String>?>(null) }
     val allThemes by (themeViewModel?.allThemes ?: flowOf(BuiltinThemes.all()))
         .collectAsStateWithLifecycle(BuiltinThemes.all())
-    val screenOrientation by viewModel.screenOrientation.collectAsStateWithLifecycle()
-    val hdrLeft by viewModel.headerLeft.collectAsStateWithLifecycle()
-    val hdrCenter by viewModel.headerCenter.collectAsStateWithLifecycle()
-    val hdrRight by viewModel.headerRight.collectAsStateWithLifecycle()
-    val ftrLeft by viewModel.footerLeft.collectAsStateWithLifecycle()
-    val ftrCenter by viewModel.footerCenter.collectAsStateWithLifecycle()
-    val ftrRight by viewModel.footerRight.collectAsStateWithLifecycle()
+    val screenOrientation by viewModel.settings.screenOrientation.collectAsStateWithLifecycle()
+    val hdrLeft by viewModel.settings.headerLeft.collectAsStateWithLifecycle()
+    val hdrCenter by viewModel.settings.headerCenter.collectAsStateWithLifecycle()
+    val hdrRight by viewModel.settings.headerRight.collectAsStateWithLifecycle()
+    val ftrLeft by viewModel.settings.footerLeft.collectAsStateWithLifecycle()
+    val ftrCenter by viewModel.settings.footerCenter.collectAsStateWithLifecycle()
+    val ftrRight by viewModel.settings.footerRight.collectAsStateWithLifecycle()
     val moColors = LocalMoRealmColors.current
 
     // Apply screen orientation
@@ -272,7 +272,7 @@ fun ReaderScreen(
     }
 
     // ── Immersive mode: hide status bar in reader (ported from Legado BaseReadBookActivity) ──
-    val showStatusBar by viewModel.showStatusBar.collectAsStateWithLifecycle()
+    val showStatusBar by viewModel.settings.showStatusBar.collectAsStateWithLifecycle()
     DisposableEffect(showStatusBar) {
         val act = context as? android.app.Activity ?: return@DisposableEffect onDispose {}
         val window = act.window
@@ -298,14 +298,14 @@ fun ReaderScreen(
             .onKeyEvent { event ->
                 if (!volumeKeyPage) return@onKeyEvent false
                 if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN) return@onKeyEvent false
-                val isTtsActive = viewModel.ttsPlaying.value
+                val isTtsActive = viewModel.tts.ttsPlaying.value
                 when (event.nativeKeyEvent.keyCode) {
                     KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                        if (isTtsActive) viewModel.ttsNextParagraph() else pageTurnCommand = ReaderPageDirection.NEXT
+                        if (isTtsActive) viewModel.tts.ttsNextParagraph() else pageTurnCommand = ReaderPageDirection.NEXT
                         true
                     }
                     KeyEvent.KEYCODE_VOLUME_UP -> {
-                        if (isTtsActive) viewModel.ttsPrevParagraph() else pageTurnCommand = ReaderPageDirection.PREV
+                        if (isTtsActive) viewModel.tts.ttsPrevParagraph() else pageTurnCommand = ReaderPageDirection.PREV
                         true
                     }
                     else -> false
@@ -526,43 +526,43 @@ fun ReaderScreen(
         ) {
             ReaderSettingsPanel(
                 currentMode = pageTurnMode,
-                onModeChange = viewModel::setPageTurnMode,
+                onModeChange = viewModel.settings::setPageTurnMode,
                 pageAnim = pageAnim,
-                onPageAnimChange = viewModel::setPageAnim,
+                onPageAnimChange = viewModel.settings::setPageAnim,
                 currentFont = fontFamily,
-                onFontChange = viewModel::setFontFamily,
+                onFontChange = viewModel.settings::setFontFamily,
                 currentFontSize = fontSize,
-                onFontSizeChange = viewModel::setFontSize,
+                onFontSizeChange = viewModel.settings::setFontSize,
                 currentLineHeight = lineHeight,
-                onLineHeightChange = viewModel::setLineHeight,
+                onLineHeightChange = viewModel.settings::setLineHeight,
                 customFontName = customFontName,
-                onImportFont = { uri, name -> viewModel.importCustomFont(uri, name) },
-                onClearCustomFont = viewModel::clearCustomFont,
+                onImportFont = { uri, name -> viewModel.settings.importCustomFont(uri, name) },
+                onClearCustomFont = viewModel.settings::clearCustomFont,
                 allThemes = allThemes.ifEmpty { BuiltinThemes.all() },
                 activeThemeId = activeTheme?.id ?: "",
                 onThemeChange = { id -> themeViewModel?.switchTheme(id) },
                 brightness = readerBrightness,
                 onBrightnessChange = viewModel::setReaderBrightness,
                 paragraphSpacing = paragraphSpacing,
-                onParagraphSpacingChange = viewModel::setParagraphSpacing,
+                onParagraphSpacingChange = viewModel.settings::setParagraphSpacing,
                 marginHorizontal = marginHorizontal,
-                onMarginHorizontalChange = viewModel::setMarginHorizontal,
+                onMarginHorizontalChange = viewModel.settings::setMarginHorizontal,
                 marginTop = marginTopVal,
-                onMarginTopChange = viewModel::setMarginTop,
+                onMarginTopChange = viewModel.settings::setMarginTop,
                 marginBottom = marginBottomVal,
-                onMarginBottomChange = viewModel::setMarginBottom,
+                onMarginBottomChange = viewModel.settings::setMarginBottom,
                 customCss = customCss,
-                onCustomCssChange = viewModel::setCustomCss,
+                onCustomCssChange = viewModel.settings::setCustomCss,
                 customBgImage = customBgImage,
-                onCustomBgImageChange = viewModel::setCustomBgImage,
+                onCustomBgImageChange = viewModel.settings::setCustomBgImage,
                 readerStyles = readerStyles,
                 activeStyleId = activeStyleId,
-                onStyleChange = viewModel::switchStyle,
+                onStyleChange = viewModel.settings::switchStyle,
                 screenOrientation = screenOrientation,
-                onScreenOrientationChange = viewModel::setScreenOrientation,
-                textSelectable = viewModel.textSelectable.collectAsStateWithLifecycle().value,
-                onTextSelectableChange = viewModel::setTextSelectable,
-                chineseConvertMode = viewModel.chineseConvertMode.collectAsStateWithLifecycle().value,
+                onScreenOrientationChange = viewModel.settings::setScreenOrientation,
+                textSelectable = viewModel.settings.textSelectable.collectAsStateWithLifecycle().value,
+                onTextSelectableChange = viewModel.settings::setTextSelectable,
+                chineseConvertMode = viewModel.settings.chineseConvertMode.collectAsStateWithLifecycle().value,
                 onChineseConvertModeChange = viewModel::setChineseConvertMode,
                 onDismiss = viewModel::hideSettingsPanel,
             )
@@ -575,14 +575,14 @@ fun ReaderScreen(
             exit = slideOutVertically(tween(200, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) { it },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            val ttsPlaying by viewModel.ttsPlaying.collectAsStateWithLifecycle()
-            val ttsSpeed by viewModel.ttsSpeed.collectAsStateWithLifecycle()
-            val ttsEngine by viewModel.ttsEngine.collectAsStateWithLifecycle()
-            val ttsParagraphIndex by viewModel.ttsParagraphIndex.collectAsStateWithLifecycle()
-            val ttsTotalParagraphs by viewModel.ttsTotalParagraphs.collectAsStateWithLifecycle()
-            val ttsSleepMinutes by viewModel.ttsSleepMinutes.collectAsStateWithLifecycle()
-            val ttsVoices by viewModel.ttsVoices.collectAsStateWithLifecycle()
-            val ttsVoiceName by viewModel.ttsVoiceName.collectAsStateWithLifecycle()
+            val ttsPlaying by viewModel.tts.ttsPlaying.collectAsStateWithLifecycle()
+            val ttsSpeed by viewModel.tts.ttsSpeed.collectAsStateWithLifecycle()
+            val ttsEngine by viewModel.tts.ttsEngine.collectAsStateWithLifecycle()
+            val ttsParagraphIndex by viewModel.tts.ttsParagraphIndex.collectAsStateWithLifecycle()
+            val ttsTotalParagraphs by viewModel.tts.ttsTotalParagraphs.collectAsStateWithLifecycle()
+            val ttsSleepMinutes by viewModel.tts.ttsSleepMinutes.collectAsStateWithLifecycle()
+            val ttsVoices by viewModel.tts.ttsVoices.collectAsStateWithLifecycle()
+            val ttsVoiceName by viewModel.tts.ttsVoiceName.collectAsStateWithLifecycle()
             TtsOverlayPanel(
                 bookTitle = book?.title ?: "",
                 chapterTitle = chapters.getOrNull(currentIndex)?.title ?: "",
@@ -596,14 +596,14 @@ fun ReaderScreen(
                 onStop = viewModel::ttsStop,
                 onPrevChapter = viewModel::prevChapter,
                 onNextChapter = viewModel::nextChapter,
-                onPrevParagraph = viewModel::ttsPrevParagraph,
-                onNextParagraph = viewModel::ttsNextParagraph,
-                onSpeedChange = viewModel::setTtsSpeed,
-                onEngineChange = viewModel::setTtsEngine,
-                onSleepTimerSet = viewModel::setTtsSleepTimer,
+                onPrevParagraph = viewModel.tts::ttsPrevParagraph,
+                onNextParagraph = viewModel.tts::ttsNextParagraph,
+                onSpeedChange = viewModel.tts::setTtsSpeed,
+                onEngineChange = viewModel.tts::setTtsEngine,
+                onSleepTimerSet = viewModel.tts::setTtsSleepTimer,
                 voices = ttsVoices,
                 selectedVoice = ttsVoiceName,
-                onVoiceChange = viewModel::setTtsVoice,
+                onVoiceChange = viewModel.tts::setTtsVoice,
                 onDismiss = viewModel::hideTtsPanel,
             )
         }

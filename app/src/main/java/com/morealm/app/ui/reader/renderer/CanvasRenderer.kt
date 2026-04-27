@@ -486,15 +486,17 @@ fun CanvasRenderer(
     // Share quote dialog state
     var shareQuoteText by remember { mutableStateOf<String?>(null) }
     var scrollPageIndex by remember(chapterIndex) { mutableIntStateOf(0) }
-    var lastSettledDisplayPage by remember(chapterIndex) { mutableIntStateOf(0) }
-    var pendingSettledDirection by remember(chapterIndex) { mutableStateOf<ReaderPageDirection?>(null) }
-    var pendingTurnStartDisplayPage by remember(chapterIndex) { mutableIntStateOf(0) }
-    var ignoredSettledDisplayPage by remember(chapterIndex) { mutableStateOf<Int?>(null) }
-    var lastReaderContent by remember(chapterIndex) { mutableStateOf<ReaderPageContent?>(null) }
-    val pageDelegateState = remember(chapterIndex) { ReaderPageDelegateState() }
+    var lastSettledDisplayPage by remember(chapterIndex, pageAnimType) { mutableIntStateOf(0) }
+    var pendingSettledDirection by remember(chapterIndex, pageAnimType) { mutableStateOf<ReaderPageDirection?>(null) }
+    var pendingTurnStartDisplayPage by remember(chapterIndex, pageAnimType) { mutableIntStateOf(0) }
+    var ignoredSettledDisplayPage by remember(chapterIndex, pageAnimType) { mutableStateOf<Int?>(null) }
+    var lastReaderContent by remember(chapterIndex, pageAnimType) { mutableStateOf<ReaderPageContent?>(null) }
+    val pageDelegateState = remember(chapterIndex, pageAnimType) { ReaderPageDelegateState() }
     val autoPagerState = remember(chapterIndex, pageAnimType) { ReaderAutoPagerState() }
     var autoPageProgress by remember(chapterIndex, pageAnimType) { mutableIntStateOf(0) }
     var autoScrollDelta by remember(chapterIndex, pageAnimType) { mutableIntStateOf(0) }
+    // Cross-chapter scroll state: survives chapter transitions for visual continuity.
+    val scrollState = remember { ReaderScrollState() }
 
     // Pager state — always start at 0, then jump after layout completes
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { renderPageCount })
@@ -566,6 +568,7 @@ fun CanvasRenderer(
     }
 
     fun fillPageFrom(displayIndex: Int, direction: ReaderPageDirection): Int? {
+        AppLog.debug("Reader", "fillPageFrom ENTER | displayIndex=$displayIndex | direction=$direction | lastSettled=$lastSettledDisplayPage | pager=${pagerState.currentPage} | readerPageIndex=$readerPageIndex | renderPageCount=$renderPageCount")
         val content = readerPageStateFor(displayIndex).fillPage(direction)
         if (content == null) {
             pageDelegateState.stopScroll()
@@ -593,8 +596,31 @@ fun CanvasRenderer(
         return content.currentDisplayIndex
     }
 
+    fun fillScrollBoundaryPage(direction: ReaderPageDirection, displayIndex: Int): Boolean {
+        val startDisplayPage = displayIndex.coerceIn(0, renderPageCount - 1)
+        val canCommitBoundary = when (direction) {
+            ReaderPageDirection.PREV -> pageFactory.isPrevChapterTurn(startDisplayPage)
+            ReaderPageDirection.NEXT -> pageFactory.isNextChapterTurn(startDisplayPage)
+            ReaderPageDirection.NONE -> false
+        }
+        if (!canCommitBoundary) {
+            AppLog.debug(
+                "Reader",
+                "Scroll boundary $direction rejected by PageFactory at display=$startDisplayPage " +
+                    "pageCount=$renderPageCount chapter=$chapterIndex completed=${chapter?.isCompleted}",
+            )
+            return false
+        }
+        fillPageFrom(startDisplayPage, direction)
+        return true
+    }
+
     fun animateByDirection(direction: ReaderPageDirection) {
         if (!pageDelegateState.keyTurnPage(direction)) return
+        // Sync with pagerState to prevent desync-caused page jumps
+        if (pageAnimType != PageAnimType.SIMULATION) {
+            lastSettledDisplayPage = pagerState.currentPage
+        }
         val startDisplayPage = lastSettledDisplayPage.coerceIn(0, renderPageCount - 1)
         if (pageAnimType == PageAnimType.NONE) {
             val committed = fillPageFrom(startDisplayPage, direction)
@@ -625,6 +651,10 @@ fun CanvasRenderer(
 
     fun dragByDirection(direction: ReaderPageDirection) {
         if (!pageDelegateState.startAnim(direction)) return
+        // Sync with pagerState to prevent desync-caused page jumps
+        if (pageAnimType != PageAnimType.SIMULATION) {
+            lastSettledDisplayPage = pagerState.currentPage
+        }
         val startDisplayPage = lastSettledDisplayPage.coerceIn(0, renderPageCount - 1)
         if (pageAnimType == PageAnimType.NONE) {
             val committed = fillPageFrom(startDisplayPage, direction)
@@ -914,6 +944,11 @@ fun CanvasRenderer(
                                     selectionState.clear()
                                     return@detectTapGestures
                                 }
+                                // Reset delegate state on tap — matches Legado's onDown()
+                                // which always runs before any page-turn request. Without
+                                // this, a stuck isRunning from a prior animation blocks
+                                // all future tap-based page turns.
+                                pageDelegateState.onDown()
                                 // 9-zone tap (ported from Legado ReadView.onSingleTapUp + setRect9x)
                                 val w = size.width; val h = size.height
                                 val tapColumn = when {
@@ -1007,6 +1042,17 @@ fun CanvasRenderer(
         if (pageAnimType == PageAnimType.SCROLL) {
             ScrollRenderer(
                 pages = currentChapterPages,
+                nextChapterPages = nextTextChapter?.pages.orEmpty(),
+                prevChapterPages = prevTextChapter?.pages.orEmpty(),
+                initialPageOffset = scrollState.consumeScrollOffset(),
+                onChapterCommit = { direction, scrollIntoOffset ->
+                    scrollState.commitChapterShift(direction, scrollIntoOffset)
+                    when (direction) {
+                        ReaderPageDirection.NEXT -> onNextChapter()
+                        ReaderPageDirection.PREV -> onPrevChapter()
+                        else -> {}
+                    }
+                },
                 titlePaint = titlePaint,
                 contentPaint = contentPaint,
                 chapterNumPaint = chapterNumPaint,
@@ -1015,12 +1061,14 @@ fun CanvasRenderer(
                 selectionStart = selectionState.startPos,
                 selectionEnd = selectionState.endPos,
                 onScrollProgress = { if (chapter?.isCompleted == true) onProgress(it) },
-                onScrollPageChanged = { displayIndex ->
+                onScrollPageChanged = { displayIndex, page ->
                     scrollPageIndex = displayIndex
                     readerPageIndex = displayIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+                    onVisiblePageChanged(page.chapterIndex, page.title, page.readProgress, page.chapterPosition)
                 },
                 onNearBottom = onScrollNearBottom,
                 onReachedBottom = onScrollReachedBottom,
+                onBoundaryPageTurn = { direction, displayIndex -> fillScrollBoundaryPage(direction, displayIndex) },
                 onTapCenter = onTapCenter,
                 onImageClick = onImageClick,
                 onLongPressText = { page, textPos, offset ->
@@ -1086,6 +1134,7 @@ fun CanvasRenderer(
                 animType = pageAnimType,
                 modifier = Modifier.fillMaxSize(),
                 simulationParams = simulationParams,
+                simulationDisplayPage = lastSettledDisplayPage.coerceIn(0, (renderPageCount - 1).coerceAtLeast(0)),
                 onPageSettled = { settledPage ->
                     if (pageAnimType == PageAnimType.SIMULATION || pageAnimType == PageAnimType.SCROLL) return@AnimatedPageReader
                     val ignoredPage = ignoredSettledDisplayPage
