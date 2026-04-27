@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -83,16 +84,9 @@ fun MoRealmNavHost(
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            if (!isFullscreen && isOnMainTab) {
-                PillNavigationBar(
-                    tabs = tabs,
-                    selectedIndex = selectedTab,
-                    onTabClick = { switchTab(it) },
-                )
-            }
-        }
+        // No bottomBar — pill nav floats as overlay via Box
     ) { innerPadding ->
+        Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
             navController = navController,
             startDestination = "main_tabs",
@@ -296,6 +290,16 @@ fun MoRealmNavHost(
                 )
             }
         }
+        // Floating pill navigation — overlays content, not in Scaffold.bottomBar
+        if (!isFullscreen && isOnMainTab) {
+            PillNavigationBar(
+                tabs = tabs,
+                selectedIndex = selectedTab,
+                onTabClick = { switchTab(it) },
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
+        } // Box
     }
 }
 
