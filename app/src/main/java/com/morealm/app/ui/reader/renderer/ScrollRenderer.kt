@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.BaseColumn
 import com.morealm.app.domain.render.ButtonColumn
 import com.morealm.app.domain.render.ImageColumn
@@ -52,6 +53,10 @@ import kotlin.math.roundToInt
 @Composable
 fun ScrollRenderer(
     pages: List<TextPage>,
+    nextChapterPages: List<TextPage> = emptyList(),
+    prevChapterPages: List<TextPage> = emptyList(),
+    initialPageOffset: Float = 0f,
+    onChapterCommit: (direction: ReaderPageDirection, scrollIntoOffset: Float) -> Unit = { _, _ -> },
     titlePaint: TextPaint,
     contentPaint: TextPaint,
     chapterNumPaint: TextPaint? = null,
@@ -64,9 +69,10 @@ fun ScrollRenderer(
     aloudColor: Color = DEFAULT_ALOUD_COLOR,
     searchResultColor: Color = DEFAULT_SEARCH_RESULT_COLOR,
     onScrollProgress: (Int) -> Unit = {},
-    onScrollPageChanged: (Int) -> Unit = {},
+    onScrollPageChanged: (pageIndex: Int, page: TextPage) -> Unit = { _, _ -> },
     onNearBottom: () -> Unit = {},
     onReachedBottom: () -> Unit = {},
+    onBoundaryPageTurn: (direction: ReaderPageDirection, pageIndex: Int) -> Boolean = { _, _ -> false },
     onTapCenter: () -> Unit = {},
     onImageClick: (String) -> Unit = {},
     onLongPressText: (page: TextPage, textPos: TextPos, offset: Offset) -> Unit = { _, _, _ -> },
@@ -119,6 +125,7 @@ fun ScrollRenderer(
     var lastNearBottomPageCount by remember { mutableIntStateOf(0) }
     var pendingRestore by remember(resetKey) { mutableStateOf(true) }
     var hasUserScrolled by remember(resetKey) { mutableStateOf(false) }
+    var pendingBoundaryTurn by remember(resetKey) { mutableStateOf<ReaderPageDirection?>(null) }
 
     // Pixel offset of the current page relative to viewport top.
     // 0 = page top aligned with viewport top
@@ -197,7 +204,7 @@ fun ScrollRenderer(
             initialProgress > 0 -> ((initialProgress / 100f) * (pageCount - 1)).roundToInt().coerceIn(0, pageCount - 1)
             else -> 0
         }
-        pageOffset = 0f
+        pageOffset = if (initialPageOffset != 0f) initialPageOffset else 0f
         lastNearBottomRequestPageCount = 0
         lastNearBottomPageCount = 0
         pendingRestore = false
@@ -304,8 +311,33 @@ fun ScrollRenderer(
         return null
     }
 
+    fun submitBoundaryTurn(direction: ReaderPageDirection, reason: String): Boolean {
+        if (pendingBoundaryTurn != null) return true
+        AppLog.debug(
+            "Reader",
+            "Scroll boundary turn request direction=$direction reason=$reason " +
+                "page=$currentPageIndex/$pageCount offset=$pageOffset layoutCompleted=$layoutCompleted",
+        )
+        val accepted = onBoundaryPageTurn(direction, currentPageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0)))
+        if (accepted) {
+            pendingBoundaryTurn = direction
+            scrollDelegateState.abortAnim()
+            AppLog.debug("Reader", "Scroll boundary turn accepted direction=$direction")
+        } else {
+            AppLog.debug("Reader", "Scroll boundary turn rejected direction=$direction reason=$reason")
+        }
+        return accepted
+    }
+
     fun clampAtFirstPage(): Boolean {
         if (currentPageIndex == 0 && pageOffset > 0) {
+            // When prev chapter pages are available, allow scrolling up into them
+            if (prevChapterPages.isNotEmpty()) return false
+
+            if (hasUserScrolled && submitBoundaryTurn(ReaderPageDirection.PREV, "first-page-top")) {
+                pageOffset = 0f
+                return true
+            }
             pageOffset = 0f
             scrollDelegateState.abortAnim()
             return true
@@ -317,11 +349,25 @@ fun ScrollRenderer(
         if (currentPageIndex < pageCount - 1 || pageOffset >= 0) return false
         val curPageHeight = pageHeight(currentPageIndex)
         val minOffset = (viewHeight - curPageHeight).toFloat().coerceAtMost(0f)
+
+        // When next chapter pages are available, allow scrolling past current chapter
+        // boundary — the draw loop will render nextChapterPages seamlessly below.
+        if (nextChapterPages.isNotEmpty() && pageOffset < minOffset) return false
+
         if (pageOffset < minOffset) {
+            if (hasUserScrolled && submitBoundaryTurn(ReaderPageDirection.NEXT, "last-page-bottom")) {
+                pageOffset = minOffset
+                return true
+            }
             pageOffset = minOffset
             scrollDelegateState.abortAnim()
             if (hasUserScrolled) {
                 lastNearBottomPageCount = pageCount
+                AppLog.debug(
+                    "Reader",
+                    "Scroll reached true bottom page=$currentPageIndex/$pageCount " +
+                        "offset=$pageOffset minOffset=$minOffset height=$curPageHeight viewHeight=$viewHeight",
+                )
                 onReachedBottom()
             }
         }
@@ -330,6 +376,10 @@ fun ScrollRenderer(
 
     fun moveToPrevPageByScroll(): Boolean {
         if (currentPageIndex <= 0) {
+            if (hasUserScrolled && submitBoundaryTurn(ReaderPageDirection.PREV, "prev-cross-boundary")) {
+                pageOffset = 0f
+                return false
+            }
             pageOffset = 0f
             scrollDelegateState.abortAnim()
             return false
@@ -341,7 +391,16 @@ fun ScrollRenderer(
 
     fun moveToNextPageByScroll(): Boolean {
         if (currentPageIndex >= pageCount - 1) {
+            // When next chapter pages are available, don't stop — let the draw loop
+            // render cross-chapter content. The chapter commit happens in a separate
+            // LaunchedEffect when the viewport majority shows next chapter content.
+            if (nextChapterPages.isNotEmpty()) return false
+
             val currentHeight = pageHeight(currentPageIndex)
+            if (hasUserScrolled && submitBoundaryTurn(ReaderPageDirection.NEXT, "next-cross-boundary")) {
+                pageOffset = (viewHeight - currentHeight).toFloat().coerceAtMost(0f)
+                return false
+            }
             pageOffset = -currentHeight
             scrollDelegateState.abortAnim()
             return false
@@ -372,7 +431,10 @@ fun ScrollRenderer(
 
     LaunchedEffect(currentPageIndex, pageOffset, pendingRestore, layoutCompleted) {
         if (!pendingRestore && layoutCompleted && pageCount > 0) {
-            onScrollPageChanged(getCurVisiblePageIndex())
+            val visiblePageIndex = getCurVisiblePageIndex()
+            pages.getOrNull(visiblePageIndex)?.let { page ->
+                onScrollPageChanged(visiblePageIndex, page)
+            }
         }
     }
 
@@ -387,7 +449,42 @@ fun ScrollRenderer(
     LaunchedEffect(currentPageIndex, pageCount, pendingRestore, layoutCompleted) {
         if (!pendingRestore && currentPageIndex >= (pageCount - 2).coerceAtLeast(0) && pageCount > lastNearBottomRequestPageCount) {
             lastNearBottomRequestPageCount = pageCount
+            AppLog.debug(
+                "Reader",
+                "Scroll near bottom page=$currentPageIndex/$pageCount layoutCompleted=$layoutCompleted",
+            )
             onNearBottom()
+        }
+    }
+
+    // Cross-chapter commit detection: when the viewport majority shows adjacent
+    // chapter content, commit the chapter shift so the ViewModel advances.
+    LaunchedEffect(currentPageIndex, pageOffset, pendingRestore, layoutCompleted, nextChapterPages.size, prevChapterPages.size) {
+        if (pendingRestore || !layoutCompleted || pageCount <= 0 || viewHeight <= 0) return@LaunchedEffect
+        // Forward commit: at last page, scrolled past 70% of it into next chapter
+        if (currentPageIndex >= pageCount - 1 && nextChapterPages.isNotEmpty()) {
+            val lastPageBottom = pageOffset + pageHeight(currentPageIndex)
+            if (lastPageBottom < viewHeight * 0.3f) {
+                val scrollInto = -(pageOffset + pageHeight(currentPageIndex))
+                AppLog.debug(
+                    "Reader",
+                    "Scroll cross-chapter commit NEXT | page=$currentPageIndex/$pageCount | scrollInto=$scrollInto",
+                )
+                onChapterCommit(ReaderPageDirection.NEXT, scrollInto.coerceAtLeast(0f))
+            }
+        }
+        // Backward commit: at first page, scrolled up past 70% into prev chapter
+        if (currentPageIndex == 0 && prevChapterPages.isNotEmpty() && pageOffset > 0) {
+            val totalPrevHeight = prevChapterPages.sumOf { it.height.toDouble() }.toFloat()
+            val scrollIntoPrev = pageOffset
+            if (scrollIntoPrev > viewHeight * 0.7f && scrollIntoPrev < totalPrevHeight) {
+                val offsetInPrev = totalPrevHeight - scrollIntoPrev
+                AppLog.debug(
+                    "Reader",
+                    "Scroll cross-chapter commit PREV | page=$currentPageIndex/$pageCount | offsetInPrev=$offsetInPrev",
+                )
+                onChapterCommit(ReaderPageDirection.PREV, -offsetInPrev)
+            }
         }
     }
 
@@ -721,6 +818,53 @@ fun ScrollRenderer(
 
                         yOffset += pageH
                         pageIdx++
+                    }
+
+                    // Cross-chapter rendering: draw next chapter pages below current chapter
+                    if (nextChapterPages.isNotEmpty() && yOffset < viewHeight) {
+                        for (nextPage in nextChapterPages) {
+                            if (yOffset >= viewHeight) break
+                            val nextPageH = nextPage.height.let { if (it > 0f) it else viewHeight.toFloat() }
+                            if (yOffset + nextPageH > 0) {
+                                canvas.save()
+                                canvas.translate(0f, yOffset)
+                                drawPageContent(
+                                    canvas = canvas,
+                                    page = nextPage,
+                                    titlePaint = titlePaint,
+                                    contentPaint = contentPaint,
+                                    chapterNumPaint = chapterNumPaint,
+                                    searchColorArgb = searchResultColor.toArgb(),
+                                    canvasWidth = viewWidth.toFloat(),
+                                )
+                                canvas.restore()
+                            }
+                            yOffset += nextPageH
+                        }
+                    }
+
+                    // Cross-chapter rendering: draw prev chapter pages above current chapter
+                    if (prevChapterPages.isNotEmpty() && pageOffset > 0) {
+                        var prevYOffset = pageOffset
+                        for (prevPage in prevChapterPages.asReversed()) {
+                            val prevPageH = prevPage.height.let { if (it > 0f) it else viewHeight.toFloat() }
+                            prevYOffset -= prevPageH
+                            if (prevYOffset + prevPageH <= 0) break
+                            if (prevYOffset < viewHeight) {
+                                canvas.save()
+                                canvas.translate(0f, prevYOffset)
+                                drawPageContent(
+                                    canvas = canvas,
+                                    page = prevPage,
+                                    titlePaint = titlePaint,
+                                    contentPaint = contentPaint,
+                                    chapterNumPaint = chapterNumPaint,
+                                    searchColorArgb = searchResultColor.toArgb(),
+                                    canvasWidth = viewWidth.toFloat(),
+                                )
+                                canvas.restore()
+                            }
+                        }
                     }
 
                     canvas.restore()

@@ -94,53 +94,7 @@ class ReaderViewModel @Inject constructor(
     val tts = ReaderTtsController(context, prefs, viewModelScope)
     val settings = ReaderSettingsController(prefs, viewModelScope, context, styleRepo)
 
-    // ── Forwarding (keep UI API stable) ──
-    val ttsPlaying get() = tts.ttsPlaying
-    val ttsSpeed get() = tts.ttsSpeed
-    val ttsEngine get() = tts.ttsEngine
-    val ttsParagraphIndex get() = tts.ttsParagraphIndex
-    val ttsTotalParagraphs get() = tts.ttsTotalParagraphs
-    val ttsSleepMinutes get() = tts.ttsSleepMinutes
-    val ttsVoices get() = tts.ttsVoices
-    val ttsVoiceName get() = tts.ttsVoiceName
-    val ttsScrollProgress get() = tts.ttsScrollProgress
-    val ttsChapterPosition get() = tts.ttsChapterPosition
-
-    val pageTurnMode get() = settings.pageTurnMode
-    val fontFamily get() = settings.fontFamily
-    val fontSize get() = settings.fontSize
-    val lineHeight get() = settings.lineHeight
-    val customFontUri get() = settings.customFontUri
-    val customFontName get() = settings.customFontName
-    val volumeKeyPage get() = settings.volumeKeyPage
-    val screenTimeout get() = settings.screenTimeout
-    val showChapterName get() = settings.showChapterName
-    val showTimeBattery get() = settings.showTimeBattery
-    val showStatusBar get() = settings.showStatusBar
-    val tapLeftAction get() = settings.tapLeftAction
-    val pageAnim get() = settings.pageAnim
-    val screenOrientation get() = settings.screenOrientation
-    val textSelectable get() = settings.textSelectable
-    val chineseConvertMode get() = settings.chineseConvertMode
-    val paragraphSpacing get() = settings.paragraphSpacing
-    val marginHorizontal get() = settings.marginHorizontal
-    val marginTop get() = settings.marginTop
-    val marginBottom get() = settings.marginBottom
-    val customCss get() = settings.customCss
-    val customBgImage get() = settings.customBgImage
-    val tapActionTopLeft get() = settings.tapActionTopLeft
-    val tapActionTopRight get() = settings.tapActionTopRight
-    val tapActionBottomLeft get() = settings.tapActionBottomLeft
-    val tapActionBottomRight get() = settings.tapActionBottomRight
-    val headerLeft get() = settings.headerLeft
-    val headerCenter get() = settings.headerCenter
-    val headerRight get() = settings.headerRight
-    val footerLeft get() = settings.footerLeft
-    val footerCenter get() = settings.footerCenter
-    val footerRight get() = settings.footerRight
-    val allStyles get() = settings.allStyles
-    val activeStyleId get() = settings.activeStyleId
-    val activeStyle get() = settings.activeStyle
+    // UI accesses settings/tts state directly: viewModel.settings.fontSize, viewModel.tts.ttsPlaying
 
     private val _readAloudPageTurn = MutableSharedFlow<Int>(extraBufferCapacity = 1)
     val readAloudPageTurn = _readAloudPageTurn.asSharedFlow()
@@ -154,25 +108,10 @@ class ReaderViewModel @Inject constructor(
         paragraphPositions = readAloudParagraphPositions,
         onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
     )
+    // Methods with extra ViewModel logic — not pure forwards
     fun ttsStop() { tts.ttsStop(); _showTtsPanel.value = false }
-    fun ttsPrevParagraph() = tts.ttsPrevParagraph()
-    fun ttsNextParagraph() = tts.ttsNextParagraph()
-    fun setTtsSpeed(speed: Float) = tts.setTtsSpeed(speed)
-    fun setTtsEngine(engine: String) = tts.setTtsEngine(engine)
-    fun setTtsVoice(voiceName: String) = tts.setTtsVoice(voiceName)
-    fun setTtsSleepTimer(minutes: Int) = tts.setTtsSleepTimer(minutes)
-
-    fun setPageTurnMode(mode: PageTurnMode) = settings.setPageTurnMode(mode)
-    fun setPageAnim(anim: String) = settings.setPageAnim(anim)
-    fun setFontFamily(family: String) = settings.setFontFamily(family)
-    fun setFontSize(size: Float) = settings.setFontSize(size)
-    fun setLineHeight(height: Float) = settings.setLineHeight(height)
-    fun importCustomFont(uri: Uri, name: String) = settings.importCustomFont(uri, name)
-    fun clearCustomFont() = settings.clearCustomFont()
-    fun setScreenOrientation(value: Int) = settings.setScreenOrientation(value)
-    fun setTextSelectable(enabled: Boolean) = settings.setTextSelectable(enabled)
     fun setChineseConvertMode(mode: Int) {
-        if (mode == chineseConvertMode.value) return
+        if (mode == settings.chineseConvertMode.value) return
         settings.setChineseConvertMode(mode)
         nextChapterCache = null
         prevChapterCache = null
@@ -184,17 +123,6 @@ class ReaderViewModel @Inject constructor(
             restoreChapterPosition = _visiblePage.value.chapterPosition,
         )
     }
-    fun setTapAction(zone: String, action: String) = settings.setTapAction(zone, action)
-    fun setHeaderFooter(slot: String, value: String) = settings.setHeaderFooter(slot, value)
-    fun switchStyle(styleId: String) = settings.switchStyle(styleId)
-    fun saveCurrentStyle(style: com.morealm.app.domain.entity.ReaderStyle) = settings.saveCurrentStyle(style)
-    fun deleteStyle(styleId: String) = settings.deleteStyle(styleId)
-    fun setParagraphSpacing(value: Float) = settings.setParagraphSpacing(value)
-    fun setMarginHorizontal(value: Int) = settings.setMarginHorizontal(value)
-    fun setMarginTop(value: Int) = settings.setMarginTop(value)
-    fun setMarginBottom(value: Int) = settings.setMarginBottom(value)
-    fun setCustomCss(css: String) = settings.setCustomCss(css)
-    fun setCustomBgImage(uri: String) = settings.setCustomBgImage(uri)
     fun setReaderBrightness(value: Float) { _readerBrightness.value = value }
 
     // ── Core State ──
@@ -304,8 +232,8 @@ class ReaderViewModel @Inject constructor(
     private val _editingContent = MutableStateFlow(false)
     val editingContent: StateFlow<Boolean> = _editingContent.asStateFlow()
 
-    private var nextChapterCache: String? = null
-    private var prevChapterCache: String? = null
+    @Volatile private var nextChapterCache: String? = null
+    @Volatile private var prevChapterCache: String? = null
     private var chapterLoadJob: kotlinx.coroutines.Job? = null
     private var chapterLoadToken: Int = 0
     private var lastPreCacheCenter: Int = -1
@@ -314,7 +242,7 @@ class ReaderViewModel @Inject constructor(
 
     // Reading time tracking
     private var readingStartTime: Long = 0L
-    private var accumulatedReadMs: Long = 0L
+    // Removed accumulatedReadMs — each flush saves only the incremental elapsed time
     private var lastStatsSaveTime: Long = 0L
 
     private var navigateToBookCallback: ((String) -> Unit)? = null
@@ -344,7 +272,7 @@ class ReaderViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         tts.shutdown()
-        val sessionMs = System.currentTimeMillis() - readingStartTime + accumulatedReadMs
+        val sessionMs = System.currentTimeMillis() - readingStartTime
         @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
         kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
             // Heavy cleanup off main thread to avoid ANR
@@ -377,11 +305,9 @@ class ReaderViewModel @Inject constructor(
         val elapsed = now - readingStartTime
         if (elapsed > 30_000 && now - lastStatsSaveTime > 60_000) {
             lastStatsSaveTime = now
-            val toSave = elapsed + accumulatedReadMs
-            accumulatedReadMs += elapsed
             readingStartTime = now
             viewModelScope.launch(Dispatchers.IO) {
-                saveReadingStats(toSave)
+                saveReadingStats(elapsed)
             }
         }
     }
@@ -695,18 +621,19 @@ class ReaderViewModel @Inject constructor(
 
         chapterLoadJob = viewModelScope.launch(Dispatchers.IO) {
             try {
+                // Capture cache to local val for thread safety (cache is @Volatile)
+                val nextCached = nextChapterCache
+                val prevCached = prevChapterCache
                 val content = when {
-                    nextChapterCache != null && index == prevIndex + 1 -> {
-                        val cached = nextChapterCache!!
+                    nextCached != null && index == prevIndex + 1 -> {
                         nextChapterCache = null
                         _nextPreloadedChapter.value = null
-                        cached
+                        nextCached
                     }
-                    prevChapterCache != null && index == prevIndex - 1 -> {
-                        val cached = prevChapterCache!!
+                    prevCached != null && index == prevIndex - 1 -> {
                         prevChapterCache = null
                         _prevPreloadedChapter.value = null
-                        cached
+                        prevCached
                     }
                     else -> {
                         nextChapterCache = null
@@ -720,32 +647,20 @@ class ReaderViewModel @Inject constructor(
                             LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapter)
                         }
                         val replaced = applyReplaceRules(raw)
-                        com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode.value)
+                        com.morealm.app.core.text.ChineseConverter.convert(replaced, settings.chineseConvertMode.value)
                     }
                 }
 
                 if (loadToken != chapterLoadToken) return@launch
 
-                val isScrollMode = pageTurnMode.value == PageTurnMode.SCROLL
-                if (isScrollMode) {
-                    _chapterContent.value = content
-                    _renderedChapter.value = RenderedReaderChapter(
-                        index = index,
-                        title = chapter.title,
-                        content = content,
-                        initialProgress = targetProgress,
-                        initialChapterPosition = targetChapterPosition,
-                    )
-                } else {
-                    _chapterContent.value = content
-                    _renderedChapter.value = RenderedReaderChapter(
-                        index = index,
-                        title = chapter.title,
-                        content = content,
-                        initialProgress = targetProgress,
-                        initialChapterPosition = targetChapterPosition,
-                    )
-                }
+                _chapterContent.value = content
+                _renderedChapter.value = RenderedReaderChapter(
+                    index = index,
+                    title = chapter.title,
+                    content = content,
+                    initialProgress = targetProgress,
+                    initialChapterPosition = targetChapterPosition,
+                )
                 _currentChapterIndex.value = index
                 _scrollProgress.value = targetProgress
                 _visiblePage.value = _visiblePage.value.copy(
@@ -755,7 +670,17 @@ class ReaderViewModel @Inject constructor(
                 )
                 suppressNextProgressSave = targetProgress > 0 || targetChapterPosition > 0
 
-                AppLog.debug("Reader", "Loaded chapter $index: ${chapter.title}")
+                AppLog.debug("Reader", buildString {
+                    append("loadChapter completed")
+                    append(" | chapter=$index/${chapterList.size}")
+                    append(" | title=${chapter.title.take(20)}")
+                    append(" | mode=${settings.pageTurnMode.value}")
+                    append(" | progress=$targetProgress")
+                    append(" | position=$targetChapterPosition")
+                    append(" | source=${if (isWebBook) "web" else "local"}")
+                    append(" | nextCache=${nextChapterCache != null}")
+                    append(" | prevCache=${prevChapterCache != null}")
+                })
                 _navigateDirection.value = 0
                 if (targetProgress == 0 && targetChapterPosition == 0) saveProgress()
                 preloadNextChapter(index + 1)
@@ -807,8 +732,12 @@ class ReaderViewModel @Inject constructor(
 
     fun onScrollReachedBottom() {
         if (_currentChapterIndex.value < _chapters.value.lastIndex) {
-            AppLog.debug("Reader", "Scroll reached chapter bottom; move to chapter ${_currentChapterIndex.value + 1}")
-            nextChapter()
+            AppLog.debug(
+                "Reader",
+                "Scroll reached temporary chapter bottom at ${_currentChapterIndex.value}; " +
+                    "chapter boundary must be committed by ReaderPageFactory",
+            )
+            onScrollNearBottom()
             return
         }
         val progress = _scrollProgress.value
@@ -841,7 +770,7 @@ class ReaderViewModel @Inject constructor(
             oldVisiblePage.chapterPosition != chapterPosition
         _visiblePage.value = VisibleReaderPage(index, title, readProgress, chapterPosition)
         val chapterChanged = index != _currentChapterIndex.value
-        val scrollBoundaryPreview = pageTurnMode.value == PageTurnMode.SCROLL && chapterChanged
+        val scrollBoundaryPreview = settings.pageTurnMode.value == PageTurnMode.SCROLL && chapterChanged
         if (!scrollBoundaryPreview && !chapterChanged && visibleChanged) {
             queueProgressSave()
         }
@@ -865,7 +794,7 @@ class ReaderViewModel @Inject constructor(
                     LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapterList[nextIndex])
                 }
                 val replaced = applyReplaceRules(raw)
-                val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode.value)
+                val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, settings.chineseConvertMode.value)
                 nextChapterCache = converted
                 _nextPreloadedChapter.value = PreloadedReaderChapter(nextIndex, chapterList[nextIndex].title, converted)
             }
@@ -887,7 +816,7 @@ class ReaderViewModel @Inject constructor(
                     LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapterList[prevIndex])
                 }
                 val replaced = applyReplaceRules(raw)
-                val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode.value)
+                val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, settings.chineseConvertMode.value)
                 prevChapterCache = converted
                 _prevPreloadedChapter.value = PreloadedReaderChapter(prevIndex, chapterList[prevIndex].title, converted)
             }
@@ -953,6 +882,7 @@ class ReaderViewModel @Inject constructor(
 
     fun nextChapter() {
         val nextIdx = _currentChapterIndex.value + 1
+        AppLog.debug("Reader", "nextChapter | from=${_currentChapterIndex.value} | to=$nextIdx | total=${_chapters.value.size}")
         if (nextIdx < _chapters.value.size) {
             _navigateDirection.value = 1
             loadChapter(nextIdx, restoreProgress = 0)
@@ -973,6 +903,7 @@ class ReaderViewModel @Inject constructor(
 
     fun prevChapter() {
         val prevIdx = _currentChapterIndex.value - 1
+        AppLog.debug("Reader", "prevChapter | from=${_currentChapterIndex.value} | to=$prevIdx")
         if (prevIdx >= 0) {
             _navigateDirection.value = -1
             loadChapter(prevIdx, restoreProgress = 100)
@@ -1368,14 +1299,9 @@ class ReaderViewModel @Inject constructor(
             val visibleIndex = visible.chapterIndex
             val chapterIdx = when {
                 visibleIndex !in 0 until chapterCount -> currentIndex
-                pageTurnMode.value == PageTurnMode.SCROLL && visibleIndex != currentIndex -> currentIndex
                 else -> visibleIndex
             }.coerceIn(0, (chapterCount - 1).coerceAtLeast(0))
-            val chapterPosition = if (visibleIndex == chapterIdx) {
-                visible.chapterPosition.coerceAtLeast(0)
-            } else {
-                0
-            }
+            val chapterPosition = visible.chapterPosition.coerceAtLeast(0)
             val scrollPct = _scrollProgress.value / 100f
             val totalProgress = if (chapterCount > 0) {
                 (chapterIdx.toFloat() + scrollPct) / chapterCount
@@ -1387,6 +1313,13 @@ class ReaderViewModel @Inject constructor(
                 totalProgress = totalProgress.coerceIn(0f, 1f),
                 scrollProgress = _scrollProgress.value,
             )
+            AppLog.debug("Reader", buildString {
+                append("saveProgress")
+                append(" | chapter=$chapterIdx/$chapterCount")
+                append(" | position=$chapterPosition")
+                append(" | scroll=${_scrollProgress.value}%")
+                append(" | total=${String.format("%.4f", totalProgress)}")
+            })
             bookRepo.saveProgress(progress)
             bookRepo.update(book.copy(
                 lastReadChapter = chapterIdx,
