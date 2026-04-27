@@ -36,6 +36,7 @@ enum class LogLevel(val priority: Int, val label: String) {
 // ── Log Record ───────────────────────────────────────
 
 data class LogRecord(
+    val id: Long,
     val time: Long,
     val level: LogLevel,
     val tag: String,
@@ -122,7 +123,7 @@ class MemorySink(
             val (ts, lv, tag, msg) = m.destructured
             val level = LogLevel.entries.find { it.label == lv } ?: LogLevel.INFO
             val time = try { fullFmt.parse("$dateBase $ts")?.time ?: 0L } catch (_: Exception) { 0L }
-            if (time > 0) buffer.addLast(LogRecord(time, level, tag, msg))
+            if (time > 0) buffer.addLast(LogRecord(id = AppLog.nextId(), time, level, tag, msg))
         }
         while (buffer.size > maxEntries) buffer.pollFirst()
         _flow.value = buffer.toList()
@@ -146,7 +147,7 @@ class MemorySink(
                 } ?: file.lastModified()
             } catch (_: Exception) { file.lastModified() }
             val thread = threadLine?.substringAfter("Thread:")?.trim() ?: "?"
-            buffer.addLast(LogRecord(
+            buffer.addLast(LogRecord(id = AppLog.nextId(),
                 time = time,
                 level = LogLevel.FATAL,
                 tag = "CRASH",
@@ -267,6 +268,8 @@ object AppLog {
 
     private const val TAG = "MoRealm"
     private const val MAX_LOG_DAYS = 7
+    private val idCounter = java.util.concurrent.atomic.AtomicLong(0)
+    fun nextId(): Long = idCounter.incrementAndGet()
 
     private val sinks = mutableListOf<LogSink>()
     private var memorySink: MemorySink? = null
@@ -380,7 +383,7 @@ object AppLog {
     // ── Core dispatch ──
 
     private fun dispatch(level: LogLevel, tag: String, msg: String, t: Throwable? = null) {
-        val record = LogRecord(
+        val record = LogRecord(id = nextId(),
             time = System.currentTimeMillis(),
             level = level,
             tag = tag,
@@ -427,7 +430,7 @@ object AppLog {
                 val ts = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
                 File(logDir, "crash_$ts.txt").writeText(crash)
                 // Synchronous write to daily log + memory (so UI shows it if app survives)
-                val record = LogRecord(
+                val record = LogRecord(id = nextId(),
                     System.currentTimeMillis(), LogLevel.FATAL, "CRASH",
                     "Uncaught exception on ${thread.name}: ${throwable.message}",
                     throwableToString(throwable),
@@ -458,7 +461,7 @@ object AppLog {
                             val idle = stack.any { it.methodName == "nativePollOnce" || it.methodName == "parkNanos" }
                             if (!idle) {
                                 val trace = stack.joinToString("\n") { "  at $it" }
-                                val record = LogRecord(
+                                val record = LogRecord(id = nextId(),
                                     System.currentTimeMillis(), LogLevel.ERROR, "ANR",
                                     "Main thread blocked >8s\n$trace",
                                 )

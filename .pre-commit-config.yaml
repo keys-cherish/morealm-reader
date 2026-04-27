@@ -217,3 +217,20 @@ repos:
         language: system
         files: '\.kt$'
         pass_filenames: false
+
+      - id: lazy-list-hashcode-key-check
+        name: LazyColumn/Row hashCode key 检查
+        entry: "bash -c '
+          # hashCode() 不保证唯一，用作 LazyColumn/LazyRow key 会导致崩溃。
+          # 真实案例：AppLogScreen 同毫秒同消息 → key 重复 → crash。
+          HITS=$(grep -rn \"key.*=.*hashCode()\" app/src/main/java/com/morealm/app/ui/ --include=\"*.kt\");
+          if [ -n \"$HITS\" ]; then
+            echo \"ERROR: LazyColumn/Row key 使用 hashCode()，不保证唯一，会导致崩溃:\";
+            echo \"$HITS\";
+            exit 1;
+          fi;
+          true
+        '"
+        language: system
+        files: '\.kt$'
+        pass_filenames: false
