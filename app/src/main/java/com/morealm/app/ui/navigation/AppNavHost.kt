@@ -85,24 +85,11 @@ fun MoRealmNavHost(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             if (!isFullscreen && isOnMainTab) {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    tonalElevation = 0.dp,
-                ) {
-                    tabs.forEachIndexed { index, tab ->
-                        NavigationBarItem(
-                            icon = { Icon(tab.icon, contentDescription = tab.label) },
-                            label = { Text(tab.label) },
-                            selected = selectedTab == index,
-                            onClick = { switchTab(index) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                            ),
-                        )
-                    }
-                }
+                PillNavigationBar(
+                    tabs = tabs,
+                    selectedIndex = selectedTab,
+                    onTabClick = { switchTab(it) },
+                )
             }
         }
     ) { innerPadding ->
