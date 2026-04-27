@@ -547,7 +547,7 @@ private fun drawImageColumn(
     val path = col.src.removePrefix("file://")
     val targetWidth = (col.end - col.start).toInt().coerceAtLeast(1)
     val bitmap = ImageCache.get(path, targetWidth) ?: return
-    // Maintain aspect ratio within the allocated slot (ported from Legado)
+    // Scale and center images within the allocated slot.
     val slotW = col.end - col.start
     val slotH = line.lineBottom - line.lineTop
     val bmpW = bitmap.width.toFloat()
