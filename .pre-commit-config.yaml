@@ -25,8 +25,8 @@ repos:
   - repo: local
     hooks:
       - id: license-check
-        name: MIT 许可证检查
-        entry: "bash -c 'test -f LICENSE && grep -q MIT LICENSE'"
+        name: 许可证检查 (GPL-3.0 + Commercial)
+        entry: "bash -c 'test -f LICENSE && grep -q GPL LICENSE && grep -q Commercial LICENSE'"
         language: system
         pass_filenames: false
 
