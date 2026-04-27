@@ -1,79 +1,111 @@
-# 墨境 MoRealm
+<p align="center">
+  <img src="docs/app-icon.png" width="120" alt="墨境 MoRealm" />
+</p>
 
-一款现代化的 Android 电子书阅读器，基于 Jetpack Compose 构建。
+<h1 align="center">墨境 MoRealm</h1>
 
-## 特性
+<p align="center">
+  <strong>一款现代化的 Android 电子书阅读器</strong><br>
+  基于 Jetpack Compose · 兼容 Legado 书源 · MIT 开源
+</p>
 
-**阅读体验**
-- Compose Canvas 渲染引擎（TXT/EPUB），原生翻页动画
-- WebView 渲染引擎（可切换），完整 CSS/HTML 排版支持
-- 5 套内置阅读预设（纸质/护眼/海蓝/暖黄/墨白），自动适配日夜模式
-- 繁简转换、自定义 CSS 注入、双页模式（平板横屏）
-- 字体/字号/行距/段距/页边距精细调节
-- 全文搜索、书签、目录搜索、正文替换净化
-- 屏幕方向锁定、亮度独立调节、自动翻页
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-Android-3DDC84?logo=android&logoColor=white" />
+  <img src="https://img.shields.io/badge/Kotlin-2.0-7F52FF?logo=kotlin&logoColor=white" />
+  <img src="https://img.shields.io/badge/Compose-Material3-4285F4?logo=jetpackcompose&logoColor=white" />
+  <img src="https://img.shields.io/badge/License-MIT-green" />
+</p>
 
-**格式支持**
-- EPUB — epublib 随机访问解析，封面/元数据瞬间提取
-- TXT — 512KB 块读取，skip 跳转，超大章节自动拆分
-- PDF — PdfRenderer 逐页渲染，封面提取
-- CBZ/CBR — 漫画格式，图片自然排序
-- MOBI/AZW3 — 基础支持
+---
 
-**TTS 朗读**
-- 系统 TTS + Edge TTS（21 个中文神经语音）+ HTTP TTS API
-- 通知栏控制、音频焦点、睡眠定时器
-- 朗读跟随滚动、音量键切换段落
+## 阅读体验
+
+- **Canvas 渲染引擎** — 自研排版，支持全文搜索、书签、目录、正文净化
+- **5 种翻页动画** — 仿真翻页（贝塞尔曲线）、滑动、覆盖、上下翻页、连续滚动
+- **5 套阅读预设** — 纸质 / 护眼 / 海蓝 / 暖黄 / 墨白，自动适配日夜模式
+- **精细排版控制** — 字体 / 字号 / 行距 / 段距 / 页边距 / 繁简转换 / 自定义 CSS
+- **独立亮度调节** — 阅读器亮度与系统分离
+- **自动翻页** — 可配速度的自动阅读
+
+## 格式支持
+
+| 格式 | 引擎 | 特性 |
+|------|------|------|
+| **EPUB** | epublib | 随机访问解析，封面/元数据瞬间提取 |
+| **TXT** | 自研 | 512KB 块读取，自动目录识别，超大章节拆分 |
+| **PDF** | PdfRenderer | 逐页渲染，封面提取 |
+| **MOBI/AZW3** | 自研 | KF8 格式解析 |
+| **CBZ/CBR** | 自研 | 漫画格式，图片自然排序 |
+
+## TTS 朗读
+
+- **三引擎支持** — 系统 TTS + Edge TTS（21 个中文神经语音）+ HTTP TTS API
+- 通知栏控制 · 音频焦点 · 睡眠定时器
+- 朗读跟随滚动 · 音量键切换段落
 - 引擎连续失败自动回退
 
-**书源**
-- 规则引擎支持 CSS/XPath/JSONPath/Regex 四种模式
-- 兼容 Legado 书源格式导入
-- 完整管道：搜索 → 书籍详情 → 目录 → 正文
+## 书源生态
 
-**书架**
-- 文件夹封面拼图预览
-- 书籍/文件夹置顶、名称排序
-- 批量管理、自定义分组
-- 两阶段导入（即时显示 + 后台补全元数据）
+- **四模式规则引擎** — CSS / XPath / JSONPath / Regex
+- **兼容 Legado 书源** — 直接导入 Legado JSON 书源格式
+- **完整内容管道** — 搜索 → 书籍详情 → 目录 → 正文
 
-**同步与备份**
-- WebDAV 云同步（标准 PROPFIND XML、文件列表、异步 IO）
-- 本地 ZIP 备份/恢复（书架/进度/书源/主题/阅读预设）
+## 更多功能
 
-**主题**
-- 6 套内置主题，150ms 动画渐变切换
-- 自定义主题编辑器（背景色/文字色/强调色）
-- 主题导入/导出（JSON 格式，兼容 Legado）
-
-**日志系统**
-- 多 Sink 架构：Logcat + 内存环形缓冲 + 滚动文件
-- 异步文件写入（专用线程 + BlockingQueue）
-- ANR 看门狗 + 崩溃报告 + Activity 生命周期监控
-- 应用内日志查看器
+| 模块 | 功能 |
+|------|------|
+| **书架** | 文件夹分组 · 封面拼图 · 置顶 · 批量管理 · 两阶段导入 |
+| **同步** | WebDAV 云备份 · 本地 ZIP 备份/恢复 |
+| **主题** | 6 套内置主题 · 自定义编辑器 · Legado 主题导入导出 |
+| **日志** | 多 Sink 架构 · ANR 看门狗 · 崩溃报告 · 应用内查看器 |
+| **统计** | 年度阅读报告 · 阅读时长追踪 |
 
 ## 技术栈
 
-- Kotlin + Jetpack Compose
-- Room + DataStore
-- Hilt 依赖注入
-- OkHttp + Jsoup + JsoupXpath + JsonPath
-- epublib（ParcelFileDescriptor 随机访问）
-- Media3 MediaSession
-- Coil 图片加载
+```
+Kotlin · Jetpack Compose · Material3
+Room · DataStore · Hilt
+OkHttp · Jsoup · JsoupXpath · JsonPath
+epublib · Media3 · Coil
+```
+
+## 架构
+
+```
+presentation/          ← ViewModel + Controller（MVVM 胶水层）
+├── reader/
+│   ├── ReaderViewModel.kt          (~330 行，纯协调)
+│   ├── ReaderChapterController.kt  (章节加载/缓存)
+│   ├── ReaderProgressController.kt (进度/统计)
+│   ├── ReaderNavigationController.kt (翻章/关联书)
+│   ├── ReaderSearchController.kt   (全文搜索)
+│   ├── ReaderBookmarkController.kt (书签)
+│   ├── ReaderContentEditController.kt (编辑/导出)
+│   ├── ReaderSettingsController.kt (设置/样式)
+│   └── ReaderTtsController.kt      (TTS)
+ui/reader/renderer/    ← 渲染层
+│   ├── CanvasRenderer.kt           (Compose 组装)
+│   ├── PageTurnCoordinator.kt      (翻页状态协调)
+│   ├── ScrollRenderer.kt           (连续滚动)
+│   ├── SimulationReadView.kt       (仿真翻页·原生View)
+│   └── SimulationDrawHelper.kt     (贝塞尔绘制引擎)
+domain/                ← 业务逻辑（纯 Kotlin，无 Android 依赖）
+```
 
 ## 构建
 
 ```bash
-# Windows
-gradlew.bat assembleDebug
+# 克隆仓库
+git clone https://github.com/keys-cherish/morealm-reader.git
+cd morealm-reader
 
-# macOS / Linux
-./gradlew assembleDebug
+# 构建 Debug APK
+./gradlew assembleDebug    # macOS / Linux
+gradlew.bat assembleDebug  # Windows
 ```
 
-APK 输出路径：`app/build/outputs/apk/debug/app-debug.apk`
+APK 输出：`app/build/outputs/apk/debug/app-debug.apk`
 
 ## 许可证
 
-MIT License
+[MIT License](LICENSE)
