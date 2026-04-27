@@ -327,13 +327,18 @@ private fun SimulationPager(
             view.bitmapProvider = { relativePos, w, h ->
                 val page = params.pageForTurn(displayPage, relativePos)
                 if (page != null && w > 0 && h > 0) {
-                    renderPageToBitmap(
-                        w, h, params.bgColor, page,
-                        params.titlePaint, params.contentPaint,
-                        chapterNumPaint = params.chapterNumPaint,
-                        reuseBitmap = null, bgBitmap = params.bgBitmap,
-                        pageInfoOverlay = params.pageInfoOverlay,
-                    )
+                    try {
+                        renderPageToBitmap(
+                            w, h, params.bgColor, page,
+                            params.titlePaint, params.contentPaint,
+                            chapterNumPaint = params.chapterNumPaint,
+                            reuseBitmap = null, bgBitmap = params.bgBitmap,
+                            pageInfoOverlay = params.pageInfoOverlay,
+                        )
+                    } catch (e: OutOfMemoryError) {
+                        AppLog.error("Simulation", "bitmap OOM w=${w} h=${h}", e)
+                        null
+                    }
                 } else null
             }
             view.onTapCenter = { params.onTapCenter() }
