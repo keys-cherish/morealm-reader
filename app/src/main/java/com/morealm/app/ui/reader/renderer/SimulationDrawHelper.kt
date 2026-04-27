@@ -49,12 +49,13 @@ class SimulationDrawHelper {
         private set
 
     // 触摸点（不让为0，否则计算有问题）
-    private var mTouchX = 0.1f
-    private var mTouchY = 0.1f
+    // internal: SimulationReadView needs read access for animation dx/dy calculation
+    internal var mTouchX = 0.1f
+    internal var mTouchY = 0.1f
 
     // 拖拽点对应的页脚
     private var mCornerX = 1
-    private var mCornerY = 1
+    internal var mCornerY = 1
     private val mPath0: Path = Path()
     private val mPath1: Path = Path()
 
@@ -427,7 +428,7 @@ class SimulationDrawHelper {
         canvas.restore()
     }
 
-    private fun calcPoints() {
+    internal fun calcPoints() {
         mMiddleX = (mTouchX + mCornerX) / 2
         mMiddleY = (mTouchY + mCornerY) / 2
         mBezierControl1.x =
