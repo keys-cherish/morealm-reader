@@ -98,16 +98,19 @@ AppLog.debug("PageTurn", "fillPageFrom | display=0 | lastSettled=1 | direction=N
 - `lastReaderContent`
 - `pageDelegateState`
 
-**函数（移入 PageTurnCoordinator）：**
-- `fillPageFrom()` — 核心翻页提交
-- `animateByDirection()` — 点击翻页
-- `dragByDirection()` — 拖拽翻页
-- `fillScrollBoundaryPage()` — 滚动边界提交
-- `readerPageStateFor()` — 页面状态构建
-- `upProgressFrom()` — 进度更新
-- `pageForDisplay()` — 页面查找
-- `relativePageForDisplay()` — 相对页面查找
-- `onPageSettled()` — Pager 动画完成回调
+**函数（移入 PageTurnCoordinator，重命名为语义化）：**
+
+| 当前名（Legado 风格） | 新名（语义化） | 职责 |
+|---|---|---|
+| `fillPageFrom()` | `commitPageTurn()` | 提交翻页，更新当前页索引 |
+| `animateByDirection()` | `turnPageByTap()` | 点击触发的翻页 |
+| `dragByDirection()` | `turnPageByDrag()` | 拖拽触发的翻页 |
+| `fillScrollBoundaryPage()` | `commitScrollChapterBoundary()` | 滚动模式跨章提交 |
+| `readerPageStateFor()` | `createPageState()` | 构建页面状态快照 |
+| `upProgressFrom()` | `reportProgress()` | 向 ViewModel 报告进度 |
+| `pageForDisplay()` | `getPageAt()` | 按显示索引获取页面 |
+| `relativePageForDisplay()` | `getRelativePage()` | 获取相对位置页面 |
+| `onPageSettled()` | `handlePagerSettled()` | Pager 动画完成处理 |
 
 **CanvasRenderer 保留：**
 - Paint/Layout 创建
@@ -121,6 +124,21 @@ AppLog.debug("PageTurn", "fillPageFrom | display=0 | lastSettled=1 | direction=N
 
 - 新建：`renderer/PageTurnCoordinator.kt`（已创建，需接入）
 - 修改：`renderer/CanvasRenderer.kt`（1840行 → ~800行）
+
+### renderer/ 文件重命名计划
+
+| 当前名 | 新名 | 理由 |
+|--------|------|------|
+| `PageAnimations.kt` | `PageAnimationPagers.kt` | 实际包含 5 种 Pager 实现 |
+| `PageCanvas.kt` | `PageContentDrawer.kt` | 职责是绘制页面内容到 Canvas |
+| `ReaderPageDelegateState.kt` | `PageTurnGateState.kt` | "Delegate"是 Legado 术语，"Gate"更直观 |
+| `ReaderPageState.kt` | `PageTurnStateMachine.kt` | 职责是翻页状态机 |
+| `ReaderDataSource.kt` | `ChapterDataSource.kt` | 提供章节数据，不是通用数据源 |
+| `SimulationDrawHelper.kt` | 保留 | 名字够清晰 |
+| `SimulationReadView.kt` | 保留 | 名字够清晰 |
+| `ScrollRenderer.kt` | 保留 | 名字够清晰 |
+| `CanvasRenderer.kt` | 保留 | 名字够清晰 |
+| `TextSelection.kt` | 保留 | 名字够清晰 |
 
 ---
 
