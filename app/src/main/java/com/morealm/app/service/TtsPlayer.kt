@@ -24,16 +24,20 @@ import java.net.URL
  * This just provides the MediaSession state for notification controls.
  *
  * Notification shows: book title, chapter name, cover art,
- * and prev/play-pause/next buttons (like Legado).
+ * and prev/play-pause/next/stop buttons (like Legado).
  */
 class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainLooper()) {
 
     private var playing = false
-    private var bookTitle = ""
-    private var chapterTitle = ""
-    private var coverArt: ByteArray? = null
-    private var coverUri: Uri? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Exposed for TtsNotificationProvider to read
+    var bookTitle = ""
+        private set
+    var chapterTitle = ""
+        private set
+    var coverBitmap: Bitmap? = null
+        private set
 
     fun updateMetadata(book: String, chapter: String, coverUrl: String? = null) {
         bookTitle = book
@@ -50,7 +54,19 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
     private fun loadCover(url: String) {
         if (url.isBlank()) return
         if (url.startsWith("content://") || url.startsWith("file://")) {
-            try { coverUri = Uri.parse(url); coverArt = null; return } catch (_: Exception) {}
+            try {
+                val uri = Uri.parse(url)
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeStream(stream, null, opts)
+                }
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
+                    coverBitmap = BitmapFactory.decodeStream(stream, null, opts)
+                }
+                android.os.Handler(Looper.getMainLooper()).post { invalidateState() }
+                return
+            } catch (_: Exception) {}
         }
         scope.launch {
             try {
@@ -59,15 +75,8 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
                 val scale = maxOf(1, maxOf(opts.outWidth, opts.outHeight) / 256)
                 val decodeOpts = BitmapFactory.Options().apply { inSampleSize = scale }
-                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
-                if (bitmap != null) {
-                    val stream = java.io.ByteArrayOutputStream()
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 80, stream)
-                    coverArt = stream.toByteArray()
-                    coverUri = null
-                    bitmap.recycle()
-                    android.os.Handler(Looper.getMainLooper()).post { invalidateState() }
-                }
+                coverBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
+                android.os.Handler(Looper.getMainLooper()).post { invalidateState() }
             } catch (e: Exception) {
                 AppLog.debug("TtsPlayer", "Cover load failed: ${e.message}")
             }
@@ -76,11 +85,14 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
 
     override fun getState(): State {
         val metaBuilder = MediaMetadata.Builder()
-            .setTitle("正在朗读: $bookTitle")
+            .setTitle("墨境 · 朗读: $bookTitle")
             .setSubtitle(chapterTitle.ifEmpty { null })
-            .setArtist("墨境 · 朗读")
-        coverArt?.let { metaBuilder.setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER) }
-        coverUri?.let { metaBuilder.setArtworkUri(it) }
+            .setArtist(bookTitle)
+        coverBitmap?.let {
+            val stream = java.io.ByteArrayOutputStream()
+            it.compress(Bitmap.CompressFormat.PNG, 80, stream)
+            metaBuilder.setArtworkData(stream.toByteArray(), MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+        }
         val metadata = metaBuilder.build()
 
         val mediaItem = MediaItem.Builder()
@@ -109,6 +121,22 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
         playing = playWhenReady
         TtsEventBus.sendEvent(TtsEventBus.Event.PlayPause)
+        return Futures.immediateVoidFuture()
+    }
+
+    override fun handleSeek(
+        mediaItemIndex: Int,
+        positionMs: Long,
+        seekCommand: Int,
+    ): ListenableFuture<*> {
+        when (seekCommand) {
+            Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
+                TtsEventBus.sendEvent(TtsEventBus.Event.NextChapter)
+            }
+            Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
+                TtsEventBus.sendEvent(TtsEventBus.Event.PrevChapter)
+            }
+        }
         return Futures.immediateVoidFuture()
     }
 
