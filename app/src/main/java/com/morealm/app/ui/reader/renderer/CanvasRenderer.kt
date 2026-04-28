@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -720,10 +721,16 @@ fun CanvasRenderer(
         } else null
     }
 
+    // Hide content until progress is restored when we need to jump to a non-zero page.
+    // This prevents the flash of page 0 before the LaunchedEffect jumps to the target page.
+    val needsProgressJump = startFromLastPage || initialProgress > 0 || initialChapterPosition > 0
+    val contentAlpha = if (!progressRestored && needsProgressJump) 0f else 1f
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(backgroundColor)
+            .graphicsLayer { alpha = contentAlpha }
             .then(
                 if (pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
                     Modifier.pointerInput(selectionState.isActive, pageAnimType, renderPageCount) {
