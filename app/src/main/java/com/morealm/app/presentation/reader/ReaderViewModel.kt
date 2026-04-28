@@ -227,6 +227,7 @@ class ReaderViewModel @Inject constructor(
 
     fun nextChapter() = navigation.nextChapter()
     fun prevChapter() = navigation.prevChapter()
+    fun clearNavigateDirection() { navigation._navigateDirection.value = 0 }
     fun openNextLinkedBook() = navigation.openNextLinkedBook()
     fun dismissNextBookPrompt() = navigation.dismissNextBookPrompt()
     fun setNavigateToBookCallback(callback: (String) -> Unit) = navigation.setNavigateToBookCallback(callback)

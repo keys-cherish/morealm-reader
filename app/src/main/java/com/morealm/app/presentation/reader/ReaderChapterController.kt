@@ -400,7 +400,8 @@ class ReaderChapterController(
                     append(" | nextCache=${nextChapterCache != null}")
                     append(" | prevCache=${prevChapterCache != null}")
                 })
-                navigateDirectionState.value = 0
+                // Don't reset navigateDirection here — let CanvasRenderer consume it
+                // for startFromLastPage before resetting after progress restoration.
                 if (targetProgress == 0 && targetChapterPosition == 0) onChapterLoaded()
                 preloadNextChapter(index + 1)
                 preloadPrevChapter(index - 1)
