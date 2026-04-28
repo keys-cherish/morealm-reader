@@ -376,6 +376,7 @@ fun ReaderScreen(
                 startFromLastPage = navigateDirection < 0,
                 initialProgress = renderedChapter.initialProgress,
                 initialChapterPosition = renderedChapter.initialChapterPosition,
+                onProgressRestored = { viewModel.clearNavigateDirection() },
                 pageAnimType = pageAnim.toPageAnimType(),
                 onTapCenter = { viewModel.toggleControls() },
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
