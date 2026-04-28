@@ -114,7 +114,10 @@ fun ProfileScreen(
     ) {
         TopAppBar(
             title = { Text("我的", fontWeight = FontWeight.Bold) },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = Color.Transparent,
+                scrolledContainerColor = Color.Transparent,
+            ),
         )
 
         // Reading stats card (real data)
