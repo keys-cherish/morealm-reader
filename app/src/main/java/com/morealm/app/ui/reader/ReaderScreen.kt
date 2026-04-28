@@ -27,6 +27,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -503,6 +505,27 @@ fun ReaderScreen(
                     viewModel.setAutoPageInterval(next)
                 },
             )
+        }
+
+        // Floating day/night toggle button (always visible, independent of control bar)
+        if (!showControls && !showSettings && !showTtsPanel && !showChapterList && !showBookmarks && !showFullSearch) {
+            androidx.compose.material3.FilledIconButton(
+                onClick = { themeViewModel?.toggleDayNight() },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+                    .size(36.dp),
+                colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                    contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                ),
+            ) {
+                androidx.compose.material3.Icon(
+                    imageVector = if (isNight) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                    contentDescription = if (isNight) "切换日间" else "切换夜间",
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
 
         // Scrim overlay for panels (tap to dismiss)
