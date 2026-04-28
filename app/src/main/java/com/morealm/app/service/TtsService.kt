@@ -133,18 +133,8 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                 return START_NOT_STICKY
             }
         }
-        // Post foreground notification immediately to avoid 5-second ANR crash.
-        // MediaSessionService will replace this with the proper media notification.
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("朗读中")
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setSilent(true)
-            .build()
-        ServiceCompat.startForeground(
-            this, NOTIFICATION_ID, notification,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0,
-        )
+        // Let MediaSessionService handle the foreground notification via TtsNotificationProvider.
+        // The early notification from onCreate() covers the ANR window.
         return super.onStartCommand(intent, flags, startId)
     }
 
