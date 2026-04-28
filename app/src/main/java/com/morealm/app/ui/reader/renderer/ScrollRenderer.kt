@@ -15,8 +15,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -741,6 +745,8 @@ fun ScrollRenderer(
                     },
                 )
             }
+            // Offscreen compositing required for BlendMode.DstOut fade edges
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             // Draw: render current page + next pages with offset (like Legado ContentTextView.drawPage)
             .drawWithContent {
                 val newWidth = size.width.toInt()
@@ -869,6 +875,27 @@ fun ScrollRenderer(
 
                     canvas.restore()
                 }
+
+                // Alpha fade edges: text fades out at top/bottom, background shows through
+                val fadeHeight = size.height * 0.05f
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to Color.Black,
+                        1f to Color.Transparent,
+                        startY = 0f,
+                        endY = fadeHeight,
+                    ),
+                    blendMode = BlendMode.DstOut,
+                )
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        1f to Color.Black,
+                        startY = size.height - fadeHeight,
+                        endY = size.height,
+                    ),
+                    blendMode = BlendMode.DstOut,
+                )
             }
     ) {
         val startHandleOffset = cursorOffsetFor(selectionStart, startHandle = true)
