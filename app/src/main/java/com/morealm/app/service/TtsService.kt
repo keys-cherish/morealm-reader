@@ -130,7 +130,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                 when (cmd) {
                     is TtsEventBus.Command.UpdateMeta -> {
                         val player = mediaSession?.player as? TtsPlayer ?: return@collect
-                        player.updateMetadata(cmd.book, cmd.chapter)
+                        player.updateMetadata(cmd.book, cmd.chapter, cmd.coverUrl)
                     }
                     is TtsEventBus.Command.SetPlaying -> {
                         val player = mediaSession?.player as? TtsPlayer ?: return@collect
