@@ -364,22 +364,21 @@ fun CanvasRenderer(
     }
 
     LaunchedEffect(currentChapterKey, layoutInputs) {
+        textChapter = placeholderChapter()
+        pageCount = 1
         if (content.isBlank()) {
-            textChapter = placeholderChapter(chapterTitle.ifBlank { "当前章节暂无正文" }).apply {
+            val chapter = placeholderChapter(chapterTitle.ifBlank { "当前章节暂无正文" }).apply {
                 isCompleted = true
             }
+            textChapter = chapter
             pageCount = 1
         } else {
-            // Check prelayout cache FIRST to avoid placeholder flash
             val cachedChapter = prelayoutCache[currentChapterKey]
             if (cachedChapter != null) {
                 textChapter = cachedChapter
                 pageCount = cachedChapter.pageSize.coerceAtLeast(1)
                 return@LaunchedEffect
             }
-            // Not cached — show placeholder while async layout runs
-            textChapter = placeholderChapter()
-            pageCount = 1
             var handle: com.morealm.app.domain.render.AsyncLayoutHandle? = null
             handle = layoutInputs.provider.layoutChapterAsync(
                 title = chapterTitle,
