@@ -140,21 +140,36 @@ class AnalyzeRule(
                 null
             }
         }
-        return if (compiled != null) {
-            compiled.eval(scope, coroutineContext)
-        } else {
-            RhinoScriptEngine.eval(script, scope, coroutineContext)
+        return try {
+            if (compiled != null) {
+                compiled.eval(scope, coroutineContext)
+            } else {
+                RhinoScriptEngine.eval(script, scope, coroutineContext)
+            }
+        } catch (e: Exception) {
+            AppLog.warn("AnalyzeRule", "JS eval error: ${e.message}")
+            null
         }
     }
 
     private fun normalizeJsSnippet(jsStr: String): String {
         val script = jsStr.trim().removePrefix("javascript:").trim()
         if (script.isEmpty()) return script
+        // Multi-statement or block-like code: run as-is
         val looksLikeBlock = script.contains(';') || script.contains('\n') ||
             script.contains("return ") || script.contains("function") || script.contains("=>") ||
             script.startsWith("var ") || script.startsWith("let ") || script.startsWith("const ") ||
-            script.startsWith("if") || script.startsWith("for") || script.startsWith("while")
-        return if (looksLikeBlock) script else "($script)"
+            script.startsWith("if") || script.startsWith("for") || script.startsWith("while") ||
+            script.startsWith("try") || script.startsWith("switch") || script.startsWith("{")
+        return if (looksLikeBlock) script else {
+            // Wrap as expression, but fall back to raw if wrapping would cause syntax error
+            try {
+                RhinoScriptEngine.compile("($script)")
+                "($script)"
+            } catch (_: Exception) {
+                script
+            }
+        }
     }
 
     // ── 获取文本列表 ──
@@ -232,7 +247,10 @@ class AnalyzeRule(
             return urlList
         }
         @Suppress("UNCHECKED_CAST")
-        return result as? List<String>
+        return when (result) {
+            is List<*> -> result.map { it.toString() }
+            else -> listOf(result.toString())
+        }
     }
 
     // ── 获取文本 ──
@@ -367,7 +385,13 @@ class AnalyzeRule(
                 }
             }
         }
-        result?.let { return it as List<Any> }
+        result?.let {
+            return when (it) {
+                is List<*> -> it.filterNotNull()
+                is org.jsoup.select.Elements -> it.toList()
+                else -> listOf(it)
+            }
+        }
         return ArrayList()
     }
 
