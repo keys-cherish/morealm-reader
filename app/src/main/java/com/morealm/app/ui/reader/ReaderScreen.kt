@@ -107,6 +107,8 @@ fun ReaderScreen(
     val pendingSearchSelection by viewModel.pendingSearchSelection.collectAsStateWithLifecycle()
     val customCss by viewModel.settings.customCss.collectAsStateWithLifecycle()
     val customBgImage by viewModel.settings.customBgImage.collectAsStateWithLifecycle()
+    val readerBgImageDay by viewModel.settings.readerBgImageDay.collectAsStateWithLifecycle()
+    val readerBgImageNight by viewModel.settings.readerBgImageNight.collectAsStateWithLifecycle()
     val selectedText by viewModel.selectedText.collectAsStateWithLifecycle()
     val viewingImageSrc by viewModel.viewingImageSrc.collectAsStateWithLifecycle()
     val ttsScrollProgress by viewModel.tts.ttsScrollProgress.collectAsStateWithLifecycle()
@@ -324,10 +326,15 @@ fun ReaderScreen(
         val readerFontSize = activeStyle?.textSize?.toFloat() ?: fontSize
         val readerLineHeight = activeStyle?.lineHeight ?: lineHeight
         val readerFontFamily = activeStyle?.fontFamily ?: fontFamily
-        // Resolve background image: customBgImage (global pref) takes priority,
-        // then activeStyle's per-style bg image (day/night aware)
+        // Resolve background image priority:
+        // 1. Per-style customBgImage (from reader bottom panel)
+        // 2. Global day/night bg image (from Reading Settings)
+        // 3. Per-style bgImageUri/bgImageUriNight
         val readerBgImage = customBgImage.ifEmpty {
-            (if (isNight) activeStyle?.bgImageUriNight else activeStyle?.bgImageUri) ?: ""
+            val globalBg = if (isNight) readerBgImageNight else readerBgImageDay
+            globalBg.ifEmpty {
+                (if (isNight) activeStyle?.bgImageUriNight else activeStyle?.bgImageUri) ?: ""
+            }
         }
         val themeCss = activeTheme?.customCss.orEmpty()
         val currentStyle = activeStyle
