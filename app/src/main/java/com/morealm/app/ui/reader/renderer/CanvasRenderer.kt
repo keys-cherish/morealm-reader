@@ -505,13 +505,17 @@ fun CanvasRenderer(
 
     LaunchedEffect(currentChapterKey, pageAnimType) {
         if (pageAnimType != PageAnimType.SCROLL) {
-            // Coordinator state is auto-reset via remember(chapterIndex, pageAnimType),
-            // but we still need to reset pagerState position on chapter/anim key change.
-            coordinator.ignoredSettledDisplayPage = 0
+            // When navigating to prev chapter, start from the last page to avoid flash.
+            // Use prelayout cache page count if available, otherwise fall back to current renderPageCount.
+            val initialPage = if (startFromLastPage) {
+                val cachedPageCount = prelayoutCache[currentChapterKey]?.pageSize ?: renderPageCount
+                (cachedPageCount - 1).coerceAtLeast(0)
+            } else 0
+            coordinator.ignoredSettledDisplayPage = initialPage
             coordinator.pendingSettledDirection = null
-            coordinator.lastSettledDisplayPage = 0
+            coordinator.lastSettledDisplayPage = initialPage
             coordinator.lastReaderContent = null
-            pagerState.scrollToPage(0)
+            pagerState.scrollToPage(initialPage)
         }
     }
 
