@@ -3,6 +3,7 @@ package com.morealm.app.domain.analyzeRule
 import android.util.Base64
 import android.provider.Settings
 import androidx.annotation.Keep
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.CookieStore
@@ -202,12 +203,12 @@ object JsExtensions {
     // ── Logging (called by book sources for debugging) ──
 
     fun log(msg: Any?): Any? {
-        com.morealm.app.core.log.AppLog.debug("JsExtensions", msg.toString())
+        AppLog.debug("JsExtensions", msg.toString())
         return msg
     }
 
     fun logType(any: Any?) {
-        com.morealm.app.core.log.AppLog.debug("JsExtensions", "type: ${any?.javaClass?.name}, value: $any")
+        AppLog.debug("JsExtensions", "type: ${any?.javaClass?.name}, value: $any")
     }
 
     fun toast(msg: Any?) {
@@ -481,7 +482,7 @@ object JsExtensions {
     }
 
     fun startBrowser(url: String, title: String, html: String?) {
-        com.morealm.app.core.log.AppLog.warn(
+        AppLog.warn(
             "JsExtensions",
             "startBrowser requested by source '${getSource()?.bookSourceName ?: ""}': $title $url",
         )
@@ -503,7 +504,7 @@ object JsExtensions {
     }
 
     fun startBrowserAwait(url: String, title: String, refetchAfterSuccess: Boolean, html: String?): StrResponse {
-        com.morealm.app.core.log.AppLog.warn(
+        AppLog.warn(
             "JsExtensions",
             "startBrowserAwait fallback for source '${getSource()?.bookSourceName ?: ""}': $title $url",
         )
@@ -520,7 +521,7 @@ object JsExtensions {
     }
 
     fun openVideoPlayer(url: String, title: String, isFloat: Boolean) {
-        com.morealm.app.core.log.AppLog.warn(
+        AppLog.warn(
             "JsExtensions",
             "openVideoPlayer requested by source '${getSource()?.bookSourceName ?: ""}': $title $url",
         )
@@ -531,7 +532,7 @@ object JsExtensions {
     }
 
     fun openUrl(url: String, mimeType: String? = null) {
-        com.morealm.app.core.log.AppLog.warn(
+        AppLog.warn(
             "JsExtensions",
             "openUrl requested by source '${getSource()?.bookSourceName ?: ""}': $url",
         )

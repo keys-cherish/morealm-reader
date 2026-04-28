@@ -582,10 +582,18 @@ fun CanvasRenderer(
 
     // Restore saved progress after layout is complete
     LaunchedEffect(renderPageCount, pageCount, chapter?.isCompleted, progressRestored, pageAnimType) {
-        if (progressRestored) return@LaunchedEffect
-        if (chapter?.isCompleted != true) return@LaunchedEffect
+        if (progressRestored) {
+            AppLog.debug("CanvasRenderer", "restoreProgress: SKIP already restored")
+            return@LaunchedEffect
+        }
+        if (chapter?.isCompleted != true) {
+            AppLog.debug("CanvasRenderer", "restoreProgress: SKIP not completed, renderPC=$renderPageCount pc=$pageCount")
+            return@LaunchedEffect
+        }
         if (renderPageCount <= 1) {
+            AppLog.debug("CanvasRenderer", "restoreProgress: renderPC<=1, startFromLast=$startFromLastPage initProg=$initialProgress")
             progressRestored = true
+            onProgressRestored()
             return@LaunchedEffect
         }
         val currentTargetPage = when {
@@ -595,6 +603,7 @@ fun CanvasRenderer(
             initialProgress > 0 -> ((initialProgress / 100f) * (pageCount - 1)).roundToInt().coerceIn(0, pageCount - 1)
             else -> 0
         }
+        AppLog.debug("CanvasRenderer", "restoreProgress: startFromLast=$startFromLastPage initProg=$initialProgress pc=$pageCount renderPC=$renderPageCount target=$currentTargetPage")
         val targetPage = pageFactory.displayIndexForCurrentPage(currentTargetPage).coerceIn(0, renderPageCount - 1)
         readerPageIndex = currentTargetPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         if (targetPage != pagerState.currentPage) {
