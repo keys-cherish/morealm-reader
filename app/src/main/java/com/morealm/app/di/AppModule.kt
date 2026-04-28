@@ -275,8 +275,6 @@ object AppModule {
                     restoreFromBackup(context)
                 }
             })
-            // Only destroy data for ancient versions (v1-v3) that are too old to migrate safely
-            .fallbackToDestructiveMigrationFrom(1, 2, 3)
             .build()
     }
 
