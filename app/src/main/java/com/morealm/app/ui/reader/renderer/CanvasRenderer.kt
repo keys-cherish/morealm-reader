@@ -645,6 +645,7 @@ fun CanvasRenderer(
         footerLeft = footerLeft,
         footerCenter = footerCenter,
         footerRight = footerRight,
+        hasBgImage = bgBitmap != null,
     )
 
     // SimulationParams for bezier page curl
@@ -1597,6 +1598,7 @@ private fun PageContentBox(
             footerLeft = footerLeft,
             footerCenter = footerCenter,
             footerRight = footerRight,
+            hasBgImage = bgBitmap != null,
         )
     }
 }
