@@ -66,6 +66,7 @@ data class PageInfoOverlaySpec(
     val footerLeft: String,
     val footerCenter: String,
     val footerRight: String,
+    val hasBgImage: Boolean = false,
 )
 
 /**
@@ -417,32 +418,34 @@ private fun drawInfoBar(
 ) {
     if (slots.all { it == "none" }) return
     val bottom = top + spec.barHeightPx
-    val bgPaint = sharedInfoBgPaint
-    val fullBg = spec.backgroundColorArgb
-    val clearBg = withAlpha(fullBg, 0)
-    bgPaint.shader = if (isTop) {
-        LinearGradient(
-            0f,
-            top,
-            0f,
-            bottom,
-            intArrayOf(fullBg, fullBg, clearBg),
-            floatArrayOf(0f, 0.72f, 1f),
-            Shader.TileMode.CLAMP,
-        )
-    } else {
-        LinearGradient(
-            0f,
-            top,
-            0f,
-            bottom,
-            intArrayOf(clearBg, fullBg, fullBg),
-            floatArrayOf(0f, 0.28f, 1f),
-            Shader.TileMode.CLAMP,
-        )
+    if (!spec.hasBgImage) {
+        val bgPaint = sharedInfoBgPaint
+        val fullBg = spec.backgroundColorArgb
+        val clearBg = withAlpha(fullBg, 0)
+        bgPaint.shader = if (isTop) {
+            LinearGradient(
+                0f,
+                top,
+                0f,
+                bottom,
+                intArrayOf(fullBg, fullBg, clearBg),
+                floatArrayOf(0f, 0.72f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+        } else {
+            LinearGradient(
+                0f,
+                top,
+                0f,
+                bottom,
+                intArrayOf(clearBg, fullBg, fullBg),
+                floatArrayOf(0f, 0.28f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+        }
+        canvas.drawRect(0f, top, width.toFloat(), bottom, bgPaint)
+        bgPaint.shader = null
     }
-    canvas.drawRect(0f, top, width.toFloat(), bottom, bgPaint)
-    bgPaint.shader = null
 
     val textPaint = sharedInfoTextPaint
     textPaint.color = withAlpha(spec.textColorArgb, ((spec.textColorArgb ushr 24) * 0.4f).toInt().coerceIn(0, 255))
