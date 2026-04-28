@@ -176,6 +176,7 @@ dependencies {
     implementation(libs.media3.session)
     implementation(libs.media3.exoplayer)
     implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
+    implementation("androidx.media:media:1.7.0")
 
     // DataStore
     implementation(libs.datastore.preferences)
