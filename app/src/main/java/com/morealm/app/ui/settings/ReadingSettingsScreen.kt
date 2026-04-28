@@ -1,20 +1,32 @@
 package com.morealm.app.ui.settings
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import com.morealm.app.presentation.settings.ReadingSettingsViewModel
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.morealm.app.presentation.settings.ReadingSettingsViewModel
 import com.morealm.app.ui.theme.LocalMoRealmColors
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -98,6 +110,53 @@ fun ReadingSettingsScreen(
             SettingsToggleRow("显示章节名", showChapterName) { viewModel.setShowChapterName(it) }
             SettingsDivider()
             SettingsToggleRow("显示时间电量", showTimeBattery) { viewModel.setShowTimeBattery(it) }
+
+            Spacer(Modifier.height(16.dp))
+
+            // ── 阅读器背景 ──
+            SectionHeader("阅读器背景")
+
+            val readerBgDay by viewModel.readerBgImageDay.collectAsStateWithLifecycle()
+            val readerBgNight by viewModel.readerBgImageNight.collectAsStateWithLifecycle()
+            val context = LocalContext.current
+
+            val dayBgLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocument()
+            ) { uri ->
+                uri?.let {
+                    try { context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+                    viewModel.setReaderBgImageDay(it.toString())
+                }
+            }
+            val nightBgLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocument()
+            ) { uri ->
+                uri?.let {
+                    try { context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+                    viewModel.setReaderBgImageNight(it.toString())
+                }
+            }
+
+            BgImageRow(
+                label = "日间背景",
+                imageUri = readerBgDay,
+                onPick = { dayBgLauncher.launch(arrayOf("image/*")) },
+                onClear = { viewModel.setReaderBgImageDay("") },
+            )
+            SettingsDivider()
+            BgImageRow(
+                label = "夜间背景",
+                imageUri = readerBgNight,
+                onPick = { nightBgLauncher.launch(arrayOf("image/*")) },
+                onClear = { viewModel.setReaderBgImageNight("") },
+            )
+
+            Text(
+                "设置后阅读器背景会随日/夜主题自动切换",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
 
             Spacer(Modifier.height(16.dp))
 
@@ -352,6 +411,69 @@ private fun ScreenTimeoutDialog(current: Int, onSelect: (Int) -> Unit, onDismiss
         },
         confirmButton = {},
     )
+}
+
+@Composable
+private fun BgImageRow(
+    label: String,
+    imageUri: String,
+    onPick: () -> Unit,
+    onClear: () -> Unit,
+) {
+    val hasImage = imageUri.isNotEmpty()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onPick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Thumbnail preview
+        if (hasImage) {
+            Image(
+                painter = rememberAsyncImagePainter(
+                    ImageRequest.Builder(LocalContext.current)
+                        .data(imageUri)
+                        .size(120, 160)
+                        .crossfade(true)
+                        .build()
+                ),
+                contentDescription = label,
+                modifier = Modifier
+                    .size(48.dp, 64.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(48.dp, 64.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.Image, null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f))
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                if (hasImage) "已设置 · 点击更换" else "点击选择图片",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+            )
+        }
+        if (hasImage) {
+            TextButton(onClick = onClear) {
+                Text("清除", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
 }
 
 @Composable

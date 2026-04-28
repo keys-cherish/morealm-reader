@@ -51,6 +51,12 @@ class ReadingSettingsViewModel @Inject constructor(
     val ttsSkipPattern: StateFlow<String> = prefs.ttsSkipPattern
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    val readerBgImageDay: StateFlow<String> = prefs.readerBgImageDay
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    val readerBgImageNight: StateFlow<String> = prefs.readerBgImageNight
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
     fun setPageAnim(v: String) = viewModelScope.launch {
         prefs.setPageAnim(v)
         val activeId = prefs.activeReaderStyle.first()
@@ -68,4 +74,6 @@ class ReadingSettingsViewModel @Inject constructor(
     fun setShowTimeBattery(v: Boolean) = viewModelScope.launch { prefs.setShowTimeBattery(v) }
     fun setCustomTxtChapterRegex(v: String) = viewModelScope.launch { prefs.setCustomTxtChapterRegex(v) }
     fun setTtsSkipPattern(v: String) = viewModelScope.launch { prefs.setTtsSkipPattern(v) }
+    fun setReaderBgImageDay(v: String) = viewModelScope.launch { prefs.setReaderBgImageDay(v) }
+    fun setReaderBgImageNight(v: String) = viewModelScope.launch { prefs.setReaderBgImageNight(v) }
 }
