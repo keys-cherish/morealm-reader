@@ -307,7 +307,7 @@ fun ProfileScreen(
             SettingsItem(Icons.Default.BugReport, "应用日志",
                 subtitle = "查看运行日志和错误信息", onClick = onNavigateAppLog)
         }
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(96.dp))
     }
 
     // Delete custom theme confirmation
