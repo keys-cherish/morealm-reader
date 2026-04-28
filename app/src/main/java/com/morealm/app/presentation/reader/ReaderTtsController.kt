@@ -158,7 +158,7 @@ class ReaderTtsController(
         } else paragraphs
     }
 
-    private fun ensureTtsService(bookTitle: String, chapterTitle: String) {
+    private fun ensureTtsService(bookTitle: String, chapterTitle: String, coverUrl: String? = null) {
         if (ttsServiceStarted) return
         try {
             val intent = Intent(context, TtsService::class.java)
@@ -168,15 +168,15 @@ class ReaderTtsController(
                 context.startService(intent)
             }
             ttsServiceStarted = true
-            TtsEventBus.sendCommand(TtsEventBus.Command.UpdateMeta(bookTitle, chapterTitle))
+            TtsEventBus.sendCommand(TtsEventBus.Command.UpdateMeta(bookTitle, chapterTitle, coverUrl))
             AppLog.info("TTS", "TTS service started")
         } catch (e: Exception) {
             AppLog.error("TTS", "Failed to start TTS service", e)
         }
     }
 
-    private fun pushTtsState(playing: Boolean, bookTitle: String = "", chapterTitle: String = "") {
-        TtsEventBus.sendCommand(TtsEventBus.Command.UpdateMeta(bookTitle, chapterTitle))
+    private fun pushTtsState(playing: Boolean, bookTitle: String = "", chapterTitle: String = "", coverUrl: String? = null) {
+        TtsEventBus.sendCommand(TtsEventBus.Command.UpdateMeta(bookTitle, chapterTitle, coverUrl))
         TtsEventBus.sendCommand(TtsEventBus.Command.SetPlaying(playing))
         TtsEventBus.updatePlayback {
             copy(
@@ -193,12 +193,13 @@ class ReaderTtsController(
         displayedContent: String? = null,
         bookTitle: String? = null,
         chapterTitle: String? = null,
+        coverUrl: String? = null,
         startChapterPosition: Int? = null,
         paragraphPositions: List<Int>? = null,
         onChapterFinished: (() -> Unit)? = null,
     ) {
         if (_ttsPlaying.value) ttsPause()
-        else ttsPlay(displayedContent, bookTitle, chapterTitle, startChapterPosition, paragraphPositions, onChapterFinished)
+        else ttsPlay(displayedContent, bookTitle, chapterTitle, coverUrl, startChapterPosition, paragraphPositions, onChapterFinished)
     }
 
     /**
@@ -206,19 +207,21 @@ class ReaderTtsController(
      * @param displayedContent current chapter content (null = resume from current paragraphs)
      * @param bookTitle book title for notification
      * @param chapterTitle chapter title for notification
+     * @param coverUrl book cover URL for notification artwork
      * @param onChapterFinished callback when chapter finishes (for auto-advance)
      */
     fun ttsPlay(
         displayedContent: String?,
         bookTitle: String?,
         chapterTitle: String?,
+        coverUrl: String? = null,
         startChapterPosition: Int? = null,
         paragraphPositions: List<Int>? = null,
         onChapterFinished: (() -> Unit)?,
     ) {
-        ensureTtsService(bookTitle ?: "", chapterTitle ?: "")
+        ensureTtsService(bookTitle ?: "", chapterTitle ?: "", coverUrl)
         _ttsPlaying.value = true
-        pushTtsState(true, bookTitle ?: "", chapterTitle ?: "")
+        pushTtsState(true, bookTitle ?: "", chapterTitle ?: "", coverUrl)
 
         ttsJob?.cancel()
         ttsJob = scope.launch {
@@ -405,12 +408,13 @@ class ReaderTtsController(
         displayedContent: String,
         bookTitle: String,
         chapterTitle: String,
+        coverUrl: String? = null,
         startChapterPosition: Int,
         paragraphPositions: List<Int>? = null,
         onChapterFinished: (() -> Unit)?,
     ) {
         ttsPause()
-        ttsPlay(displayedContent, bookTitle, chapterTitle, startChapterPosition, paragraphPositions, onChapterFinished)
+        ttsPlay(displayedContent, bookTitle, chapterTitle, coverUrl, startChapterPosition, paragraphPositions, onChapterFinished)
     }
 
     private fun chapterPositionForParagraph(index: Int): Int {

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>墨境 MoRealm — 功能详情</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#FFFCF6;--card:#FFF;--card2:#F8F6F1;--text:#1A1A1A;--text2:#6B6560;--accent:#E08300;--accent2:#C47200;--border:rgba(0,0,0,.08)}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC",sans-serif;background:var(--bg);color:var(--text);line-height:1.7}
+nav{position:sticky;top:0;z-index:10;background:rgba(255,252,246,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;gap:12px}
+nav .brand{font-weight:800;font-size:18px;color:var(--accent)}
+.container{max-width:800px;margin:0 auto;padding:40px 24px 80px}
+h1{font-size:2.2rem;font-weight:800;margin-bottom:8px}
+.lead{font-size:1.1rem;color:var(--text2);margin-bottom:48px}
+.section{margin-bottom:56px}
+.section h2{font-size:1.5rem;font-weight:700;margin-bottom:20px;padding-bottom:12px;border-bottom:2px solid var(--accent);display:inline-block}
+.feature-list{list-style:none;display:flex;flex-direction:column;gap:16px}
+.feature-list li{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px 24px;display:flex;gap:16px;align-items:flex-start;transition:transform .15s}
+.feature-list li:hover{transform:translateX(4px)}
+.feature-list .emoji{font-size:28px;flex-shrink:0;width:40px;text-align:center}
+.feature-list h3{font-size:1rem;font-weight:700;margin-bottom:4px}
+.feature-list p{font-size:.9rem;color:var(--text2)}
+.format-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+.format-chip{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center;font-weight:700;font-size:1.1rem;transition:border-color .2s}
+.format-chip:hover{border-color:var(--accent)}
+.format-chip small{display:block;font-weight:400;font-size:.75rem;color:var(--text2);margin-top:4px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:24px}
+.stat{background:linear-gradient(135deg,var(--accent),#D4760A);border-radius:16px;padding:24px;text-align:center;color:#fff}
+.stat .num{font-size:2.5rem;font-weight:800;line-height:1}
+.stat .label{font-size:.85rem;opacity:.8;margin-top:4px}
+footer{text-align:center;padding:40px 24px;color:var(--text2);font-size:13px;border-top:1px solid var(--border)}
+</style>
+</head>
+<body>
+<nav><span class="brand">📖 墨境 MoRealm</span><span style="color:var(--text2);font-size:14px">功能详情</span></nav>
+<div class="container">
+<h1>为深度阅读而生</h1>
+<p class="lead">每一个功能都经过精心打磨，只为让你沉浸在文字的世界里。</p>
+
+<div class="section">
+<h2>格式支持</h2>
+<div class="format-grid">
+  <div class="format-chip">EPUB<small>主流电子书</small></div>
+  <div class="format-chip">TXT<small>自动识别目录</small></div>
+  <div class="format-chip">PDF<small>逐页渲染</small></div>
+  <div class="format-chip">MOBI<small>Kindle 格式</small></div>
+  <div class="format-chip">AZW3<small>KF8 解析</small></div>
+  <div class="format-chip">CBZ/CBR<small>漫画格式</small></div>
+</div>
+</div>
+
+<div class="section">
+<h2>阅读体验</h2>
+<ul class="feature-list">
+  <li><span class="emoji">🖌️</span><div><h3>Canvas 自研排版</h3><p>全文搜索、书签、目录跳转、正文净化，流畅不卡顿</p></div></li>
+  <li><span class="emoji">📄</span><div><h3>5 种翻页动画</h3><p>平移 · 覆盖 · 仿真翻页（贝塞尔曲线）· 上下滚动 · 无动画</p></div></li>
+  <li><span class="emoji">🎯</span><div><h3>5 套阅读预设</h3><p>纸质 / 护眼 / 海蓝 / 暖黄 / 墨白，自动适配日夜模式</p></div></li>
+  <li><span class="emoji">🔤</span><div><h3>精细排版控制</h3><p>字体导入 · 字号 · 行距 · 段距 · 页边距 · 繁简转换 · 自定义 CSS</p></div></li>
+  <li><span class="emoji">🔆</span><div><h3>独立亮度</h3><p>阅读器亮度与系统分离，不影响其他 App</p></div></li>
+  <li><span class="emoji">⏩</span><div><h3>自动翻页</h3><p>可调速度的自动阅读，解放双手</p></div></li>
+</ul>
+</div>
+
+<div class="section">
+<h2>TTS 朗读</h2>
+<ul class="feature-list">
+  <li><span class="emoji">🗣️</span><div><h3>四引擎支持</h3><p>Edge TTS 神经语音 · 系统 TTS · OpenAI · 自定义 HTTP API</p></div></li>
+  <li><span class="emoji">🎛️</span><div><h3>通知栏控制</h3><p>书名 + 章节 + 封面 + 上一章/暂停/停止/下一章</p></div></li>
+  <li><span class="emoji">🎚️</span><div><h3>语速调节</h3><p>拖动滑块自由调节朗读速度</p></div></li>
+</ul>
+</div>
+
+<div class="section">
+<h2>书源与同步</h2>
+<ul class="feature-list">
+  <li><span class="emoji">🌐</span><div><h3>兼容 Legado 书源</h3><p>直接导入 Legado JSON 书源，CSS / XPath / JSONPath / Regex 四模式引擎</p></div></li>
+  <li><span class="emoji">☁️</span><div><h3>WebDAV 云同步</h3><p>进度 / 书架 / 书源 / 主题一键全同步</p></div></li>
+  <li><span class="emoji">💾</span><div><h3>本地备份</h3><p>ZIP 导出/导入，数据库升级前自动备份</p></div></li>
+</ul>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="num">7</div><div class="label">支持格式</div></div>
+  <div class="stat"><div class="num">6</div><div class="label">内置主题</div></div>
+  <div class="stat"><div class="num">4</div><div class="label">TTS 引擎</div></div>
+</div>
+</div>
+<footer>墨境 MoRealm · 把阅读留在时间里 · GPL-3.0 + Commercial</footer>
+</body>
+</html>

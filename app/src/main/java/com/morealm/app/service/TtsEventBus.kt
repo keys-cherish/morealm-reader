@@ -35,7 +35,7 @@ object TtsEventBus {
 
     /** ViewModel → Service */
     sealed class Command {
-        data class UpdateMeta(val book: String, val chapter: String) : Command()
+        data class UpdateMeta(val book: String, val chapter: String, val coverUrl: String? = null) : Command()
         data class SetPlaying(val playing: Boolean) : Command()
         data object StopService : Command()
     }
