@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.db.*
 import com.morealm.app.domain.preference.AppPreferences
 import dagger.Module
@@ -12,6 +13,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import java.io.File
 import javax.inject.Singleton
 
 private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -191,18 +193,92 @@ private val MIGRATION_9_10 = object : Migration(9, 10) {
     }
 }
 
+/**
+ * Auto-backup database before any migration (upgrade or downgrade).
+ * Keeps the 2 most recent backups in app internal storage.
+ */
+private fun backupDatabaseBeforeMigration(context: Context) {
+    try {
+        val dbFile = context.getDatabasePath("morealm.db")
+        if (!dbFile.exists()) return
+        val backupDir = File(context.filesDir, "db_backup")
+        if (!backupDir.exists()) backupDir.mkdirs()
+        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        val backupFile = File(backupDir, "morealm_$ts.db")
+        dbFile.copyTo(backupFile, overwrite = true)
+        // Also backup WAL/SHM if present
+        val wal = File(dbFile.path + "-wal")
+        val shm = File(dbFile.path + "-shm")
+        if (wal.exists()) wal.copyTo(File(backupFile.path + "-wal"), overwrite = true)
+        if (shm.exists()) shm.copyTo(File(backupFile.path + "-shm"), overwrite = true)
+        // Keep only 2 most recent backups
+        backupDir.listFiles { f -> f.name.endsWith(".db") }
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(2)
+            ?.forEach { old ->
+                old.delete()
+                File(old.path + "-wal").delete()
+                File(old.path + "-shm").delete()
+            }
+        AppLog.info("DB", "Pre-migration backup: ${backupFile.name}")
+    } catch (e: Exception) {
+        AppLog.error("DB", "Backup failed", e)
+    }
+}
+
+/**
+ * Attempt to restore database from the most recent backup.
+ * Called when Room detects a downgrade or migration failure.
+ */
+private fun restoreFromBackup(context: Context): Boolean {
+    try {
+        val backupDir = File(context.filesDir, "db_backup")
+        val latest = backupDir.listFiles { f -> f.name.endsWith(".db") }
+            ?.maxByOrNull { it.lastModified() } ?: return false
+        val dbFile = context.getDatabasePath("morealm.db")
+        latest.copyTo(dbFile, overwrite = true)
+        val wal = File(latest.path + "-wal")
+        val shm = File(latest.path + "-shm")
+        if (wal.exists()) wal.copyTo(File(dbFile.path + "-wal"), overwrite = true)
+        if (shm.exists()) shm.copyTo(File(dbFile.path + "-shm"), overwrite = true)
+        AppLog.info("DB", "Restored from backup: ${latest.name}")
+        return true
+    } catch (e: Exception) {
+        AppLog.error("DB", "Restore failed", e)
+        return false
+    }
+}
+
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
 
     @Provides
     @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
-        Room.databaseBuilder(context, AppDatabase::class.java, "morealm.db")
+    fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
+        // Backup before Room opens (covers both upgrade and downgrade)
+        backupDatabaseBeforeMigration(context)
+
+        return Room.databaseBuilder(context, AppDatabase::class.java, "morealm.db")
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
-            .fallbackToDestructiveMigrationOnDowngrade()
+            .addMigrations(
+                MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
+                MIGRATION_13_14, MIGRATION_14_15,
+            )
+            // On downgrade: try restore from backup, otherwise keep tables as-is
+            .addCallback(object : RoomDatabase.Callback() {
+                override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
+                    AppLog.error("DB", "Destructive migration triggered! Attempting restore...")
+                    restoreFromBackup(context)
+                }
+            })
+            // Only destroy data for ancient versions (v1-v3) that are too old to migrate safely
+            .fallbackToDestructiveMigrationFrom(1, 2, 3)
             .build()
+    }
 
     @Provides fun provideBookDao(db: AppDatabase): BookDao = db.bookDao()
     @Provides fun provideChapterDao(db: AppDatabase): ChapterDao = db.chapterDao()
