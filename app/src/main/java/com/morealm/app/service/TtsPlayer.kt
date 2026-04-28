@@ -38,6 +38,7 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
         private set
     var coverBitmap: Bitmap? = null
         private set
+    private var coverArtBytes: ByteArray? = null
 
     fun updateMetadata(book: String, chapter: String, coverUrl: String? = null) {
         bookTitle = book
@@ -63,6 +64,11 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
                     coverBitmap = BitmapFactory.decodeStream(stream, null, opts)
+                    coverArtBytes = coverBitmap?.let { bmp ->
+                        java.io.ByteArrayOutputStream().also {
+                            bmp.compress(Bitmap.CompressFormat.PNG, 80, it)
+                        }.toByteArray()
+                    }
                 }
                 android.os.Handler(Looper.getMainLooper()).post { invalidateState() }
                 return
@@ -76,6 +82,11 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
                 val scale = maxOf(1, maxOf(opts.outWidth, opts.outHeight) / 256)
                 val decodeOpts = BitmapFactory.Options().apply { inSampleSize = scale }
                 coverBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
+                coverArtBytes = coverBitmap?.let { bmp ->
+                    java.io.ByteArrayOutputStream().also {
+                        bmp.compress(Bitmap.CompressFormat.PNG, 80, it)
+                    }.toByteArray()
+                }
                 android.os.Handler(Looper.getMainLooper()).post { invalidateState() }
             } catch (e: Exception) {
                 AppLog.debug("TtsPlayer", "Cover load failed: ${e.message}")
@@ -88,10 +99,8 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
             .setTitle("墨境 · 朗读: $bookTitle")
             .setSubtitle(chapterTitle.ifEmpty { null })
             .setArtist(bookTitle)
-        coverBitmap?.let {
-            val stream = java.io.ByteArrayOutputStream()
-            it.compress(Bitmap.CompressFormat.PNG, 80, stream)
-            metaBuilder.setArtworkData(stream.toByteArray(), MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+        coverArtBytes?.let {
+            metaBuilder.setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
         }
         val metadata = metaBuilder.build()
 
@@ -109,7 +118,7 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
                     .build()
             )
             .setPlayWhenReady(playing, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
-            .setPlaybackState(if (playing) Player.STATE_READY else Player.STATE_IDLE)
+            .setPlaybackState(Player.STATE_READY)
             .setPlaylist(listOf(MediaItemData.Builder(mediaItem.hashCode().toLong())
                 .setMediaItem(mediaItem)
                 .setMediaMetadata(metadata)
