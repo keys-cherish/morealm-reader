@@ -745,8 +745,6 @@ fun ScrollRenderer(
                     },
                 )
             }
-            // Offscreen compositing required for BlendMode.DstOut fade edges
-            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             // Draw: render current page + next pages with offset (like Legado ContentTextView.drawPage)
             .drawWithContent {
                 val newWidth = size.width.toInt()
@@ -758,18 +756,27 @@ fun ScrollRenderer(
                 }
                 if (viewWidth <= 0 || viewHeight <= 0 || pageCount == 0) return@drawWithContent
 
+                // 1) Draw background OUTSIDE the offscreen layer (not affected by DstOut)
+                drawIntoCanvas { composeCanvas ->
+                    val canvas = composeCanvas.nativeCanvas
+                    canvas.drawColor(bgColor)
+                    if (bgBitmap != null && !bgBitmap.isRecycled) {
+                        drawBgBitmap(canvas, bgBitmap, viewWidth.toFloat(), viewHeight.toFloat())
+                    }
+                }
+
+                // 2) Draw text content in offscreen layer so DstOut only erases text
+                drawContext.canvas.saveLayer(
+                    androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height),
+                    androidx.compose.ui.graphics.Paint()
+                )
+
                 drawIntoCanvas { composeCanvas ->
                     val canvas = composeCanvas.nativeCanvas
 
                     // Save and clip to viewport
                     canvas.save()
                     canvas.clipRect(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
-
-                    // Draw background
-                    canvas.drawColor(bgColor)
-                    if (bgBitmap != null && !bgBitmap.isRecycled) {
-                        drawBgBitmap(canvas, bgBitmap, viewWidth.toFloat(), viewHeight.toFloat())
-                    }
 
                     // Draw pages starting from currentPageIndex at pageOffset
                     var yOffset = pageOffset
@@ -896,6 +903,9 @@ fun ScrollRenderer(
                     ),
                     blendMode = BlendMode.DstOut,
                 )
+
+                // 3) Restore the offscreen layer (text with faded edges composited onto background)
+                drawContext.canvas.restore()
             }
     ) {
         val startHandleOffset = cursorOffsetFor(selectionStart, startHandle = true)
