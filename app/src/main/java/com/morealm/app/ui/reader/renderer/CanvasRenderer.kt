@@ -95,6 +95,7 @@ fun CanvasRenderer(
     startFromLastPage: Boolean = false,
     initialProgress: Int = 0,
     initialChapterPosition: Int = 0,
+    onProgressRestored: () -> Unit = {},
     pageAnimType: PageAnimType = PageAnimType.SLIDE,
     onTapCenter: () -> Unit = {},
     onProgress: (Int) -> Unit = {},
@@ -604,6 +605,7 @@ fun CanvasRenderer(
         coordinator.lastReaderContent = coordinator.createPageState(targetPage).upContent()
         coordinator.reportProgress(coordinator.lastReaderContent)
         progressRestored = true
+        onProgressRestored()
     }
 
     // Report progress
