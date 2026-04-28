@@ -368,7 +368,7 @@ fun ShelfScreen(
         } else if (isListView) {
             // List view
             LazyColumn(
-                contentPadding = PaddingValues(vertical = 4.dp),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 88.dp),
             ) {
                 if (currentFolderId == null) {
                     lazyItems(folderIds, key = { "folder_$it" }, contentType = { "folder" }) { folderId ->
@@ -394,7 +394,7 @@ fun ShelfScreen(
             // Grid view
             LazyVerticalGrid(
                 columns = GridCells.Fixed(columns),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 88.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
