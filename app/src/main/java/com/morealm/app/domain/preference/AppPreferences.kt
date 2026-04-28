@@ -53,6 +53,8 @@ class AppPreferences @Inject constructor(
         val MARGIN_BOTTOM = intPreferencesKey("margin_bottom")
         val CUSTOM_CSS = stringPreferencesKey("custom_css")
         val CUSTOM_BG_IMAGE = stringPreferencesKey("custom_bg_image")
+        val READER_BG_IMAGE_DAY = stringPreferencesKey("reader_bg_image_day")
+        val READER_BG_IMAGE_NIGHT = stringPreferencesKey("reader_bg_image_night")
         val CUSTOM_TXT_CHAPTER_REGEX = stringPreferencesKey("custom_txt_chapter_regex")
         val TTS_SKIP_PATTERN = stringPreferencesKey("tts_skip_pattern")
         val TTS_VOICE = stringPreferencesKey("tts_voice")
@@ -199,6 +201,12 @@ class AppPreferences @Inject constructor(
     val customBgImage: Flow<String> = context.dataStore.data
         .map { it[Keys.CUSTOM_BG_IMAGE] ?: "" }
 
+    val readerBgImageDay: Flow<String> = context.dataStore.data
+        .map { it[Keys.READER_BG_IMAGE_DAY] ?: "" }
+
+    val readerBgImageNight: Flow<String> = context.dataStore.data
+        .map { it[Keys.READER_BG_IMAGE_NIGHT] ?: "" }
+
     val customTxtChapterRegex: Flow<String> = context.dataStore.data
         .map { it[Keys.CUSTOM_TXT_CHAPTER_REGEX] ?: "" }
 
@@ -304,6 +312,8 @@ class AppPreferences @Inject constructor(
     suspend fun setMarginBottom(margin: Int) = update(Keys.MARGIN_BOTTOM, margin)
     suspend fun setCustomCss(css: String) = update(Keys.CUSTOM_CSS, css)
     suspend fun setCustomBgImage(uri: String) = update(Keys.CUSTOM_BG_IMAGE, uri)
+    suspend fun setReaderBgImageDay(uri: String) = update(Keys.READER_BG_IMAGE_DAY, uri)
+    suspend fun setReaderBgImageNight(uri: String) = update(Keys.READER_BG_IMAGE_NIGHT, uri)
     suspend fun setCustomTxtChapterRegex(regex: String) = update(Keys.CUSTOM_TXT_CHAPTER_REGEX, regex)
     suspend fun setTtsSkipPattern(pattern: String) = update(Keys.TTS_SKIP_PATTERN, pattern)
     suspend fun setTtsVoice(voice: String) = update(Keys.TTS_VOICE, voice)
