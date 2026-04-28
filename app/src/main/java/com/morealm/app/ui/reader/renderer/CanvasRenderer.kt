@@ -975,6 +975,7 @@ fun CanvasRenderer(
                 footerLeft = footerLeft,
                 footerCenter = footerCenter,
                 footerRight = footerRight,
+                hasBgImage = bgBitmap != null,
             )
         } else {
             AnimatedPageReader(
@@ -1232,6 +1233,7 @@ private fun PageReaderInfoOverlay(
     footerLeft: String,
     footerCenter: String,
     footerRight: String,
+    hasBgImage: Boolean = false,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         val safePageIndex = pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
@@ -1260,11 +1262,14 @@ private fun PageReaderInfoOverlay(
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
                 .height(64.dp)
-                .background(
-                    Brush.verticalGradient(
-                        0f to backgroundColor,
-                        0.72f to backgroundColor,
-                        1f to backgroundColor.copy(alpha = 0f),
+                .then(
+                    if (hasBgImage) Modifier
+                    else Modifier.background(
+                        Brush.verticalGradient(
+                            0f to backgroundColor,
+                            0.72f to backgroundColor,
+                            1f to backgroundColor.copy(alpha = 0f),
+                        )
                     )
                 )
                 .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
@@ -1286,11 +1291,14 @@ private fun PageReaderInfoOverlay(
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
                 .height(64.dp)
-                .background(
-                    Brush.verticalGradient(
-                        0f to backgroundColor.copy(alpha = 0f),
-                        0.28f to backgroundColor,
-                        1f to backgroundColor,
+                .then(
+                    if (hasBgImage) Modifier
+                    else Modifier.background(
+                        Brush.verticalGradient(
+                            0f to backgroundColor.copy(alpha = 0f),
+                            0.28f to backgroundColor,
+                            1f to backgroundColor,
+                        )
                     )
                 )
                 .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
