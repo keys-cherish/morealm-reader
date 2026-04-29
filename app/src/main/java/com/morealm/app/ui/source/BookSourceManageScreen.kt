@@ -1,6 +1,8 @@
 package com.morealm.app.ui.source
 
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -54,6 +56,24 @@ fun BookSourceManageScreen(
     var importUrl by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     var editingSource by remember { mutableStateOf<BookSource?>(null) }
+
+    // File picker for importing local JSON files
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                val json = context.contentResolver.openInputStream(it)?.use { stream ->
+                    stream.bufferedReader().readText()
+                }
+                if (json != null) {
+                    viewModel.importFromUri(it) { json }
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "读取文件失败: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     // Show import result toast
     LaunchedEffect(importResult) {
@@ -295,6 +315,18 @@ fun BookSourceManageScreen(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
                             cursorColor = MaterialTheme.colorScheme.primary),
                     )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            showImportDialog = false
+                            filePickerLauncher.launch("application/json")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("选择本地文件")
+                    }
                 }
             },
             confirmButton = {
