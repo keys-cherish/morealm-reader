@@ -120,9 +120,17 @@ data class BookSource(
     }
 
     /**
-     * 执行登录脚本
+     * 判断 loginUrl 是否为纯 URL（非JS脚本）
      */
-    fun login() {
+    fun isLoginUrlPureUrl(): Boolean {
+        val url = loginUrl ?: return false
+        return !url.startsWith("@js:") && !url.startsWith("<js>")
+    }
+
+    /**
+     * 执行登录脚本，传入用户填写的表单数据
+     */
+    fun login(loginData: Map<String, String> = emptyMap()) {
         val loginJs = getLoginJs()
         if (!loginJs.isNullOrBlank()) {
             val js = """$loginJs
@@ -132,7 +140,9 @@ data class BookSource(
                     throw('Function login not implements!!!')
                 }
             """.trimIndent()
-            evalJS(js)
+            evalJS(js) { bindings ->
+                bindings["result"] = loginData.toMutableMap()
+            }
         }
     }
 
@@ -250,7 +260,7 @@ data class BookSource(
     /**
      * 执行JS（书源级别，供header中@js:调用、login脚本等）
      */
-    fun evalJS(jsStr: String): Any? {
+    fun evalJS(jsStr: String, extraBindings: ((ScriptBindings) -> Unit)? = null): Any? {
         val bindings = ScriptBindings()
         JsExtensions.sourceGetter = { this }
         JsExtensions.ruleDataGetter = { null }
@@ -259,6 +269,7 @@ data class BookSource(
         bindings["baseUrl"] = bookSourceUrl
         bindings["cookie"] = CookieStore
         bindings["cache"] = CacheManager
+        extraBindings?.invoke(bindings)
         val scope = RhinoScriptEngine.getRuntimeScope(bindings)
         return RhinoScriptEngine.eval(jsStr, scope)
     }
