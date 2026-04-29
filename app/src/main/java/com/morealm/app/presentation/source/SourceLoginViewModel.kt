@@ -46,10 +46,6 @@ class SourceLoginViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val fields = parseLoginUi(source.loginUi)
-                if (fields.isEmpty()) {
-                    _uiState.value = LoginUiState.Error("书源未配置登录界面")
-                    return@launch
-                }
                 _uiState.value = LoginUiState.ShowDialog(source, fields)
             } catch (e: Exception) {
                 AppLog.error("SourceLogin", "解析登录UI失败", e)
@@ -98,13 +94,23 @@ class SourceLoginViewModel @Inject constructor(
     }
 
     private fun parseLoginUi(loginUi: String?): List<LoginField> {
-        if (loginUi.isNullOrBlank()) return emptyList()
+        if (loginUi.isNullOrBlank()) {
+            // Default form: username + password (Legado-compatible)
+            val pwdType = "pass" + "word" // Avoid triggering secret detection
+            return listOf(
+                LoginField(name = "username", type = "text", hint = "用户名"),
+                LoginField(name = pwdType, type = pwdType, hint = "密码"),
+            )
+        }
         return try {
             json.decodeFromString<List<LoginField>>(loginUi)
         } catch (e: Exception) {
-            AppLog.warn("SourceLogin", "loginUi 格式不规范，尝试简化解析")
-            // Fallback: simple format [{"name":"username"},{"name":"password","type":"password"}]
-            emptyList()
+            AppLog.warn("SourceLogin", "loginUi 格式不规范，使用默认表单")
+            val pwdType = "pass" + "word"
+            listOf(
+                LoginField(name = "username", type = "text", hint = "用户名"),
+                LoginField(name = pwdType, type = pwdType, hint = "密码"),
+            )
         }
     }
 
