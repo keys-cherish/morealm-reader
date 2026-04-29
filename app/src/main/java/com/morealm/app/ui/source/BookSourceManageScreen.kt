@@ -28,6 +28,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.webbook.CheckSource
 import com.morealm.app.presentation.source.BookSourceManageViewModel
@@ -68,8 +69,11 @@ fun BookSourceManageScreen(
                 }
                 if (json != null) {
                     viewModel.importFromUri(it) { json }
+                } else {
+                    Toast.makeText(context, "文件内容为空", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
+                AppLog.error("SourceManage", "读取文件失败", e)
                 Toast.makeText(context, "读取文件失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
@@ -319,7 +323,7 @@ fun BookSourceManageScreen(
                     OutlinedButton(
                         onClick = {
                             showImportDialog = false
-                            filePickerLauncher.launch("application/json")
+                            filePickerLauncher.launch("*/*")
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
