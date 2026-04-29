@@ -72,6 +72,16 @@ class ReaderChapterController(
     private val _prevPreloadedChapter = MutableStateFlow<PreloadedReaderChapter?>(null)
     val prevPreloadedChapter: StateFlow<PreloadedReaderChapter?> = _prevPreloadedChapter.asStateFlow()
 
+    // ── Three-chapter cache (Legado-style) ──
+    private val _prevTextChapter = MutableStateFlow<com.morealm.app.domain.render.TextChapter?>(null)
+    val prevTextChapter: StateFlow<com.morealm.app.domain.render.TextChapter?> = _prevTextChapter.asStateFlow()
+
+    private val _curTextChapter = MutableStateFlow<com.morealm.app.domain.render.TextChapter?>(null)
+    val curTextChapter: StateFlow<com.morealm.app.domain.render.TextChapter?> = _curTextChapter.asStateFlow()
+
+    private val _nextTextChapter = MutableStateFlow<com.morealm.app.domain.render.TextChapter?>(null)
+    val nextTextChapter: StateFlow<com.morealm.app.domain.render.TextChapter?> = _nextTextChapter.asStateFlow()
+
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
