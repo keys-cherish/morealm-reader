@@ -36,6 +36,7 @@ import com.morealm.app.ui.theme.LocalMoRealmColors
 fun BookSourceManageScreen(
     onBack: () -> Unit,
     viewModel: BookSourceManageViewModel = hiltViewModel(),
+    loginViewModel: com.morealm.app.presentation.source.SourceLoginViewModel = hiltViewModel(),
 ) {
     val moColors = LocalMoRealmColors.current
     val context = LocalContext.current
@@ -48,6 +49,7 @@ fun BookSourceManageScreen(
     val checkProgress by viewModel.checkProgress.collectAsStateWithLifecycle()
     val checkTotal by viewModel.checkTotal.collectAsStateWithLifecycle()
     val checkResults by viewModel.checkResults.collectAsStateWithLifecycle()
+    val loginUiState by loginViewModel.uiState.collectAsStateWithLifecycle()
     var showImportDialog by remember { mutableStateOf(false) }
     var importUrl by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
@@ -253,12 +255,16 @@ fun BookSourceManageScreen(
                 ) {
                     items(filteredSources, key = { it.bookSourceUrl }) { source ->
                         val checkResult = checkResults[source.bookSourceUrl]
+                        val isLoggedIn = remember(source) { loginViewModel.checkLoginStatus(source) }
                         SourceItem(
                             source = source,
                             checkResult = checkResult,
+                            isLoggedIn = isLoggedIn,
                             onToggle = { viewModel.toggleSource(source) },
                             onEdit = { editingSource = source },
                             onDelete = { viewModel.deleteSource(source) },
+                            onLogin = { loginViewModel.showLoginDialog(source) },
+                            onLogout = { loginViewModel.logout(source) },
                         )
                     }
                 }
@@ -326,15 +332,53 @@ fun BookSourceManageScreen(
             onCancelDebug = { viewModel.cancelDebug() },
         )
     }
+
+    // Login dialog and state handling
+    when (val state = loginUiState) {
+        is com.morealm.app.presentation.source.LoginUiState.ShowDialog -> {
+            SourceLoginDialog(
+                source = state.source,
+                fields = state.fields,
+                onDismiss = { loginViewModel.dismissDialog() },
+                onLogin = { fieldValues ->
+                    loginViewModel.login(state.source, fieldValues)
+                },
+            )
+        }
+        is com.morealm.app.presentation.source.LoginUiState.Loading -> {
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text("登录中") },
+                text = { Text(state.message) },
+                confirmButton = {},
+            )
+        }
+        is com.morealm.app.presentation.source.LoginUiState.Success -> {
+            LaunchedEffect(state) {
+                Toast.makeText(context, state.message, Toast.LENGTH_SHORT).show()
+                loginViewModel.dismissDialog()
+            }
+        }
+        is com.morealm.app.presentation.source.LoginUiState.Error -> {
+            LaunchedEffect(state) {
+                Toast.makeText(context, state.message, Toast.LENGTH_LONG).show()
+                loginViewModel.dismissDialog()
+            }
+        }
+        com.morealm.app.presentation.source.LoginUiState.Idle -> {}
+    }
 }
 
 @Composable
 private fun SourceItem(
     source: BookSource,
     checkResult: CheckSource.CheckResult? = null,
+    isLoggedIn: Boolean = false,
     onToggle: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onLogin: () -> Unit = {},
+    onLogout: () -> Unit = {},
 ) {
     val moColors = LocalMoRealmColors.current
     var showMenu by remember { mutableStateOf(false) }
@@ -416,6 +460,20 @@ private fun SourceItem(
                 colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier.padding(start = 8.dp),
             )
+            // Login button (only show if source has loginUrl)
+            if (!source.loginUrl.isNullOrBlank()) {
+                IconButton(
+                    onClick = { if (isLoggedIn) onLogout() else onLogin() },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        if (isLoggedIn) Icons.Default.Lock else Icons.Default.LockOpen,
+                        if (isLoggedIn) "已登录" else "未登录",
+                        tint = if (isLoggedIn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
             IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
                 Icon(Icons.Default.Edit, "编辑",
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
