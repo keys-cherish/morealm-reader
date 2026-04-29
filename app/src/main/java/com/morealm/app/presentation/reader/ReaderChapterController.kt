@@ -72,6 +72,16 @@ class ReaderChapterController(
     private val _prevPreloadedChapter = MutableStateFlow<PreloadedReaderChapter?>(null)
     val prevPreloadedChapter: StateFlow<PreloadedReaderChapter?> = _prevPreloadedChapter.asStateFlow()
 
+    // ── Three-chapter cache (Legado-style) ──
+    private val _prevTextChapter = MutableStateFlow<com.morealm.app.domain.render.TextChapter?>(null)
+    val prevTextChapter: StateFlow<com.morealm.app.domain.render.TextChapter?> = _prevTextChapter.asStateFlow()
+
+    private val _curTextChapter = MutableStateFlow<com.morealm.app.domain.render.TextChapter?>(null)
+    val curTextChapter: StateFlow<com.morealm.app.domain.render.TextChapter?> = _curTextChapter.asStateFlow()
+
+    private val _nextTextChapter = MutableStateFlow<com.morealm.app.domain.render.TextChapter?>(null)
+    val nextTextChapter: StateFlow<com.morealm.app.domain.render.TextChapter?> = _nextTextChapter.asStateFlow()
+
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
@@ -198,7 +208,7 @@ class ReaderChapterController(
                 }
             }
 
-            val chapters: List<BookChapter> = if (isWebBook) {
+            var chapters: List<BookChapter> = if (isWebBook) {
                 try {
                     loadWebBookChapters(book)
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -253,14 +263,30 @@ class ReaderChapterController(
             if (chapters.isEmpty()) {
                 AppLog.warn("Chapter", "No chapters found for book ${book.id}")
                 if (isWebBook) {
-                    publishReaderError(
-                        title = "\u4e66\u6e90\u65e0\u7ae0\u8282",
-                        detail = webReaderErrorDetail(book, "\u8be5\u4e66\u6e90\u6ca1\u6709\u89e3\u6790\u5230\u7ae0\u8282\u76ee\u5f55"),
-                    )
+                    // Fallback: create a single chapter from the book URL so content can still be fetched
+                    val fallbackUrl = book.tocUrl?.takeIf { it.isNotBlank() } ?: book.bookUrl
+                    if (fallbackUrl.isNotBlank()) {
+                        AppLog.info("Chapter", "No TOC, creating fallback chapter from bookUrl")
+                        chapters = listOf(
+                            BookChapter(
+                                id = "${bookId}_0",
+                                bookId = bookId,
+                                index = 0,
+                                title = book.title,
+                                url = fallbackUrl,
+                            )
+                        )
+                    } else {
+                        publishReaderError(
+                            title = "\u4e66\u6e90\u65e0\u7ae0\u8282",
+                            detail = webReaderErrorDetail(book, "\u8be5\u4e66\u6e90\u6ca1\u6709\u89e3\u6790\u5230\u7ae0\u8282\u76ee\u5f55"),
+                        )
+                        return
+                    }
+                } else {
+                    _loading.value = false
                     return
                 }
-                _loading.value = false
-                return
             }
 
             _chapters.value = chapters
@@ -384,7 +410,8 @@ class ReaderChapterController(
                     append(" | nextCache=${nextChapterCache != null}")
                     append(" | prevCache=${prevChapterCache != null}")
                 })
-                navigateDirectionState.value = 0
+                // Don't reset navigateDirection here — let CanvasRenderer consume it
+                // for startFromLastPage before resetting after progress restoration.
                 if (targetProgress == 0 && targetChapterPosition == 0) onChapterLoaded()
                 preloadNextChapter(index + 1)
                 preloadPrevChapter(index - 1)

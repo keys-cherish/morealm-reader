@@ -129,6 +129,12 @@ class ReaderSettingsController(
         .map { it?.customBgImage ?: "" }
         .stateIn(scope, SharingStarted.Eagerly, "")
 
+    val readerBgImageDay: StateFlow<String> = prefs.readerBgImageDay
+        .stateIn(scope, SharingStarted.Eagerly, "")
+
+    val readerBgImageNight: StateFlow<String> = prefs.readerBgImageNight
+        .stateIn(scope, SharingStarted.Eagerly, "")
+
     val pageAnim: StateFlow<String> = activeStyle
         .map { it?.pageAnim ?: "slide" }
         .stateIn(scope, SharingStarted.Eagerly, "slide")

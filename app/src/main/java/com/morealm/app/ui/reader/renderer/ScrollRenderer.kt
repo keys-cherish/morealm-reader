@@ -15,8 +15,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -752,18 +756,27 @@ fun ScrollRenderer(
                 }
                 if (viewWidth <= 0 || viewHeight <= 0 || pageCount == 0) return@drawWithContent
 
+                // 1) Draw background OUTSIDE the offscreen layer (not affected by DstOut)
+                drawIntoCanvas { composeCanvas ->
+                    val canvas = composeCanvas.nativeCanvas
+                    canvas.drawColor(bgColor)
+                    if (bgBitmap != null && !bgBitmap.isRecycled) {
+                        drawBgBitmap(canvas, bgBitmap, viewWidth.toFloat(), viewHeight.toFloat())
+                    }
+                }
+
+                // 2) Draw text content in offscreen layer so DstOut only erases text
+                drawContext.canvas.saveLayer(
+                    androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height),
+                    androidx.compose.ui.graphics.Paint()
+                )
+
                 drawIntoCanvas { composeCanvas ->
                     val canvas = composeCanvas.nativeCanvas
 
                     // Save and clip to viewport
                     canvas.save()
                     canvas.clipRect(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
-
-                    // Draw background
-                    canvas.drawColor(bgColor)
-                    if (bgBitmap != null && !bgBitmap.isRecycled) {
-                        drawBgBitmap(canvas, bgBitmap, viewWidth.toFloat(), viewHeight.toFloat())
-                    }
 
                     // Draw pages starting from currentPageIndex at pageOffset
                     var yOffset = pageOffset
@@ -869,6 +882,30 @@ fun ScrollRenderer(
 
                     canvas.restore()
                 }
+
+                // Alpha fade edges: text fades out at top/bottom, background shows through
+                val fadeHeight = size.height * 0.05f
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to Color.Black,
+                        1f to Color.Transparent,
+                        startY = 0f,
+                        endY = fadeHeight,
+                    ),
+                    blendMode = BlendMode.DstOut,
+                )
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        1f to Color.Black,
+                        startY = size.height - fadeHeight,
+                        endY = size.height,
+                    ),
+                    blendMode = BlendMode.DstOut,
+                )
+
+                // 3) Restore the offscreen layer (text with faded edges composited onto background)
+                drawContext.canvas.restore()
             }
     ) {
         val startHandleOffset = cursorOffsetFor(selectionStart, startHandle = true)

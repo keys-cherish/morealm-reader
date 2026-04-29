@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>墨境 MoRealm — 主题展示</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;transition:background .42s cubic-bezier(.16,1,.3,1),color .42s cubic-bezier(.16,1,.3,1);min-height:100vh}
+.wrap{max-width:480px;margin:0 auto;padding:40px 20px 80px}
+h1{font-size:1.8rem;font-weight:800;margin-bottom:4px;transition:color .42s}
+.sub{font-size:.9rem;opacity:.5;margin-bottom:32px}
+.picker{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:40px}
+.pick{border-radius:14px;padding:14px 8px;text-align:center;cursor:pointer;border:2px solid transparent;transition:all .25s;font-size:13px;font-weight:600}
+.pick:hover{transform:scale(1.04)}
+.pick.active{border-color:currentColor;box-shadow:0 4px 20px rgba(0,0,0,.15)}
+.pick .circle{width:28px;height:28px;border-radius:50%;margin:0 auto 6px;position:relative}
+.pick .circle::after{content:'';position:absolute;width:12px;height:12px;border-radius:50%;top:50%;left:50%;transform:translate(-50%,-50%)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>主题切换</h1>
+  <p class="sub">点击切换，实时预览 420ms 丝滑过渡</p>
+
+  <div class="picker" id="picker"></div>
+
+  <div class="reader-mock" id="reader">
+    <div class="reader-header"><span class="ch-name">第一章 初见</span><span class="time">23:38</span></div>
+    <div class="reader-body">
+      <p>　　暮色四合，长安城的灯火次第亮起。</p>
+      <p>　　少年站在朱雀大街的尽头，望着远处巍峨的宫墙，心中涌起一股说不清的情绪。三年前他从江南来到这座城市，身上只有一封推荐信和半两碎银。</p>
+      <p>　　"你就是新来的？"身后传来一个清冷的声音。</p>
+      <p>　　他转过身，看见一个白衣女子站在月光下，手中握着一卷竹简。</p>
+    </div>
+    <div class="reader-footer"><span>📖 1/42</span><span>62.0%</span></div>
+  </div>
+
+  <div class="stats-mock">
+    <h2>阅读统计</h2>
+    <div class="stat-row">
+      <div class="stat-item"><span class="stat-num">30</span><span class="stat-label">本书</span></div>
+      <div class="stat-item"><span class="stat-num">18h57m</span><span class="stat-label">总时长</span></div>
+      <div class="stat-item"><span class="stat-num">5</span><span class="stat-label">连续天数</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const themes=[
+  {id:'morealm',name:'墨境',bg:'#0A0A0F',surface:'#111118',text:'#EDEDEF',accent:'#7C5CFC',reader_bg:'#0A0A0F',reader_text:'#EDEDEF'},
+  {id:'paper',name:'纸上',bg:'#FFFCF6',surface:'#F8F6F1',text:'#1A1A1A',accent:'#E08300',reader_bg:'#FFFCF6',reader_text:'#2D2D2D'},
+  {id:'cyber',name:'赛博朋克',bg:'#0D0D0D',surface:'#1A1A2E',text:'#E0E0E0',accent:'#FF2D95',reader_bg:'#0D0D0D',reader_text:'#E0E0E0'},
+  {id:'forest',name:'森林',bg:'#1B2A1B',surface:'#243324',text:'#D7E8D7',accent:'#4CAF50',reader_bg:'#1B2A1B',reader_text:'#DCE8DC'},
+  {id:'midnight',name:'深夜',bg:'#000000',surface:'#0A0A0A',text:'#B0B0B0',accent:'#6366F1',reader_bg:'#000',reader_text:'#A0A0A0'},
+  {id:'eink',name:'墨水屏',bg:'#FFFFFF',surface:'#F0F0F0',text:'#000000',accent:'#333333',reader_bg:'#FFF',reader_text:'#000'},
+];
+let active='morealm';
+const picker=document.getElementById('picker');
+themes.forEach(t=>{
+  const d=document.createElement('div');
+  d.className='pick'+(t.id===active?' active':'');
+  d.dataset.id=t.id;
+  d.innerHTML=`<div class="circle" style="background:${t.bg};border:1px solid rgba(128,128,128,.3)"><div style="position:absolute;width:12px;height:12px;border-radius:50%;top:50%;left:50%;transform:translate(-50%,-50%);background:${t.accent}"></div></div>${t.name}`;
+  d.onclick=()=>apply(t.id);
+  picker.appendChild(d);
+});
+function apply(id){
+  active=id;
+  const t=themes.find(x=>x.id===id);
+  document.body.style.background=t.bg;
+  document.body.style.color=t.text;
+  document.querySelector('.reader-mock').style.background=t.reader_bg;
+  document.querySelector('.reader-mock').style.color=t.reader_text;
+  document.querySelector('.reader-mock').style.borderColor=t.accent+'33';
+  document.querySelector('.stats-mock').style.background=t.surface;
+  document.querySelector('.stats-mock').style.borderColor=t.accent+'33';
+  document.querySelectorAll('.stat-num').forEach(e=>e.style.color=t.accent);
+  document.querySelector('.ch-name').style.color=t.accent;
+  document.querySelectorAll('.pick').forEach(e=>e.classList.toggle('active',e.dataset.id===id));
+  document.querySelectorAll('.pick').forEach(e=>{e.style.background=t.surface;e.style.color=t.text});
+}
+apply('morealm');
+</script>
+
+<style>
+.reader-mock{border-radius:20px;border:1px solid;padding:20px;margin-bottom:24px;transition:all .42s cubic-bezier(.16,1,.3,1);font-size:15px;line-height:1.8}
+.reader-header,.reader-footer{display:flex;justify-content:space-between;font-size:12px;opacity:.4;margin-bottom:12px}
+.reader-footer{margin-top:16px;margin-bottom:0}
+.reader-body p{margin-bottom:12px;text-align:justify}
+.ch-name{font-weight:600;transition:color .42s}
+.stats-mock{border-radius:20px;border:1px solid transparent;padding:24px;transition:all .42s cubic-bezier(.16,1,.3,1)}
+.stats-mock h2{font-size:1rem;font-weight:700;margin-bottom:16px}
+.stat-row{display:flex;justify-content:space-around;text-align:center}
+.stat-item{display:flex;flex-direction:column;gap:2px}
+.stat-num{font-size:1.5rem;font-weight:800;transition:color .42s}
+.stat-label{font-size:.75rem;opacity:.5}
+</style>
+</body>
+</html>

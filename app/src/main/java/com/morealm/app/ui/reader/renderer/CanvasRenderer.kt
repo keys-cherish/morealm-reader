@@ -95,6 +95,7 @@ fun CanvasRenderer(
     startFromLastPage: Boolean = false,
     initialProgress: Int = 0,
     initialChapterPosition: Int = 0,
+    onProgressRestored: () -> Unit = {},
     pageAnimType: PageAnimType = PageAnimType.SLIDE,
     onTapCenter: () -> Unit = {},
     onProgress: (Int) -> Unit = {},
@@ -330,11 +331,17 @@ fun CanvasRenderer(
     fun placeholderChapter(message: String = chapterTitle.ifBlank { "加载中..." }): TextChapter =
         placeholderChapterFor(chapterIndex, chapterTitle, message)
 
-    // Layout pages — use async streaming layout for faster first-page display
-    var textChapter by remember(currentChapterKey) { mutableStateOf<TextChapter?>(placeholderChapter()) }
-    var pageCount by remember { mutableIntStateOf(1) }
-    val scope = rememberCoroutineScope()
+    // Layout pages — use prelayout cache to avoid placeholder flash
     val prelayoutCache = remember { mutableStateMapOf<String, TextChapter>() }
+    var textChapter by remember(currentChapterKey) {
+        val cached = prelayoutCache[currentChapterKey]
+        mutableStateOf<TextChapter?>(cached ?: placeholderChapter())
+    }
+    var pageCount by remember(currentChapterKey) {
+        val cached = prelayoutCache[currentChapterKey]
+        mutableIntStateOf(cached?.pageSize?.coerceAtLeast(1) ?: 1)
+    }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle) {
         prelayoutCache.clear()
@@ -504,13 +511,17 @@ fun CanvasRenderer(
 
     LaunchedEffect(currentChapterKey, pageAnimType) {
         if (pageAnimType != PageAnimType.SCROLL) {
-            // Coordinator state is auto-reset via remember(chapterIndex, pageAnimType),
-            // but we still need to reset pagerState position on chapter/anim key change.
-            coordinator.ignoredSettledDisplayPage = 0
+            // When navigating to prev chapter, start from the last page to avoid flash.
+            // Use prelayout cache page count if available, otherwise fall back to current renderPageCount.
+            val initialPage = if (startFromLastPage) {
+                val cachedPageCount = prelayoutCache[currentChapterKey]?.pageSize ?: renderPageCount
+                (cachedPageCount - 1).coerceAtLeast(0)
+            } else 0
+            coordinator.ignoredSettledDisplayPage = initialPage
             coordinator.pendingSettledDirection = null
-            coordinator.lastSettledDisplayPage = 0
+            coordinator.lastSettledDisplayPage = initialPage
             coordinator.lastReaderContent = null
-            pagerState.scrollToPage(0)
+            pagerState.scrollToPage(initialPage)
         }
     }
 
@@ -581,10 +592,18 @@ fun CanvasRenderer(
 
     // Restore saved progress after layout is complete
     LaunchedEffect(renderPageCount, pageCount, chapter?.isCompleted, progressRestored, pageAnimType) {
-        if (progressRestored) return@LaunchedEffect
-        if (chapter?.isCompleted != true) return@LaunchedEffect
+        if (progressRestored) {
+            AppLog.debug("CanvasRenderer", "restoreProgress: SKIP already restored")
+            return@LaunchedEffect
+        }
+        if (chapter?.isCompleted != true) {
+            AppLog.debug("CanvasRenderer", "restoreProgress: SKIP not completed, renderPC=$renderPageCount pc=$pageCount")
+            return@LaunchedEffect
+        }
         if (renderPageCount <= 1) {
+            AppLog.debug("CanvasRenderer", "restoreProgress: renderPC<=1, startFromLast=$startFromLastPage initProg=$initialProgress")
             progressRestored = true
+            onProgressRestored()
             return@LaunchedEffect
         }
         val currentTargetPage = when {
@@ -594,6 +613,7 @@ fun CanvasRenderer(
             initialProgress > 0 -> ((initialProgress / 100f) * (pageCount - 1)).roundToInt().coerceIn(0, pageCount - 1)
             else -> 0
         }
+        AppLog.debug("CanvasRenderer", "restoreProgress: startFromLast=$startFromLastPage initProg=$initialProgress pc=$pageCount renderPC=$renderPageCount target=$currentTargetPage")
         val targetPage = pageFactory.displayIndexForCurrentPage(currentTargetPage).coerceIn(0, renderPageCount - 1)
         readerPageIndex = currentTargetPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         if (targetPage != pagerState.currentPage) {
@@ -604,6 +624,7 @@ fun CanvasRenderer(
         coordinator.lastReaderContent = coordinator.createPageState(targetPage).upContent()
         coordinator.reportProgress(coordinator.lastReaderContent)
         progressRestored = true
+        onProgressRestored()
     }
 
     // Report progress
@@ -645,6 +666,7 @@ fun CanvasRenderer(
         footerLeft = footerLeft,
         footerCenter = footerCenter,
         footerRight = footerRight,
+        hasBgImage = bgBitmap != null,
     )
 
     // SimulationParams for bezier page curl
@@ -975,6 +997,7 @@ fun CanvasRenderer(
                 footerLeft = footerLeft,
                 footerCenter = footerCenter,
                 footerRight = footerRight,
+                hasBgImage = bgBitmap != null,
             )
         } else {
             AnimatedPageReader(
@@ -1232,6 +1255,7 @@ private fun PageReaderInfoOverlay(
     footerLeft: String,
     footerCenter: String,
     footerRight: String,
+    hasBgImage: Boolean = false,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         val safePageIndex = pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
@@ -1260,11 +1284,14 @@ private fun PageReaderInfoOverlay(
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
                 .height(64.dp)
-                .background(
-                    Brush.verticalGradient(
-                        0f to backgroundColor,
-                        0.72f to backgroundColor,
-                        1f to backgroundColor.copy(alpha = 0f),
+                .then(
+                    if (hasBgImage) Modifier
+                    else Modifier.background(
+                        Brush.verticalGradient(
+                            0f to backgroundColor,
+                            0.72f to backgroundColor,
+                            1f to backgroundColor.copy(alpha = 0f),
+                        )
                     )
                 )
                 .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
@@ -1286,11 +1313,14 @@ private fun PageReaderInfoOverlay(
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
                 .height(64.dp)
-                .background(
-                    Brush.verticalGradient(
-                        0f to backgroundColor.copy(alpha = 0f),
-                        0.28f to backgroundColor,
-                        1f to backgroundColor,
+                .then(
+                    if (hasBgImage) Modifier
+                    else Modifier.background(
+                        Brush.verticalGradient(
+                            0f to backgroundColor.copy(alpha = 0f),
+                            0.28f to backgroundColor,
+                            1f to backgroundColor,
+                        )
                     )
                 )
                 .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
@@ -1589,6 +1619,7 @@ private fun PageContentBox(
             footerLeft = footerLeft,
             footerCenter = footerCenter,
             footerRight = footerRight,
+            hasBgImage = bgBitmap != null,
         )
     }
 }

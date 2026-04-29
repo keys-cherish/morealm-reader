@@ -190,6 +190,7 @@ class ReaderViewModel @Inject constructor(
         displayedContent = chapter.chapterContent.value,
         bookTitle = chapter.book.value?.title ?: "",
         chapterTitle = chapter.chapters.value.getOrNull(chapter.currentChapterIndex.value)?.title ?: "",
+        coverUrl = chapter.book.value?.coverUrl,
         startChapterPosition = visibleReadAloudChapterPosition
             .takeIf { tts.ttsPlaying.value.not() && it >= 0 },
         paragraphPositions = readAloudParagraphPositions,
@@ -226,6 +227,7 @@ class ReaderViewModel @Inject constructor(
 
     fun nextChapter() = navigation.nextChapter()
     fun prevChapter() = navigation.prevChapter()
+    fun clearNavigateDirection() { navigation._navigateDirection.value = 0 }
     fun openNextLinkedBook() = navigation.openNextLinkedBook()
     fun dismissNextBookPrompt() = navigation.dismissNextBookPrompt()
     fun setNavigateToBookCallback(callback: (String) -> Unit) = navigation.setNavigateToBookCallback(callback)

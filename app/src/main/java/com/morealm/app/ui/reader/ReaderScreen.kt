@@ -3,6 +3,7 @@ package com.morealm.app.ui.reader
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import com.morealm.app.core.log.AppLog
 import android.net.Uri
 import android.os.Build
 import android.view.KeyEvent
@@ -26,6 +27,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -107,6 +110,8 @@ fun ReaderScreen(
     val pendingSearchSelection by viewModel.pendingSearchSelection.collectAsStateWithLifecycle()
     val customCss by viewModel.settings.customCss.collectAsStateWithLifecycle()
     val customBgImage by viewModel.settings.customBgImage.collectAsStateWithLifecycle()
+    val readerBgImageDay by viewModel.settings.readerBgImageDay.collectAsStateWithLifecycle()
+    val readerBgImageNight by viewModel.settings.readerBgImageNight.collectAsStateWithLifecycle()
     val selectedText by viewModel.selectedText.collectAsStateWithLifecycle()
     val viewingImageSrc by viewModel.viewingImageSrc.collectAsStateWithLifecycle()
     val ttsScrollProgress by viewModel.tts.ttsScrollProgress.collectAsStateWithLifecycle()
@@ -320,14 +325,19 @@ fun ReaderScreen(
         val readerBg = moColors.readerBackground
         val readerFg = moColors.readerText
         // [Theme] log — one-line diagnosis for background color bugs (saved 4 rounds last time)
-        com.morealm.app.core.log.AppLog.debug("Theme", "readerBg=${String.format("#%08X", readerBg.toArgb())} | isNight=$isNight")
+        AppLog.debug("Theme", "readerBg=${String.format("#%08X", readerBg.toArgb())} | isNight=$isNight")
         val readerFontSize = activeStyle?.textSize?.toFloat() ?: fontSize
         val readerLineHeight = activeStyle?.lineHeight ?: lineHeight
         val readerFontFamily = activeStyle?.fontFamily ?: fontFamily
-        // Resolve background image: customBgImage (global pref) takes priority,
-        // then activeStyle's per-style bg image (day/night aware)
+        // Resolve background image priority:
+        // 1. Per-style customBgImage (from reader bottom panel)
+        // 2. Global day/night bg image (from Reading Settings)
+        // 3. Per-style bgImageUri/bgImageUriNight
         val readerBgImage = customBgImage.ifEmpty {
-            (if (isNight) activeStyle?.bgImageUriNight else activeStyle?.bgImageUri) ?: ""
+            val globalBg = if (isNight) readerBgImageNight else readerBgImageDay
+            globalBg.ifEmpty {
+                (if (isNight) activeStyle?.bgImageUriNight else activeStyle?.bgImageUri) ?: ""
+            }
         }
         val themeCss = activeTheme?.customCss.orEmpty()
         val currentStyle = activeStyle
@@ -369,6 +379,7 @@ fun ReaderScreen(
                 startFromLastPage = navigateDirection < 0,
                 initialProgress = renderedChapter.initialProgress,
                 initialChapterPosition = renderedChapter.initialChapterPosition,
+                onProgressRestored = { viewModel.clearNavigateDirection() },
                 pageAnimType = pageAnim.toPageAnimType(),
                 onTapCenter = { viewModel.toggleControls() },
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
@@ -494,6 +505,27 @@ fun ReaderScreen(
                     viewModel.setAutoPageInterval(next)
                 },
             )
+        }
+
+        // Floating day/night toggle button (always visible, independent of control bar)
+        if (!showControls && !showSettings && !showTtsPanel && !showChapterList && !showBookmarks && !showFullSearch) {
+            androidx.compose.material3.FilledIconButton(
+                onClick = { themeViewModel?.toggleDayNight() },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+                    .size(36.dp),
+                colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                    contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                ),
+            ) {
+                androidx.compose.material3.Icon(
+                    imageVector = if (isNight) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                    contentDescription = if (isNight) "切换日间" else "切换夜间",
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
 
         // Scrim overlay for panels (tap to dismiss)

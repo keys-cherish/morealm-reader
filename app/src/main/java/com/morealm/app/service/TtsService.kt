@@ -18,6 +18,7 @@ import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -34,6 +35,7 @@ import kotlinx.coroutines.*
  * Listens to TtsEventBus.commands for metadata/state updates from ViewModel.
  */
 @Suppress("DEPRECATION")
+@UnstableApi
 @AndroidEntryPoint
 class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListener {
 
@@ -80,6 +82,10 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         const val CMD_PREV_CHAPTER = "prev_chapter"
         const val CMD_NEXT_CHAPTER = "next_chapter"
         const val ACTION_STOP = "com.morealm.app.TTS_STOP"
+        const val ACTION_PREV = "com.morealm.app.TTS_PREV"
+        const val ACTION_NEXT = "com.morealm.app.TTS_NEXT"
+        const val ACTION_PAUSE = "com.morealm.app.TTS_PAUSE"
+        const val ACTION_RESUME = "com.morealm.app.TTS_RESUME"
     }
 
     override fun onCreate() {
@@ -96,6 +102,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0,
         )
         initMediaSession()
+        setMediaNotificationProvider(TtsNotificationProvider(this))
         setupAudioFocus()
         initNoisyReceiver()
         initPhoneStateListener()
@@ -104,22 +111,30 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopSelfAndRelease()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopSelfAndRelease()
+                return START_NOT_STICKY
+            }
+            ACTION_PREV -> {
+                TtsEventBus.sendEvent(TtsEventBus.Event.PrevChapter)
+                return START_NOT_STICKY
+            }
+            ACTION_NEXT -> {
+                TtsEventBus.sendEvent(TtsEventBus.Event.NextChapter)
+                return START_NOT_STICKY
+            }
+            ACTION_PAUSE -> {
+                TtsEventBus.sendEvent(TtsEventBus.Event.PlayPause)
+                return START_NOT_STICKY
+            }
+            ACTION_RESUME -> {
+                TtsEventBus.sendEvent(TtsEventBus.Event.PlayPause)
+                return START_NOT_STICKY
+            }
         }
-        // Post foreground notification immediately to avoid 5-second ANR crash.
-        // MediaSessionService will replace this with the proper media notification.
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("朗读中")
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setSilent(true)
-            .build()
-        ServiceCompat.startForeground(
-            this, NOTIFICATION_ID, notification,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0,
-        )
+        // Let MediaSessionService handle the foreground notification via TtsNotificationProvider.
+        // The early notification from onCreate() covers the ANR window.
         return super.onStartCommand(intent, flags, startId)
     }
 
@@ -130,7 +145,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                 when (cmd) {
                     is TtsEventBus.Command.UpdateMeta -> {
                         val player = mediaSession?.player as? TtsPlayer ?: return@collect
-                        player.updateMetadata(cmd.book, cmd.chapter)
+                        player.updateMetadata(cmd.book, cmd.chapter, cmd.coverUrl)
                     }
                     is TtsEventBus.Command.SetPlaying -> {
                         val player = mediaSession?.player as? TtsPlayer ?: return@collect

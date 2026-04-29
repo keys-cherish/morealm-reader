@@ -114,7 +114,10 @@ fun ProfileScreen(
     ) {
         TopAppBar(
             title = { Text("我的", fontWeight = FontWeight.Bold) },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = Color.Transparent,
+                scrolledContainerColor = Color.Transparent,
+            ),
         )
 
         // Reading stats card (real data)
@@ -304,7 +307,7 @@ fun ProfileScreen(
             SettingsItem(Icons.Default.BugReport, "应用日志",
                 subtitle = "查看运行日志和错误信息", onClick = onNavigateAppLog)
         }
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(96.dp))
     }
 
     // Delete custom theme confirmation

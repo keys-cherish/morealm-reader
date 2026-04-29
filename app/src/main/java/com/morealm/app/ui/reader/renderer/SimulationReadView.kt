@@ -380,9 +380,11 @@ class SimulationReadView(context: Context) : android.view.View(context) {
             canvas.drawColor(bgMeanColor)
             drawHelper.bgMeanColor = bgMeanColor
             if (isNext) {
+                // Next: current page curls away, next page revealed underneath
                 drawHelper.onDraw(canvas, curBitmap, nextBitmap)
             } else {
-                drawHelper.onDraw(canvas, prevBitmap, curBitmap)
+                // Prev: current page curls away, previous page revealed underneath
+                drawHelper.onDraw(canvas, curBitmap, prevBitmap)
             }
         } else {
             canvas.drawColor(bgMeanColor)
