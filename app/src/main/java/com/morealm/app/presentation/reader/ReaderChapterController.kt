@@ -5,6 +5,8 @@ import android.net.Uri
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.parser.LocalBookParser
+import com.morealm.app.domain.render.ChapterProvider
+import com.morealm.app.domain.render.TextChapter
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.ReplaceRuleRepository
 import com.morealm.app.domain.repository.SourceRepository
@@ -82,6 +84,100 @@ class ReaderChapterController(
     private val _nextTextChapter = MutableStateFlow<com.morealm.app.domain.render.TextChapter?>(null)
     val nextTextChapter: StateFlow<com.morealm.app.domain.render.TextChapter?> = _nextTextChapter.asStateFlow()
 
+    // ── Layout params (pushed from UI layer) ──
+    @Volatile
+    private var cachedLayoutParams: LayoutParams? = null
+    private var relayoutJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Called from UI layer when layout parameters change (screen size, font, padding, style).
+     * Triggers re-layout of all cached chapters.
+     *
+     * On first call (old == null), if chapter content is already loaded, we also trigger
+     * relayout so the ViewModel cache is populated before CanvasRenderer needs it.
+     */
+    fun updateLayoutParams(params: LayoutParams) {
+        val old = cachedLayoutParams
+        cachedLayoutParams = params
+        if (old == null) {
+            // First time receiving layout params — if content already loaded, layout it now
+            if (_chapterContent.value.isNotBlank()) {
+                relayoutAllChapters()
+            }
+        } else if (!layoutParamsEqual(old, params)) {
+            // Layout params changed — re-layout all cached chapters
+            relayoutAllChapters()
+        }
+    }
+
+    /**
+     * Compare layout params by value. TextPaint does not override equals(), so we compare
+     * the fields that actually affect layout output.
+     */
+    private fun layoutParamsEqual(a: LayoutParams, b: LayoutParams): Boolean {
+        return a.viewWidth == b.viewWidth
+            && a.viewHeight == b.viewHeight
+            && a.paddingLeft == b.paddingLeft
+            && a.paddingRight == b.paddingRight
+            && a.paddingTop == b.paddingTop
+            && a.paddingBottom == b.paddingBottom
+            && a.paragraphIndent == b.paragraphIndent
+            && a.textFullJustify == b.textFullJustify
+            && a.titleMode == b.titleMode
+            && a.isMiddleTitle == b.isMiddleTitle
+            && a.lineSpacingExtra == b.lineSpacingExtra
+            && a.paragraphSpacing == b.paragraphSpacing
+            && a.titleTopSpacing == b.titleTopSpacing
+            && a.titleBottomSpacing == b.titleBottomSpacing
+            && a.contentPaint.textSize == b.contentPaint.textSize
+            && a.contentPaint.letterSpacing == b.contentPaint.letterSpacing
+            && a.contentPaint.typeface == b.contentPaint.typeface
+            && a.titlePaint.textSize == b.titlePaint.textSize
+            && a.titlePaint.letterSpacing == b.titlePaint.letterSpacing
+    }
+
+    private fun relayoutAllChapters() {
+        relayoutJob?.cancel()
+        relayoutJob = scope.launch(Dispatchers.Default) {
+            val params = cachedLayoutParams ?: return@launch
+            val curContent = _chapterContent.value
+            val curIdx = _currentChapterIndex.value
+            val chapterList = _chapters.value
+            if (curContent.isNotBlank() && curIdx in chapterList.indices) {
+                val provider = createChapterProviderFrom(params)
+                val tc = provider.layoutChapter(
+                    title = chapterList[curIdx].title,
+                    content = curContent,
+                    chapterIndex = curIdx,
+                    chaptersSize = chapterList.size,
+                )
+                _curTextChapter.value = tc
+            }
+            val nextPre = _nextPreloadedChapter.value
+            if (nextPre != null && nextPre.content.isNotBlank()) {
+                val provider = createChapterProviderFrom(params)
+                val tc = provider.layoutChapter(
+                    title = nextPre.title,
+                    content = nextPre.content,
+                    chapterIndex = nextPre.index,
+                    chaptersSize = chapterList.size,
+                )
+                _nextTextChapter.value = tc
+            }
+            val prevPre = _prevPreloadedChapter.value
+            if (prevPre != null && prevPre.content.isNotBlank()) {
+                val provider = createChapterProviderFrom(params)
+                val tc = provider.layoutChapter(
+                    title = prevPre.title,
+                    content = prevPre.content,
+                    chapterIndex = prevPre.index,
+                    chaptersSize = chapterList.size,
+                )
+                _prevTextChapter.value = tc
+            }
+        }
+    }
+
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
@@ -106,6 +202,29 @@ class ReaderChapterController(
     internal lateinit var scrollProgressState: MutableStateFlow<Int>
     internal lateinit var navigateDirectionState: MutableStateFlow<Int>
     internal lateinit var linkedBooksState: MutableStateFlow<List<Book>>
+
+    private fun createChapterProviderFrom(params: LayoutParams): ChapterProvider {
+        return ChapterProvider(
+            viewWidth = params.viewWidth,
+            viewHeight = params.viewHeight,
+            paddingLeft = params.paddingLeft,
+            paddingRight = params.paddingRight,
+            paddingTop = params.paddingTop,
+            paddingBottom = params.paddingBottom,
+            titlePaint = params.titlePaint,
+            contentPaint = params.contentPaint,
+            textMeasure = params.textMeasure,
+            paragraphIndent = params.paragraphIndent,
+            textFullJustify = params.textFullJustify,
+            titleMode = params.titleMode,
+            isMiddleTitle = params.isMiddleTitle,
+            lineSpacingExtra = params.lineSpacingExtra,
+            paragraphSpacing = params.paragraphSpacing,
+            titleTopSpacing = params.titleTopSpacing,
+            titleBottomSpacing = params.titleBottomSpacing,
+            chapterNumPaint = params.chapterNumPaint,
+        )
+    }
 
     fun isWebBook(book: Book): Boolean {
         return book.format == com.morealm.app.domain.entity.BookFormat.WEB ||
@@ -134,6 +253,10 @@ class ReaderChapterController(
         prevChapterCache = null
         _nextPreloadedChapter.value = null
         _prevPreloadedChapter.value = null
+        // Clear TextChapter caches to avoid stale layout data
+        _curTextChapter.value = null
+        _prevTextChapter.value = null
+        _nextTextChapter.value = null
         _chapters.value = listOf(errorChapter)
         _currentChapterIndex.value = 0
         _chapterContent.value = content
@@ -348,6 +471,30 @@ class ReaderChapterController(
         }
         val isWebBook = isWebBook(book)
 
+        // ── Legado-style TextChapter cache rotation ──
+        // Rotate before launching the coroutine so CanvasRenderer can use the
+        // rotated cache immediately (e.g., next→cur when navigating forward).
+        when {
+            index == prevIndex + 1 -> {
+                // Forward: cur→prev, next→cur (next will be re-preloaded)
+                _prevTextChapter.value = _curTextChapter.value
+                _curTextChapter.value = _nextTextChapter.value
+                _nextTextChapter.value = null
+            }
+            index == prevIndex - 1 -> {
+                // Backward: cur→next, prev→cur (prev will be re-preloaded)
+                _nextTextChapter.value = _curTextChapter.value
+                _curTextChapter.value = _prevTextChapter.value
+                _prevTextChapter.value = null
+            }
+            else -> {
+                // Jump: clear all caches
+                _curTextChapter.value = null
+                _prevTextChapter.value = null
+                _nextTextChapter.value = null
+            }
+        }
+
         chapterLoadJob = scope.launch(Dispatchers.IO) {
             try {
                 // Capture cache to local val for thread safety (cache is @Volatile)
@@ -413,14 +560,32 @@ class ReaderChapterController(
                 // Don't reset navigateDirection here — let CanvasRenderer consume it
                 // for startFromLastPage before resetting after progress restoration.
                 if (targetProgress == 0 && targetChapterPosition == 0) onChapterLoaded()
-                preloadNextChapter(index + 1)
-                preloadPrevChapter(index - 1)
+
+                // Layout current chapter (Legado-style).
+                // If cache rotation already provided a matching TextChapter, skip re-layout.
+                val rotatedCur = _curTextChapter.value
+                if (rotatedCur == null || rotatedCur.chapterIndex != index) {
+                    layoutAndCacheChapter(index, chapter.title, content)
+                }
+
+                // Preload and layout adjacent chapters.
+                // Only preload the side that wasn't already populated by rotation.
+                if (_nextTextChapter.value?.chapterIndex != index + 1) {
+                    preloadNextChapter(index + 1)
+                }
+                if (_prevTextChapter.value?.chapterIndex != index - 1) {
+                    preloadPrevChapter(index - 1)
+                }
                 maybeRetriggerPreCache(index)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (loadToken != chapterLoadToken) return@launch
                 AppLog.error("Chapter", "Failed to load chapter $index", e)
+                // Clear stale TextChapter caches on error
+                _curTextChapter.value = null
+                _prevTextChapter.value = null
+                _nextTextChapter.value = null
                 val title = if (isWebBook) "\u6b63\u6587\u52a0\u8f7d\u5931\u8d25" else "\u52a0\u8f7d\u5931\u8d25"
                 val detail = if (isWebBook) {
                     webReaderErrorDetail(
@@ -467,6 +632,8 @@ class ReaderChapterController(
                 val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
                 nextChapterCache = converted
                 _nextPreloadedChapter.value = PreloadedReaderChapter(nextIndex, chapterList[nextIndex].title, converted)
+                // Layout next chapter
+                layoutAndCacheNextChapter(nextIndex, chapterList[nextIndex].title, converted)
             }
         } catch (e: Exception) {
             AppLog.warn("Chapter", "Preload next chapter $nextIndex failed", e)
@@ -489,6 +656,8 @@ class ReaderChapterController(
                 val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
                 prevChapterCache = converted
                 _prevPreloadedChapter.value = PreloadedReaderChapter(prevIndex, chapterList[prevIndex].title, converted)
+                // Layout prev chapter
+                layoutAndCachePrevChapter(prevIndex, chapterList[prevIndex].title, converted)
             }
         } catch (e: Exception) {
             AppLog.warn("Chapter", "Preload prev chapter $prevIndex failed", e)
@@ -756,6 +925,62 @@ class ReaderChapterController(
         if (nextIdx < _chapters.value.size && _nextPreloadedChapter.value?.index != nextIdx) {
             scope.launch(Dispatchers.IO) {
                 preloadNextChapter(nextIdx)
+            }
+        }
+    }
+
+    // ── Chapter Layout (Legado-style) ──
+
+    private suspend fun layoutAndCacheChapter(index: Int, title: String, content: String) {
+        val params = cachedLayoutParams ?: return
+        withContext(Dispatchers.Default) {
+            try {
+                val provider = createChapterProviderFrom(params)
+                val textChapter = provider.layoutChapter(
+                    title = title,
+                    content = content,
+                    chapterIndex = index,
+                    chaptersSize = _chapters.value.size,
+                )
+                _curTextChapter.value = textChapter
+            } catch (e: Exception) {
+                AppLog.error("Chapter", "Layout chapter $index failed", e)
+            }
+        }
+    }
+
+    private suspend fun layoutAndCacheNextChapter(index: Int, title: String, content: String) {
+        val params = cachedLayoutParams ?: return
+        withContext(Dispatchers.Default) {
+            try {
+                val provider = createChapterProviderFrom(params)
+                val textChapter = provider.layoutChapter(
+                    title = title,
+                    content = content,
+                    chapterIndex = index,
+                    chaptersSize = _chapters.value.size,
+                )
+                _nextTextChapter.value = textChapter
+            } catch (e: Exception) {
+                AppLog.error("Chapter", "Layout next chapter $index failed", e)
+            }
+        }
+    }
+
+    private suspend fun layoutAndCachePrevChapter(index: Int, title: String, content: String) {
+        val params = cachedLayoutParams ?: return
+        withContext(Dispatchers.Default) {
+            try {
+                val provider = createChapterProviderFrom(params)
+                val textChapter = provider.layoutChapter(
+                    title = title,
+                    content = content,
+                    chapterIndex = index,
+                    chaptersSize = _chapters.value.size,
+                )
+                _prevTextChapter.value = textChapter
+            } catch (e: Exception) {
+                AppLog.error("Chapter", "Layout prev chapter $index failed", e)
             }
         }
     }

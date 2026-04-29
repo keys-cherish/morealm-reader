@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.render.*
+import com.morealm.app.presentation.reader.LayoutParams
 import com.morealm.app.presentation.reader.ReaderSearchController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -137,6 +138,11 @@ fun CanvasRenderer(
     onPageTurnCommandConsumed: () -> Unit = {},
     autoPageSeconds: Int = 0,
     readAloudChapterPosition: Int = -1,
+    // ── ViewModel TextChapter cache (Legado-style) ──
+    vmCurTextChapter: TextChapter? = null,
+    vmPrevTextChapter: TextChapter? = null,
+    vmNextTextChapter: TextChapter? = null,
+    onLayoutParamsChanged: ((LayoutParams) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -291,6 +297,32 @@ fun CanvasRenderer(
 
     fun chapterCacheKey(index: Int, title: String, body: String): String = "$index|$title|${body.hashCode()}|$screenWidthPx|$screenHeightPx|$fontSizePx|$lineHeight|$effectivePadLeft|$effectivePadRight|$effectivePadTop|$effectivePadBottom|${readerStyle?.hashCode()}"
 
+    // Push layout params to ViewModel whenever they change
+    LaunchedEffect(layoutInputs) {
+        onLayoutParamsChanged?.invoke(
+            LayoutParams(
+                viewWidth = layoutInputs.provider.viewWidth,
+                viewHeight = layoutInputs.provider.viewHeight,
+                paddingLeft = layoutInputs.provider.paddingLeft,
+                paddingRight = layoutInputs.provider.paddingRight,
+                paddingTop = layoutInputs.provider.paddingTop,
+                paddingBottom = layoutInputs.provider.paddingBottom,
+                titlePaint = layoutInputs.titlePaint,
+                contentPaint = layoutInputs.contentPaint,
+                textMeasure = layoutInputs.provider.textMeasure,
+                paragraphIndent = layoutInputs.provider.paragraphIndent,
+                textFullJustify = layoutInputs.provider.textFullJustify,
+                titleMode = layoutInputs.provider.titleMode,
+                isMiddleTitle = layoutInputs.provider.isMiddleTitle,
+                lineSpacingExtra = layoutInputs.provider.lineSpacingExtra,
+                paragraphSpacing = layoutInputs.provider.paragraphSpacing,
+                titleTopSpacing = layoutInputs.provider.titleTopSpacing,
+                titleBottomSpacing = layoutInputs.provider.titleBottomSpacing,
+                chapterNumPaint = layoutInputs.provider.chapterNumPaint,
+            )
+        )
+    }
+
     val currentChapterKey: String = remember(
         chapterIndex,
         chapterTitle,
@@ -369,9 +401,7 @@ fun CanvasRenderer(
         }
     }
 
-    LaunchedEffect(currentChapterKey, layoutInputs) {
-        textChapter = placeholderChapter()
-        pageCount = 1
+    LaunchedEffect(currentChapterKey, layoutInputs, vmCurTextChapter) {
         if (content.isBlank()) {
             val chapter = placeholderChapter(chapterTitle.ifBlank { "当前章节暂无正文" }).apply {
                 isCompleted = true
@@ -379,12 +409,27 @@ fun CanvasRenderer(
             textChapter = chapter
             pageCount = 1
         } else {
+            // Priority 1: ViewModel cache (same chapter index, same layout params)
+            val vmCached = vmCurTextChapter
+            if (vmCached != null && vmCached.chapterIndex == chapterIndex
+                && vmCached.viewWidth == layoutInputs.provider.viewWidth
+                && vmCached.viewHeight == layoutInputs.provider.viewHeight
+            ) {
+                textChapter = vmCached
+                pageCount = vmCached.pageSize.coerceAtLeast(1)
+                prelayoutCache[currentChapterKey] = vmCached
+                return@LaunchedEffect
+            }
+            // Priority 2: Local prelayout cache
             val cachedChapter = prelayoutCache[currentChapterKey]
             if (cachedChapter != null) {
                 textChapter = cachedChapter
                 pageCount = cachedChapter.pageSize.coerceAtLeast(1)
                 return@LaunchedEffect
             }
+            // Priority 3: Async layout
+            textChapter = placeholderChapter()
+            pageCount = 1
             var handle: com.morealm.app.domain.render.AsyncLayoutHandle? = null
             handle = layoutInputs.provider.layoutChapterAsync(
                 title = chapterTitle,
@@ -413,12 +458,29 @@ fun CanvasRenderer(
     }
     val currentChapterPages = chapter?.pages?.takeIf { it.isNotEmpty() }
         ?: lastRenderablePages.ifEmpty { placeholderChapter().pages }
-    val prevTextChapter = if (prevChapterTitle.isNotBlank() && prevChapterContent.isNotBlank()) {
-        prelayoutCache[chapterCacheKey(chapterIndex - 1, prevChapterTitle, prevChapterContent)]
-    } else null
-    val nextTextChapter = if (nextChapterTitle.isNotBlank() && nextChapterContent.isNotBlank()) {
-        prelayoutCache[chapterCacheKey(chapterIndex + 1, nextChapterTitle, nextChapterContent)]
-    } else null
+    // Prefer ViewModel cache for prev/next chapters, fallback to local prelayout cache
+    val prevTextChapter = run {
+        val vmPrev = vmPrevTextChapter
+        if (vmPrev != null && vmPrev.chapterIndex == chapterIndex - 1
+            && vmPrev.viewWidth == layoutInputs.provider.viewWidth
+            && vmPrev.viewHeight == layoutInputs.provider.viewHeight
+        ) {
+            vmPrev
+        } else if (prevChapterTitle.isNotBlank() && prevChapterContent.isNotBlank()) {
+            prelayoutCache[chapterCacheKey(chapterIndex - 1, prevChapterTitle, prevChapterContent)]
+        } else null
+    }
+    val nextTextChapter = run {
+        val vmNext = vmNextTextChapter
+        if (vmNext != null && vmNext.chapterIndex == chapterIndex + 1
+            && vmNext.viewWidth == layoutInputs.provider.viewWidth
+            && vmNext.viewHeight == layoutInputs.provider.viewHeight
+        ) {
+            vmNext
+        } else if (nextChapterTitle.isNotBlank() && nextChapterContent.isNotBlank()) {
+            prelayoutCache[chapterCacheKey(chapterIndex + 1, nextChapterTitle, nextChapterContent)]
+        } else null
+    }
     var readerPageIndex by remember(chapterIndex) { mutableIntStateOf(0) }
     LaunchedEffect(pageCount, chapter?.isCompleted) {
         if (chapter?.isCompleted == true && pageCount > 0 && readerPageIndex > pageCount - 1) {

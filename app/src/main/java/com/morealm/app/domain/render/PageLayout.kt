@@ -397,6 +397,10 @@ class TextChapter(
     val chapterIndex: Int,
     val title: String,
     val chaptersSize: Int,
+    /** Layout viewport width used to produce this chapter's pages */
+    val viewWidth: Int = 0,
+    /** Layout viewport height used to produce this chapter's pages */
+    val viewHeight: Int = 0,
 ) {
     private val pageLock = Any()
     private val textPages = arrayListOf<TextPage>()

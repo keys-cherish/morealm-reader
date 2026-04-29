@@ -69,7 +69,7 @@ class ChapterProvider(
         chapterIndex: Int,
         chaptersSize: Int = 0,
     ): TextChapter {
-        val textChapter = TextChapter(chapterIndex, title, chaptersSize)
+        val textChapter = TextChapter(chapterIndex, title, chaptersSize, viewWidth, viewHeight)
         val textPages = arrayListOf<TextPage>()
         layoutInternal(title, content, chapterIndex, chaptersSize, textChapter, textPages)
         return textChapter
@@ -95,7 +95,7 @@ class ChapterProvider(
         onCompleted: (() -> Unit)? = null,
         onError: ((Throwable) -> Unit)? = null,
     ): AsyncLayoutHandle {
-        val textChapter = TextChapter(chapterIndex, title, chaptersSize)
+        val textChapter = TextChapter(chapterIndex, title, chaptersSize, viewWidth, viewHeight)
         val channel = Channel<TextPage>(Channel.UNLIMITED)
 
         val job = scope.launch(Dispatchers.Default) {

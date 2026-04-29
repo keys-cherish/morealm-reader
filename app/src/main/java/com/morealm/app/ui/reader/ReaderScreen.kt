@@ -60,6 +60,7 @@ import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.Bookmark
 import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.presentation.reader.ReaderSearchController
+import com.morealm.app.presentation.reader.LayoutParams
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.ui.theme.MoRealmColors
 import kotlinx.coroutines.flow.flowOf
@@ -356,6 +357,11 @@ fun ReaderScreen(
         val isTxtFormat = book?.format == com.morealm.app.domain.entity.BookFormat.TXT
         val displayContent = renderedChapter.content.ifEmpty { content }
 
+        // Collect ViewModel TextChapter cache for Legado-style pre-layout
+        val vmCurTextChapter by viewModel.chapter.curTextChapter.collectAsState()
+        val vmPrevTextChapter by viewModel.chapter.prevTextChapter.collectAsState()
+        val vmNextTextChapter by viewModel.chapter.nextTextChapter.collectAsState()
+
         // Keep the last real reader surface on screen. During initial loading, avoid rendering
         // a synthetic 1/1 empty chapter that shows up as a visible white/loading flicker in LDPlayer.
         if (displayContent.isNotBlank()) {
@@ -427,6 +433,10 @@ fun ReaderScreen(
                 footerLeft = ftrLeft,
                 footerCenter = ftrCenter,
                 footerRight = ftrRight,
+                vmCurTextChapter = vmCurTextChapter,
+                vmPrevTextChapter = vmPrevTextChapter,
+                vmNextTextChapter = vmNextTextChapter,
+                onLayoutParamsChanged = { params -> viewModel.chapter.updateLayoutParams(params) },
                 modifier = Modifier.fillMaxSize(),
             )
         }
