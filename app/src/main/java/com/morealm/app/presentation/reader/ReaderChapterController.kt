@@ -474,17 +474,40 @@ class ReaderChapterController(
         // ── Legado-style TextChapter cache rotation ──
         // Rotate before launching the coroutine so CanvasRenderer can use the
         // rotated cache immediately (e.g., next→cur when navigating forward).
+        // IMPORTANT: Validate rotated cache layout params — if they don't match current
+        // layout, clear the cache to avoid rendering with stale layout.
+        val currentLayoutParams = cachedLayoutParams
         when {
             index == prevIndex + 1 -> {
                 // Forward: cur→prev, next→cur (next will be re-preloaded)
                 _prevTextChapter.value = _curTextChapter.value
-                _curTextChapter.value = _nextTextChapter.value
+                val rotatedNext = _nextTextChapter.value
+                // Validate rotated cache: must have matching layout params
+                if (rotatedNext != null && currentLayoutParams != null &&
+                    (rotatedNext.viewWidth != currentLayoutParams.viewWidth ||
+                     rotatedNext.viewHeight != currentLayoutParams.viewHeight)
+                ) {
+                    // Layout params don't match — clear to force re-layout
+                    _curTextChapter.value = null
+                } else {
+                    _curTextChapter.value = rotatedNext
+                }
                 _nextTextChapter.value = null
             }
             index == prevIndex - 1 -> {
                 // Backward: cur→next, prev→cur (prev will be re-preloaded)
                 _nextTextChapter.value = _curTextChapter.value
-                _curTextChapter.value = _prevTextChapter.value
+                val rotatedPrev = _prevTextChapter.value
+                // Validate rotated cache: must have matching layout params
+                if (rotatedPrev != null && currentLayoutParams != null &&
+                    (rotatedPrev.viewWidth != currentLayoutParams.viewWidth ||
+                     rotatedPrev.viewHeight != currentLayoutParams.viewHeight)
+                ) {
+                    // Layout params don't match — clear to force re-layout
+                    _curTextChapter.value = null
+                } else {
+                    _curTextChapter.value = rotatedPrev
+                }
                 _prevTextChapter.value = null
             }
             else -> {
