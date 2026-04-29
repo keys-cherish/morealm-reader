@@ -27,6 +27,7 @@ data class LoginField(
 sealed class LoginUiState {
     data object Idle : LoginUiState()
     data class ShowDialog(val source: BookSource, val fields: List<LoginField>) : LoginUiState()
+    data class ShowWebView(val source: BookSource, val url: String, val headerMap: Map<String, String>) : LoginUiState()
     data class Loading(val message: String) : LoginUiState()
     data class Success(val message: String) : LoginUiState()
     data class Error(val message: String) : LoginUiState()
@@ -45,6 +46,12 @@ class SourceLoginViewModel @Inject constructor(
     fun showLoginDialog(source: BookSource) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // 纯URL类型的loginUrl → WebView登录
+                if (source.isLoginUrlPureUrl()) {
+                    val headerMap = source.getHeaderMap(true)
+                    _uiState.value = LoginUiState.ShowWebView(source, source.loginUrl!!, headerMap)
+                    return@launch
+                }
                 val fields = parseLoginUi(source.loginUi)
                 _uiState.value = LoginUiState.ShowDialog(source, fields)
             } catch (e: Exception) {
@@ -66,8 +73,8 @@ class SourceLoginViewModel @Inject constructor(
                 )
                 source.putLoginInfo(infoJson)
 
-                // Execute login script
-                source.login()
+                // Execute login script with result binding
+                source.login(fieldValues)
 
                 withContext(Dispatchers.Main) {
                     _uiState.value = LoginUiState.Success("登录成功")
