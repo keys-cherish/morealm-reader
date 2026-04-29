@@ -1,5 +1,6 @@
 package com.morealm.app.presentation.source
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.BookSource
@@ -109,6 +110,34 @@ class BookSourceManageViewModel @Inject constructor(
             } catch (e: Exception) {
                 _importResult.value = "导入失败: ${e.message}"
                 AppLog.error("SourceManage", "Import failed", e)
+            } finally {
+                _isImporting.value = false
+                _importProgress.value = ImportProgress()
+            }
+        }
+    }
+
+    fun importFromUri(uri: Uri, readContent: (Uri) -> String) {
+        viewModelScope.launch {
+            _isImporting.value = true
+            try {
+                val json = withContext(Dispatchers.IO) {
+                    AppLog.info("SourceManage", "Reading from URI: $uri")
+                    readContent(uri)
+                }
+                val imported = withContext(Dispatchers.IO) {
+                    BookSourceImporter.importFromJson(json)
+                }
+                if (imported.isNotEmpty()) {
+                    importSourcesIncrementally(imported)
+                    _importResult.value = "成功导入 ${imported.size} 个书源"
+                    AppLog.info("SourceManage", "Imported ${imported.size} sources from file")
+                } else {
+                    _importResult.value = "未识别到有效书源"
+                }
+            } catch (e: Exception) {
+                _importResult.value = "导入失败: ${e.message}"
+                AppLog.error("SourceManage", "Import from file failed", e)
             } finally {
                 _isImporting.value = false
                 _importProgress.value = ImportProgress()
