@@ -381,6 +381,18 @@ fun BookSourceManageScreen(
                 },
             )
         }
+        is com.morealm.app.presentation.source.LoginUiState.ShowWebView -> {
+            WebViewLoginScreen(
+                source = state.source,
+                loginUrl = state.url,
+                headerMap = state.headerMap,
+                onDismiss = { loginViewModel.dismissDialog() },
+                onLoginComplete = {
+                    loginViewModel.dismissDialog()
+                    Toast.makeText(context, "登录完成", Toast.LENGTH_SHORT).show()
+                },
+            )
+        }
         is com.morealm.app.presentation.source.LoginUiState.Loading -> {
             AlertDialog(
                 onDismissRequest = {},
