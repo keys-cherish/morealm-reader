@@ -331,11 +331,17 @@ fun CanvasRenderer(
     fun placeholderChapter(message: String = chapterTitle.ifBlank { "加载中..." }): TextChapter =
         placeholderChapterFor(chapterIndex, chapterTitle, message)
 
-    // Layout pages — use async streaming layout for faster first-page display
-    var textChapter by remember(currentChapterKey) { mutableStateOf<TextChapter?>(placeholderChapter()) }
-    var pageCount by remember { mutableIntStateOf(1) }
-    val scope = rememberCoroutineScope()
+    // Layout pages — use prelayout cache to avoid placeholder flash
     val prelayoutCache = remember { mutableStateMapOf<String, TextChapter>() }
+    var textChapter by remember(currentChapterKey) {
+        val cached = prelayoutCache[currentChapterKey]
+        mutableStateOf<TextChapter?>(cached ?: placeholderChapter())
+    }
+    var pageCount by remember(currentChapterKey) {
+        val cached = prelayoutCache[currentChapterKey]
+        mutableIntStateOf(cached?.pageSize?.coerceAtLeast(1) ?: 1)
+    }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle) {
         prelayoutCache.clear()
