@@ -1,6 +1,7 @@
 package com.morealm.app.domain.http
 
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.domain.http.SSLHelper.trustAllSSL
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -40,6 +41,9 @@ val okHttpClient: OkHttpClient by lazy {
         .connectionSpecs(specs)
         .followRedirects(true)
         .followSslRedirects(true)
+        // Trust self-signed / expired certs — many small Chinese book-source sites ship them.
+        // Without this, "Chain validation failed" / "Trust anchor not found" kills ~30% of sources.
+        .trustAllSSL()
         .addInterceptor { chain ->
             try {
                 val request = chain.request()
