@@ -261,7 +261,12 @@ object RhinoScriptEngine : AbstractScriptEngine(), Invocable, Compilable {
     override fun getRuntimeScope(bindings: ScriptBindings): Scriptable {
         val cx = Context.enter()
         try {
-            bindings.prototype = cx.initStandardObjects()
+            // FIX: previously `cx.initStandardObjects()` was used as the prototype, which
+            // only exposes ECMA built-ins. Book sources commonly call `importClass(...)` /
+            // `importPackage(...)` (Mozilla Rhino top-level helpers from ImporterTopLevel).
+            // RhinoTopLevel extends ImporterTopLevel, so promoting it to the prototype
+            // chain restores those globals.
+            bindings.prototype = topLevel ?: cx.initStandardObjects()
         } finally {
             Context.exit()
         }
