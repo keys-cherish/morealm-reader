@@ -1,5 +1,6 @@
 package com.morealm.app.domain.webbook
 
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.analyzeRule.AnalyzeRule
 import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setCoroutineContext
 import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setNextChapterUrl
@@ -12,10 +13,16 @@ import kotlin.coroutines.coroutineContext
 
 /**
  * 获取正文内容
+ *
+ * 防御策略：
+ * - 单页解析失败 → 返回空内容字符串，让其他页继续抓
+ * - 翻页中某一页失败 → break 翻页循环，使用已抓到的内容
+ * - 顶层任何未捕获异常 → 返回空字符串而非抛异常，UI 显示"加载失败"而非崩溃
  */
 object BookContent {
 
-    @Throws(Exception::class)
+    private const val TAG = "BookContent"
+
     suspend fun analyzeContent(
         bookSource: BookSource,
         baseUrl: String,
@@ -23,7 +30,28 @@ object BookContent {
         body: String?,
         nextChapterUrl: String? = null,
     ): String {
-        body ?: throw Exception("获取网页内容失败: $baseUrl")
+        if (body.isNullOrBlank()) {
+            AppLog.warn(TAG, "empty body for ${bookSource.bookSourceName}: $baseUrl")
+            return ""
+        }
+        return try {
+            doAnalyze(bookSource, baseUrl, redirectUrl, body, nextChapterUrl)
+        } catch (e: Exception) {
+            AppLog.warn(
+                TAG,
+                "analyzeContent failed for ${bookSource.bookSourceName}@$baseUrl: ${e.message?.take(160)}"
+            )
+            ""
+        }
+    }
+
+    private suspend fun doAnalyze(
+        bookSource: BookSource,
+        baseUrl: String,
+        redirectUrl: String,
+        body: String,
+        nextChapterUrl: String?,
+    ): String {
         val contentList = arrayListOf<String>()
         val nextUrlList = arrayListOf(redirectUrl)
         val contentRule = bookSource.getContentRule()
@@ -46,15 +74,23 @@ object BookContent {
                 ) break
                 nextUrlList.add(nextUrl)
                 coroutineContext.ensureActive()
-                val analyzeUrl = AnalyzeUrl(mUrl = nextUrl, source = bookSource, coroutineContext = coroutineContext)
-                val res = analyzeUrl.getStrResponseAwait(
-                    jsStr = contentRule.webJs,
-                    sourceRegex = contentRule.sourceRegex,
-                )
-                res.body?.let { nextBody ->
+                try {
+                    val analyzeUrl = AnalyzeUrl(mUrl = nextUrl, source = bookSource, coroutineContext = coroutineContext)
+                    val res = analyzeUrl.getStrResponseAwait(
+                        jsStr = contentRule.webJs,
+                        sourceRegex = contentRule.sourceRegex,
+                    )
+                    val nextBody = res.body
+                    if (nextBody.isNullOrBlank()) {
+                        AppLog.warn(TAG, "next-content-page empty body: $nextUrl")
+                        break
+                    }
                     contentData = analyzeContentPage(nextUrl, res.url, nextBody, contentRule, bookSource, nextChapterUrl)
                     nextUrl = if (contentData.second.isNotEmpty()) contentData.second[0] else ""
                     contentList.add(contentData.first)
+                } catch (e: Exception) {
+                    AppLog.warn(TAG, "next-content-page fetch failed: $nextUrl: ${e.message?.take(120)}")
+                    break
                 }
             }
         }
@@ -62,12 +98,16 @@ object BookContent {
         var contentStr = contentList.joinToString("\n")
         val replaceRegex = contentRule.replaceRegex
         if (!replaceRegex.isNullOrEmpty()) {
-            contentStr = analyzeRule.getString(replaceRegex, contentStr)
+            contentStr = try {
+                analyzeRule.getString(replaceRegex, contentStr)
+            } catch (e: Exception) {
+                AppLog.warn(TAG, "replaceRegex failed: ${e.message?.take(120)}")
+                contentStr
+            }
         }
         return contentStr
     }
 
-    @Throws(Exception::class)
     private suspend fun analyzeContentPage(
         baseUrl: String,
         redirectUrl: String,
@@ -76,23 +116,37 @@ object BookContent {
         bookSource: BookSource,
         nextChapterUrl: String?,
     ): Pair<String, List<String>> {
-        val analyzeRule = AnalyzeRule(null, bookSource)
-        analyzeRule.setContent(body, baseUrl)
-        analyzeRule.setCoroutineContext(coroutineContext)
-        analyzeRule.setRedirectUrl(redirectUrl)
-        analyzeRule.setNextChapterUrl(nextChapterUrl)
+        return try {
+            val analyzeRule = AnalyzeRule(null, bookSource)
+            analyzeRule.setContent(body, baseUrl)
+            analyzeRule.setCoroutineContext(coroutineContext)
+            analyzeRule.setRedirectUrl(redirectUrl)
+            analyzeRule.setNextChapterUrl(nextChapterUrl)
 
-        val nextUrlList = arrayListOf<String>()
-        var content = analyzeRule.getString(contentRule.content, unescape = false)
-        if (content.indexOf('&') > -1) {
-            content = StringEscapeUtils.unescapeHtml4(content)
-        }
-        val nextUrlRule = contentRule.nextContentUrl
-        if (!nextUrlRule.isNullOrEmpty()) {
-            analyzeRule.getStringList(nextUrlRule, isUrl = true)?.let {
-                nextUrlList.addAll(it)
+            val nextUrlList = arrayListOf<String>()
+            var content = try {
+                analyzeRule.getString(contentRule.content, unescape = false)
+            } catch (e: Exception) {
+                AppLog.warn(TAG, "content rule failed: ${e.message?.take(120)}")
+                ""
             }
+            if (content.indexOf('&') > -1) {
+                content = StringEscapeUtils.unescapeHtml4(content)
+            }
+            val nextUrlRule = contentRule.nextContentUrl
+            if (!nextUrlRule.isNullOrEmpty()) {
+                try {
+                    analyzeRule.getStringList(nextUrlRule, isUrl = true)?.let {
+                        nextUrlList.addAll(it)
+                    }
+                } catch (e: Exception) {
+                    AppLog.warn(TAG, "nextContentUrl rule failed: ${e.message?.take(120)}")
+                }
+            }
+            Pair(content, nextUrlList)
+        } catch (e: Exception) {
+            AppLog.warn(TAG, "analyzeContentPage failed: ${e.message?.take(120)}")
+            Pair("", emptyList())
         }
-        return Pair(content, nextUrlList)
     }
 }
