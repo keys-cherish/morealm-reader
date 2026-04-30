@@ -353,15 +353,21 @@ class ReaderChapterController(
                 // Capture cache to local val for thread safety (cache is @Volatile)
                 val nextCached = nextChapterCache
                 val prevCached = prevChapterCache
+                // Track which cache path was used so we can defer clearing preloaded
+                // chapter state until AFTER _renderedChapter is published — avoids a
+                // frame where the UI sees null preloaded data but hasn't received the
+                // new chapter content yet, which causes a visible page-0 flash.
+                var usedNextCache = false
+                var usedPrevCache = false
                 val content = when {
                     nextCached != null && index == prevIndex + 1 -> {
                         nextChapterCache = null
-                        _nextPreloadedChapter.value = null
+                        usedNextCache = true
                         nextCached
                     }
                     prevCached != null && index == prevIndex - 1 -> {
                         prevChapterCache = null
-                        _prevPreloadedChapter.value = null
+                        usedPrevCache = true
                         prevCached
                     }
                     else -> {
@@ -382,6 +388,9 @@ class ReaderChapterController(
 
                 if (loadToken != chapterLoadToken) return@launch
 
+                // Publish new chapter content FIRST, before clearing old preloaded data.
+                // This ensures the UI always has valid content to display during the
+                // transition, preventing the page-0 flash on backward navigation.
                 _chapterContent.value = content
                 _renderedChapter.value = RenderedReaderChapter(
                     index = index,
@@ -391,6 +400,12 @@ class ReaderChapterController(
                     initialChapterPosition = targetChapterPosition,
                 )
                 _currentChapterIndex.value = index
+
+                // NOW safe to clear old preloaded chapter data — the new chapter is
+                // already published so the UI won't see a gap.
+                if (usedNextCache) _nextPreloadedChapter.value = null
+                if (usedPrevCache) _prevPreloadedChapter.value = null
+
                 scrollProgressState.value = targetProgress
                 visiblePageState.value = visiblePageState.value.copy(
                     chapterIndex = index,
@@ -399,17 +414,7 @@ class ReaderChapterController(
                 )
                 setSuppressNextProgressSave(targetProgress > 0 || targetChapterPosition > 0)
 
-                AppLog.debug("Chapter", buildString {
-                    append("loadChapter completed")
-                    append(" | chapter=$index/${chapterList.size}")
-                    append(" | title=${chapter.title.take(20)}")
-                    append(" | mode=${pageTurnMode()}")
-                    append(" | progress=$targetProgress")
-                    append(" | position=$targetChapterPosition")
-                    append(" | source=${if (isWebBook) "web" else "local"}")
-                    append(" | nextCache=${nextChapterCache != null}")
-                    append(" | prevCache=${prevChapterCache != null}")
-                })
+                AppLog.info("Chapter", "loadChapter #$index/${chapterList.size} \"${chapter.title.take(20)}\" prog=$targetProgress pos=$targetChapterPosition ${if (isWebBook) "web" else "local"}")
                 // Don't reset navigateDirection here — let CanvasRenderer consume it
                 // for startFromLastPage before resetting after progress restoration.
                 if (targetProgress == 0 && targetChapterPosition == 0) onChapterLoaded()

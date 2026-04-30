@@ -42,18 +42,60 @@ import kotlin.coroutines.EmptyCoroutineContext
 @Suppress("unused")
 object JsExtensions {
 
+    private data class RuntimeContext(
+        val source: BookSource?,
+        val coroutineContext: CoroutineContext,
+        val ruleData: RuleDataInterface?,
+    )
+
+    private val runtimeStack = ThreadLocal<MutableList<RuntimeContext>>()
+
+    /**
+     * JS bridge 是全局单例，但 source/ruleData/coroutineContext 必须按本次 JS 执行隔离。
+     * 搜索会并发执行多个书源，不能再把这些状态写到 object 级可变字段里，否则会串源。
+     */
+    fun <T> withRuntimeContext(
+        source: BookSource?,
+        coroutineContext: CoroutineContext = EmptyCoroutineContext,
+        ruleData: RuleDataInterface? = null,
+        block: () -> T,
+    ): T {
+        val stack = runtimeStack.get() ?: mutableListOf<RuntimeContext>().also(runtimeStack::set)
+        stack.add(RuntimeContext(source, coroutineContext, ruleData))
+        try {
+            return block()
+        } finally {
+            stack.removeAt(stack.lastIndex)
+            if (stack.isEmpty()) runtimeStack.remove()
+        }
+    }
+
+    private fun currentRuntimeContext(): RuntimeContext? = runtimeStack.get()?.lastOrNull()
+
+    private fun currentCoroutineContext(): CoroutineContext =
+        currentRuntimeContext()?.coroutineContext
+            ?: coroutineContextGetter?.invoke()
+            ?: EmptyCoroutineContext
+
+    private fun currentRuleData(): RuleDataInterface? =
+        currentRuntimeContext()?.ruleData ?: ruleDataGetter?.invoke()
+
+    @Deprecated("仅作为旧调用兜底。新代码请使用 withRuntimeContext 隔离每次 JS 执行上下文。")
     var sourceGetter: (() -> Any?)? = null
+    @Deprecated("仅作为旧调用兜底。新代码请使用 withRuntimeContext 隔离每次 JS 执行上下文。")
     var coroutineContextGetter: (() -> CoroutineContext)? = null
+    @Deprecated("仅作为旧调用兜底。新代码请使用 withRuntimeContext 隔离每次 JS 执行上下文。")
     var ruleDataGetter: (() -> RuleDataInterface?)? = null
 
-    fun getSource(): BookSource? = sourceGetter?.invoke() as? BookSource
+    fun getSource(): BookSource? =
+        currentRuntimeContext()?.source ?: sourceGetter?.invoke() as? BookSource
 
     fun getTag(): String? = getSource()?.bookSourceUrl
 
     // ── Variable get/put (delegated to ruleData, matches AnalyzeUrl API) ──
 
     fun put(key: String, value: String): String {
-        val ruleData = ruleDataGetter?.invoke()
+        val ruleData = currentRuleData()
         if (ruleData != null) {
             ruleData.putVariable(key, value)
         } else {
@@ -63,7 +105,7 @@ object JsExtensions {
     }
 
     fun get(key: String): String {
-        return ruleDataGetter?.invoke()?.getVariable(key)?.takeIf { it.isNotEmpty() }
+        return currentRuleData()?.getVariable(key)?.takeIf { it.isNotEmpty() }
             ?: getSource()?.get(key)?.takeIf { it.isNotEmpty() }
             ?: ""
     }
@@ -72,11 +114,11 @@ object JsExtensions {
 
     fun ajax(url: Any): String? {
         val urlStr = if (url is List<*>) url.firstOrNull().toString() else url.toString()
-        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val ctx = currentCoroutineContext()
         val analyzeUrl = AnalyzeUrl(
             urlStr,
             source = getSource(),
-            ruleData = ruleDataGetter?.invoke(),
+            ruleData = currentRuleData(),
             coroutineContext = ctx,
         )
         return runCatching {
@@ -100,12 +142,12 @@ object JsExtensions {
     }
 
     fun connect(urlStr: String, header: Any?, callTimeout: Long?): StrResponse {
-        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val ctx = currentCoroutineContext()
         val headerMap = headersToMap(header).takeIf { it.isNotEmpty() }
         val analyzeUrl = AnalyzeUrl(
             urlStr,
             source = getSource(),
-            ruleData = ruleDataGetter?.invoke(),
+            ruleData = currentRuleData(),
             coroutineContext = ctx,
             headerMapF = headerMap,
         )
@@ -117,11 +159,11 @@ object JsExtensions {
     fun getStrResponse(urlStr: String): StrResponse = connect(urlStr)
 
     fun getByteArray(urlStr: String): ByteArray {
-        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val ctx = currentCoroutineContext()
         val analyzeUrl = AnalyzeUrl(
             urlStr,
             source = getSource(),
-            ruleData = ruleDataGetter?.invoke(),
+            ruleData = currentRuleData(),
             coroutineContext = ctx,
         )
         return runCatching {
@@ -132,9 +174,17 @@ object JsExtensions {
     fun ajaxAll(urlList: Array<String>): Array<StrResponse> = ajaxAll(urlList, false)
 
     fun ajaxAll(urlList: Array<String>, skipRateLimit: Boolean): Array<StrResponse> {
-        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val ctx = currentCoroutineContext()
+        val source = getSource()
+        val ruleData = currentRuleData()
         return runBlocking(ctx) {
-            urlList.map { url -> async { connect(url) } }.awaitAll().toTypedArray()
+            urlList.map { url ->
+                async {
+                    withRuntimeContext(source, ctx, ruleData) {
+                        connect(url)
+                    }
+                }
+            }.awaitAll().toTypedArray()
         }
     }
 
@@ -149,7 +199,7 @@ object JsExtensions {
     fun post(urlStr: String, body: String): StrResponse = post(urlStr, body, null)
 
     fun post(urlStr: String, body: String, headers: Any?): StrResponse {
-        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val ctx = currentCoroutineContext()
         val headerMap = headersToMap(headers).toMutableMap()
         if (!headerMap.containsKey("User-Agent")) {
             headerMap["User-Agent"] = DEFAULT_USER_AGENT
@@ -184,7 +234,7 @@ object JsExtensions {
     }
 
     fun head(urlStr: String, headers: Map<String, String>, timeout: Int?): StrResponse {
-        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val ctx = currentCoroutineContext()
         val headerMap = headers.toMutableMap()
         if (!headerMap.containsKey("User-Agent")) {
             headerMap["User-Agent"] = DEFAULT_USER_AGENT
@@ -429,7 +479,7 @@ object JsExtensions {
     }
 
     fun webView(html: String?, url: String?, js: String?, cacheFirst: Boolean): String? {
-        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val ctx = currentCoroutineContext()
         return runBlocking(ctx) {
             com.morealm.app.domain.http.BackstageWebView(
                 url = url,
@@ -444,7 +494,7 @@ object JsExtensions {
     }
 
     fun webViewGetSource(html: String?, url: String?, js: String?, sourceRegex: String, cacheFirst: Boolean): String? {
-        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val ctx = currentCoroutineContext()
         return runBlocking(ctx) {
             com.morealm.app.domain.http.BackstageWebView(
                 url = url,
@@ -461,7 +511,7 @@ object JsExtensions {
     }
 
     fun webViewGetOverrideUrl(html: String?, url: String?, js: String?, overrideUrlRegex: String, cacheFirst: Boolean): String? {
-        val ctx = coroutineContextGetter?.invoke() ?: EmptyCoroutineContext
+        val ctx = currentCoroutineContext()
         return runBlocking(ctx) {
             com.morealm.app.domain.http.BackstageWebView(
                 url = url,

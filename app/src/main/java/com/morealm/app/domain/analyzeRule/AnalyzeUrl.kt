@@ -21,6 +21,13 @@ import com.script.rhino.RhinoScriptEngine
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
@@ -128,6 +135,9 @@ class AnalyzeUrl(
             bindings["baseUrl"] = baseUrl
             bindings["page"] = page
             bindings["key"] = key
+            // 兼容部分 Legado/阅读旧书源中仍在使用的别名。
+            bindings["searchPage"] = page
+            bindings["searchKey"] = key
             bindings["source"] = source
             bindings["result"] = result
             bindings["cookie"] = CookieStore
@@ -322,22 +332,22 @@ class AnalyzeUrl(
      */
     private fun analyzeUrl() {
         val urlMatcher = paramPattern.matcher(ruleUrl)
-        val urlNoOption = if (urlMatcher.find()) ruleUrl.substring(0, urlMatcher.start()) else ruleUrl
+        val rawUrlNoOption = if (urlMatcher.find()) ruleUrl.substring(0, urlMatcher.start()) else ruleUrl
+        val urlNoOption = replaceLegacySearchPlaceholders(rawUrlNoOption)
         url = AnalyzeRule.getAbsoluteURL(baseUrl, urlNoOption)
         getBaseUrl(url)?.let { baseUrl = it }
 
-        if (urlNoOption.length != ruleUrl.length) {
+        if (rawUrlNoOption.length != ruleUrl.length) {
             val urlOptionStr = ruleUrl.substring(urlMatcher.end())
             try {
-                val json = Json { ignoreUnknownKeys = true; isLenient = true }
-                val option = json.decodeFromString<UrlOption>(urlOptionStr)
+                val option = urlOptionJson.decodeFromString<UrlOption>(urlOptionStr)
                 option.method?.let { if (it.equals("POST", true)) method = RequestMethod.POST }
-                option.headers?.forEach { (k, v) -> headerMap[k] = v }
-                option.body?.let { body = it }
+                option.headers?.let { headerMap.putAll(headersElementToMap(it)) }
+                option.body?.let { body = bodyElementToString(it) }
                 option.charset?.let { charset = it }
-                option.retry?.let { retry = it }
+                option.retry?.asIntCompat()?.let { retry = it }
                 option.type?.let { type = it }
-                option.webView?.let { useWebView = it }
+                option.webView?.asBooleanCompat()?.let { useWebView = it }
                 option.webJs?.let { webJs = it }
                 option.js?.let { jsStr ->
                     evalJS(jsStr, url)?.toString()?.let { url = it }
@@ -359,6 +369,76 @@ class AnalyzeUrl(
                     encodedForm = encodeForm(it)
                 }
             }
+        }
+    }
+
+    /**
+     * 兼容旧版阅读/Legado 书源中裸写的 searchKey/searchPage。
+     *
+     * 新规则通常写作 {{key}}/{{page}}，但不少导出的旧书源仍会在 URL 或
+     * URL option 的 body/header 中直接出现 searchKey/searchPage。若不在这里
+     * 兜底，导入后会请求字面量 searchKey 或解析 JSON option 失败，表现为所有搜索为空。
+     */
+    private fun replaceLegacySearchPlaceholders(value: String): String {
+        var result = value
+        key?.let { result = result.replace("searchKey", it) }
+        page?.let { currentPage ->
+            result = legacySearchPageOffsetPattern.replace(result) { match ->
+                val offset = match.groupValues.getOrNull(1)?.toIntOrNull() ?: 0
+                (currentPage + offset).toString()
+            }
+            result = result.replace("searchPage", currentPage.toString())
+        }
+        return result
+    }
+
+    private fun JsonElement.replaceLegacyPlaceholders(): JsonElement {
+        return when (this) {
+            is JsonObject -> JsonObject(mapValues { (_, value) -> value.replaceLegacyPlaceholders() })
+            is JsonArray -> JsonArray(map { it.replaceLegacyPlaceholders() })
+            JsonNull -> JsonNull
+            is JsonPrimitive -> if (isString) JsonPrimitive(replaceLegacySearchPlaceholders(content)) else this
+        }
+    }
+
+    private fun bodyElementToString(element: JsonElement): String? {
+        val normalized = element.replaceLegacyPlaceholders()
+        return when (normalized) {
+            JsonNull -> null
+            is JsonPrimitive -> normalized.content
+            else -> normalized.toString()
+        }
+    }
+
+    private fun headersElementToMap(element: JsonElement): Map<String, String> {
+        val normalized = element.replaceLegacyPlaceholders()
+        return when (normalized) {
+            is JsonObject -> normalized.mapValues { (_, value) ->
+                when (value) {
+                    is JsonPrimitive -> value.content
+                    else -> value.toString()
+                }
+            }
+            is JsonPrimitive -> headersToMap(normalized.content)
+            else -> emptyMap()
+        }
+    }
+
+    private fun JsonElement.asIntCompat(): Int? {
+        return when (this) {
+            is JsonPrimitive -> intOrNull ?: content.toIntOrNull()
+            else -> null
+        }
+    }
+
+    private fun JsonElement.asBooleanCompat(): Boolean? {
+        return when (this) {
+            is JsonPrimitive -> booleanOrNull ?: when (content.lowercase()) {
+                "", "false", "0", "null" -> false
+                "true", "1" -> true
+                else -> true
+            }
+            else -> true
         }
     }
 
@@ -574,19 +654,21 @@ class AnalyzeUrl(
     @Serializable
     data class UrlOption(
         val method: String? = null,
-        val headers: Map<String, String>? = null,
-        val body: String? = null,
+        val headers: JsonElement? = null,
+        val body: JsonElement? = null,
         val charset: String? = null,
         val type: String? = null,
-        val webView: Boolean? = null,
+        val webView: JsonElement? = null,
         val webJs: String? = null,
         val js: String? = null,
-        val retry: Int? = null,
+        val retry: JsonElement? = null,
     )
 
     companion object {
         val defined_PATTERN: Pattern = Pattern.compile("\\$\\d{1,2}")
         val paramPattern: Pattern = Pattern.compile("\\s*,\\s*(?=\\{)")
         private val pagePattern: Pattern = Pattern.compile("<(.*?)>")
+        private val legacySearchPageOffsetPattern = Regex("searchPage([+-]\\d+)")
+        private val urlOptionJson = Json { ignoreUnknownKeys = true; isLenient = true }
     }
 }
