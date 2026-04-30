@@ -23,7 +23,25 @@ class AnalyzeByJSonPath(json: Any) {
                 when (json) {
                     is ReadContext -> json
                     is String -> JsonPath.parse(json)
-                    else -> JsonPath.parse(json)
+                    is Map<*, *> -> JsonPath.parse(json)
+                    is List<*> -> JsonPath.parse(json)
+                    // Jsoup Element/Elements are HTML — never valid JSON.
+                    // When a source mixes @json: rules with HTML content (晋江文学's search
+                    // returns HTML but the source has $.novelName style child rules),
+                    // JsonPath.parse(Object) tries to cast to String and throws
+                    // "org.jsoup.nodes.Element cannot be cast to java.lang.String",
+                    // killing the whole rule chain. Fallback to an empty doc and warn —
+                    // missing fields degrade gracefully to empty values.
+                    is org.jsoup.nodes.Element,
+                    is org.jsoup.select.Elements -> {
+                        AppLog.warn(
+                            TAG,
+                            "JSONPath rule received jsoup ${json.javaClass.simpleName}; fallback to empty doc"
+                        )
+                        JsonPath.parse("{}")
+                    }
+                    // Last-resort string conversion for primitives etc.
+                    else -> JsonPath.parse(json.toString())
                 }
             } catch (e: Exception) {
                 AppLog.warn(TAG, "JSON parse failed, fallback to empty doc: ${e.message?.take(120)}")
@@ -55,7 +73,16 @@ class AnalyzeByJSonPath(json: Any) {
                     val ob = ctx.read<Any>(cleaned)
                     result = if (ob is List<*>) ob.joinToString("\n") else ob.toString()
                 } catch (e: Exception) {
-                    AppLog.warn(TAG, "getString('${rule.take(60)}') failed: ${e.message?.take(120)}")
+                    // "No results for path: $.foo" is the JsonPath library signaling
+                    // a missing field — happens for almost every search result on every
+                    // source because rules cover optional fields (uptime, process, etc).
+                    // Don't flood warn-level logs with these; debug-only.
+                    val msg = e.message ?: ""
+                    if (msg.contains("No results for path", ignoreCase = true)) {
+                        AppLog.debug(TAG, "getString('${rule.take(60)}'): missing field")
+                    } else {
+                        AppLog.warn(TAG, "getString('${rule.take(60)}') failed: ${msg.take(120)}")
+                    }
                 }
             }
             return result
@@ -88,7 +115,12 @@ class AnalyzeByJSonPath(json: Any) {
                     if (obj is List<*>) { for (o in obj) result.add(o.toString()) }
                     else result.add(obj.toString())
                 } catch (e: Exception) {
-                    AppLog.warn(TAG, "getStringList('${rule.take(60)}') failed: ${e.message?.take(120)}")
+                    val msg = e.message ?: ""
+                    if (msg.contains("No results for path", ignoreCase = true)) {
+                        AppLog.debug(TAG, "getStringList('${rule.take(60)}'): missing field")
+                    } else {
+                        AppLog.warn(TAG, "getStringList('${rule.take(60)}') failed: ${msg.take(120)}")
+                    }
                 }
             } else {
                 result.add(st)
