@@ -47,7 +47,10 @@ object BookContent {
                 nextUrlList.add(nextUrl)
                 coroutineContext.ensureActive()
                 val analyzeUrl = AnalyzeUrl(mUrl = nextUrl, source = bookSource, coroutineContext = coroutineContext)
-                val res = analyzeUrl.getStrResponseAwait()
+                val res = analyzeUrl.getStrResponseAwait(
+                    jsStr = contentRule.webJs,
+                    sourceRegex = contentRule.sourceRegex,
+                )
                 res.body?.let { nextBody ->
                     contentData = analyzeContentPage(nextUrl, res.url, nextBody, contentRule, bookSource, nextChapterUrl)
                     nextUrl = if (contentData.second.isNotEmpty()) contentData.second[0] else ""

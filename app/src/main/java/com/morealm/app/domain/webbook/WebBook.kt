@@ -170,7 +170,8 @@ object WebBook {
         contentUrl: String,
         nextChapterUrl: String? = null,
     ): String {
-        if (bookSource.getContentRule().content.isNullOrEmpty()) return contentUrl
+        val contentRule = bookSource.getContentRule()
+        if (contentRule.content.isNullOrEmpty()) return contentUrl
         val requestUrl = AnalyzeRule.getAbsoluteURL(bookSource.bookSourceUrl, contentUrl)
         val analyzeUrl = AnalyzeUrl(
             mUrl = requestUrl,
@@ -178,7 +179,10 @@ object WebBook {
             source = bookSource,
             coroutineContext = coroutineContext
         )
-        var res = analyzeUrl.getStrResponseAwait()
+        var res = analyzeUrl.getStrResponseAwait(
+            jsStr = contentRule.webJs,
+            sourceRegex = contentRule.sourceRegex,
+        )
         // 检测书源是否已登录
         bookSource.loginCheckJs?.let { checkJs ->
             if (checkJs.isNotBlank()) {
