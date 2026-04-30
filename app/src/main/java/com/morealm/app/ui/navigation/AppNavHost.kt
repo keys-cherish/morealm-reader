@@ -31,6 +31,7 @@ import androidx.navigation.navArgument
 import com.morealm.app.ui.detail.BookDetailScreen
 import com.morealm.app.ui.listen.ListenScreen
 import com.morealm.app.ui.profile.AboutScreen
+import com.morealm.app.ui.profile.ChangelogScreen
 import com.morealm.app.ui.profile.ProfileScreen
 import com.morealm.app.ui.profile.ReplaceRuleScreen
 import com.morealm.app.ui.profile.ThemeEditorScreen
@@ -58,7 +59,7 @@ fun MoRealmNavHost(
     val moColors = LocalMoRealmColors.current
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "app_log" || route == "cache_book" || route.startsWith("theme_editor")
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "app_log" || route == "cache_book" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -244,7 +245,14 @@ fun MoRealmNavHost(
             }
 
             composable("about") {
-                AboutScreen(onBack = { navController.safePopBackStack() })
+                AboutScreen(
+                    onBack = { navController.safePopBackStack() },
+                    onNavigateChangelog = { navController.safeNavigate("changelog") },
+                )
+            }
+
+            composable("changelog") {
+                ChangelogScreen(onBack = { navController.safePopBackStack() })
             }
 
             composable("source_manage") {

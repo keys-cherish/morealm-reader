@@ -1,10 +1,13 @@
 package com.morealm.app.ui.cache
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,6 +42,22 @@ fun CacheBookScreen(
     val cacheStats by viewModel.cacheStats.collectAsStateWithLifecycle()
     val isDownloading by viewModel.isDownloading.collectAsStateWithLifecycle()
     val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
+    val exportState by viewModel.exportState.collectAsStateWithLifecycle()
+
+    // SAF document picker for TXT export. The MIME hint "text/plain" makes most file
+    // managers default to .txt extension; the user-suggested filename is set per-launch.
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        val bookId = viewModel.pendingExportBookId
+        viewModel.pendingExportBookId = null
+        if (uri != null && bookId != null) {
+            val book = webBooks.firstOrNull { it.id == bookId }
+            if (book != null) {
+                viewModel.exportTxt(book, uri)
+            }
+        }
+    }
 
     // Refresh stats when download completes
     LaunchedEffect(isDownloading) {
@@ -145,11 +164,21 @@ fun CacheBookScreen(
                 ) {
                     items(webBooks, key = { it.id }) { book ->
                         val stat = cacheStats[book.id]
+                        val export = exportState[book.id]
+                        // Pop a toast once per export-completion and clear the message
+                        LaunchedEffect(export?.running, export?.message) {
+                            val msg = export?.message
+                            if (export != null && !export.running && !msg.isNullOrBlank()) {
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                viewModel.dismissExportMessage(book.id)
+                            }
+                        }
                         CacheBookItem(
                             book = book,
                             stat = stat,
                             isDownloading = isDownloading && downloadProgress.bookId == book.id,
                             downloadProgress = if (downloadProgress.bookId == book.id) downloadProgress else null,
+                            exportState = export,
                             onDownloadAll = {
                                 viewModel.startDownload(book)
                             },
@@ -160,6 +189,22 @@ fun CacheBookScreen(
                                 viewModel.clearCache(book)
                                 Toast.makeText(context, "已清除缓存", Toast.LENGTH_SHORT).show()
                             },
+                            onExportTxt = {
+                                if (stat == null || stat.cachedChapters == 0) {
+                                    Toast.makeText(
+                                        context,
+                                        "请先缓存章节再导出",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    return@CacheBookItem
+                                }
+                                viewModel.pendingExportBookId = book.id
+                                // Suggested filename: <书名>_<作者>.txt — sanitized for FAT/exFAT
+                                val safeName = "${book.title}_${book.author.ifBlank { "未知" }}"
+                                    .replace(Regex("""[\\/:*?"<>|]"""), "_")
+                                    .take(80) + ".txt"
+                                exportLauncher.launch(safeName)
+                            },
                         )
                     }
                 }
@@ -168,15 +213,18 @@ fun CacheBookScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun CacheBookItem(
     book: Book,
     stat: CacheBookViewModel.CacheStat?,
     isDownloading: Boolean,
     downloadProgress: CacheBookService.DownloadProgress?,
+    exportState: CacheBookViewModel.ExportState? = null,
     onDownloadAll: () -> Unit,
     onDownloadFromCurrent: () -> Unit,
     onClearCache: () -> Unit,
+    onExportTxt: () -> Unit = {},
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -293,19 +341,44 @@ private fun CacheBookItem(
                 Spacer(Modifier.height(8.dp))
             }
 
+            // Export-in-progress row (per-book TXT export, separate from download progress)
+            if (exportState?.running == true) {
+                val pct = if (exportState.total > 0) {
+                    exportState.done.toFloat() / exportState.total
+                } else 0f
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        "导出中 ${exportState.done}/${exportState.total}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    LinearProgressIndicator(
+                        progress = { pct },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
             // Expanded actions
-            if (expanded && !isDownloading) {
-                Row(
+            if (expanded && !isDownloading && exportState?.running != true) {
+                FlowRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     OutlinedButton(
                         onClick = onDownloadAll,
-                        modifier = Modifier.weight(1f),
                         shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                     ) {
                         Icon(Icons.Default.CloudDownload, null, Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
@@ -313,19 +386,29 @@ private fun CacheBookItem(
                     }
                     OutlinedButton(
                         onClick = onDownloadFromCurrent,
-                        modifier = Modifier.weight(1f),
                         shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                     ) {
                         Icon(Icons.Default.Download, null, Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("从当前章", style = MaterialTheme.typography.labelSmall)
                     }
                     OutlinedButton(
-                        onClick = onClearCache,
-                        modifier = Modifier.weight(1f),
+                        onClick = onExportTxt,
                         shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.tertiary,
+                        ),
+                    ) {
+                        Icon(Icons.Default.Article, null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("导出TXT", style = MaterialTheme.typography.labelSmall)
+                    }
+                    OutlinedButton(
+                        onClick = onClearCache,
+                        shape = MaterialTheme.shapes.small,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
                             contentColor = MaterialTheme.colorScheme.error,
                         ),
