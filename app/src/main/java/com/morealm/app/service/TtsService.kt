@@ -86,6 +86,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         const val ACTION_NEXT = "com.morealm.app.TTS_NEXT"
         const val ACTION_PAUSE = "com.morealm.app.TTS_PAUSE"
         const val ACTION_RESUME = "com.morealm.app.TTS_RESUME"
+        const val ACTION_ADD_TIMER = "com.morealm.app.TTS_ADD_TIMER"
     }
 
     override fun onCreate() {
@@ -132,6 +133,10 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                 TtsEventBus.sendEvent(TtsEventBus.Event.PlayPause)
                 return START_NOT_STICKY
             }
+            ACTION_ADD_TIMER -> {
+                TtsEventBus.sendEvent(TtsEventBus.Event.AddTimer)
+                return START_NOT_STICKY
+            }
         }
         // Let MediaSessionService handle the foreground notification via TtsNotificationProvider.
         // The early notification from onCreate() covers the ANR window.
@@ -159,6 +164,10 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                     }
                     is TtsEventBus.Command.StopService -> {
                         stopSelfAndRelease()
+                    }
+                    is TtsEventBus.Command.SetSleepMinutes -> {
+                        val player = mediaSession?.player as? TtsPlayer ?: return@collect
+                        player.setSleepMinutes(cmd.minutes)
                     }
                 }
             }
