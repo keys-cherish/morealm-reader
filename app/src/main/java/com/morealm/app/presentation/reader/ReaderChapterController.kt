@@ -28,6 +28,31 @@ private const val NON_TEXT_WEB_CONTENT_MESSAGE = "\uff08\u8be5\u4e66\u6e90\u8fd4
 private const val READER_ERROR_CHAPTER_URL_PREFIX = "morealm:error:"
 
 /**
+ * Friendly placeholder shown when a web chapter ends up with an empty body
+ * (server returned 200-empty, parsing rule didn't match, network failed silently…).
+ *
+ * Without this the reader was rendering literally nothing and the user only saw the
+ * floating day/night button — they had no clue the menu was reachable by tapping the
+ * screen center. The placeholder explains the failure modes and prompts the menu.
+ *
+ * NOTE: kept as plain readable Chinese (not encoded) so a future regex maintainer can
+ * grep "本章内容为空" easily and bump the message in one place.
+ */
+internal const val EMPTY_CONTENT_PLACEHOLDER =
+    "⚠ 本章内容为空，无法显示\n\n" +
+        "可能原因：\n" +
+        "• 服务器返回了空响应\n" +
+        "• 当前书源的正文规则不适配此章节\n" +
+        "• 网络超时或被拦截\n\n" +
+        "请尝试：\n" +
+        "• 点击屏幕中央 → 顶栏「换源」选择其他书源\n" +
+        "• 或退回详情页后重新打开"
+
+/** True when the rendered chapter body is the placeholder above (avoid mistreating it as real content). */
+internal fun isEmptyContentPlaceholder(text: String?): Boolean =
+    text != null && text.startsWith("⚠ 本章内容为空")
+
+/**
  * Manages chapter loading, preloading, web book support, and replace rules.
  * Extracted from ReaderViewModel.
  */
@@ -632,6 +657,13 @@ class ReaderChapterController(
         val nextUrl = _chapters.value.getOrNull(index + 1)?.url
         val content = WebBook.getContentAwait(source, chapter.url, nextUrl)
         val sanitized = sanitizeWebChapterContent(content)
+        // Empty body / parse-failure → return a readable placeholder instead of "" so
+        // the reader has something to render and the user is told how to recover.
+        // Don't cache the placeholder — next attempt may succeed.
+        if (sanitized.isBlank()) {
+            AppLog.warn("Chapter", "empty content for ${book?.title}@${chapter.title} url=${chapter.url}")
+            return EMPTY_CONTENT_PLACEHOLDER
+        }
         if (content.isNotBlank() && sanitized == content) {
             CacheBook.putContent(sourceUrl, chapter.url, content)
         }
