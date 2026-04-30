@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -22,7 +23,10 @@ import com.morealm.app.ui.theme.LocalMoRealmColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AboutScreen(onBack: () -> Unit) {
+fun AboutScreen(
+    onBack: () -> Unit,
+    onNavigateChangelog: () -> Unit = {},
+) {
     val moColors = LocalMoRealmColors.current
 
     Column(
@@ -68,6 +72,12 @@ fun AboutScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(4.dp))
             Text("v1.0.0", style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "作者：光坂镇",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+            )
         }
 
         Spacer(Modifier.height(32.dp))
@@ -123,6 +133,46 @@ fun AboutScreen(onBack: () -> Unit) {
                 InfoRow("渲染", "WebView + CSS 排版引擎")
                 InfoRow("存储", "Room + DataStore")
                 InfoRow("依赖注入", "Hilt")
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Changelog entry
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+            onClick = onNavigateChangelog,
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.History,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "更新日志",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        "查看版本迭代记录",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                }
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                )
             }
         }
 
