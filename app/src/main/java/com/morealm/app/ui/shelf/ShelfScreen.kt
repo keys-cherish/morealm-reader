@@ -49,6 +49,11 @@ fun ShelfScreen(
     isNightTheme: Boolean = true,
     columns: Int = 3,
     continueReadingRequest: Int = 0,
+    /**
+     * Smart routing entry point. Defaults to [onBookClick] (always reader). When non-null
+     * caller — typically AppNavHost — wants WEB books to land on the detail page first.
+     */
+    onBookOpen: ((Book) -> Unit)? = null,
     viewModel: ShelfViewModel = hiltViewModel(),
 ) {
     val allBooks by viewModel.books.collectAsStateWithLifecycle()
@@ -329,11 +334,16 @@ fun ShelfScreen(
             }
         }
 
-        // Helper lambdas for batch mode
+        // Helper lambdas for batch mode.
+        // Manual taps go through onBookOpen (smart router: WEB → detail page first).
+        // Auto-resume / continue-reading flows use onBookClick directly to land in reader.
         val bookClick: (String) -> Unit = { id ->
             if (batchMode) {
                 selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
-            } else onBookClick(id)
+            } else {
+                val book = allBooks.find { it.id == id }
+                if (onBookOpen != null && book != null) onBookOpen(book) else onBookClick(id)
+            }
         }
         val bookLongClick: (String) -> Unit = { id ->
             if (!batchMode) {
