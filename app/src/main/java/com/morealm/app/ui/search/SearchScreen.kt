@@ -535,6 +535,28 @@ private fun OnlineResultItem(
                         modifier = Modifier.padding(top = 2.dp),
                     )
                 }
+                // Legado-parity meta row: 最新章节 / 字数 / 分类
+                // Pulled from result.searchBook (already populated by source rules) so no extra fetch.
+                val meta = remember(result) {
+                    buildList {
+                        result.searchBook?.latestChapterTitle?.takeIf { it.isNotBlank() }
+                            ?.let { add("最新: ${it.take(20)}") }
+                        result.searchBook?.wordCount?.takeIf { it.isNotBlank() }
+                            ?.let { add(it) }
+                        result.searchBook?.kind?.takeIf { it.isNotBlank() }
+                            ?.let { add(it.replace(",", " ").replace("，", " ").take(24)) }
+                    }.joinToString(" · ")
+                }
+                if (meta.isNotEmpty()) {
+                    Text(
+                        meta,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.85f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
                 if (result.intro.isNotBlank()) {
                     Text(
                         result.intro,
