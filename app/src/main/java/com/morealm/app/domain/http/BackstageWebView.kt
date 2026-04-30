@@ -30,6 +30,7 @@ class BackstageWebView(
     private val overrideUrlRegex: String? = null,
     private val javaScript: String? = null,
     private val delayTime: Long = 0,
+    private val persistCookie: Boolean = true,
 ) {
 
     private val mHandler = Handler(Looper.getMainLooper())
@@ -108,6 +109,7 @@ class BackstageWebView(
     private fun getJs(): String = javaScript?.takeIf { it.isNotEmpty() } ?: JS
 
     private fun setCookie(url: String) {
+        if (!persistCookie) return
         tag?.let {
             val cookie = android.webkit.CookieManager.getInstance().getCookie(url)
             if (!cookie.isNullOrBlank()) {
