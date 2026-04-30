@@ -77,8 +77,10 @@ class EdgeTtsEngine : TtsEngine {
     private var selectedVoice: String = VOICES.first().id
 
     fun setVoice(voiceName: String) {
-        if (voiceName.isNotBlank()) {
-            selectedVoice = voiceName
+        selectedVoice = if (voiceName.isBlank()) {
+            VOICES.first().id
+        } else {
+            VOICES.firstOrNull { it.id == voiceName }?.id ?: VOICES.first().id
         }
     }
 

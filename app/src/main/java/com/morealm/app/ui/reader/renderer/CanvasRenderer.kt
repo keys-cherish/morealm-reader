@@ -370,6 +370,14 @@ fun CanvasRenderer(
     }
 
     LaunchedEffect(currentChapterKey, layoutInputs) {
+        // Check prelayout cache first — if we already have a fully laid-out chapter,
+        // use it immediately without flashing a placeholder.
+        val cachedChapter = prelayoutCache[currentChapterKey]
+        if (cachedChapter != null) {
+            textChapter = cachedChapter
+            pageCount = cachedChapter.pageSize.coerceAtLeast(1)
+            return@LaunchedEffect
+        }
         textChapter = placeholderChapter()
         pageCount = 1
         if (content.isBlank()) {
@@ -379,12 +387,6 @@ fun CanvasRenderer(
             textChapter = chapter
             pageCount = 1
         } else {
-            val cachedChapter = prelayoutCache[currentChapterKey]
-            if (cachedChapter != null) {
-                textChapter = cachedChapter
-                pageCount = cachedChapter.pageSize.coerceAtLeast(1)
-                return@LaunchedEffect
-            }
             var handle: com.morealm.app.domain.render.AsyncLayoutHandle? = null
             handle = layoutInputs.provider.layoutChapterAsync(
                 title = chapterTitle,
@@ -419,7 +421,15 @@ fun CanvasRenderer(
     val nextTextChapter = if (nextChapterTitle.isNotBlank() && nextChapterContent.isNotBlank()) {
         prelayoutCache[chapterCacheKey(chapterIndex + 1, nextChapterTitle, nextChapterContent)]
     } else null
-    var readerPageIndex by remember(chapterIndex) { mutableIntStateOf(0) }
+    // When navigating backward, initialize to last page from prelayout cache
+    // to avoid flashing page 0 for one frame before LaunchedEffect corrects it.
+    var readerPageIndex by remember(chapterIndex) {
+        val initialPage = if (startFromLastPage) {
+            val cached = prelayoutCache[currentChapterKey]
+            (cached?.pageSize?.minus(1))?.coerceAtLeast(0) ?: 0
+        } else 0
+        mutableIntStateOf(initialPage)
+    }
     LaunchedEffect(pageCount, chapter?.isCompleted) {
         if (chapter?.isCompleted == true && pageCount > 0 && readerPageIndex > pageCount - 1) {
             readerPageIndex = pageCount - 1
@@ -448,12 +458,7 @@ fun CanvasRenderer(
                 isScroll = pageAnimType == PageAnimType.SCROLL,
                 hasNextChapterValue = chapterIndex < chaptersSize - 1,
                 hasPrevChapterValue = chapterIndex > 0,
-                onUpContent = { relativePosition, resetPageOffset ->
-                    AppLog.debug(
-                        "PageTurn",
-                        "upContent(relativePosition=$relativePosition, resetPageOffset=$resetPageOffset)",
-                    )
-                },
+                onUpContent = { _, _ -> },
             ),
         )
     }
@@ -592,16 +597,9 @@ fun CanvasRenderer(
 
     // Restore saved progress after layout is complete
     LaunchedEffect(renderPageCount, pageCount, chapter?.isCompleted, progressRestored, pageAnimType) {
-        if (progressRestored) {
-            AppLog.debug("CanvasRenderer", "restoreProgress: SKIP already restored")
-            return@LaunchedEffect
-        }
-        if (chapter?.isCompleted != true) {
-            AppLog.debug("CanvasRenderer", "restoreProgress: SKIP not completed, renderPC=$renderPageCount pc=$pageCount")
-            return@LaunchedEffect
-        }
+        if (progressRestored) return@LaunchedEffect
+        if (chapter?.isCompleted != true) return@LaunchedEffect
         if (renderPageCount <= 1) {
-            AppLog.debug("CanvasRenderer", "restoreProgress: renderPC<=1, startFromLast=$startFromLastPage initProg=$initialProgress")
             progressRestored = true
             onProgressRestored()
             return@LaunchedEffect
@@ -613,7 +611,7 @@ fun CanvasRenderer(
             initialProgress > 0 -> ((initialProgress / 100f) * (pageCount - 1)).roundToInt().coerceIn(0, pageCount - 1)
             else -> 0
         }
-        AppLog.debug("CanvasRenderer", "restoreProgress: startFromLast=$startFromLastPage initProg=$initialProgress pc=$pageCount renderPC=$renderPageCount target=$currentTargetPage")
+        AppLog.debug("CanvasRenderer", "restoreProgress: startFromLast=$startFromLastPage target=$currentTargetPage pc=$pageCount renderPC=$renderPageCount")
         val targetPage = pageFactory.displayIndexForCurrentPage(currentTargetPage).coerceIn(0, renderPageCount - 1)
         readerPageIndex = currentTargetPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         if (targetPage != pagerState.currentPage) {

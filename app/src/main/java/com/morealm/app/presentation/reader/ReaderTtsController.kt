@@ -76,6 +76,65 @@ class ReaderTtsController(
         return if (_ttsEngine.value == "edge") edgeTtsEngine else systemTtsEngine
     }
 
+    private fun voiceEngineId(engine: String): String =
+        if (engine == "edge") "edge" else "system"
+
+    private suspend fun voicesForEngine(engineId: String): List<com.morealm.app.domain.entity.TtsVoice> {
+        return if (engineId == "edge") {
+            com.morealm.app.domain.tts.EdgeTtsEngine.VOICES
+        } else {
+            systemTtsEngine.awaitReady()
+            systemTtsEngine.getChineseVoices()
+        }
+    }
+
+    private suspend fun savedVoiceForEngine(engineId: String): String {
+        val engineVoice = if (engineId == "edge") {
+            prefs.ttsEdgeVoice.first()
+        } else {
+            prefs.ttsSystemVoice.first()
+        }
+        return engineVoice.ifBlank { prefs.ttsVoice.first() }
+    }
+
+    private suspend fun saveVoiceForEngine(engineId: String, voiceName: String) {
+        if (engineId == "edge") {
+            prefs.setTtsEdgeVoice(voiceName)
+        } else {
+            prefs.setTtsSystemVoice(voiceName)
+        }
+        // Keep the legacy key updated for older code paths and existing backups.
+        prefs.setTtsVoice(voiceName)
+    }
+
+    private fun validVoiceOrDefault(
+        voiceName: String,
+        voices: List<com.morealm.app.domain.entity.TtsVoice>,
+    ): String {
+        if (voiceName.isBlank()) return ""
+        return voiceName.takeIf { selected -> voices.any { it.id == selected } } ?: ""
+    }
+
+    private fun applyTtsVoice(engineId: String, voiceName: String) {
+        if (engineId == "edge") {
+            edgeTtsEngine.setVoice(voiceName)
+        } else {
+            systemTtsEngine.setVoice(voiceName)
+        }
+    }
+
+    private suspend fun refreshVoicesForEngine(engine: String, preferredVoice: String? = null) {
+        val engineId = voiceEngineId(engine)
+        val voices = voicesForEngine(engineId)
+        val resolvedVoice = validVoiceOrDefault(
+            voiceName = preferredVoice ?: savedVoiceForEngine(engineId),
+            voices = voices,
+        )
+        _ttsVoices.value = voices
+        _ttsVoiceName.value = resolvedVoice
+        applyTtsVoice(engineId, resolvedVoice)
+    }
+
     /** Initialize TTS preferences and event listeners. Call from ViewModel init. */
     fun initialize(
         getBookTitle: () -> String,
@@ -94,16 +153,7 @@ class ReaderTtsController(
         scope.launch {
             val savedEngine = prefs.ttsEngine.first()
             _ttsEngine.value = savedEngine
-            val voiceName = prefs.ttsVoice.first()
-            _ttsVoiceName.value = voiceName
-            if (savedEngine == "edge") {
-                _ttsVoices.value = com.morealm.app.domain.tts.EdgeTtsEngine.VOICES
-                if (voiceName.isNotBlank()) edgeTtsEngine.setVoice(voiceName)
-            } else {
-                systemTtsEngine.awaitReady()
-                _ttsVoices.value = systemTtsEngine.getChineseVoices()
-                if (voiceName.isNotBlank()) systemTtsEngine.setVoice(voiceName)
-            }
+            refreshVoicesForEngine(savedEngine)
         }
         scope.launch {
             TtsEventBus.events.collect { event ->
@@ -350,35 +400,17 @@ class ReaderTtsController(
         _ttsEngine.value = engine
         scope.launch {
             prefs.setTtsEngine(engine)
-            if (engine == "edge") {
-                _ttsVoices.value = com.morealm.app.domain.tts.EdgeTtsEngine.VOICES
-                val savedVoice = _ttsVoiceName.value
-                val edgeVoice = com.morealm.app.domain.tts.EdgeTtsEngine.VOICES.find { it.id == savedVoice }
-                if (edgeVoice == null) {
-                    val defaultVoice = com.morealm.app.domain.tts.EdgeTtsEngine.VOICES.first().id
-                    _ttsVoiceName.value = defaultVoice
-                    edgeTtsEngine.setVoice(defaultVoice)
-                } else {
-                    edgeTtsEngine.setVoice(savedVoice)
-                }
-            } else {
-                systemTtsEngine.awaitReady()
-                _ttsVoices.value = systemTtsEngine.getChineseVoices()
-                val savedVoice = _ttsVoiceName.value
-                systemTtsEngine.setVoice(savedVoice)
-            }
+            refreshVoicesForEngine(engine)
             if (wasPlaying) ttsPlay(null, null, null, onChapterFinished = null)
         }
     }
 
     fun setTtsVoice(voiceName: String) {
-        _ttsVoiceName.value = voiceName
-        if (_ttsEngine.value == "edge") {
-            edgeTtsEngine.setVoice(voiceName)
-        } else {
-            systemTtsEngine.setVoice(voiceName)
-        }
-        scope.launch { prefs.setTtsVoice(voiceName) }
+        val engineId = voiceEngineId(_ttsEngine.value)
+        val resolvedVoice = validVoiceOrDefault(voiceName, _ttsVoices.value)
+        _ttsVoiceName.value = resolvedVoice
+        applyTtsVoice(engineId, resolvedVoice)
+        scope.launch { saveVoiceForEngine(engineId, resolvedVoice) }
     }
 
     fun setTtsSleepTimer(minutes: Int) {
