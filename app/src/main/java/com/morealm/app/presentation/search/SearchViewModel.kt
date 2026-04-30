@@ -5,6 +5,7 @@ import android.text.Html
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.Book
+import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.SearchBook
 import com.morealm.app.domain.preference.AppPreferences
@@ -16,24 +17,23 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
-import java.util.concurrent.Executors
-import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
-import kotlin.math.min
 import java.io.IOException
 
 private const val TEXT_BOOK_SOURCE_TYPE = 0
 private const val SOURCE_SEARCH_TIMEOUT_MS = 30_000L
-private const val TOTAL_SEARCH_TIMEOUT_MS = 45_000L
+private const val SEARCH_PARALLELISM = 8
 
 data class SearchResult(
     val title: String,
@@ -84,7 +84,7 @@ class SearchViewModel @Inject constructor(
     val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
 
     private var searchJob: Job? = null
-    private val threadCount = 4
+    private val searchGeneration = AtomicInteger(0)
     private val mergeMutex = Mutex()
 
     val disclaimerAccepted: StateFlow<Boolean> = prefs.disclaimerAccepted
@@ -103,6 +103,7 @@ class SearchViewModel @Inject constructor(
     }
 
     fun cancelSearch() {
+        searchGeneration.incrementAndGet()
         searchJob?.cancel()
         searchJob = null
         markUnfinishedSourcesFailed("搜索已取消")
@@ -111,31 +112,23 @@ class SearchViewModel @Inject constructor(
 
     fun search(keyword: String) {
         if (keyword.isBlank()) return
+        val searchId = searchGeneration.incrementAndGet()
         searchJob?.cancel()
         _query.value = keyword
         _results.value = emptyList()
         _localResults.value = emptyList()
+        _sourceProgress.value = emptyList()
         _isSearching.value = true
-
-        val threadIndex = AtomicInteger(1)
-        val searchPool = Executors.newFixedThreadPool(
-            min(threadCount, 16),
-            ThreadFactory { runnable ->
-                Thread(runnable, "SearchPool-${threadIndex.getAndIncrement()}").apply {
-                    uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { thread, throwable ->
-                        AppLog.logThreadException("Search", thread, throwable)
-                    }
-                }
-            }
-        ).asCoroutineDispatcher()
 
         searchJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val localBooks = searchRepo.searchLocalBooks(keyword)
+                if (!isCurrentSearch(searchId)) return@launch
                 _localResults.value = localBooks
                 AppLog.info("Search", "Local: ${localBooks.size} results for '$keyword'")
 
                 val allSources = searchRepo.getEnabledSources()
+                if (!isCurrentSearch(searchId)) return@launch
                 val skipped = allSources.filter { it.bookSourceType != TEXT_BOOK_SOURCE_TYPE }
                 if (skipped.isNotEmpty()) {
                     AppLog.info(
@@ -145,7 +138,7 @@ class SearchViewModel @Inject constructor(
                 }
                 val sources = allSources.filter { it.bookSourceType == TEXT_BOOK_SOURCE_TYPE }
                 if (sources.isEmpty()) {
-                    _isSearching.value = false
+                    if (isCurrentSearch(searchId)) _isSearching.value = false
                     return@launch
                 }
 
@@ -158,73 +151,79 @@ class SearchViewModel @Inject constructor(
                 }
                 AppLog.info("Search", "Searching '$keyword' across ${sources.size} sources")
 
-                val sourceJobs = sources.map { source ->
-                    launch(searchPool) {
-                        updateSourceStatus(source.bookSourceUrl, SourceStatus.SEARCHING)
-                        try {
-                            val searchBooks = withTimeout(SOURCE_SEARCH_TIMEOUT_MS) {
-                                searchRepo.searchOnlineSource(source, keyword)
-                            }
-                            val mapped = searchBooks.map { sb ->
-                                SearchResult(
-                                    title = sb.name,
-                                    author = sb.author,
-                                    coverUrl = sb.coverUrl,
-                                    bookUrl = sb.bookUrl,
-                                    sourceName = decodeHtmlEntities(sb.originName.ifBlank { source.bookSourceName }),
-                                    sourceUrl = sb.origin,
-                                    sourceType = sb.type,
-                                    intro = sb.intro ?: "",
-                                    searchBook = sb,
-                                )
-                            }.filter { result ->
-                                // 只把 Legado 默认文本书源送入小说阅读器，并过滤掉标题和作者都不包含关键词的结果。
-                                result.sourceType == TEXT_BOOK_SOURCE_TYPE &&
-                                    (result.title.contains(keyword, ignoreCase = true) ||
-                                    result.author.contains(keyword, ignoreCase = true)
-                                    )
-                            }
-                            if (mapped.isNotEmpty()) {
-                                mergeResults(mapped, keyword)
-                            }
-                            updateSourceStatus(source.bookSourceUrl, SourceStatus.DONE)
-                        } catch (e: TimeoutCancellationException) {
-                            updateSourceStatus(source.bookSourceUrl, SourceStatus.FAILED, "超时")
-                            AppLog.warn("Search", "${decodeHtmlEntities(source.bookSourceName)} timeout")
-                        } catch (e: Exception) {
-                            val message = e.toSearchErrorMessage()
-                            updateSourceStatus(source.bookSourceUrl, SourceStatus.FAILED, message)
-                            if (e is IOException) {
-                                AppLog.warn("Search", "${decodeHtmlEntities(source.bookSourceName)} failed: ${e.message}")
-                            } else {
-                                AppLog.warn("Search", "${decodeHtmlEntities(source.bookSourceName)} failed: ${e.message}", e)
+                val semaphore = Semaphore(SEARCH_PARALLELISM.coerceAtMost(sources.size).coerceAtLeast(1))
+                supervisorScope {
+                    val sourceJobs = sources.map { source ->
+                        launch {
+                            semaphore.withPermit {
+                                searchSingleSource(searchId, source, keyword)
                             }
                         }
                     }
-                }
-
-                try {
-                    withTimeout(TOTAL_SEARCH_TIMEOUT_MS) {
-                        sourceJobs.joinAll()
-                    }
-                } catch (e: TimeoutCancellationException) {
-                    sourceJobs.forEach { job ->
-                        if (job.isActive) job.cancel()
-                    }
-                    markUnfinishedSourcesFailed("搜索总超时")
-                    AppLog.warn("Search", "Search total timeout for '$keyword'")
+                    sourceJobs.joinAll()
                 }
                 AppLog.info("Search", "Search complete: ${_results.value.size} online results")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                markUnfinishedSourcesFailed(searchId, "搜索已取消")
+                throw e
             } finally {
-                markUnfinishedSourcesFailed("搜索已结束")
-                _isSearching.value = false
-                searchPool.close()
+                if (isCurrentSearch(searchId)) {
+                    markUnfinishedSourcesFailed(searchId, "搜索已结束")
+                    _isSearching.value = false
+                    searchJob = null
+                }
             }
         }
     }
 
-    private suspend fun mergeResults(newItems: List<SearchResult>, keyword: String) {
+    private suspend fun searchSingleSource(searchId: Int, source: BookSource, keyword: String) {
+        if (!isCurrentSearch(searchId)) return
+        updateSourceStatus(searchId, source.bookSourceUrl, SourceStatus.SEARCHING)
+        try {
+            val searchBooks = withTimeout(SOURCE_SEARCH_TIMEOUT_MS) {
+                searchRepo.searchOnlineSource(source, keyword)
+            }
+            if (!isCurrentSearch(searchId)) return
+            val mapped = searchBooks.map { sb ->
+                SearchResult(
+                    title = sb.name,
+                    author = sb.author,
+                    coverUrl = sb.coverUrl,
+                    bookUrl = sb.bookUrl,
+                    sourceName = decodeHtmlEntities(sb.originName.ifBlank { source.bookSourceName }),
+                    sourceUrl = sb.origin,
+                    sourceType = sb.type,
+                    intro = sb.intro ?: "",
+                    searchBook = sb,
+                )
+            }.filter { result ->
+                // 只把 Legado 默认文本书源送入小说阅读器，并过滤掉标题和作者都不包含关键词的结果。
+                result.sourceType == TEXT_BOOK_SOURCE_TYPE &&
+                    (result.title.contains(keyword, ignoreCase = true) ||
+                    result.author.contains(keyword, ignoreCase = true)
+                    )
+            }
+            if (mapped.isNotEmpty()) {
+                mergeResults(searchId, mapped, keyword)
+            }
+            updateSourceStatus(searchId, source.bookSourceUrl, SourceStatus.DONE)
+        } catch (e: TimeoutCancellationException) {
+            updateSourceStatus(searchId, source.bookSourceUrl, SourceStatus.FAILED, "超时")
+            AppLog.warn("Search", "${decodeHtmlEntities(source.bookSourceName)} timeout")
+        } catch (e: Exception) {
+            val message = e.toSearchErrorMessage()
+            updateSourceStatus(searchId, source.bookSourceUrl, SourceStatus.FAILED, message)
+            if (e is IOException) {
+                AppLog.warn("Search", "${decodeHtmlEntities(source.bookSourceName)} failed: ${e.message}")
+            } else {
+                AppLog.warn("Search", "${decodeHtmlEntities(source.bookSourceName)} failed: ${e.message}", e)
+            }
+        }
+    }
+
+    private suspend fun mergeResults(searchId: Int, newItems: List<SearchResult>, keyword: String) {
         mergeMutex.withLock {
+            if (!isCurrentSearch(searchId)) return@withLock
             val current = ArrayList(_results.value)
             for (item in newItems) {
                 val existing = current.find {
@@ -260,18 +259,34 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    private fun updateSourceStatus(sourceUrl: String, status: SourceStatus, errorMessage: String? = null) {
-        _sourceProgress.value = _sourceProgress.value.map {
-            if (it.sourceUrl == sourceUrl) {
-                it.copy(status = status, errorMessage = errorMessage)
-            } else {
-                it
+    private fun isCurrentSearch(searchId: Int): Boolean = searchGeneration.get() == searchId
+
+    private fun updateSourceStatus(searchId: Int, sourceUrl: String, status: SourceStatus, errorMessage: String? = null) {
+        _sourceProgress.update { progress ->
+            if (!isCurrentSearch(searchId)) return@update progress
+            progress.map {
+                if (it.sourceUrl == sourceUrl) {
+                    it.copy(status = status, errorMessage = errorMessage)
+                } else {
+                    it
+                }
             }
         }
     }
 
+    private fun markUnfinishedSourcesFailed(searchId: Int, message: String) {
+        _sourceProgress.update { progress ->
+            if (!isCurrentSearch(searchId)) return@update progress
+            markUnfinished(progress, message)
+        }
+    }
+
     private fun markUnfinishedSourcesFailed(message: String) {
-        _sourceProgress.value = _sourceProgress.value.map {
+        _sourceProgress.update { progress -> markUnfinished(progress, message) }
+    }
+
+    private fun markUnfinished(progress: List<SourceSearchProgress>, message: String): List<SourceSearchProgress> {
+        return progress.map {
             when (it.status) {
                 SourceStatus.WAITING, SourceStatus.SEARCHING -> it.copy(
                     status = SourceStatus.FAILED,

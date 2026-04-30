@@ -23,10 +23,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.morealm.app.domain.entity.TtsVoice
 import com.morealm.app.presentation.profile.ListenViewModel
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -37,6 +40,8 @@ fun ListenScreen(
     val playback by viewModel.playbackState.collectAsStateWithLifecycle()
     val selectedEngine by viewModel.selectedEngine.collectAsStateWithLifecycle()
     val selectedSpeed by viewModel.selectedSpeed.collectAsStateWithLifecycle()
+    val voices by viewModel.voices.collectAsStateWithLifecycle()
+    val selectedVoice by viewModel.selectedVoice.collectAsStateWithLifecycle()
 
     val isActive = playback.bookTitle.isNotBlank()
     val progress = if (playback.totalParagraphs > 0)
@@ -216,6 +221,16 @@ fun ListenScreen(
 
             Spacer(Modifier.height(14.dp))
 
+            TtsVoiceSelector(
+                voices = voices,
+                selectedVoice = selectedVoice,
+                onVoiceChange = viewModel::selectVoice,
+            )
+
+            if (voices.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+            }
+
             // Speed selection
             Text("语速", style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onBackground)
@@ -252,6 +267,73 @@ fun ListenScreen(
         }
 
         Spacer(Modifier.height(120.dp))
+    }
+}
+
+@Composable
+private fun TtsVoiceSelector(
+    voices: List<TtsVoice>,
+    selectedVoice: String,
+    onVoiceChange: (String) -> Unit,
+) {
+    if (voices.isEmpty()) return
+
+    var showVoiceMenu by remember { mutableStateOf(false) }
+    val displayName = if (selectedVoice.isBlank()) {
+        "默认"
+    } else {
+        voices.find { it.id == selectedVoice }?.name?.take(28)
+            ?: selectedVoice.substringAfterLast("#").take(28)
+    }
+
+    Text("语音", style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onBackground)
+    Spacer(Modifier.height(8.dp))
+    Box {
+        OutlinedButton(
+            onClick = { showVoiceMenu = true },
+            modifier = Modifier.fillMaxWidth().height(40.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+        ) {
+            Text(
+                displayName,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Icon(Icons.Default.ArrowDropDown, null, modifier = Modifier.size(18.dp))
+        }
+        DropdownMenu(
+            expanded = showVoiceMenu,
+            onDismissRequest = { showVoiceMenu = false },
+        ) {
+            DropdownMenuItem(
+                text = {
+                    Text("默认", fontWeight = if (selectedVoice.isBlank()) FontWeight.Bold else FontWeight.Normal)
+                },
+                onClick = { onVoiceChange(""); showVoiceMenu = false },
+            )
+            voices.take(30).forEach { voice ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(
+                                voice.name.substringAfterLast("#").take(30),
+                                fontWeight = if (selectedVoice == voice.id) FontWeight.Bold else FontWeight.Normal,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(
+                                voice.language,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            )
+                        }
+                    },
+                    onClick = { onVoiceChange(voice.id); showVoiceMenu = false },
+                )
+            }
+        }
     }
 }
 

@@ -261,17 +261,17 @@ data class BookSource(
      * 执行JS（书源级别，供header中@js:调用、login脚本等）
      */
     fun evalJS(jsStr: String, extraBindings: ((ScriptBindings) -> Unit)? = null): Any? {
-        val bindings = ScriptBindings()
-        JsExtensions.sourceGetter = { this }
-        JsExtensions.ruleDataGetter = { null }
-        bindings["java"] = JsExtensions
-        bindings["source"] = this
-        bindings["baseUrl"] = bookSourceUrl
-        bindings["cookie"] = CookieStore
-        bindings["cache"] = CacheManager
-        extraBindings?.invoke(bindings)
-        val scope = RhinoScriptEngine.getRuntimeScope(bindings)
-        return RhinoScriptEngine.eval(jsStr, scope)
+        return JsExtensions.withRuntimeContext(this) {
+            val bindings = ScriptBindings()
+            bindings["java"] = JsExtensions
+            bindings["source"] = this
+            bindings["baseUrl"] = bookSourceUrl
+            bindings["cookie"] = CookieStore
+            bindings["cache"] = CacheManager
+            extraBindings?.invoke(bindings)
+            val scope = RhinoScriptEngine.getRuntimeScope(bindings)
+            RhinoScriptEngine.eval(jsStr, scope)
+        }
     }
 
     class Converters {
