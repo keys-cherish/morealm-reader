@@ -175,6 +175,9 @@ class ReaderTtsController(
                             ttsPlay(null, null, null, onChapterFinished = null)
                         }
                     }
+                    is TtsEventBus.Event.AddTimer -> {
+                        addTtsSleepTimer()
+                    }
                 }
             }
         }
@@ -416,14 +419,40 @@ class ReaderTtsController(
     fun setTtsSleepTimer(minutes: Int) {
         _ttsSleepMinutes.value = minutes
         sleepTimerJob?.cancel()
+        // Push to player so notification refreshes immediately
+        TtsEventBus.sendCommand(TtsEventBus.Command.SetSleepMinutes(minutes))
+        TtsEventBus.updatePlayback { copy(sleepMinutes = minutes) }
         if (minutes > 0) {
             sleepTimerJob = scope.launch {
-                delay(minutes * 60_000L)
+                var remaining = minutes
+                while (remaining > 0) {
+                    delay(60_000L)
+                    remaining -= 1
+                    _ttsSleepMinutes.value = remaining
+                    TtsEventBus.sendCommand(TtsEventBus.Command.SetSleepMinutes(remaining))
+                    TtsEventBus.updatePlayback { copy(sleepMinutes = remaining) }
+                }
                 ttsStop()
-                _ttsSleepMinutes.value = 0
                 AppLog.info("TTS", "TTS sleep timer expired")
             }
         }
+    }
+
+    /**
+     * Increment sleep timer by 10 minutes (Legado-style).
+     * - 0 → 10
+     * - [10..170] → +10 (capped at 180)
+     * - 180 → 0 (cycle off)
+     */
+    fun addTtsSleepTimer() {
+        val current = _ttsSleepMinutes.value
+        val next = when {
+            current >= 180 -> 0
+            current <= 0 -> 10
+            else -> (current + 10).coerceAtMost(180)
+        }
+        AppLog.info("TTS", "Sleep timer: $current → $next minutes")
+        setTtsSleepTimer(next)
     }
 
     /** Speak text one-shot (doesn't affect TTS state) */

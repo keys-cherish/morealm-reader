@@ -15,6 +15,8 @@ data class TtsPlaybackState(
     val totalParagraphs: Int = 0,
     val speed: Float = 1.0f,
     val engine: String = "system",
+    /** Remaining sleep timer minutes (0 = disabled). Updated every minute. */
+    val sleepMinutes: Int = 0,
 )
 
 /**
@@ -31,6 +33,8 @@ object TtsEventBus {
         data object PlayPause : Event()
         data class AudioFocusLoss(val resumeOnGain: Boolean) : Event()
         data object AudioFocusGain : Event()
+        /** Notification "+10 minutes" timer button pressed */
+        data object AddTimer : Event()
     }
 
     /** ViewModel → Service */
@@ -38,6 +42,8 @@ object TtsEventBus {
         data class UpdateMeta(val book: String, val chapter: String, val coverUrl: String? = null) : Command()
         data class SetPlaying(val playing: Boolean) : Command()
         data object StopService : Command()
+        /** Push current sleep-timer remaining minutes to the player so notification can refresh */
+        data class SetSleepMinutes(val minutes: Int) : Command()
     }
 
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 4)
