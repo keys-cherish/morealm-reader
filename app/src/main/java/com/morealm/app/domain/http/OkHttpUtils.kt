@@ -61,6 +61,23 @@ val okHttpClient: OkHttpClient by lazy {
                 throw IOException(e)
             }
         }
+        // Auto cookie persistence: load stored cookies into request, save Set-Cookie from response.
+        // This is what fixes "login lost after re-entering". Skip when caller opts out via
+        // the `${CookieManager.cookieJarHeader}: false` header (e.g. cover image fetch).
+        .addInterceptor { chain ->
+            val original = chain.request()
+            val optOut = original.header(CookieManager.cookieJarHeader) == "false"
+            val request = if (optOut) {
+                original.newBuilder().removeHeader(CookieManager.cookieJarHeader).build()
+            } else {
+                CookieManager.loadRequest(original)
+            }
+            val response = chain.proceed(request)
+            if (!optOut) {
+                CookieManager.saveResponse(response)
+            }
+            response
+        }
         .build()
         .apply { installDispatcherExceptionLogger("OkHttp") }
 }
