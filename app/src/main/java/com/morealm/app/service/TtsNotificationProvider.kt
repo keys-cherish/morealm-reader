@@ -33,8 +33,14 @@ class TtsNotificationProvider(private val service: TtsService) : MediaNotificati
         val chapterTitle = player?.chapterTitle ?: ""
         val cover = player?.coverBitmap
         val isPlaying = player?.isPlaying == true
+        val sleepMinutes = player?.sleepMinutes ?: 0
 
-        val title = if (isPlaying) "墨境 · 朗读: $bookTitle" else "墨境 · 暂停: $bookTitle"
+        val stateLabel = when {
+            !isPlaying -> "暂停"
+            sleepMinutes > 0 -> "朗读 · 定时 ${sleepMinutes} 分钟"
+            else -> "朗读"
+        }
+        val title = "墨境 · $stateLabel: $bookTitle"
         val subtitle = chapterTitle.ifEmpty { "准备中…" }
 
         val builder = NotificationCompat.Builder(service, TtsService.CHANNEL_ID)
@@ -84,6 +90,12 @@ class TtsNotificationProvider(private val service: TtsService) : MediaNotificati
             android.R.drawable.ic_delete,
             "停止",
             buildActionIntent(TtsService.ACTION_STOP, 5),
+        )
+        // Action: +10 minutes sleep timer
+        builder.addAction(
+            android.R.drawable.ic_menu_add,
+            if (sleepMinutes > 0) "+10 (${sleepMinutes})" else "定时 +10",
+            buildActionIntent(TtsService.ACTION_ADD_TIMER, 6),
         )
 
         // MediaStyle: show prev, play/pause, next in compact view

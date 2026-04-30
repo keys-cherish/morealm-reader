@@ -38,6 +38,9 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
         private set
     var coverBitmap: Bitmap? = null
         private set
+    /** Remaining sleep timer minutes (0 = disabled). Triggers notification refresh on change. */
+    var sleepMinutes: Int = 0
+        private set
     private var coverArtBytes: ByteArray? = null
 
     fun updateMetadata(book: String, chapter: String, coverUrl: String? = null) {
@@ -49,6 +52,12 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
 
     fun setPlaying(isPlaying: Boolean) {
         playing = isPlaying
+        invalidateState()
+    }
+
+    fun setSleepMinutes(minutes: Int) {
+        if (sleepMinutes == minutes) return
+        sleepMinutes = minutes
         invalidateState()
     }
 
