@@ -187,10 +187,38 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.0-alpha3",
+        date = "2026-05-01",
+        title = "缓存导出 · 搜索元信息 · Legado 全链路对齐",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            // ── 本次新增（缓存与搜索体验） ──
+            ChangelogItem(ChangeType.NEW, "缓存页支持「导出 TXT」：选择保存位置后自动导出全部已缓存章节，含书名、作者、简介与 ContentProcessor 处理后的正文"),
+            ChangelogItem(ChangeType.NEW, "缓存项操作区改为自适应换行布局：全部缓存 / 从当前章 / 导出 TXT / 清除四按钮"),
+            ChangelogItem(ChangeType.NEW, "搜索结果卡片显示「最新章节 / 字数 / 分类」元信息（与 Legado 对齐）"),
+            ChangelogItem(ChangeType.IMPROVE, "AnalyzeUrl：搜索 / 详情 / 目录 / 正文 五处统一走 errResponse + loginCheckJs 错误恢复（Legado-parity）"),
+            ChangelogItem(ChangeType.IMPROVE, "AnalyzeUrl：cookie 始终注入 — 关闭 enabledCookieJar 不再误丢已登录会话"),
+            ChangelogItem(ChangeType.NEW, "AnalyzeUrl：补齐 getErrResponse / getErrStrResponse — 网络异常时 JS 仍能检查响应"),
+            ChangelogItem(ChangeType.FIX, "搜索 HTTP 重定向到详情页时 bookUrl 错误：现在使用最终 URL 并复用 body（修单结果重定向源大量打不开）"),
+            ChangelogItem(ChangeType.FIX, "晋江文学搜索崩溃：JSONPath 收到 jsoup Element 时 fallback 到空文档，不再 cast 异常"),
+            ChangelogItem(ChangeType.FIX, "JSONPath「No results for path」噪音从 warn 降为 debug — 日志量降低约 10×"),
+            ChangelogItem(ChangeType.FIX, "正文为空时显示友好占位文本 + 自动展开控制栏，引导用户换源 / 重试"),
+            ChangelogItem(ChangeType.FIX, "ContentProcessor：标题首行不再被错误段首缩进；标题去重新增二次匹配（替换后标题）"),
+            ChangelogItem(ChangeType.IMPROVE, "WEB 书短按打开优先进入详情页（Legado-parity），本地书保持直进阅读器"),
+            ChangelogItem(ChangeType.IMPROVE, "OkHttp 全局信任自签 / 过期证书（SSLHelper），修「Trust anchor not found」一类源失效"),
+            ChangelogItem(ChangeType.NEW, "AutoGroupClassifier 启发式分组：题材 / 格式 / 来源 4 层兜底，无需手配关键词"),
+            ChangelogItem(ChangeType.IMPROVE, "搜索详情页二次请求复用 infoHtml — 减少 ~10% 跨阶段失败率"),
+            // ── alpha3 原有 ──
+            ChangelogItem(ChangeType.NEW, "新增「更新日志」页面：按版本分组展示迭代记录，每项带类型标签（新增 / 修复 / 优化 / 重构）"),
+            ChangelogItem(ChangeType.NEW, "关于页面增加「更新日志」入口卡片，可一键跳转查看历史版本变更"),
+            ChangelogItem(ChangeType.NEW, "关于页面显示作者署名：光坂镇"),
+            ChangelogItem(ChangeType.IMPROVE, "更新日志页支持「最新」与「里程碑」徽章，便于快速识别重要版本"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.0.0",
         date = "2026-04-30",
         title = "首个正式版本",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             ChangelogItem(ChangeType.NEW, "搜索结果卡片增加最新章节、字数、类型标签展示"),
             ChangelogItem(ChangeType.IMPROVE, "Legado 书源兼容性大幅增强：errResponse、loginCheckJs、JSONPath jsoup-Element 等多项对齐"),
