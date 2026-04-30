@@ -189,10 +189,36 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
         version = "v1.0-alpha3",
         date = "2026-05-01",
-        title = "缓存导出 · 搜索元信息 · Legado 全链路对齐",
+        title = "自动分组重构 · 多标签 · 智能视图 · Legado 全链路对齐",
         tag = ReleaseTag.LATEST,
         items = listOf(
-            // ── 本次新增（缓存与搜索体验） ──
+            // ── 自动分组重构（本次重点） ──
+            // P0 数据透传修复
+            ChangelogItem(ChangeType.FIX, "搜索结果 SearchResult 透传 kind / wordCount / latestChapter — 网络书加架瞬间不再丢失分类元数据"),
+            ChangelogItem(ChangeType.NEW, "EPUB 导入解析 dc:subject 标签并写入 Book.kind — 本地书也能拿到题材信息"),
+            // P1 数据结构升级 v17
+            ChangelogItem(ChangeType.NEW, "新增 book_tags 多对多表与 tag_definitions 词表，单分组升级为多标签系统（v17 schema）"),
+            ChangelogItem(ChangeType.NEW, "Book 实体增加 tagsAssignedBy / groupLocked 字段，区分自动归类与用户手动锁定"),
+            ChangelogItem(ChangeType.IMPROVE, "DB v16→v17 迁移：现有 BookGroup 自动迁移为 USER 标签，folderId 镜像为 MANUAL 标签 — 升级零数据丢失"),
+            ChangelogItem(ChangeType.NEW, "首启自动播种 15 个内置题材标签（修真 / 玄幻 / 都市 / 言情 等），关键词支持用户编辑"),
+            // P2 分类引擎重写
+            ChangelogItem(ChangeType.NEW, "TagResolver 5 层评分瀑布替代旧的 first-hit 分类器：用户关键词 → 元数据 → 简介 → 标题 → 来源/格式"),
+            ChangelogItem(ChangeType.IMPROVE, "字段权重打分（标题 ×1.5 / kind ×1.3 / 简介 ×0.8）+ 中文词边界检测，避免「军事」误中「军事爱好者后传」"),
+            ChangelogItem(ChangeType.IMPROVE, "AutoGroupClassifier 退化为薄壳适配层，统一调用 TagResolver；每次分类同步写入 book_tags"),
+            ChangelogItem(ChangeType.NEW, "自动归类同时写入来源标签（source:起点 / source:番茄 等），按来源聚合零摩擦"),
+            // P3 智能种子视图
+            ChangelogItem(ChangeType.NEW, "书架顶部新增智能视图横滑栏：📖 继续阅读 / 🔥 追更中 / ✨ 本周新加 / 😴 搁置已久 / ✅ 已读完 / 📁 离线书 / 🌐 按来源"),
+            ChangelogItem(ChangeType.NEW, "点击任一智能视图卡片进入详情页，列出对应书目并支持快速进入阅读"),
+            ChangelogItem(ChangeType.IMPROVE, "智能视图带实时计数徽章，零本数视图自动隐藏（按来源除外）"),
+
+            // ── 缓存与搜索体验 ──
+            // 后台书架刷新（任务 1，Legado MainViewModel.upToc 移植）
+            ChangelogItem(ChangeType.NEW, "书架顶部新增「刷新」按钮：后台并发拉取所有 WEB 书目录，发现新章节时显示「N 新」红色角标"),
+            ChangelogItem(ChangeType.NEW, "数据库升级 v15→v16：Book 实体新增 lastCheckCount / lastCheckTime / canUpdate 字段（升级前自动备份）"),
+            ChangelogItem(ChangeType.NEW, "ShelfRefreshController：固定线程池并发（默认 4），单源失败不影响其他源；状态合并避免双重刷新"),
+            ChangelogItem(ChangeType.IMPROVE, "刷新进行中可点击按钮取消，已发起的 fetch 自然结束以避免半状态"),
+            ChangelogItem(ChangeType.IMPROVE, "用户点击书本打开时自动清除「N 新」角标（与 Legado 一致）"),
+
             ChangelogItem(ChangeType.NEW, "缓存页支持「导出 TXT」：选择保存位置后自动导出全部已缓存章节，含书名、作者、简介与 ContentProcessor 处理后的正文"),
             ChangelogItem(ChangeType.NEW, "缓存项操作区改为自适应换行布局：全部缓存 / 从当前章 / 导出 TXT / 清除四按钮"),
             ChangelogItem(ChangeType.NEW, "搜索结果卡片显示「最新章节 / 字数 / 分类」元信息（与 Legado 对齐）"),
@@ -206,9 +232,9 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             ChangelogItem(ChangeType.FIX, "ContentProcessor：标题首行不再被错误段首缩进；标题去重新增二次匹配（替换后标题）"),
             ChangelogItem(ChangeType.IMPROVE, "WEB 书短按打开优先进入详情页（Legado-parity），本地书保持直进阅读器"),
             ChangelogItem(ChangeType.IMPROVE, "OkHttp 全局信任自签 / 过期证书（SSLHelper），修「Trust anchor not found」一类源失效"),
-            ChangelogItem(ChangeType.NEW, "AutoGroupClassifier 启发式分组：题材 / 格式 / 来源 4 层兜底，无需手配关键词"),
             ChangelogItem(ChangeType.IMPROVE, "搜索详情页二次请求复用 infoHtml — 减少 ~10% 跨阶段失败率"),
-            // ── alpha3 原有 ──
+
+            // ── 关于 / 更新日志页面 ──
             ChangelogItem(ChangeType.NEW, "新增「更新日志」页面：按版本分组展示迭代记录，每项带类型标签（新增 / 修复 / 优化 / 重构）"),
             ChangelogItem(ChangeType.NEW, "关于页面增加「更新日志」入口卡片，可一键跳转查看历史版本变更"),
             ChangelogItem(ChangeType.NEW, "关于页面显示作者署名：光坂镇"),
@@ -216,15 +242,15 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
         ),
     ),
     ChangelogEntry(
-        version = "v1.0.0",
+        version = "v1.0-alpha2",
         date = "2026-04-30",
-        title = "首个正式版本",
+        title = "主题与书源登录",
         items = listOf(
-            ChangelogItem(ChangeType.NEW, "搜索结果卡片增加最新章节、字数、类型标签展示"),
-            ChangelogItem(ChangeType.IMPROVE, "Legado 书源兼容性大幅增强：errResponse、loginCheckJs、JSONPath jsoup-Element 等多项对齐"),
-            ChangelogItem(ChangeType.FIX, "搜索结果空内容、重定向、JSONPath 解析等场景的稳定性修复"),
-            ChangelogItem(ChangeType.NEW, "正文处理器：标题缩进修复 + 二级标题去重"),
-            ChangelogItem(ChangeType.NEW, "网络书优先从详情页路由 + AnalyzeUrl 的 cookie / errResponse 行为对齐"),
+            ChangelogItem(ChangeType.FIX, "修复主题切换动画不一致问题"),
+            ChangelogItem(ChangeType.NEW, "加入书源登录（测试功能）"),
+            ChangelogItem(ChangeType.FIX, "修复主题超时导致批量超时问题"),
+            ChangelogItem(ChangeType.FIX, "修复阅读器内夜间 / 白天按钮主题切换闪烁问题"),
+            ChangelogItem(ChangeType.NEW, "支持本地 JSON 导入书源功能"),
         ),
     ),
     ChangelogEntry(

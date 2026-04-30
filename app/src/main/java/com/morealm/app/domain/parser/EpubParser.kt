@@ -25,6 +25,7 @@ data class EpubMetadata(
     val description: String = "",
     val language: String = "",
     val publisher: String = "",
+    val subject: String = "",
     val opfPath: String = "",
 )
 
@@ -68,6 +69,12 @@ object EpubParser {
                 description = meta.descriptions.firstOrNull()?.let {
                     if (it.contains('<')) Jsoup.parse(it).text() else it
                 }.orEmpty(),
+                subject = runCatching {
+                    // dc:subject is a list of free-text genre/category tags. Join non-blank
+                    // entries so a book with multiple subjects (玄幻 + 修真) feeds all signals
+                    // into the auto-grouping classifier.
+                    meta.subjects?.filter { it.isNotBlank() }?.joinToString(",").orEmpty()
+                }.getOrDefault(""),
             )
             val coverPath = extractCoverFromBook(context, uri, book)
             EpubImportResult(metadata, coverPath)

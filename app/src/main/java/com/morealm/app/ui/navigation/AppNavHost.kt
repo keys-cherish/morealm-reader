@@ -59,7 +59,7 @@ fun MoRealmNavHost(
     val moColors = LocalMoRealmColors.current
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "app_log" || route == "cache_book" || route.startsWith("theme_editor")
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "app_log" || route == "cache_book" || route.startsWith("theme_editor") || route.startsWith("system_view/")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -213,6 +213,9 @@ fun MoRealmNavHost(
                                 isNightTheme = isNight,
                                 columns = columns,
                                 continueReadingRequest = continueReadingRequest,
+                                onNavigateSystemView = { view ->
+                                    navController.safeNavigate("system_view/${view.name}")
+                                },
                             )
                         }
                         BottomTab.Discover -> SearchScreen(
@@ -253,6 +256,26 @@ fun MoRealmNavHost(
 
             composable("changelog") {
                 ChangelogScreen(onBack = { navController.safePopBackStack() })
+            }
+
+            composable(
+                route = "system_view/{viewName}",
+                arguments = listOf(navArgument("viewName") { type = NavType.StringType }),
+            ) { backStackEntry ->
+                val viewName = backStackEntry.arguments?.getString("viewName").orEmpty()
+                com.morealm.app.ui.shelf.SystemViewScreen(
+                    viewName = viewName,
+                    onBack = { navController.safePopBackStack() },
+                    onBookOpen = { book ->
+                        // Same routing rule as the shelf: WEB to detail, local to reader.
+                        val route = if (book.format == com.morealm.app.domain.entity.BookFormat.WEB) {
+                            "detail/${book.id}"
+                        } else {
+                            "reader/${book.id}"
+                        }
+                        navController.safeNavigate(route)
+                    },
+                )
             }
 
             composable("source_manage") {
