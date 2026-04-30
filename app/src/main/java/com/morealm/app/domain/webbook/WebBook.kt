@@ -40,29 +40,7 @@ object WebBook {
         // handle the failure — sources commonly use loginCheckJs to detect 401/403
         // sessions and trigger a re-login dance. Without this fallback, any transient
         // 5xx kills the search instead of letting JS rewrite the response.
-        val checkJs = bookSource.loginCheckJs
-        var res = runCatching {
-            val initial = analyzeUrl.getStrResponseAwait()
-            if (!checkJs.isNullOrBlank()) {
-                analyzeUrl.evalJS(checkJs, initial) as StrResponse
-            } else {
-                initial
-            }
-        }.getOrElse { throwable ->
-            if (!checkJs.isNullOrBlank()) {
-                val errResponse = analyzeUrl.getErrStrResponse(throwable)
-                try {
-                    val rewritten = analyzeUrl.evalJS(checkJs, errResponse) as StrResponse
-                    // If JS couldn't recover (still 500), bubble the original throwable
-                    if (rewritten.code() == 500) throw throwable
-                    rewritten
-                } catch (_: Throwable) {
-                    throw throwable
-                }
-            } else {
-                throw throwable
-            }
-        }
+        val res = fetchWithLoginCheck(analyzeUrl, bookSource)
         checkRedirect(bookSource, res)
         // Legado-parity: detect HTTP redirect on the search request. Many sources
         // single-result-redirect to the detail page; we must propagate this flag so
@@ -96,13 +74,7 @@ object WebBook {
             ruleData = ruleData,
             coroutineContext = coroutineContext
         )
-        var res = analyzeUrl.getStrResponseAwait()
-        // 检测书源是否已登录
-        bookSource.loginCheckJs?.let { checkJs ->
-            if (checkJs.isNotBlank()) {
-                res = analyzeUrl.evalJS(checkJs, res) as StrResponse
-            }
-        }
+        var res = fetchWithLoginCheck(analyzeUrl, bookSource)
         checkRedirect(bookSource, res)
         return BookList.analyzeBookList(
             bookSource = bookSource,
@@ -146,13 +118,7 @@ object WebBook {
             ruleData = null,
             coroutineContext = coroutineContext
         )
-        var res = analyzeUrl.getStrResponseAwait()
-        // 检测书源是否已登录
-        bookSource.loginCheckJs?.let { checkJs ->
-            if (checkJs.isNotBlank()) {
-                res = analyzeUrl.evalJS(checkJs, res) as StrResponse
-            }
-        }
+        var res = fetchWithLoginCheck(analyzeUrl, bookSource)
         checkRedirect(bookSource, res)
         BookInfo.analyzeBookInfo(
             bookSource = bookSource,
@@ -188,13 +154,7 @@ object WebBook {
             source = bookSource,
             coroutineContext = coroutineContext
         )
-        var res = analyzeUrl.getStrResponseAwait()
-        // 检测书源是否已登录
-        bookSource.loginCheckJs?.let { checkJs ->
-            if (checkJs.isNotBlank()) {
-                res = analyzeUrl.evalJS(checkJs, res) as StrResponse
-            }
-        }
+        var res = fetchWithLoginCheck(analyzeUrl, bookSource)
         checkRedirect(bookSource, res)
         return BookChapterList.analyzeChapterList(
             bookSource = bookSource,
@@ -222,16 +182,12 @@ object WebBook {
             source = bookSource,
             coroutineContext = coroutineContext
         )
-        var res = analyzeUrl.getStrResponseAwait(
+        var res = fetchWithLoginCheck(
+            analyzeUrl = analyzeUrl,
+            bookSource = bookSource,
             jsStr = contentRule.webJs,
             sourceRegex = contentRule.sourceRegex,
         )
-        // 检测书源是否已登录
-        bookSource.loginCheckJs?.let { checkJs ->
-            if (checkJs.isNotBlank()) {
-                res = analyzeUrl.evalJS(checkJs, res) as StrResponse
-            }
-        }
         checkRedirect(bookSource, res)
         return BookContent.analyzeContent(
             bookSource = bookSource,
@@ -257,5 +213,53 @@ object WebBook {
 
     private fun checkRedirect(bookSource: BookSource, response: StrResponse) {
         // 重定向检测（日志记录）
+    }
+
+    /**
+     * Fetch with loginCheckJs error-recovery (Legado parity).
+     *
+     * Wraps [analyzeUrl.getStrResponseAwait] so that if the network call throws AND
+     * the source has a loginCheckJs, the JS gets a chance to inspect the synthetic
+     * error response (via [AnalyzeUrl.getErrStrResponse]) and rewrite it — book sources
+     * use this to detect 401/403/expired-session and trigger a silent re-login.
+     *
+     * Behavior:
+     *  - Success path: run loginCheckJs against the real response, return
+     *  - Throw + no loginCheckJs: rethrow (caller handles)
+     *  - Throw + has loginCheckJs: feed errResponse to JS; if JS returns 500-coded
+     *    response (signal "I couldn't recover"), rethrow original; otherwise return JS-rewritten.
+     */
+    private suspend fun fetchWithLoginCheck(
+        analyzeUrl: AnalyzeUrl,
+        bookSource: BookSource,
+        jsStr: String? = null,
+        sourceRegex: String? = null,
+    ): StrResponse {
+        val checkJs = bookSource.loginCheckJs
+        return runCatching {
+            val initial = if (jsStr != null || sourceRegex != null) {
+                analyzeUrl.getStrResponseAwait(jsStr = jsStr, sourceRegex = sourceRegex)
+            } else {
+                analyzeUrl.getStrResponseAwait()
+            }
+            if (!checkJs.isNullOrBlank()) {
+                analyzeUrl.evalJS(checkJs, initial) as StrResponse
+            } else {
+                initial
+            }
+        }.getOrElse { throwable ->
+            if (!checkJs.isNullOrBlank()) {
+                val errResponse = analyzeUrl.getErrStrResponse(throwable)
+                try {
+                    val rewritten = analyzeUrl.evalJS(checkJs, errResponse) as StrResponse
+                    if (rewritten.code() == 500) throw throwable
+                    rewritten
+                } catch (_: Throwable) {
+                    throw throwable
+                }
+            } else {
+                throw throwable
+            }
+        }
     }
 }
