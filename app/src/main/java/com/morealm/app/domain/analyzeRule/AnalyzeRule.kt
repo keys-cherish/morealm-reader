@@ -94,61 +94,60 @@ class AnalyzeRule(
     // ── JS 执行 ──
 
     fun evalJS(jsStr: String, result: Any? = null): Any? {
-        val bindings = ScriptBindings()
-        org.mozilla.javascript.Context.enter()
-        try {
-            // java变量绑定JsExtensions，提供base64/md5/aes/http等工具方法
-            JsExtensions.sourceGetter = { source }
-            JsExtensions.coroutineContextGetter = { coroutineContext }
-            JsExtensions.ruleDataGetter = { ruleData }
-            bindings["java"] = JsExtensions
-            bindings["source"] = source
-            bindings["book"] = ruleData
-            bindings["baseUrl"] = baseUrl
-            bindings["result"] = result
-            bindings["chapter"] = chapter
-            bindings["title"] = chapter?.title
-            bindings["src"] = content
-            bindings["nextChapterUrl"] = nextChapterUrl
-            bindings["cookie"] = com.morealm.app.domain.http.CookieStore
-            bindings["cache"] = com.morealm.app.domain.http.CacheManager
-        } finally {
-            org.mozilla.javascript.Context.exit()
-        }
-        val topScope = topScopeRef?.get()
-        // 优先使用 jsLib 共享作用域
-        val sharedScope = source?.jsLib?.let { SharedJsScope.getScope(it, coroutineContext) }
-        val scope = if (sharedScope != null) {
-            bindings.apply { prototype = sharedScope }
-        } else if (topScope == null) {
-            RhinoScriptEngine.getRuntimeScope(bindings).apply {
-                if (evalJSCallCount++ > 16) {
-                    topScopeRef = WeakReference(prototype)
+        return JsExtensions.withRuntimeContext(source, coroutineContext, ruleData) {
+            val bindings = ScriptBindings()
+            org.mozilla.javascript.Context.enter()
+            try {
+                // java 绑定全局工具对象；实际 source/ruleData/coroutineContext 由 ThreadLocal 上下文隔离。
+                bindings["java"] = JsExtensions
+                bindings["source"] = source
+                bindings["book"] = ruleData
+                bindings["baseUrl"] = baseUrl
+                bindings["result"] = result
+                bindings["chapter"] = chapter
+                bindings["title"] = chapter?.title
+                bindings["src"] = content
+                bindings["nextChapterUrl"] = nextChapterUrl
+                bindings["cookie"] = com.morealm.app.domain.http.CookieStore
+                bindings["cache"] = com.morealm.app.domain.http.CacheManager
+            } finally {
+                org.mozilla.javascript.Context.exit()
+            }
+            val topScope = topScopeRef?.get()
+            // 优先使用 jsLib 共享作用域
+            val sharedScope = source?.jsLib?.let { SharedJsScope.getScope(it, coroutineContext) }
+            val scope = if (sharedScope != null) {
+                bindings.apply { prototype = sharedScope }
+            } else if (topScope == null) {
+                RhinoScriptEngine.getRuntimeScope(bindings).apply {
+                    if (evalJSCallCount++ > 16) {
+                        topScopeRef = WeakReference(prototype)
+                    }
+                }
+            } else {
+                bindings.apply {
+                    prototype = topScope
                 }
             }
-        } else {
-            bindings.apply {
-                prototype = topScope
+            // 使用编译缓存：相同 JS 源码只编译一次，后续直接执行已编译脚本
+            val script = normalizeJsSnippet(jsStr)
+            val compiled = scriptCache.getOrPut(script) {
+                try {
+                    RhinoScriptEngine.compile(script)
+                } catch (_: Exception) {
+                    null
+                }
             }
-        }
-        // 使用编译缓存：相同 JS 源码只编译一次，后续直接执行已编译脚本
-        val script = normalizeJsSnippet(jsStr)
-        val compiled = scriptCache.getOrPut(script) {
             try {
-                RhinoScriptEngine.compile(script)
-            } catch (_: Exception) {
+                if (compiled != null) {
+                    compiled.eval(scope, coroutineContext)
+                } else {
+                    RhinoScriptEngine.eval(script, scope, coroutineContext)
+                }
+            } catch (e: Exception) {
+                AppLog.warn("AnalyzeRule", "JS eval error: ${e.message}")
                 null
             }
-        }
-        return try {
-            if (compiled != null) {
-                compiled.eval(scope, coroutineContext)
-            } else {
-                RhinoScriptEngine.eval(script, scope, coroutineContext)
-            }
-        } catch (e: Exception) {
-            AppLog.warn("AnalyzeRule", "JS eval error: ${e.message}")
-            null
         }
     }
 

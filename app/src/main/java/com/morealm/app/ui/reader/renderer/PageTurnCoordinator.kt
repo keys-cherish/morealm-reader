@@ -6,7 +6,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.TextPage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -83,14 +82,8 @@ internal class PageTurnCoordinator(
             currentDisplayIndex = displayIndex,
             onBoundaryChapter = { direction ->
                 when (direction) {
-                    ReaderPageDirection.PREV -> {
-                        AppLog.debug("PageTurn", "Commit prev chapter from fillPage boundary: ${chapterIndex - 1}")
-                        onPrevChapter()
-                    }
-                    ReaderPageDirection.NEXT -> {
-                        AppLog.debug("PageTurn", "Commit next chapter from fillPage boundary: ${chapterIndex + 1}")
-                        onNextChapter()
-                    }
+                    ReaderPageDirection.PREV -> onPrevChapter()
+                    ReaderPageDirection.NEXT -> onNextChapter()
                     ReaderPageDirection.NONE -> Unit
                 }
             },
@@ -119,14 +112,12 @@ internal class PageTurnCoordinator(
 
     fun commitPageTurn(displayIndex: Int, direction: ReaderPageDirection, readerPageIndexSetter: (Int) -> Unit): Int? {
         val factory = pageFactory ?: return null
-        AppLog.debug("PageTurn", "commitPageTurn ENTER | displayIndex=$displayIndex | direction=$direction | lastSettled=$lastSettledDisplayPage | renderPageCount=$renderPageCount")
         val content = createPageState(displayIndex).fillPage(direction)
         if (content == null) {
             pageDelegateState.stopScroll()
             return null
         }
         if (content.boundaryDirection != null) {
-            AppLog.debug("PageTurn", "commitPageTurn committed chapter boundary | direction=$direction")
             pageDelegateState.stopScroll()
             return null
         }
@@ -135,7 +126,6 @@ internal class PageTurnCoordinator(
         factory.currentLocalIndex(content.currentDisplayIndex)?.let { localIndex ->
             readerPageIndexSetter(localIndex)
         }
-        AppLog.debug("PageTurn", "commitPageTurn committed=${content.currentDisplayIndex} | local=${factory.currentLocalIndex(content.currentDisplayIndex)} | chapter=${content.currentPage.chapterIndex} | page=${content.currentPage.index}")
         reportProgress(content)
         pageDelegateState.stopScroll()
         return content.currentDisplayIndex
@@ -149,10 +139,7 @@ internal class PageTurnCoordinator(
             ReaderPageDirection.NEXT -> factory.isNextChapterTurn(startDisplayPage)
             ReaderPageDirection.NONE -> false
         }
-        if (!canCommitBoundary) {
-            AppLog.debug("PageTurn", "Scroll boundary $direction rejected at display=$startDisplayPage | renderPageCount=$renderPageCount")
-            return false
-        }
+        if (!canCommitBoundary) return false
         commitPageTurn(startDisplayPage, direction, readerPageIndexSetter)
         return true
     }
@@ -189,7 +176,6 @@ internal class PageTurnCoordinator(
         ) {
             commitPageTurn(startDisplayPage, direction, readerPageIndexSetter)
         } else {
-            AppLog.debug("PageTurn", "keyTurnPage($direction) rejected at display=$startDisplayPage")
             pageDelegateState.stopScroll()
         }
     }
@@ -224,7 +210,6 @@ internal class PageTurnCoordinator(
         ) {
             commitPageTurn(startDisplayPage, direction, readerPageIndexSetter)
         } else {
-            AppLog.debug("PageTurn", "dragTurnPage($direction) rejected at display=$startDisplayPage")
             pageDelegateState.stopScroll()
         }
     }

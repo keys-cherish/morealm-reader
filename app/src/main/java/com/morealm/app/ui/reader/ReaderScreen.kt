@@ -3,7 +3,6 @@ package com.morealm.app.ui.reader
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import com.morealm.app.core.log.AppLog
 import android.net.Uri
 import android.os.Build
 import android.view.KeyEvent
@@ -35,7 +34,6 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -324,8 +322,6 @@ fun ReaderScreen(
         // The user expects: dark theme → dark bg, light theme → light bg.
         val readerBg = moColors.readerBackground
         val readerFg = moColors.readerText
-        // [Theme] log — one-line diagnosis for background color bugs (saved 4 rounds last time)
-        AppLog.debug("Theme", "readerBg=${String.format("#%08X", readerBg.toArgb())} | isNight=$isNight")
         val readerFontSize = activeStyle?.textSize?.toFloat() ?: fontSize
         val readerLineHeight = activeStyle?.lineHeight ?: lineHeight
         val readerFontFamily = activeStyle?.fontFamily ?: fontFamily

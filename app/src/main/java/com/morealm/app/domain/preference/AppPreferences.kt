@@ -58,6 +58,8 @@ class AppPreferences @Inject constructor(
         val CUSTOM_TXT_CHAPTER_REGEX = stringPreferencesKey("custom_txt_chapter_regex")
         val TTS_SKIP_PATTERN = stringPreferencesKey("tts_skip_pattern")
         val TTS_VOICE = stringPreferencesKey("tts_voice")
+        val TTS_SYSTEM_VOICE = stringPreferencesKey("tts_system_voice")
+        val TTS_EDGE_VOICE = stringPreferencesKey("tts_edge_voice")
         val ACTIVE_READER_STYLE = stringPreferencesKey("active_reader_style")
         val SCREEN_ORIENTATION = intPreferencesKey("screen_orientation") // -1=auto, 0=portrait, 1=landscape
         val TEXT_SELECTABLE = booleanPreferencesKey("text_selectable")
@@ -216,6 +218,12 @@ class AppPreferences @Inject constructor(
     val ttsVoice: Flow<String> = context.dataStore.data
         .map { it[Keys.TTS_VOICE] ?: "" }
 
+    val ttsSystemVoice: Flow<String> = context.dataStore.data
+        .map { it[Keys.TTS_SYSTEM_VOICE] ?: "" }
+
+    val ttsEdgeVoice: Flow<String> = context.dataStore.data
+        .map { it[Keys.TTS_EDGE_VOICE] ?: "" }
+
     val activeReaderStyle: Flow<String> = context.dataStore.data
         .map { it[Keys.ACTIVE_READER_STYLE] ?: "preset_paper" }
 
@@ -317,4 +325,6 @@ class AppPreferences @Inject constructor(
     suspend fun setCustomTxtChapterRegex(regex: String) = update(Keys.CUSTOM_TXT_CHAPTER_REGEX, regex)
     suspend fun setTtsSkipPattern(pattern: String) = update(Keys.TTS_SKIP_PATTERN, pattern)
     suspend fun setTtsVoice(voice: String) = update(Keys.TTS_VOICE, voice)
+    suspend fun setTtsSystemVoice(voice: String) = update(Keys.TTS_SYSTEM_VOICE, voice)
+    suspend fun setTtsEdgeVoice(voice: String) = update(Keys.TTS_EDGE_VOICE, voice)
 }
