@@ -132,7 +132,14 @@ class AnalyzeUrl(
         val bindings = ScriptBindings()
         org.mozilla.javascript.Context.enter()
         try {
-            bindings["java"] = this
+            // FIX: previously `bindings["java"] = this` exposed AnalyzeUrl as `java`,
+            // but book sources call `java.connect(...)` (or even bare `connect(...)`)
+            // expecting JsExtensions. AnalyzeUrl itself doesn't have `connect`, so
+            // every such source crashed with "找不到函数 connect". Bind JsExtensions
+            // for the `java` namespace and keep AnalyzeUrl reachable as `analyzeUrl`
+            // for the rare source that needs page/key/source helpers from it.
+            bindings["java"] = JsExtensions
+            bindings["analyzeUrl"] = this
             bindings["baseUrl"] = baseUrl
             bindings["page"] = page
             bindings["key"] = key

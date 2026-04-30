@@ -2,6 +2,7 @@ package com.morealm.app.ui.detail
 
 import androidx.compose.foundation.background
 import com.morealm.app.presentation.profile.BookDetailViewModel
+import com.morealm.app.presentation.profile.SearchStatus
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,7 +42,10 @@ fun BookDetailScreen(
 ) {
     val book by viewModel.book.collectAsStateWithLifecycle()
     val showSourcePicker by viewModel.showSourcePicker.collectAsStateWithLifecycle()
-    val availableSources by viewModel.availableSources.collectAsStateWithLifecycle()
+    val enabledSourcesCount by viewModel.enabledSourcesCount.collectAsStateWithLifecycle()
+    val changeCandidates by viewModel.changeSourceCandidates.collectAsStateWithLifecycle()
+    val changeProgress by viewModel.changeSourceProgress.collectAsStateWithLifecycle()
+    val changeSearching by viewModel.changeSourceSearching.collectAsStateWithLifecycle()
     val saving by viewModel.saving.collectAsStateWithLifecycle()
     val moColors = LocalMoRealmColors.current
     val context = LocalContext.current
@@ -158,7 +162,7 @@ fun BookDetailScreen(
                 }
 
                 // Source switch button (for online books)
-                if (b.sourceId != null && availableSources.isNotEmpty()) {
+                if (b.sourceId != null && enabledSourcesCount > 0) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = { viewModel.showSourcePicker() },
@@ -247,40 +251,94 @@ fun BookDetailScreen(
         )
     }
 
-    // Source picker dialog
+    // Change-source dialog: cross-source search + real switch
     if (showSourcePicker) {
         AlertDialog(
             onDismissRequest = { viewModel.hideSourcePicker() },
-            title = { Text("选择书源") },
+            title = {
+                Column {
+                    Text("换源 · 搜索其他书源")
+                    val total = changeProgress.size
+                    val done = changeProgress.count { it.status == SearchStatus.DONE || it.status == SearchStatus.FAILED }
+                    if (total > 0) {
+                        Text(
+                            "已搜索 $done/$total · 找到 ${changeCandidates.size} 个候选",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            },
             text = {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.heightIn(max = 400.dp),
-                ) {
-                    items(availableSources, key = { it.bookSourceUrl }) { source ->
-                        val isCurrent = source.bookSourceUrl == book?.sourceId
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.switchSource(source) },
-                            shape = MaterialTheme.shapes.small,
-                            color = if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                Column(modifier = Modifier.heightIn(max = 480.dp)) {
+                    if (changeSearching && changeCandidates.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+                        }
+                    }
+                    if (changeCandidates.isEmpty() && !changeSearching) {
+                        Text(
+                            "没有在其他书源中找到该书。\n可能是书源关闭了/搜索规则不匹配。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 16.dp),
+                        )
+                    }
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(changeCandidates, key = { it.sourceUrl + "|" + it.searchBook.bookUrl }) { c ->
+                            val isCurrent = c.sourceUrl == book?.origin
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !isCurrent) { viewModel.applyChangedSource(c) },
+                                shape = MaterialTheme.shapes.small,
+                                color = if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                             ) {
-                                Text(
-                                    source.bookSourceName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = if (isCurrent) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                if (isCurrent) {
-                                    Text("当前", style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary)
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            c.sourceName,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = if (isCurrent) MaterialTheme.colorScheme.primary
+                                                    else MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        if (isCurrent) {
+                                            Text(
+                                                "当前",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                            )
+                                        }
+                                    }
+                                    val sb = c.searchBook
+                                    val sub = buildString {
+                                        if (sb.author.isNotBlank()) append(sb.author)
+                                        sb.latestChapterTitle?.takeIf { it.isNotBlank() }?.let {
+                                            if (isNotEmpty()) append(" · ")
+                                            append("最新: ").append(it)
+                                        }
+                                        sb.wordCount?.takeIf { it.isNotBlank() }?.let {
+                                            if (isNotEmpty()) append(" · ")
+                                            append(it)
+                                        }
+                                    }
+                                    if (sub.isNotEmpty()) {
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(
+                                            sub,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -288,9 +346,7 @@ fun BookDetailScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { viewModel.hideSourcePicker() }) {
-                    Text("取消")
-                }
+                TextButton(onClick = { viewModel.hideSourcePicker() }) { Text("关闭") }
             },
         )
     }
