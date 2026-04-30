@@ -138,7 +138,10 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
         playing = playWhenReady
-        TtsEventBus.sendEvent(TtsEventBus.Event.PlayPause)
+        // Forward to host via the new Play/Pause commands so the speak loop reacts.
+        TtsEventBus.sendCommand(
+            if (playWhenReady) TtsEventBus.Command.Play else TtsEventBus.Command.Pause
+        )
         return Futures.immediateVoidFuture()
     }
 
@@ -147,12 +150,13 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
         positionMs: Long,
         seekCommand: Int,
     ): ListenableFuture<*> {
+        // Default seek = paragraph navigation; chapter is reachable via custom commands.
         when (seekCommand) {
             Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
-                TtsEventBus.sendEvent(TtsEventBus.Event.NextChapter)
+                TtsEventBus.sendCommand(TtsEventBus.Command.NextParagraph)
             }
             Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
-                TtsEventBus.sendEvent(TtsEventBus.Event.PrevChapter)
+                TtsEventBus.sendCommand(TtsEventBus.Command.PrevParagraph)
             }
         }
         return Futures.immediateVoidFuture()

@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.MenuBook
@@ -252,6 +253,28 @@ fun BookGridItem(
                     Icon(Icons.Default.Check, null,
                         tint = MaterialTheme.colorScheme.surface,
                         modifier = Modifier.size(14.dp))
+                }
+            } else if (book.lastCheckCount > 0) {
+                // Legado-parity "N 新" badge: rendered top-end of cover, only when
+                // batch refresh discovered new chapters since the user last opened
+                // the book. Cleared when user navigates into the reader.
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .background(
+                            MaterialTheme.colorScheme.error,
+                            RoundedCornerShape(8.dp),
+                        )
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (book.lastCheckCount > 99) "99+" else "${book.lastCheckCount} 新",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = MaterialTheme.colorScheme.onError,
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
             }
         }

@@ -57,6 +57,25 @@ data class Book(
     // Sort & display
     val pinned: Boolean = false,
     val sortOrder: Int = 0,
+
+    // ── Update tracking (Legado-parity, since v16) ──
+    /**
+     * Number of new chapters discovered on the most recent toc refresh.
+     * Used by the shelf "N 新" badge. Cleared (set to 0) when the user opens
+     * the book — not when they finish reading the new chapters, matching
+     * Legado's `Book.lastCheckCount` semantics.
+     */
+    val lastCheckCount: Int = 0,
+    /** Wall-clock time (ms) of the most recent toc refresh attempt for this book. */
+    val lastCheckTime: Long = 0L,
+    /** When false, batch toc-refresh skips this book (user opted out). */
+    val canUpdate: Boolean = true,
+
+    // ── Auto-grouping bookkeeping (since v17) ──
+    /** AUTO = TagResolver assigned the current folderId; MANUAL = user moved it; HYBRID = mixed. */
+    val tagsAssignedBy: String = "AUTO",
+    /** When true, TagResolver never overwrites this book's tags or folderId. */
+    val groupLocked: Boolean = false,
 )
 
 @Serializable

@@ -53,6 +53,9 @@ class ShelfViewModel @Inject constructor(
     private val autoGroupClassifier: AutoGroupClassifier,
     private val prefs: AppPreferences,
     private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
+    private val refreshController: ShelfRefreshController,
+    private val systemViewController: ShelfSystemViewController,
+    private val databaseSeeder: com.morealm.app.domain.db.DatabaseSeeder,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -63,7 +66,23 @@ class ShelfViewModel @Inject constructor(
     val lastReadBook: StateFlow<Book?> = bookRepo.getLastReadBook()
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
 
+    // ── Smart-shelf views (since v17, P3) ───────────────────────────────────
+    val selectedSystemView: StateFlow<SystemView?> = systemViewController.selectedView
+    val systemViewCounts: StateFlow<List<SystemViewCount>> =
+        systemViewController.observeCounts(viewModelScope)
+    val booksInSystemView: Flow<List<Book>> =
+        systemViewController.observeBooksInSelectedView()
+    val sourceGroups = systemViewController.observeSourceGroups()
+
+    fun selectSystemView(view: SystemView?) = systemViewController.selectView(view)
+
     init {
+        // Seed built-in genre tags once per install (idempotent — no-op if seeded).
+        viewModelScope.launch(Dispatchers.IO) {
+            try { databaseSeeder.seedIfNeeded() } catch (e: Exception) {
+                AppLog.warn("Shelf", "Tag seeder failed: ${e.message}")
+            }
+        }
         // Do not parse EPUB/PDF covers during the launch critical path. LDPlayer
         // reports null UI roots while startup restore competes with heavy cover
         // extraction, so refresh stale covers only after the shelf has had time
@@ -223,6 +242,7 @@ class ShelfViewModel @Inject constructor(
                     title = result.metadata.title.ifBlank { baseName },
                     author = result.metadata.author.ifBlank { author },
                     description = result.metadata.description.ifBlank { null },
+                    kind = result.metadata.subject.ifBlank { null },
                     localPath = uri.toString(), format = format,
                     coverUrl = result.coverPath, addedAt = System.currentTimeMillis(),
                 )
@@ -429,6 +449,7 @@ class ShelfViewModel @Inject constructor(
                             title = result.metadata.title.ifBlank { pb.book.title },
                             author = result.metadata.author,
                             description = result.metadata.description.ifBlank { null },
+                            kind = result.metadata.subject.ifBlank { pb.book.kind },
                             coverUrl = result.coverPath,
                         )
                     }
@@ -617,5 +638,36 @@ class ShelfViewModel @Inject constructor(
     private suspend fun applyAutoGroup(book: Book): Book {
         val groupId = autoGroupClassifier.classify(book)
         return if (groupId != null && book.folderId == null) book.copy(folderId = groupId) else book
+    }
+
+    // ── Batch toc refresh (Legado parity, see ShelfRefreshController) ──
+
+    /** True while the controller is draining its refresh queue. */
+    val isRefreshing: kotlinx.coroutines.flow.StateFlow<Boolean> = refreshController.isRefreshing
+
+    /** (done, total) for UI progress bar. */
+    val refreshProgress: kotlinx.coroutines.flow.StateFlow<Pair<Int, Int>> = refreshController.progress
+
+    /**
+     * Trigger toc refresh for every WEB book on the shelf with canUpdate=true.
+     * Uses the books snapshot from [books]; a refresh while books load is a no-op
+     * (we'd refresh nothing, which is fine).
+     */
+    fun refreshAllBooks() {
+        refreshController.refresh(books.value)
+    }
+
+    /** User canceled — drop the queue, keep in-flight fetches running so we don't half-update. */
+    fun cancelRefresh() {
+        refreshController.cancel()
+    }
+
+    /** Clear "N 新" badge when user opens a book. Called from AppNavHost on navigate. */
+    fun clearNewChapterBadge(bookId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                bookRepo.clearLastCheckCount(bookId)
+            } catch (_: Exception) {}
+        }
     }
 }

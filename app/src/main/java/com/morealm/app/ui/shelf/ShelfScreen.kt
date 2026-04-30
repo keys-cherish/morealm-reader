@@ -54,6 +54,8 @@ fun ShelfScreen(
      * caller — typically AppNavHost — wants WEB books to land on the detail page first.
      */
     onBookOpen: ((Book) -> Unit)? = null,
+    /** Navigate into a smart-shelf detail screen (continue reading / following / etc). */
+    onNavigateSystemView: (com.morealm.app.presentation.shelf.SystemView) -> Unit = {},
     viewModel: ShelfViewModel = hiltViewModel(),
 ) {
     val allBooks by viewModel.books.collectAsStateWithLifecycle()
@@ -235,6 +237,28 @@ fun ShelfScreen(
                         tint = MaterialTheme.colorScheme.onBackground,
                     )
                 }
+                // Batch toc refresh — Legado parity. Spinning while in flight.
+                val isRefreshingToc by viewModel.isRefreshing.collectAsStateWithLifecycle()
+                IconButton(
+                    onClick = {
+                        if (isRefreshingToc) viewModel.cancelRefresh()
+                        else viewModel.refreshAllBooks()
+                    },
+                ) {
+                    if (isRefreshingToc) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "刷新书架更新",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                }
                 Box {
                     IconButton(onClick = { showSortMenu = true }) {
                         Icon(Icons.Default.SortByAlpha, "排序",
@@ -304,6 +328,16 @@ fun ShelfScreen(
             FolderImportBanner(
                 state = folderImportState,
                 onDismiss = viewModel::clearFolderImportMessage,
+            )
+        }
+
+        // Smart-shelf row (since v17, P3): zero-config "继续阅读 / 追更中 / ..." entries.
+        // Hidden when drilled into a folder — that view is intentionally a clean focused list.
+        val systemViewCounts by viewModel.systemViewCounts.collectAsStateWithLifecycle()
+        if (currentFolderId == null && systemViewCounts.any { it.count > 0 }) {
+            com.morealm.app.ui.shelf.components.SmartShelfRow(
+                counts = systemViewCounts,
+                onSelect = onNavigateSystemView,
             )
         }
 
