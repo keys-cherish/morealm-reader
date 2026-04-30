@@ -1,5 +1,6 @@
 package com.morealm.app.domain.webbook
 
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.analyzeRule.AnalyzeRule
 import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setCoroutineContext
 import com.morealm.app.domain.analyzeRule.AnalyzeUrl
@@ -24,8 +25,15 @@ data class ChapterResult(
 
 /**
  * 获取目录列表
+ *
+ * 防御策略：
+ * - 单字段/单条目解析失败 → 跳过该字段/条目，不影响其他章节
+ * - 翻页中某一页失败 → break 翻页循环，使用已抓到的章节
+ * - 顶层任何未捕获异常 → 返回空列表，让 UI 显示"无章节"而非白屏
  */
 object BookChapterList {
+
+    private const val TAG = "BookChapterList"
 
     suspend fun analyzeChapterList(
         bookSource: BookSource,
@@ -34,7 +42,28 @@ object BookChapterList {
         redirectUrl: String,
         body: String?,
     ): List<ChapterResult> {
-        body ?: throw Exception("获取网页内容失败: $tocUrl")
+        if (body.isNullOrBlank()) {
+            AppLog.warn(TAG, "empty body for ${bookSource.bookSourceName}: $tocUrl")
+            return emptyList()
+        }
+        return try {
+            doAnalyze(bookSource, bookUrl, tocUrl, redirectUrl, body)
+        } catch (e: Exception) {
+            AppLog.warn(
+                TAG,
+                "analyzeChapterList failed for ${bookSource.bookSourceName}@$tocUrl: ${e.message?.take(160)}"
+            )
+            emptyList()
+        }
+    }
+
+    private suspend fun doAnalyze(
+        bookSource: BookSource,
+        bookUrl: String,
+        tocUrl: String,
+        redirectUrl: String,
+        body: String,
+    ): List<ChapterResult> {
         val chapterList = ArrayList<ChapterResult>()
         val tocRule = bookSource.getTocRule()
         val nextUrlList = arrayListOf(redirectUrl)
@@ -53,12 +82,20 @@ object BookChapterList {
                 var nextUrl = chapterData.second[0]
                 while (nextUrl.isNotEmpty() && !nextUrlList.contains(nextUrl)) {
                     nextUrlList.add(nextUrl)
-                    val analyzeUrl = AnalyzeUrl(mUrl = nextUrl, source = bookSource, coroutineContext = coroutineContext)
-                    val res = analyzeUrl.getStrResponseAwait()
-                    res.body?.let { nextBody ->
+                    try {
+                        val analyzeUrl = AnalyzeUrl(mUrl = nextUrl, source = bookSource, coroutineContext = coroutineContext)
+                        val res = analyzeUrl.getStrResponseAwait()
+                        val nextBody = res.body
+                        if (nextBody.isNullOrBlank()) {
+                            AppLog.warn(TAG, "next-toc-page empty body: $nextUrl")
+                            break
+                        }
                         chapterData = analyzeChapterPage(bookUrl, nextUrl, nextUrl, nextBody, tocRule, listRule, bookSource)
                         nextUrl = chapterData.second.firstOrNull() ?: ""
                         chapterList.addAll(chapterData.first)
+                    } catch (e: Exception) {
+                        AppLog.warn(TAG, "next-toc-page fetch failed: $nextUrl: ${e.message?.take(120)}")
+                        break
                     }
                 }
             }
@@ -72,26 +109,32 @@ object BookChapterList {
         // formatJs: 格式化章节标题
         val formatJs = tocRule.formatJs
         if (!formatJs.isNullOrBlank()) {
-            org.mozilla.javascript.Context.enter().use {
-                val bindings = ScriptBindings()
-                bindings["gInt"] = 0
-                list.forEachIndexed { index, chapter ->
-                    bindings["index"] = index + 1
-                    bindings["title"] = chapter.title
-                    runCatching {
-                        RhinoScriptEngine.eval(formatJs, RhinoScriptEngine.getRuntimeScope(bindings))
-                            ?.toString()?.let { newTitle ->
-                                if (newTitle.isNotBlank() && newTitle != chapter.title) {
-                                    list[index] = chapter.copy(title = newTitle)
+            try {
+                org.mozilla.javascript.Context.enter().use {
+                    val bindings = ScriptBindings()
+                    bindings["gInt"] = 0
+                    list.forEachIndexed { index, chapter ->
+                        bindings["index"] = index + 1
+                        bindings["title"] = chapter.title
+                        runCatching {
+                            RhinoScriptEngine.eval(formatJs, RhinoScriptEngine.getRuntimeScope(bindings))
+                                ?.toString()?.let { newTitle ->
+                                    if (newTitle.isNotBlank() && newTitle != chapter.title) {
+                                        list[index] = chapter.copy(title = newTitle)
+                                    }
                                 }
-                            }
+                        }
                     }
                 }
+            } catch (e: Exception) {
+                AppLog.warn(TAG, "formatJs failed for ${bookSource.bookSourceName}: ${e.message?.take(120)}")
             }
         }
 
+        AppLog.info(TAG, "${bookSource.bookSourceName}: ${list.size} chapters parsed")
         return list
     }
+
     private suspend fun analyzeChapterPage(
         bookUrl: String,
         baseUrl: String,
@@ -107,13 +150,22 @@ object BookChapterList {
         analyzeRule.setCoroutineContext(coroutineContext)
 
         val chapterList = arrayListOf<ChapterResult>()
-        val elements = analyzeRule.getElements(listRule)
+        val elements = try {
+            analyzeRule.getElements(listRule)
+        } catch (e: Exception) {
+            AppLog.warn(TAG, "list rule failed: ${e.message?.take(120)}")
+            emptyList()
+        }
 
         val nextUrlList = arrayListOf<String>()
         val nextTocRule = tocRule.nextTocUrl
         if (!nextTocRule.isNullOrEmpty()) {
-            analyzeRule.getStringList(nextTocRule, isUrl = true)?.let {
-                for (item in it) { if (item != redirectUrl) nextUrlList.add(item) }
+            try {
+                analyzeRule.getStringList(nextTocRule, isUrl = true)?.let {
+                    for (item in it) { if (item != redirectUrl) nextUrlList.add(item) }
+                }
+            } catch (e: Exception) {
+                AppLog.warn(TAG, "nextTocUrl rule failed: ${e.message?.take(120)}")
             }
         }
         coroutineContext.ensureActive()
@@ -128,17 +180,24 @@ object BookChapterList {
 
             elements.forEachIndexed { index, item ->
                 coroutineContext.ensureActive()
-                analyzeRule.setContent(item)
-                val title = analyzeRule.getString(nameRule)
-                var url = analyzeRule.getString(urlRule)
-                val tag = analyzeRule.getString(upTimeRule)
-                val isVolume = analyzeRule.getString(isVolumeRule).let { it == "true" || it == "1" }
-                if (url.isEmpty()) {
-                    url = if (isVolume) title + index else baseUrl
-                }
-                if (title.isNotEmpty()) {
-                    val isVip = analyzeRule.getString(vipRule).let { it == "true" || it == "1" }
-                    val isPay = analyzeRule.getString(payRule).let { it == "true" || it == "1" }
+                try {
+                    analyzeRule.setContent(item)
+                    val title = try { analyzeRule.getString(nameRule) } catch (_: Exception) { "" }
+                    if (title.isEmpty()) return@forEachIndexed
+                    var url = try { analyzeRule.getString(urlRule) } catch (_: Exception) { "" }
+                    val tag = try { analyzeRule.getString(upTimeRule) } catch (_: Exception) { "" }
+                    val isVolume = try {
+                        analyzeRule.getString(isVolumeRule).let { it == "true" || it == "1" }
+                    } catch (_: Exception) { false }
+                    if (url.isEmpty()) {
+                        url = if (isVolume) title + index else baseUrl
+                    }
+                    val isVip = try {
+                        analyzeRule.getString(vipRule).let { it == "true" || it == "1" }
+                    } catch (_: Exception) { false }
+                    val isPay = try {
+                        analyzeRule.getString(payRule).let { it == "true" || it == "1" }
+                    } catch (_: Exception) { false }
                     chapterList.add(
                         ChapterResult(
                             title = title,
@@ -149,6 +208,8 @@ object BookChapterList {
                             tag = tag,
                         )
                     )
+                } catch (e: Exception) {
+                    AppLog.warn(TAG, "chapter[$index] parse failed: ${e.message?.take(120)}")
                 }
             }
         }
