@@ -30,6 +30,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.util.regex.Pattern
@@ -498,8 +499,14 @@ class AnalyzeUrl(
      * 设置cookie: 仅在书源显式启用 CookieJar 时，才把持久化 Cookie 自动合并进请求。
      * 这样保留 header 中手写 Cookie 的同时，避免未启用的 Legado 书源被历史 Cookie 污染。
      */
+    /**
+     * Inject stored cookies into the outgoing header. Aligns with Legado's behavior:
+     * cookies are always loaded from [CookieStore] (so the user's login state is honored
+     * even when the source disables auto-jar). [BookSource.enabledCookieJar] only
+     * controls whether the global OkHttp interceptor will *save* Set-Cookie on response —
+     * achieved by adding the `CookieJar: false` opt-out header when disabled.
+     */
     private fun setCookie() {
-        if (!enabledCookieJar) return
         val cookie = CookieStore.getCookie(domain)
         if (cookie.isNotEmpty()) {
             val headerCookie = headerMap["Cookie"]
@@ -509,7 +516,33 @@ class AnalyzeUrl(
                 mergeCookies(cookie, headerCookie)
             }
         }
+        if (!enabledCookieJar) {
+            headerMap[com.morealm.app.domain.http.CookieManager.cookieJarHeader] = "false"
+        } else {
+            headerMap.remove(com.morealm.app.domain.http.CookieManager.cookieJarHeader)
+        }
     }
+
+    /**
+     * Build a synthetic 500 Response from a Throwable.
+     * Used by loginCheckJs / HTTP TTS check JS so book-source JS can still inspect the
+     * failure (status / body) when the network call threw — Legado-parity.
+     */
+    fun getErrResponse(e: Throwable): okhttp3.Response {
+        val body = (e.message ?: "Error Response")
+            .toResponseBody("text/plain; charset=utf-8".toMediaType())
+        return okhttp3.Response.Builder()
+            .request(okhttp3.Request.Builder().url(url.ifBlank { "https://error.local/" }).build())
+            .protocol(okhttp3.Protocol.HTTP_1_1)
+            .code(500)
+            .message(e.message?.take(120) ?: "Error Response")
+            .body(body)
+            .build()
+    }
+
+    /** StrResponse variant of [getErrResponse] */
+    fun getErrStrResponse(e: Throwable): StrResponse =
+        StrResponse(getErrResponse(e), e.message ?: "")
 
     /**
      * 合并两个cookie字符串
