@@ -155,6 +155,96 @@ private val MIGRATION_14_15 = object : Migration(14, 15) {
     }
 }
 
+/**
+ * v15 → v16: Legado-parity background toc refresh tracking.
+ *
+ * - lastCheckCount  — number of new chapters discovered on the most recent toc
+ *                     refresh; drives the shelf "N 新" badge. Default 0.
+ * - lastCheckTime   — wall-clock ms of most recent refresh attempt. Default 0.
+ * - canUpdate       — opt-out flag for batch refresh. Default 1 (opt-in).
+ *
+ * All three are nullable-safe with defaults; existing rows get zeroed counters
+ * so the user sees a clean shelf until the next refresh kicks in. No reverse
+ * migration: downgrading drops these columns silently (Room handles it via the
+ * usual destructive-on-downgrade path which is already firewalled by
+ * AppModule.provideDatabase's pre-upgrade backup).
+ */
+private val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE books ADD COLUMN `lastCheckCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE books ADD COLUMN `lastCheckTime` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE books ADD COLUMN `canUpdate` INTEGER NOT NULL DEFAULT 1")
+    }
+}
+
+/**
+ * v16 → v17: auto-grouping data model.
+ *
+ *  - books gains `tagsAssignedBy` (AUTO/MANUAL/HYBRID) and `groupLocked` so the
+ *    classifier can tell user-curated tags apart from its own guesses.
+ *  - book_tags is the new many-to-many join replacing the single folderId model.
+ *    folderId is **kept** for compat — every existing assignment is mirrored
+ *    into book_tags as a MANUAL entry so the shelf keeps working unchanged.
+ *  - tag_definitions stores the user-editable vocabulary (genres, source, format,
+ *    status, custom). Existing book_groups are migrated as USER tags so users
+ *    don't lose their hand-built groups when the app upgrades.
+ *
+ * The migration is idempotent on the data side — safe to re-run if Room replays.
+ */
+private val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // 1. New columns on books
+        db.execSQL("ALTER TABLE books ADD COLUMN `tagsAssignedBy` TEXT NOT NULL DEFAULT 'AUTO'")
+        db.execSQL("ALTER TABLE books ADD COLUMN `groupLocked` INTEGER NOT NULL DEFAULT 0")
+
+        // 2. book_tags many-to-many
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS `book_tags` (
+                `bookId` TEXT NOT NULL,
+                `tagId` TEXT NOT NULL,
+                `assignedBy` TEXT NOT NULL,
+                `score` REAL NOT NULL DEFAULT 0,
+                `assignedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`bookId`, `tagId`)
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_book_tags_bookId` ON `book_tags` (`bookId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_book_tags_tagId` ON `book_tags` (`tagId`)")
+
+        // 3. tag_definitions vocabulary
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS `tag_definitions` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `type` TEXT NOT NULL,
+                `keywords` TEXT NOT NULL DEFAULT '',
+                `color` TEXT,
+                `icon` TEXT,
+                `sortOrder` INTEGER NOT NULL DEFAULT 0,
+                `builtin` INTEGER NOT NULL DEFAULT 0,
+                `createdAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+        """.trimIndent())
+
+        // 4. Migrate existing BookGroup → tag_definitions(USER)
+        val now = System.currentTimeMillis()
+        db.execSQL("""
+            INSERT OR IGNORE INTO tag_definitions (id, name, type, keywords, color, icon, sortOrder, builtin, createdAt)
+            SELECT id, name, 'USER', autoKeywords, NULL, emoji, sortOrder, 0, $now FROM book_groups
+        """.trimIndent())
+
+        // 5. Mirror existing folderId assignments into book_tags as MANUAL
+        db.execSQL("""
+            INSERT OR IGNORE INTO book_tags (bookId, tagId, assignedBy, score, assignedAt)
+            SELECT id, folderId, 'MANUAL', 1.0, $now FROM books WHERE folderId IS NOT NULL
+        """.trimIndent())
+
+        // 6. Books that already had a folderId were user-placed → mark MANUAL
+        db.execSQL("UPDATE books SET tagsAssignedBy = 'MANUAL' WHERE folderId IS NOT NULL")
+    }
+}
+
 private val MIGRATION_9_10 = object : Migration(9, 10) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // book_sources 表结构完全重构，删除旧表并重建
@@ -266,7 +356,7 @@ object AppModule {
                 MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                 MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                 MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
-                MIGRATION_13_14, MIGRATION_14_15,
+                MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
             )
             // On downgrade: try restore from backup, otherwise keep tables as-is
             .addCallback(object : RoomDatabase.Callback() {
@@ -282,6 +372,8 @@ object AppModule {
     @Provides fun provideChapterDao(db: AppDatabase): ChapterDao = db.chapterDao()
     @Provides fun provideBookSourceDao(db: AppDatabase): BookSourceDao = db.bookSourceDao()
     @Provides fun provideBookGroupDao(db: AppDatabase): BookGroupDao = db.bookGroupDao()
+    @Provides fun provideBookTagDao(db: AppDatabase): BookTagDao = db.bookTagDao()
+    @Provides fun provideTagDefinitionDao(db: AppDatabase): TagDefinitionDao = db.tagDefinitionDao()
     @Provides fun provideReadProgressDao(db: AppDatabase): ReadProgressDao = db.readProgressDao()
     @Provides fun provideThemeDao(db: AppDatabase): ThemeDao = db.themeDao()
     @Provides fun provideReadStatsDao(db: AppDatabase): ReadStatsDao = db.readStatsDao()

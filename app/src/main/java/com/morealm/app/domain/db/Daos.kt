@@ -10,6 +10,17 @@ import androidx.paging.PagingSource
 import com.morealm.app.domain.entity.*
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * Aggregate row returned by [BookDao.observeSourceGroups]. Backed by a
+ * GROUP BY query — Room maps the SELECT'd column names to the field names
+ * here so the SQL aliases must match exactly.
+ */
+data class SourceGroupCount(
+    val sourceName: String,
+    val count: Int,
+)
+
+
 @Dao
 interface BookDao {
     @Query("SELECT * FROM books WHERE folderId IS :folderId ORDER BY lastReadAt DESC")
@@ -66,6 +77,76 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE title LIKE :keyword OR author LIKE :keyword ORDER BY lastReadAt DESC")
     suspend fun searchBooks(keyword: String): List<Book>
 
+    // ── System / smart views (since v17) ─────────────────────────────────────
+    // All accept a `now` parameter so callers (and tests) can pin the clock.
+
+    /** "继续阅读" — recently-touched books, regardless of format. */
+    @Query("SELECT * FROM books WHERE lastReadAt > :since ORDER BY lastReadAt DESC")
+    fun observeContinueReading(since: Long): Flow<List<Book>>
+
+    @Query("SELECT COUNT(*) FROM books WHERE lastReadAt > :since")
+    fun countContinueReading(since: Long): Flow<Int>
+
+    /** "追更中" — WEB books with recent reads or new chapters. */
+    @Query("""
+        SELECT * FROM books
+        WHERE format = 'WEB'
+          AND (lastReadAt > :since OR latestChapterTime > :since)
+        ORDER BY latestChapterTime DESC, lastReadAt DESC
+    """)
+    fun observeFollowingUpdates(since: Long): Flow<List<Book>>
+
+    @Query("""
+        SELECT COUNT(*) FROM books
+        WHERE format = 'WEB' AND (lastReadAt > :since OR latestChapterTime > :since)
+    """)
+    fun countFollowingUpdates(since: Long): Flow<Int>
+
+    /** "本周新加" — recently added. */
+    @Query("SELECT * FROM books WHERE addedAt > :since ORDER BY addedAt DESC")
+    fun observeNewThisWeek(since: Long): Flow<List<Book>>
+
+    @Query("SELECT COUNT(*) FROM books WHERE addedAt > :since")
+    fun countNewThisWeek(since: Long): Flow<Int>
+
+    /**
+     * "搁置已久" — books not touched in [staleBefore] AND not effectively done.
+     * `lastReadAt > 0` excludes never-opened books (those are "未读" not "搁置").
+     */
+    @Query("""
+        SELECT * FROM books
+        WHERE lastReadAt > 0 AND lastReadAt < :staleBefore AND readProgress < :finishedThreshold
+        ORDER BY lastReadAt ASC
+    """)
+    fun observeStale(staleBefore: Long, finishedThreshold: Float): Flow<List<Book>>
+
+    @Query("""
+        SELECT COUNT(*) FROM books
+        WHERE lastReadAt > 0 AND lastReadAt < :staleBefore AND readProgress < :finishedThreshold
+    """)
+    fun countStale(staleBefore: Long, finishedThreshold: Float): Flow<Int>
+
+    @Query("SELECT * FROM books WHERE readProgress >= :threshold ORDER BY lastReadAt DESC")
+    fun observeFinished(threshold: Float): Flow<List<Book>>
+
+    @Query("SELECT COUNT(*) FROM books WHERE readProgress >= :threshold")
+    fun countFinished(threshold: Float): Flow<Int>
+
+    /** "离线书" — local file formats. */
+    @Query("SELECT * FROM books WHERE format IN (:formats) ORDER BY addedAt DESC")
+    fun observeLocalFiles(formats: List<String>): Flow<List<Book>>
+
+    @Query("SELECT COUNT(*) FROM books WHERE format IN (:formats)")
+    fun countLocalFiles(formats: List<String>): Flow<Int>
+
+    /** Per-source grouping for "按来源" view. */
+    @Query("""
+        SELECT originName AS sourceName, COUNT(*) AS count
+        FROM books WHERE format = 'WEB' AND originName != ''
+        GROUP BY originName ORDER BY count DESC
+    """)
+    fun observeSourceGroups(): Flow<List<SourceGroupCount>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(book: Book)
 
@@ -74,6 +155,22 @@ interface BookDao {
 
     @Update
     suspend fun update(book: Book)
+
+    /**
+     * Atomic field-level update used by ShelfRefreshController so a Toc-refresh
+     * pass doesn't have to round-trip the full Book row (which races with the
+     * user's edits to the same row from other screens).
+     */
+    @Query("UPDATE books SET totalChapters = :total, lastCheckCount = :newCount, lastCheckTime = :time WHERE id = :id")
+    suspend fun updateLastCheck(id: String, total: Int, newCount: Int, time: Long)
+
+    /** Reset the "N 新" badge counter — called when user opens the book. */
+    @Query("UPDATE books SET lastCheckCount = 0 WHERE id = :id")
+    suspend fun clearLastCheckCount(id: String)
+
+    /** Books eligible for batch toc refresh (web-format only, opt-in). */
+    @Query("SELECT * FROM books WHERE format = 'WEB' AND canUpdate = 1 ORDER BY lastReadAt DESC")
+    suspend fun getRefreshableBooks(): List<Book>
 
     @Delete
     suspend fun delete(book: Book)
@@ -177,6 +274,92 @@ interface BookGroupDao {
 
     @Query("SELECT * FROM book_groups ORDER BY sortOrder")
     suspend fun getAllGroupsSync(): List<BookGroup>
+}
+
+/**
+ * Many-to-many join between [Book] and [TagDefinition].
+ *
+ * Queries fall into three categories:
+ *  - per-book: list a book's tags (used by detail / edit screens).
+ *  - per-tag:  list books carrying a tag (used by the shelf chip filter).
+ *  - intersection: list books carrying *all* of N tags (used by multi-chip filter).
+ *
+ * The intersection query uses GROUP BY + HAVING COUNT(DISTINCT tagId) = N which
+ * is faster than nested IN clauses and avoids hitting SQLite's expression depth
+ * limit when users stack many chips.
+ */
+@Dao
+interface BookTagDao {
+    @Query("SELECT * FROM book_tags WHERE bookId = :bookId")
+    suspend fun getTagsForBook(bookId: String): List<BookTag>
+
+    @Query("SELECT * FROM book_tags WHERE bookId = :bookId")
+    fun observeTagsForBook(bookId: String): Flow<List<BookTag>>
+
+    @Query("SELECT bookId FROM book_tags WHERE tagId = :tagId")
+    suspend fun getBookIdsByTag(tagId: String): List<String>
+
+    @Query("""
+        SELECT bookId FROM book_tags
+        WHERE tagId IN (:tagIds)
+        GROUP BY bookId
+        HAVING COUNT(DISTINCT tagId) = :tagCount
+    """)
+    suspend fun getBookIdsByAllTags(tagIds: List<String>, tagCount: Int): List<String>
+
+    @Query("SELECT COUNT(DISTINCT bookId) FROM book_tags WHERE tagId = :tagId")
+    fun countBooksWithTag(tagId: String): Flow<Int>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(tag: BookTag)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(tags: List<BookTag>)
+
+    @Query("DELETE FROM book_tags WHERE bookId = :bookId AND tagId = :tagId")
+    suspend fun delete(bookId: String, tagId: String)
+
+    @Query("DELETE FROM book_tags WHERE bookId = :bookId AND assignedBy = :assignedBy")
+    suspend fun deleteAutoAssignmentsFor(bookId: String, assignedBy: String = "AUTO")
+
+    @Query("DELETE FROM book_tags WHERE bookId = :bookId")
+    suspend fun deleteAllForBook(bookId: String)
+
+    @Query("DELETE FROM book_tags WHERE tagId = :tagId")
+    suspend fun deleteAllForTag(tagId: String)
+}
+
+@Dao
+interface TagDefinitionDao {
+    @Query("SELECT * FROM tag_definitions ORDER BY sortOrder, name")
+    fun getAllTags(): Flow<List<TagDefinition>>
+
+    @Query("SELECT * FROM tag_definitions ORDER BY sortOrder, name")
+    suspend fun getAllTagsSync(): List<TagDefinition>
+
+    @Query("SELECT * FROM tag_definitions WHERE type = :type ORDER BY sortOrder, name")
+    fun getTagsByType(type: String): Flow<List<TagDefinition>>
+
+    @Query("SELECT * FROM tag_definitions WHERE type = :type ORDER BY sortOrder, name")
+    suspend fun getTagsByTypeSync(type: String): List<TagDefinition>
+
+    @Query("SELECT * FROM tag_definitions WHERE id = :id")
+    suspend fun getById(id: String): TagDefinition?
+
+    @Query("SELECT * FROM tag_definitions WHERE name = :name AND type = :type LIMIT 1")
+    suspend fun findByName(name: String, type: String): TagDefinition?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(tag: TagDefinition)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(tags: List<TagDefinition>)
+
+    @Update
+    suspend fun update(tag: TagDefinition)
+
+    @Query("DELETE FROM tag_definitions WHERE id = :id AND builtin = 0")
+    suspend fun deleteUserTag(id: String)
 }
 
 @Dao

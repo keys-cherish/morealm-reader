@@ -10,6 +10,8 @@ import com.morealm.app.domain.entity.*
         BookChapter::class,
         BookSource::class,
         BookGroup::class,
+        BookTag::class,
+        TagDefinition::class,
         ReadProgress::class,
         ThemeEntity::class,
         ReadStats::class,
@@ -21,7 +23,7 @@ import com.morealm.app.domain.entity.*
         Cache::class,
         Cookie::class,
     ],
-    version = 15,
+    version = 17,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -29,6 +31,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun chapterDao(): ChapterDao
     abstract fun bookSourceDao(): BookSourceDao
     abstract fun bookGroupDao(): BookGroupDao
+    abstract fun bookTagDao(): BookTagDao
+    abstract fun tagDefinitionDao(): TagDefinitionDao
     abstract fun readProgressDao(): ReadProgressDao
     abstract fun themeDao(): ThemeDao
     abstract fun readStatsDao(): ReadStatsDao

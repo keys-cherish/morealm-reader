@@ -44,6 +44,9 @@ data class SearchResult(
     val sourceUrl: String = "",
     val sourceType: Int = TEXT_BOOK_SOURCE_TYPE,
     val intro: String = "",
+    val kind: String? = null,
+    val wordCount: String? = null,
+    val latestChapter: String? = null,
     val searchBook: SearchBook? = null,
 )
 
@@ -194,6 +197,9 @@ class SearchViewModel @Inject constructor(
                     sourceUrl = sb.origin,
                     sourceType = sb.type,
                     intro = sb.intro ?: "",
+                    kind = sb.kind,
+                    wordCount = sb.wordCount,
+                    latestChapter = sb.latestChapterTitle,
                     searchBook = sb,
                 )
             }.filter { result ->
@@ -328,6 +334,8 @@ class SearchViewModel @Inject constructor(
                     origin = result.sourceUrl,
                     originName = result.sourceName,
                     description = result.intro.ifBlank { null },
+                    kind = result.kind?.takeIf { it.isNotBlank() },
+                    wordCount = result.wordCount?.takeIf { it.isNotBlank() },
                     format = BookFormat.WEB,
                     addedAt = System.currentTimeMillis(),
                 )

@@ -22,6 +22,9 @@ class BookRepository @Inject constructor(
 ) {
     fun getAllBooks(): Flow<List<Book>> = bookDao.getAllBooks()
 
+    /** Reset the "N 新" chapter-update badge — called when user opens the book. */
+    suspend fun clearLastCheckCount(bookId: String) = bookDao.clearLastCheckCount(bookId)
+
     fun getBooksPaging(sortMode: String): PagingSource<Int, Book> = when (sortMode) {
         "recent" -> bookDao.getAllBooksByRecent()
         "addTime" -> bookDao.getAllBooksByAddTime()

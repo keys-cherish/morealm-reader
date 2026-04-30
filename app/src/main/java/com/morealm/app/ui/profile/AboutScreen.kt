@@ -120,24 +120,6 @@ fun AboutScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        // Tech info
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("技术信息", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                InfoRow("框架", "Jetpack Compose + Material 3")
-                InfoRow("渲染", "WebView + CSS 排版引擎")
-                InfoRow("存储", "Room + DataStore")
-                InfoRow("依赖注入", "Hilt")
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
         // Changelog entry
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -208,18 +190,5 @@ private fun FeatureRow(
             Text(desc, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
         }
-    }
-}
-
-@Composable
-private fun InfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label, style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-        Text(value, style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface)
     }
 }

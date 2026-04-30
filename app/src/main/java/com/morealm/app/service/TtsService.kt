@@ -26,7 +26,9 @@ import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.domain.preference.AppPreferences
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import kotlinx.coroutines.*
 
 /**
@@ -39,6 +41,8 @@ import kotlinx.coroutines.*
 @AndroidEntryPoint
 class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListener {
 
+    @Inject lateinit var prefs: AppPreferences
+
     private var mediaSession: MediaSession? = null
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -46,6 +50,12 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
     private val serviceScope = CoroutineScope(
         SupervisorJob() + Dispatchers.Main + AppLog.coroutineExceptionHandler("TtsService")
     )
+
+    /**
+     * Owns the actual TTS reading state — engines, paragraph data, speakJob.
+     * Lives for the whole service lifetime so playback survives ViewModel destruction.
+     */
+    private lateinit var engineHost: TtsEngineHost
 
     // WakeLock: keep CPU alive when screen is off (ported from Legado)
     private val wakeLock by lazy {
@@ -71,6 +81,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         override fun onReceive(context: Context, intent: Intent) {
             if (AudioManager.ACTION_AUDIO_BECOMING_NOISY == intent.action) {
                 AppLog.info("TtsService", "Audio becoming noisy (headphones unplugged) → pausing")
+                if (::engineHost.isInitialized) engineHost.onAudioFocusLoss(resumeOnGain = false)
                 TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss(resumeOnGain = false))
             }
         }
@@ -102,13 +113,15 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0,
         )
+        engineHost = TtsEngineHost(applicationContext, prefs, serviceScope)
+        engineHost.start()
         initMediaSession()
         setMediaNotificationProvider(TtsNotificationProvider(this))
         setupAudioFocus()
         initNoisyReceiver()
         initPhoneStateListener()
         listenForCommands()
-        AppLog.info("TtsService", "Service created")
+        AppLog.info("TtsService", "Service created (host-based architecture)")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -143,32 +156,51 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         return super.onStartCommand(intent, flags, startId)
     }
 
-    /** Listen for commands from ViewModel via TtsEventBus */
+    /** Listen for commands from ViewModel and forward to the engine host. */
     private fun listenForCommands() {
         serviceScope.launch {
             TtsEventBus.commands.collect { cmd ->
+                // Player metadata mirroring (notification needs these even for legacy commands).
                 when (cmd) {
                     is TtsEventBus.Command.UpdateMeta -> {
-                        val player = mediaSession?.player as? TtsPlayer ?: return@collect
-                        player.updateMetadata(cmd.book, cmd.chapter, cmd.coverUrl)
+                        val player = mediaSession?.player as? TtsPlayer
+                        player?.updateMetadata(cmd.book, cmd.chapter, cmd.coverUrl)
                     }
-                    is TtsEventBus.Command.SetPlaying -> {
-                        val player = mediaSession?.player as? TtsPlayer ?: return@collect
-                        player.setPlaying(cmd.playing)
-                        if (cmd.playing) {
-                            requestAudioFocus()
-                            acquireWakeLocks()
-                        } else {
-                            releaseWakeLocks()
-                        }
+                    is TtsEventBus.Command.LoadAndPlay -> {
+                        val player = mediaSession?.player as? TtsPlayer
+                        player?.updateMetadata(cmd.bookTitle, cmd.chapterTitle, cmd.coverUrl)
+                        requestAudioFocus()
+                        acquireWakeLocks()
                     }
-                    is TtsEventBus.Command.StopService -> {
-                        stopSelfAndRelease()
+                    is TtsEventBus.Command.Play -> {
+                        requestAudioFocus()
+                        acquireWakeLocks()
+                    }
+                    is TtsEventBus.Command.Pause -> {
+                        releaseWakeLocks()
                     }
                     is TtsEventBus.Command.SetSleepMinutes -> {
-                        val player = mediaSession?.player as? TtsPlayer ?: return@collect
-                        player.setSleepMinutes(cmd.minutes)
+                        (mediaSession?.player as? TtsPlayer)?.setSleepMinutes(cmd.minutes)
                     }
+                    is TtsEventBus.Command.StopService -> {
+                        engineHost.handleCommand(cmd)
+                        stopSelfAndRelease()
+                        return@collect
+                    }
+                    else -> { /* fall through to host */ }
+                }
+                engineHost.handleCommand(cmd)
+                // Mirror playing state to TtsPlayer so MediaSession reflects it.
+                (mediaSession?.player as? TtsPlayer)?.setPlaying(TtsEventBus.playbackState.value.isPlaying)
+            }
+        }
+        // Mirror host state changes back to TtsPlayer for notification updates.
+        serviceScope.launch {
+            TtsEventBus.playbackState.collect { state ->
+                val player = mediaSession?.player as? TtsPlayer ?: return@collect
+                player.setPlaying(state.isPlaying)
+                if (state.bookTitle.isNotEmpty() || state.chapterTitle.isNotEmpty()) {
+                    player.updateMetadata(state.bookTitle, state.chapterTitle, state.coverUrl)
                 }
             }
         }
@@ -213,12 +245,14 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                 when (state) {
                     TelephonyManager.CALL_STATE_RINGING -> {
                         needResumeOnCallIdle = true
+                        engineHost.onAudioFocusLoss(resumeOnGain = true)
                         TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss(resumeOnGain = true))
                         AppLog.info("TtsService", "Incoming call → pausing TTS")
                     }
                     TelephonyManager.CALL_STATE_IDLE -> {
                         if (needResumeOnCallIdle) {
                             needResumeOnCallIdle = false
+                            engineHost.onAudioFocusGain()
                             TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusGain)
                             AppLog.info("TtsService", "Call ended → resuming TTS")
                         }
@@ -260,7 +294,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         }
     }
 
-    /** Audio focus callback — pauses TTS when calls/WeChat/QQ audio interrupts */
+    /** Audio focus callback — pauses TTS via the host when calls/WeChat/QQ audio interrupts. */
     override fun onAudioFocusChange(focusChange: Int) {
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS,
@@ -268,18 +302,21 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                 val resumeOnGain = focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT &&
                     TtsEventBus.playbackState.value.isPlaying
                 wasPlayingBeforeFocusLoss = resumeOnGain
+                engineHost.onAudioFocusLoss(resumeOnGain)
                 TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss(resumeOnGain = resumeOnGain))
                 AppLog.info("TtsService", "Audio focus lost → pausing TTS")
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 val resumeOnGain = TtsEventBus.playbackState.value.isPlaying
                 wasPlayingBeforeFocusLoss = resumeOnGain
+                engineHost.onAudioFocusLoss(resumeOnGain)
                 TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusLoss(resumeOnGain = resumeOnGain))
                 AppLog.debug("TtsService", "Audio focus ducking → pausing TTS")
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
                 if (wasPlayingBeforeFocusLoss) {
                     wasPlayingBeforeFocusLoss = false
+                    engineHost.onAudioFocusGain()
                     TtsEventBus.sendEvent(TtsEventBus.Event.AudioFocusGain)
                     AppLog.info("TtsService", "Audio focus regained → resuming TTS")
                 }
@@ -369,6 +406,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
     }
 
     override fun onDestroy() {
+        if (::engineHost.isInitialized) engineHost.release()
         serviceScope.cancel()
         releaseWakeLocks()
         abandonAudioFocus()
