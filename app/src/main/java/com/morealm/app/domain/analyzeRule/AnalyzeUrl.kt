@@ -68,6 +68,7 @@ class AnalyzeUrl(
     private var useWebView: Boolean = false
     private var webJs: String? = null
     private val domain: String
+    private val enabledCookieJar = source?.enabledCookieJar == true
     private val concurrentRateLimiter = ConcurrentRateLimiter(
         source?.bookSourceUrl,
         source?.concurrentRate,
@@ -260,12 +261,14 @@ class AnalyzeUrl(
             requestHeaders["User-Agent"] = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         }
         val postDomain = getSubDomain(urlStr)
-        CookieStore.getCookie(postDomain).takeIf { it.isNotBlank() }?.let { cookie ->
-            val headerCookie = requestHeaders["Cookie"]
-            requestHeaders["Cookie"] = if (headerCookie.isNullOrBlank()) {
-                cookie
-            } else {
-                mergeCookies(cookie, headerCookie)
+        if (enabledCookieJar) {
+            CookieStore.getCookie(postDomain).takeIf { it.isNotBlank() }?.let { cookie ->
+                val headerCookie = requestHeaders["Cookie"]
+                requestHeaders["Cookie"] = if (headerCookie.isNullOrBlank()) {
+                    cookie
+                } else {
+                    mergeCookies(cookie, headerCookie)
+                }
             }
         }
         return runCatching {
@@ -485,9 +488,11 @@ class AnalyzeUrl(
     }
 
     /**
-     * 设置cookie: 合并数据库cookie和header中的cookie
+     * 设置cookie: 仅在书源显式启用 CookieJar 时，才把持久化 Cookie 自动合并进请求。
+     * 这样保留 header 中手写 Cookie 的同时，避免未启用的 Legado 书源被历史 Cookie 污染。
      */
     private fun setCookie() {
+        if (!enabledCookieJar) return
         val cookie = CookieStore.getCookie(domain)
         if (cookie.isNotEmpty()) {
             val headerCookie = headerMap["Cookie"]
@@ -522,6 +527,7 @@ class AnalyzeUrl(
      * 保存响应中的cookie
      */
     private fun saveCookie(response: okhttp3.Response, cookieDomain: String = domain) {
+        if (!enabledCookieJar) return
         val setCookieHeaders = response.headers("Set-Cookie")
         if (setCookieHeaders.isNotEmpty()) {
             val cookieParts = setCookieHeaders.mapNotNull { header ->
@@ -552,17 +558,36 @@ class AnalyzeUrl(
 
     /**
      * 访问网站,返回StrResponse（带并发限制和Cookie管理）
-     * 当 useWebView=true 时，使用 BackstageWebView 渲染JS页面
      */
     suspend fun getStrResponseAwait(): StrResponse {
-        if (useWebView) {
+        return getStrResponseAwait(jsStr = null, sourceRegex = null, useWebView = true)
+    }
+
+    /**
+     * 访问网站,返回StrResponse（带并发限制和Cookie管理）
+     *
+     * @param jsStr 正文规则层传入的 ContentRule.webJs；URL option 中的 webJs 优先级更高。
+     * @param sourceRegex 正文规则层传入的资源嗅探正则。
+     * @param useWebView 调用方是否允许使用 WebView。
+     */
+    suspend fun getStrResponseAwait(
+        jsStr: String?,
+        sourceRegex: String? = null,
+        useWebView: Boolean = true,
+    ): StrResponse {
+        val needRuleWebView = !jsStr.isNullOrBlank() || !sourceRegex.isNullOrBlank()
+        // webJs/sourceRegex 本身就是 WebView 语义；若只按 URL option 判断，会导致导入字段存在但永远不执行。
+        val shouldUseWebView = useWebView && (this.useWebView || needRuleWebView)
+        if (shouldUseWebView) {
             return concurrentRateLimiter.withLimit {
                 setCookie()
                 val webView = BackstageWebView(
                     url = url,
                     headerMap = headerMap,
-                    javaScript = webJs,
+                    javaScript = webJs ?: jsStr,
+                    sourceRegex = sourceRegex,
                     tag = domain,
+                    persistCookie = enabledCookieJar,
                 )
                 webView.getStrResponse()
             }
@@ -599,6 +624,16 @@ class AnalyzeUrl(
     fun getStrResponse(): StrResponse {
         return runBlocking(coroutineContext) {
             getStrResponseAwait()
+        }
+    }
+
+    fun getStrResponse(
+        jsStr: String?,
+        sourceRegex: String? = null,
+        useWebView: Boolean = true,
+    ): StrResponse {
+        return runBlocking(coroutineContext) {
+            getStrResponseAwait(jsStr, sourceRegex, useWebView)
         }
     }
 
