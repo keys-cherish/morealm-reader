@@ -2,21 +2,40 @@ package com.morealm.app.domain.analyzeRule
 
 import com.jayway.jsonpath.JsonPath
 import com.jayway.jsonpath.ReadContext
+import com.morealm.app.core.log.AppLog
 
 /**
  * JSONPath 解析器
+ *
+ * 防御性设计：
+ * - 任何 jsonpath 表达式编译/求值异常都被吞，返回空结果
+ * - 自动 trim BOM、zero-width 字符、首尾空白（防止 `&&`/`||` 切分后的子规则带换行）
+ * - JSON 解析失败时 fallback 到空文档，避免整个搜索源因单条规则崩溃
  */
 @Suppress("RegExpRedundantEscape")
 class AnalyzeByJSonPath(json: Any) {
 
     companion object {
+        private const val TAG = "AnalyzeByJSonPath"
+
         fun parse(json: Any): ReadContext {
-            return when (json) {
-                is ReadContext -> json
-                is String -> JsonPath.parse(json)
-                else -> JsonPath.parse(json)
+            return try {
+                when (json) {
+                    is ReadContext -> json
+                    is String -> JsonPath.parse(json)
+                    else -> JsonPath.parse(json)
+                }
+            } catch (e: Exception) {
+                AppLog.warn(TAG, "JSON parse failed, fallback to empty doc: ${e.message?.take(120)}")
+                JsonPath.parse("{}")
             }
         }
+
+        /** 清理规则字符串：去 BOM/zero-width，去首尾空白；防止 `unexpected token` */
+        private fun sanitizeRule(rule: String): String =
+            rule.trimStart('\uFEFF', '\u200B', '\u200C', '\u200D')
+                .trimEnd('\uFEFF', '\u200B', '\u200C', '\u200D')
+                .trim()
     }
 
     private var ctx: ReadContext = parse(json)
@@ -31,15 +50,19 @@ class AnalyzeByJSonPath(json: Any) {
             result = ruleAnalyzes.innerRule("{$.") { getString(it) }
             if (result.isEmpty()) {
                 try {
-                    val ob = ctx.read<Any>(rule)
+                    val cleaned = sanitizeRule(rule)
+                    if (cleaned.isEmpty()) return null
+                    val ob = ctx.read<Any>(cleaned)
                     result = if (ob is List<*>) ob.joinToString("\n") else ob.toString()
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    AppLog.warn(TAG, "getString('${rule.take(60)}') failed: ${e.message?.take(120)}")
+                }
             }
             return result
         } else {
             val textList = arrayListOf<String>()
             for (rl in rules) {
-                val temp = getString(rl)
+                val temp = getString(sanitizeRule(rl))
                 if (!temp.isNullOrEmpty()) {
                     textList.add(temp)
                     if (ruleAnalyzes.elementsType == "||") break
@@ -48,6 +71,7 @@ class AnalyzeByJSonPath(json: Any) {
             return textList.joinToString("\n")
         }
     }
+
     internal fun getStringList(rule: String): List<String> {
         val result = ArrayList<String>()
         if (rule.isEmpty()) return result
@@ -58,10 +82,14 @@ class AnalyzeByJSonPath(json: Any) {
             val st = ruleAnalyzes.innerRule("{$.") { getString(it) }
             if (st.isEmpty()) {
                 try {
-                    val obj = ctx.read<Any>(rule)
+                    val cleaned = sanitizeRule(rule)
+                    if (cleaned.isEmpty()) return result
+                    val obj = ctx.read<Any>(cleaned)
                     if (obj is List<*>) { for (o in obj) result.add(o.toString()) }
                     else result.add(obj.toString())
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    AppLog.warn(TAG, "getStringList('${rule.take(60)}') failed: ${e.message?.take(120)}")
+                }
             } else {
                 result.add(st)
             }
@@ -69,7 +97,7 @@ class AnalyzeByJSonPath(json: Any) {
         } else {
             val results = ArrayList<List<String>>()
             for (rl in rules) {
-                val temp = getStringList(rl)
+                val temp = getStringList(sanitizeRule(rl))
                 if (temp.isNotEmpty()) {
                     results.add(temp)
                     if (temp.isNotEmpty() && ruleAnalyzes.elementsType == "||") break
@@ -89,7 +117,14 @@ class AnalyzeByJSonPath(json: Any) {
     }
 
     internal fun getObject(rule: String): Any {
-        return ctx.read(rule)
+        return try {
+            val cleaned = sanitizeRule(rule)
+            if (cleaned.isEmpty()) return ArrayList<Any>()
+            ctx.read(cleaned)
+        } catch (e: Exception) {
+            AppLog.warn(TAG, "getObject('${rule.take(60)}') failed: ${e.message?.take(120)}")
+            ArrayList<Any>()
+        }
     }
 
     internal fun getList(rule: String): ArrayList<Any>? {
@@ -99,12 +134,18 @@ class AnalyzeByJSonPath(json: Any) {
         val rules = ruleAnalyzes.splitRule("&&", "||", "%%")
         if (rules.size == 1) {
             ctx.let {
-                try { return it.read<ArrayList<Any>>(rules[0]) } catch (_: Exception) {}
+                try {
+                    val cleaned = sanitizeRule(rules[0])
+                    if (cleaned.isEmpty()) return result
+                    return it.read<ArrayList<Any>>(cleaned)
+                } catch (e: Exception) {
+                    AppLog.warn(TAG, "getList('${rule.take(60)}') failed: ${e.message?.take(120)}")
+                }
             }
         } else {
             val results = ArrayList<ArrayList<*>>()
             for (rl in rules) {
-                val temp = getList(rl)
+                val temp = getList(sanitizeRule(rl))
                 if (!temp.isNullOrEmpty()) {
                     results.add(temp)
                     if (temp.isNotEmpty() && ruleAnalyzes.elementsType == "||") break

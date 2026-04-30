@@ -53,7 +53,15 @@ object BookList {
         if (ruleList.startsWith("-")) { reverse = true; ruleList = ruleList.substring(1) }
         if (ruleList.startsWith("+")) { ruleList = ruleList.substring(1) }
 
-        val collections = analyzeRule.getElements(ruleList)
+        val collections = try {
+            analyzeRule.getElements(ruleList)
+        } catch (e: Exception) {
+            AppLog.warn(
+                "BookList",
+                "list rule failed for ${bookSource.bookSourceName}: ${e.message?.take(120)}"
+            )
+            emptyList()
+        }
         coroutineContext.ensureActive()
 
         if (collections.isEmpty() && bookSource.bookUrlPattern.isNullOrEmpty()) {
@@ -140,10 +148,20 @@ object BookList {
         analyzeRule.setContent(item)
         coroutineContext.ensureActive()
 
-        searchBook.name = analyzeRule.getString(ruleName).trim()
+        searchBook.name = try {
+            analyzeRule.getString(ruleName).trim()
+        } catch (e: Exception) {
+            AppLog.warn("BookList", "name rule failed for ${bookSource.bookSourceName}: ${e.message?.take(120)}")
+            ""
+        }
         if (searchBook.name.isNotEmpty()) {
             coroutineContext.ensureActive()
-            searchBook.author = analyzeRule.getString(ruleAuthor).trim()
+            searchBook.author = try {
+                analyzeRule.getString(ruleAuthor).trim()
+            } catch (e: Exception) {
+                AppLog.warn("BookList", "author rule failed for ${bookSource.bookSourceName}: ${e.message?.take(120)}")
+                ""
+            }
             coroutineContext.ensureActive()
             try { searchBook.kind = analyzeRule.getStringList(ruleKind)?.joinToString(",") } catch (_: Exception) {}
             coroutineContext.ensureActive()
@@ -159,7 +177,12 @@ object BookList {
                 }
             } catch (_: Exception) {}
             coroutineContext.ensureActive()
-            searchBook.bookUrl = analyzeRule.getString(ruleBookUrl, isUrl = true)
+            searchBook.bookUrl = try {
+                analyzeRule.getString(ruleBookUrl, isUrl = true)
+            } catch (e: Exception) {
+                AppLog.warn("BookList", "bookUrl rule failed for ${bookSource.bookSourceName}: ${e.message?.take(120)}")
+                ""
+            }
             if (searchBook.bookUrl.isEmpty()) searchBook.bookUrl = baseUrl
             return searchBook
         }
