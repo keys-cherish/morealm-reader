@@ -101,6 +101,18 @@ fun MoRealmNavHost(
                 // Stabilize lambdas to avoid recomposition of child screens
                 val onBookClick = remember { { bookId: String -> navController.safeNavigate("reader/$bookId") } }
                 val onBookLongClick = remember { { bookId: String -> navController.safeNavigate("detail/$bookId") } }
+                // Smart router: WEB books go to the detail page so the user can confirm
+                // before reading (Legado-parity); local files open straight in the reader.
+                val onBookOpen = remember {
+                    { book: com.morealm.app.domain.entity.Book ->
+                        val route = if (book.format == com.morealm.app.domain.entity.BookFormat.WEB) {
+                            "detail/${book.id}"
+                        } else {
+                            "reader/${book.id}"
+                        }
+                        navController.safeNavigate(route)
+                    }
+                }
                 val onSearchTab = remember(switchTab) { { switchTab(1) } }
                 val onToggleDayNight = remember(themeViewModel) { { themeViewModel.toggleDayNight() } }
                 val onNavWebDav = remember { { navController.safeNavigate("webdav") } }
@@ -194,6 +206,7 @@ fun MoRealmNavHost(
                             ShelfScreen(
                                 onBookClick = onBookClick,
                                 onBookLongClick = onBookLongClick,
+                                onBookOpen = onBookOpen,
                                 onSearch = onSearchTab,
                                 onToggleDayNight = onToggleDayNight,
                                 isNightTheme = isNight,
