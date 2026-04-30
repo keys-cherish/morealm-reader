@@ -36,11 +36,31 @@ object WebBook {
             ruleData = ruleData,
             coroutineContext = coroutineContext
         )
-        var res = analyzeUrl.getStrResponseAwait()
-        // 检测书源是否已登录
-        bookSource.loginCheckJs?.let { checkJs ->
-            if (checkJs.isNotBlank()) {
-                res = analyzeUrl.evalJS(checkJs, res) as StrResponse
+        // Legado-parity: when network call throws, give loginCheckJs a chance to
+        // handle the failure — sources commonly use loginCheckJs to detect 401/403
+        // sessions and trigger a re-login dance. Without this fallback, any transient
+        // 5xx kills the search instead of letting JS rewrite the response.
+        val checkJs = bookSource.loginCheckJs
+        var res = runCatching {
+            val initial = analyzeUrl.getStrResponseAwait()
+            if (!checkJs.isNullOrBlank()) {
+                analyzeUrl.evalJS(checkJs, initial) as StrResponse
+            } else {
+                initial
+            }
+        }.getOrElse { throwable ->
+            if (!checkJs.isNullOrBlank()) {
+                val errResponse = analyzeUrl.getErrStrResponse(throwable)
+                try {
+                    val rewritten = analyzeUrl.evalJS(checkJs, errResponse) as StrResponse
+                    // If JS couldn't recover (still 500), bubble the original throwable
+                    if (rewritten.code() == 500) throw throwable
+                    rewritten
+                } catch (_: Throwable) {
+                    throw throwable
+                }
+            } else {
+                throw throwable
             }
         }
         checkRedirect(bookSource, res)
