@@ -312,6 +312,17 @@ class ReaderViewModel @Inject constructor(
             onPrev = { _readAloudPageTurn.tryEmit(-1) },
             onNext = { _readAloudPageTurn.tryEmit(1) },
         )
+        // When a chapter resolves to the empty-content placeholder, auto-show the
+        // control bar so the toolbar (and "换源" entry) are immediately discoverable.
+        // Without this prompt the user only sees the floating day/night button on a
+        // blank screen and assumes the app is broken.
+        viewModelScope.launch {
+            chapter.chapterContent.collect { text ->
+                if (isEmptyContentPlaceholder(text) && !_showControls.value) {
+                    _showControls.value = true
+                }
+            }
+        }
     }
 
     override fun onCleared() {

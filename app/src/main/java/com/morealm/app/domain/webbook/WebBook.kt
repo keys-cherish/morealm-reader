@@ -44,6 +44,10 @@ object WebBook {
             }
         }
         checkRedirect(bookSource, res)
+        // Legado-parity: detect HTTP redirect on the search request. Many sources
+        // single-result-redirect to the detail page; we must propagate this flag so
+        // BookList can reuse the body and set bookUrl to the final URL (not search URL).
+        val redirected = res.raw?.priorResponse?.isRedirect == true
         return BookList.analyzeBookList(
             bookSource = bookSource,
             ruleData = ruleData,
@@ -51,6 +55,7 @@ object WebBook {
             baseUrl = res.url,
             body = res.body,
             isSearch = true,
+            isRedirect = redirected,
         )
     }
 
@@ -91,11 +96,29 @@ object WebBook {
 
     /**
      * 获取书籍详情
+     *
+     * Legado-parity: when [searchBook.infoHtml] is non-empty (set by BookList during
+     * search-redirect or bookUrlPattern match), reuse that body and skip the network
+     * request entirely. This avoids:
+     *   - one redundant network round-trip per book opened
+     *   - the "second-fetch failure" that breaks ~10% of opens on flaky sources
      */
     suspend fun getBookInfoAwait(
         bookSource: BookSource,
         searchBook: SearchBook,
     ): SearchBook {
+        searchBook.infoHtml?.takeIf { it.isNotBlank() }?.let { cachedBody ->
+            BookInfo.analyzeBookInfo(
+                bookSource = bookSource,
+                searchBook = searchBook,
+                baseUrl = searchBook.bookUrl,
+                redirectUrl = searchBook.bookUrl,
+                body = cachedBody,
+            )
+            // Drop the cached body once consumed — keeps SearchBook small in memory.
+            searchBook.infoHtml = null
+            return searchBook
+        }
         val analyzeUrl = AnalyzeUrl(
             mUrl = searchBook.bookUrl,
             baseUrl = bookSource.bookSourceUrl,

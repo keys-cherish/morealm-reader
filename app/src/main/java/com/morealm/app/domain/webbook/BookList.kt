@@ -25,6 +25,14 @@ object BookList {
         baseUrl: String,
         body: String?,
         isSearch: Boolean = true,
+        /**
+         * Legado-parity: when the search request is redirected to a detail-page-shaped URL
+         * (single-result shortcut on many sites), the final response body IS the detail
+         * page. We must:
+         *   1. Use [baseUrl] (the redirect target) as bookUrl, not the search URL
+         *   2. Stash body into searchBook.infoHtml so getBookInfoAwait can skip a refetch
+         */
+        isRedirect: Boolean = false,
     ): ArrayList<SearchBook> {
         body ?: throw Exception("获取网页内容失败: ${analyzeUrl.ruleUrl}")
         val bookList = ArrayList<SearchBook>()
@@ -38,9 +46,25 @@ object BookList {
             coroutineContext.ensureActive()
             if (pattern.isNotBlank() && baseUrl.matches(pattern.toRegex())) {
                 getInfoItem(bookSource, analyzeRule, analyzeUrl, body, baseUrl, ruleData.getVariable())
-                    ?.let { bookList.add(it) }
+                    ?.let {
+                        // detail-page response — body IS the detail page, stash for reuse
+                        it.infoHtml = body
+                        bookList.add(it)
+                    }
                 return bookList
             }
+        }
+        // Same as above, but triggered by HTTP redirect (server-side single-result jump)
+        if (isSearch && isRedirect) {
+            coroutineContext.ensureActive()
+            getInfoItem(bookSource, analyzeRule, analyzeUrl, body, baseUrl, ruleData.getVariable())
+                ?.let {
+                    it.bookUrl = baseUrl
+                    it.infoHtml = body
+                    bookList.add(it)
+                }
+            if (bookList.isNotEmpty()) return bookList
+            // fall through if detail-rule-as-search didn't yield a book; try list rules
         }
 
         val bookListRule: BookListRule = when {
