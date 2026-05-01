@@ -1,6 +1,7 @@
 package com.morealm.app.service
 
 import android.content.Context
+import android.speech.tts.TextToSpeech
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.core.text.AppPattern
 import com.morealm.app.domain.entity.TtsVoice
@@ -9,6 +10,7 @@ import com.morealm.app.domain.tts.EdgeTtsEngine
 import com.morealm.app.domain.tts.SystemTtsEngine
 import com.morealm.app.domain.tts.TtsEngine
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -47,6 +49,16 @@ class TtsEngineHost(
     private var paragraphs: List<String> = emptyList()
     private var paragraphPositions: List<Int> = emptyList()
     private var paragraphIndex: Int = 0
+
+    /**
+     * 当前段内字符偏移，用于句中续读（仿 Legado paragraphStartPos）。
+     * - SystemTtsEngine 批量路径下：onRangeStart 实时回写，pause 不清零；
+     *   resume 时第一段切片 substring(paragraphStartPos) 后再入队。
+     * - 段切换（onDone 推进 paragraphIndex）时复位为 0。
+     * - 用户手动切上/下段（prevParagraph/nextParagraph）也复位为 0。
+     * - 这是 Legado 没做、MoRealm 新增的「真断点续读」能力。
+     */
+    private var paragraphStartPos: Int = 0
 
     private var bookTitle: String = ""
     private var chapterTitle: String = ""
@@ -191,6 +203,7 @@ class TtsEngineHost(
                     sliceMode = "parseParagraphs"
                 }
                 paragraphIndex = paragraphIndexForPosition(cmd.startChapterPosition)
+                paragraphStartPos = 0 // 新章节加载，句中位置归零
                 waitingForNextChapter = false
 
                 // TTS-DIAG #5 — what the host actually loaded. Sample the first
@@ -247,6 +260,7 @@ class TtsEngineHost(
                 speakJob?.cancelAndJoin()
                 runCatching { currentEngine().stop() }
                 paragraphIndex = 0
+                paragraphStartPos = 0
                 waitingForNextChapter = false
                 TtsEventBus.updatePlayback {
                     copy(
@@ -265,6 +279,7 @@ class TtsEngineHost(
         val newIdx = (paragraphIndex - 1).coerceAtLeast(0)
         if (newIdx == paragraphIndex && !TtsEventBus.playbackState.value.isPlaying) return
         paragraphIndex = newIdx
+        paragraphStartPos = 0 // 用户主动切段，断点信息作废
         if (TtsEventBus.playbackState.value.isPlaying) {
             // restart loop at new index
             scope.launch {
@@ -284,6 +299,7 @@ class TtsEngineHost(
         val newIdx = (paragraphIndex + 1).coerceAtMost(paragraphs.size - 1)
         if (newIdx == paragraphIndex && !TtsEventBus.playbackState.value.isPlaying) return
         paragraphIndex = newIdx
+        paragraphStartPos = 0
         if (TtsEventBus.playbackState.value.isPlaying) {
             scope.launch {
                 controlMutex.withLock {
@@ -299,105 +315,266 @@ class TtsEngineHost(
 
     // ── The speak loop ───────────────────────────────────────────────────────
 
+    /**
+     * 入口：按引擎类型分流。
+     * - [SystemTtsEngine]：走 [runBatchPlayback]（仿 Legado，一次性入队整章）。
+     * - [EdgeTtsEngine] / 其他：走 [runStreamingPlayback]（callbackFlow 串行）。
+     *
+     * 之前的统一串行实现遇到「listener 被替换 / onDone 不触发」时整个 host 卡死
+     * 在第一段 collect 上（症状：进度永远 1/N，但用户能听到第 12 段——其实是
+     * 引擎回调走丢，host 状态没推进）。批量路径用全局常驻 listener + utteranceId
+     * 解析回调来源，根除这个 race。
+     */
     private suspend fun speakLoop() {
-        var consecutiveErrors = 0
-        try {
-            val engine = currentEngine()
-            // TTS-DIAG #6 — speak loop entered. If you see #5 but never #6,
-            // the speakJob coroutine never actually got scheduled.
-            AppLog.info(
-                "TTS",
-                "Host.speakLoop: ENTER engine=${engine.javaClass.simpleName}, " +
-                    "paragraphs=${paragraphs.size}, startIdx=$paragraphIndex",
+        val engine = currentEngine()
+        AppLog.info(
+            "TTS",
+            "Host.speakLoop: ENTER engine=${engine.javaClass.simpleName}, " +
+                "paragraphs=${paragraphs.size}, startIdx=$paragraphIndex, " +
+                "paragraphStartPos=$paragraphStartPos",
+        )
+        if (engine is SystemTtsEngine) {
+            runBatchPlayback(engine)
+        } else {
+            runStreamingPlayback(engine)
+        }
+    }
+
+    /**
+     * 仿 Legado [TTSReadAloudService.play] 的批量入队播放。
+     *
+     * 流程：
+     * 1. 把当前段及之后所有段全部规划成 utterance 列表（长段二次切句）。
+     * 2. 注册批量回调：onUtteranceStart→更新 paragraphIndex+publishState；
+     *    onUtteranceDone→若是整章最后一个 utt 则 `finished.complete()`；
+     *    onRangeStart→刷新 paragraphStartPos（句中位置）。
+     * 3. 一次性 enqueue（首条 QUEUE_FLUSH，后续 QUEUE_ADD）。
+     * 4. await finished；任何中断（pause/stop/切段）由外层 cancel speakJob → 协程
+     *    在 await 处抛 CancellationException。
+     *
+     * 第一段如有 [paragraphStartPos] > 0（pause 时记录的句中位置），切片后再入队，
+     * 实现「真断点续读」——这是 Legado 没做但合理的扩展。
+     */
+    private suspend fun runBatchPlayback(engine: SystemTtsEngine) {
+        // 等引擎就绪
+        val initRes = engine.awaitReadyResult()
+        if (initRes is SystemTtsEngine.InitResult.Failed) {
+            AppLog.error("TtsHost", "System TTS init failed: ${initRes.reason}")
+            TtsEventBus.sendEvent(
+                TtsEventBus.Event.Error(initRes.reason, canOpenSettings = true)
             )
-            if (engine is SystemTtsEngine) {
-                // Resolve init with a hard timeout (4s default inside SystemTtsEngine).
-                // On failure, surface a user-facing reason and bail out cleanly instead
-                // of letting the speak loop deadlock on a never-ready engine.
-                val initRes = engine.awaitReadyResult()
-                AppLog.info("TTS", "Host.speakLoop: SystemTtsEngine awaitReadyResult=$initRes")
-                if (initRes is SystemTtsEngine.InitResult.Failed) {
-                    AppLog.error("TtsHost", "System TTS init failed: ${initRes.reason}")
-                    TtsEventBus.sendEvent(
-                        TtsEventBus.Event.Error(initRes.reason, canOpenSettings = true)
-                    )
-                    publishState(playing = false)
-                    return
+            publishState(playing = false)
+            return
+        }
+
+        engine.setSpeechRate(speed)
+        applyVoiceToEngine() // 确保语音配置应用到当前 engine 实例
+
+        // 规划 utterance 列表
+        data class Utt(
+            val paraIdx: Int,
+            val subIdx: Int,
+            val text: String,
+            val isLastSubOfPara: Boolean,
+        )
+        val plan = ArrayList<Utt>()
+        for (idx in paragraphIndex until paragraphs.size) {
+            val rawText = paragraphs[idx]
+            if (rawText.isBlank() || skipRegex?.containsMatchIn(rawText) == true) continue
+            // 第一段从断点切片
+            val text = if (idx == paragraphIndex && paragraphStartPos in 1 until rawText.length) {
+                rawText.substring(paragraphStartPos)
+            } else {
+                rawText
+            }
+            val subs = splitIntoSubSentences(text)
+            for ((subIdx, sub) in subs.withIndex()) {
+                if (sub.isBlank()) continue
+                plan.add(Utt(idx, subIdx, sub, subIdx == subs.lastIndex))
+            }
+        }
+
+        AppLog.info(
+            "TTS",
+            "Host.runBatchPlayback: plan size=${plan.size}, startPara=$paragraphIndex, " +
+                "startPos=$paragraphStartPos",
+        )
+
+        if (plan.isEmpty()) {
+            AppLog.warn("TtsHost", "runBatchPlayback: nothing to read in this chapter")
+            publishState(playing = false)
+            // 整章空（全是空段/标点段）→ 等同于读完，触发翻章
+            waitingForNextChapter = true
+            TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
+            return
+        }
+
+        val finished = CompletableDeferred<Unit>()
+        val lastUtt = plan.last()
+
+        val cb = object : SystemTtsEngine.BatchCallback {
+            override fun onUtteranceStart(utteranceId: String) {
+                val parsed = parseUtteranceId(utteranceId) ?: return
+                val (paraIdx, _) = parsed
+                if (paraIdx != paragraphIndex) {
+                    paragraphIndex = paraIdx
+                    paragraphStartPos = 0 // 段切换重置句中位置
+                }
+                publishState(playing = true)
+            }
+
+            override fun onUtteranceDone(utteranceId: String) {
+                val parsed = parseUtteranceId(utteranceId) ?: return
+                val (paraIdx, subIdx) = parsed
+                if (paraIdx == lastUtt.paraIdx && subIdx == lastUtt.subIdx) {
+                    if (!finished.isCompleted) finished.complete(Unit)
                 }
             }
 
+            override fun onUtteranceError(utteranceId: String, errorCode: Int) {
+                AppLog.warn("TtsHost", "batch utterance error id=$utteranceId code=$errorCode")
+                // 单段失败：把它当作完成跳过；如果是最后一段也要 fulfill finished
+                val parsed = parseUtteranceId(utteranceId)
+                if (parsed != null) {
+                    val (paraIdx, subIdx) = parsed
+                    if (paraIdx == lastUtt.paraIdx && subIdx == lastUtt.subIdx) {
+                        if (!finished.isCompleted) finished.complete(Unit)
+                    }
+                }
+            }
+
+            override fun onRangeStart(utteranceId: String, start: Int, end: Int) {
+                val parsed = parseUtteranceId(utteranceId) ?: return
+                val (paraIdx, subIdx) = parsed
+                if (paraIdx == paragraphIndex) {
+                    // 当 utterance 是从段断点切片来的，要把切片偏移加回原段坐标
+                    val sliceOffset = if (subIdx == 0 && paraIdx == paragraphIndex) {
+                        paragraphStartPosBaseForFirstSub
+                    } else 0
+                    paragraphStartPos = (sliceOffset + start).coerceAtLeast(0)
+                }
+            }
+        }
+
+        // 记下"第一段第一子句"的切片基准（用于 onRangeStart 把局部偏移还原成段内坐标）
+        // 注意：plan 入队后 paragraphStartPos 会被回调改写，所以这里用一个独立字段保存初始值
+        paragraphStartPosBaseForFirstSub = if (paragraphStartPos in 1 until (paragraphs.getOrNull(paragraphIndex)?.length ?: 0)) {
+            paragraphStartPos
+        } else 0
+
+        engine.setBatchCallback(cb)
+
+        // 入队
+        for ((i, utt) in plan.withIndex()) {
+            val mode = if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+            val id = "morealm_${utt.paraIdx}_${utt.subIdx}"
+            val result = engine.enqueue(utt.text, id, mode)
+            if (result == TextToSpeech.ERROR) {
+                AppLog.error("TtsHost", "batch enqueue ERROR at i=$i id=$id, aborting")
+                engine.setBatchCallback(null)
+                TtsEventBus.sendEvent(
+                    TtsEventBus.Event.Error("TTS 入队失败，请重试", canOpenSettings = true)
+                )
+                publishState(playing = false)
+                return
+            }
+        }
+
+        // 等整章读完或被取消
+        try {
+            finished.await()
+        } catch (_: CancellationException) {
+            // pause/stop/切段被外层 cancel：此时 engine.stop() 已被调用（pause/stop/setEngine 都会调）
+            AppLog.debug("TtsHost", "runBatchPlayback: cancelled mid-flight")
+            engine.setBatchCallback(null)
+            throw kotlin.coroutines.cancellation.CancellationException("batch cancelled")
+        }
+        engine.setBatchCallback(null)
+
+        // 章节读完
+        AppLog.info("TtsHost", "runBatchPlayback: chapter finished")
+        waitingForNextChapter = true
+        TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
+        val gotNext = withTimeoutOrNull(WAIT_NEXT_CHAPTER_MS) {
+            while (waitingForNextChapter) delay(50)
+            true
+        }
+        if (gotNext != true) {
+            AppLog.info("TtsHost", "runBatchPlayback: no next chapter within ${WAIT_NEXT_CHAPTER_MS}ms, stopping")
+            publishState(playing = false)
+        }
+    }
+
+    /** 仅供 [onRangeStart] 把切片局部偏移还原成段内坐标用。 */
+    @Volatile private var paragraphStartPosBaseForFirstSub: Int = 0
+
+    /** 解析 utteranceId "morealm_{paraIdx}_{subIdx}" → (paraIdx, subIdx)。 */
+    private fun parseUtteranceId(id: String): Pair<Int, Int>? {
+        if (!id.startsWith("morealm_")) return null
+        val parts = id.removePrefix("morealm_").split("_")
+        if (parts.size != 2) return null
+        val p = parts[0].toIntOrNull() ?: return null
+        val s = parts[1].toIntOrNull() ?: return null
+        return p to s
+    }
+
+    /**
+     * 长段二次切句。Legado 没做这步——它的 contentList 来自排版后的 page.text，自带换行。
+     * MoRealm 是按章节段 offset 切片，长段（200+ 字）整体扔给引擎会断句不自然。
+     *
+     * 切分点：。！？；和换行。保留分隔符在前一子句末尾。短于 [LONG_PARA_THRESHOLD]
+     * 的段不切，避免把短句切碎让引擎反复重启 prosody。
+     */
+    private fun splitIntoSubSentences(text: String): List<String> {
+        if (text.length <= LONG_PARA_THRESHOLD) return listOf(text)
+        val result = ArrayList<String>()
+        val sb = StringBuilder()
+        for (c in text) {
+            sb.append(c)
+            if (c in SENTENCE_SEPARATORS) {
+                if (sb.isNotBlank()) result.add(sb.toString())
+                sb.clear()
+            }
+        }
+        if (sb.isNotEmpty()) result.add(sb.toString())
+        return if (result.isEmpty()) listOf(text) else result
+    }
+
+    /**
+     * EdgeTts / 其他流式引擎走的老 callbackFlow 串行路径。
+     * 保留旧实现是因为这些引擎一次返回一段音频流，没有 TTS 引擎层面的"队列"概念。
+     */
+    private suspend fun runStreamingPlayback(engine: TtsEngine) {
+        var consecutiveErrors = 0
+        try {
             for (idx in paragraphIndex until paragraphs.size) {
                 if (!TtsEventBus.playbackState.value.isPlaying) {
-                    AppLog.info("TTS", "Host.speakLoop: isPlaying flipped to false, exiting at idx=$idx")
+                    AppLog.info("TTS", "Host.runStreamingPlayback: isPlaying=false, exit at idx=$idx")
                     return
                 }
                 paragraphIndex = idx
+                paragraphStartPos = 0
                 publishState(playing = true)
 
                 val paragraphText = paragraphs[idx]
-                // Legado parity: skip blank / punctuation-only paragraphs but
-                // still advance the highlight so the user can see TTS scrolling
-                // through silent gaps (chapter dividers, image-only lines).
                 if (paragraphText.isBlank() ||
                     skipRegex?.containsMatchIn(paragraphText) == true) {
-                    AppLog.debug("TTS", "Host.speakLoop: skip idx=$idx (blank or matches skipRegex)")
                     continue
                 }
 
                 try {
                     AppLog.info(
                         "TTS",
-                        "Host.speakLoop: speak idx=$idx/${paragraphs.size} " +
-                            "len=${paragraphText.length} text='${paragraphText.take(40)}'",
+                        "Host.runStreamingPlayback: speak idx=$idx/${paragraphs.size} " +
+                            "len=${paragraphText.length}",
                     )
                     engine.speak(paragraphText, speed).collect { /* drain */ }
-                    AppLog.debug("TTS", "Host.speakLoop: speak idx=$idx returned normally")
                     consecutiveErrors = 0
                 } catch (ce: CancellationException) {
-                    AppLog.debug("TTS", "Host.speakLoop: cancelled at idx=$idx")
                     throw ce
                 } catch (e: Exception) {
                     consecutiveErrors++
-                    AppLog.warn("TtsHost", "speak error on para $idx (consec=$consecutiveErrors)", e)
-                    // Recovery path A — when the system engine reports a
-                    // synchronous ERROR (most often a corrupted voice binding
-                    // after the language pack changed under us), tearing down
-                    // and rebinding TextToSpeech almost always clears the
-                    // problem. We do this on the FIRST failure, before the
-                    // 3-strikes terminal stop, mirroring Legado's recovery in
-                    // TTSReadAloudService.
-                    if (consecutiveErrors == 1 && engine is SystemTtsEngine) {
-                        AppLog.info(
-                            "TtsHost",
-                            "speak error is recoverable — will reInit SystemTtsEngine and retry para $idx",
-                        )
-                        runCatching { engine.reInit() }
-                            .onFailure { AppLog.warn("TtsHost", "reInit threw: ${it.message}", it) }
-                        // Re-apply the user's voice selection on the fresh
-                        // binding; otherwise the rebinding could have dropped
-                        // back to system default.
-                        applyVoiceToEngine()
-                        // Retry the SAME paragraph by stepping idx back one —
-                        // the for-loop will increment again on next iteration.
-                        // We DON'T emit the user-facing toast yet; if the retry
-                        // succeeds the user never sees a stutter.
-                        delay(150)
-                        AppLog.info(
-                            "TtsHost",
-                            "reInit complete; retrying paragraph $idx (silent recovery, no Toast)",
-                        )
-                        // Loop will re-attempt this paragraph because we
-                        // continue here — but the for-loop's idx has already
-                        // advanced; explicitly retry by recursing into a tail
-                        // call of speakLoop with paragraphIndex = idx.
-                        paragraphIndex = idx
-                        speakLoop()
-                        return
-                    }
-                    // Surface the very first failure of a streak immediately so
-                    // the user gets a Toast instead of staring at a silent
-                    // reader. TtsErrorPresenter dedupes within 3s, so a retry
-                    // storm won't produce a flood of toasts.
+                    AppLog.warn("TtsHost", "stream speak error para $idx (consec=$consecutiveErrors)", e)
                     if (consecutiveErrors == 1) {
                         TtsEventBus.sendEvent(
                             TtsEventBus.Event.Error(
@@ -408,17 +585,13 @@ class TtsEngineHost(
                     }
                     if (consecutiveErrors >= 3) {
                         if (engineId != "system") {
-                            AppLog.info("TtsHost", "Falling back to system engine after repeated errors")
-                            // Tell the user *why* the voice just changed —
-                            // previously this was a silent fallback and users
-                            // assumed the engine setting had been forgotten.
+                            AppLog.info("TtsHost", "Stream engine fallback → system after repeated errors")
                             TtsEventBus.sendEvent(
                                 TtsEventBus.Event.Error(
-                                    "Edge TTS 多次失败，已自动切换为系统朗读",
+                                    "${engine.javaClass.simpleName} 多次失败，已自动切换为系统朗读",
                                     canOpenSettings = false,
                                 )
                             )
-                            // Persist the fallback so it survives next launch.
                             withContext(NonCancellable) { prefs.setTtsEngine("system") }
                             engineId = "system"
                             voiceName = savedVoiceForEngine("system")
@@ -428,14 +601,10 @@ class TtsEngineHost(
                                 copy(engine = "system", voiceName = voiceName, voices = voices)
                             }
                             consecutiveErrors = 0
-                            // restart the loop with system engine
-                            speakLoop()
+                            speakLoop() // 切到 system → 入口会进入 batch 路径
                             return
                         }
-                        AppLog.error("TtsHost", "Engine repeatedly failing, stopping playback", e)
-                        // Terminal stop after 3 strikes on the system engine.
-                        // Without this Error event the user previously just saw
-                        // the play button toggle off with no explanation.
+                        AppLog.error("TtsHost", "Stream engine repeatedly failing, stopping", e)
                         TtsEventBus.sendEvent(
                             TtsEventBus.Event.Error(
                                 "TTS 连续 3 次朗读失败，已停止：${e.message ?: "未知错误"}",
@@ -448,22 +617,18 @@ class TtsEngineHost(
                     delay(200)
                 }
             }
-            // Reached the end of paragraphs in this chapter.
+            // chapter end
             waitingForNextChapter = true
             TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
-            // Wait briefly for ViewModel to send LoadAndPlay; if nothing arrives, stop.
             val gotNext = withTimeoutOrNull(WAIT_NEXT_CHAPTER_MS) {
                 while (waitingForNextChapter) delay(50)
                 true
             }
-            if (gotNext != true) {
-                AppLog.info("TtsHost", "No next chapter received within ${WAIT_NEXT_CHAPTER_MS}ms; stopping")
-                publishState(playing = false)
-            }
+            if (gotNext != true) publishState(playing = false)
         } catch (_: CancellationException) {
-            // normal cancel, leave isPlaying as set by caller
+            // normal cancel
         } catch (e: Exception) {
-            AppLog.error("TtsHost", "speakLoop crashed", e)
+            AppLog.error("TtsHost", "runStreamingPlayback crashed", e)
             publishState(playing = false)
         }
     }
@@ -719,5 +884,11 @@ class TtsEngineHost(
     companion object {
         /** How long the host waits for a LoadAndPlay after ChapterFinished before giving up. */
         private const val WAIT_NEXT_CHAPTER_MS = 5_000L
+
+        /** 长段二次切句阈值（字符数）。<= 80 不切，避免短段被切碎。 */
+        private const val LONG_PARA_THRESHOLD = 80
+
+        /** 切句分隔符：中文标点 + 换行（结合 splitIntoSubSentences 使用）。 */
+        private val SENTENCE_SEPARATORS = setOf('。', '！', '？', '；', '\n')
     }
 }

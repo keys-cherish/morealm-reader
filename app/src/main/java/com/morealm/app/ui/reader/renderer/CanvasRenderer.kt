@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.asPaddingValues
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.render.*
 import com.morealm.app.presentation.reader.ReaderSearchController
@@ -137,6 +138,20 @@ fun CanvasRenderer(
     onPageTurnCommandConsumed: () -> Unit = {},
     autoPageSeconds: Int = 0,
     readAloudChapterPosition: Int = -1,
+    /**
+     * 当前章节所有用户高亮 — ReaderViewModel 按 chapterIndex 实时订阅 DB。
+     * 渲染时每页自筛与本页 chapter-position 区间有交集的子集再画。
+     */
+    chapterHighlights: List<Highlight> = emptyList(),
+    /**
+     * 用户在 mini-menu 选某色后触发：保存一条新高亮。回调收到原文与颜色 ARGB；
+     * 章节字符 offset 由 ReaderSelectionToolbar 自己根据 selectionState 计算。
+     */
+    onAddHighlight: (start: Int, end: Int, content: String, colorArgb: Int) -> Unit = { _, _, _, _ -> },
+    /** 用户在「已存高亮」点击后选择删除。 */
+    onDeleteHighlight: (id: String) -> Unit = {},
+    /** 用户分享一条高亮内容（生成卡片图）。 */
+    onShareHighlight: (Highlight) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -464,6 +479,23 @@ fun CanvasRenderer(
     }
 
     val pages = pageFactory.pages
+
+    /**
+     * Convert DB [Highlight] rows into renderer-friendly [HighlightSpan]s once
+     * per change. Recomputes only when the chapter index or list identity
+     * changes — Compose `remember(key)` keys it on the list reference, so
+     * Flow.collectAsState producing a new list will trigger fresh mapping.
+     */
+    val highlightSpans = remember(chapterHighlights) {
+        chapterHighlights.map { h ->
+            HighlightSpan(
+                id = h.id,
+                startChapterPos = h.startChapterPos,
+                endChapterPos = h.endChapterPos,
+                colorArgb = h.colorArgb,
+            )
+        }
+    }
     val renderPageCount = pageFactory.pageCount
 
     LaunchedEffect(chapter, readAloudChapterPosition) {
@@ -509,6 +541,14 @@ fun CanvasRenderer(
 
     // Page-turn coordinator — replaces local page-turn functions and state
     val coordinator = remember(chapterIndex, pageAnimType) {
+        // Diagnostic for cross-chapter flicker (docs/issues/simulation-page-turn-flicker.md
+        // root cause #2). Each rebuild starts with lastSettledDisplayPage=0,
+        // which is the source of "shows page 1 of new chapter for one frame".
+        AppLog.debug(
+            "PageTurnFlicker",
+            "[2] coordinator REBUILD chapterIndex=$chapterIndex pageAnimType=$pageAnimType" +
+                " (default lastSettledDisplayPage=0)",
+        )
         PageTurnCoordinator(scope, pageAnimType, onNextChapter, onPrevChapter, onProgress, onVisiblePageChanged)
     }
     // Update deps on each recomposition so coordinator always sees latest values
@@ -1046,6 +1086,7 @@ fun CanvasRenderer(
                     autoPageNextPage = if (autoPageProgress > 0) coordinator.getRelativePage(pageIndex, 1) else null,
                     autoPageAccentColor = accentColor,
                     readAloudChapterPosition = readAloudChapterPosition,
+                    chapterHighlights = highlightSpans,
                     onCurrentPageChanged = {},
                     onSelectionStartMove = { textPos ->
                         selectedTextPage = coordinator.getPageAt(pageIndex)
@@ -1510,6 +1551,12 @@ private fun PageContentBox(
     autoPageAccentColor: Color = Color.Transparent,
     /** TTS 当前段位置；透传给 PageCanvas 触发重组以刷新高亮。-1 = 非朗读态。 */
     readAloudChapterPosition: Int = -1,
+    /**
+     * 当前章节的所有用户高亮（按 chapter-position 区间存）。每个 PageContentBox
+     * 在画自己这页时只取与本页 `chapterPosition .. chapterPosition + page.charSize`
+     * 有交集的那批，避免每页都遍历整章。
+     */
+    chapterHighlights: List<HighlightSpan> = emptyList(),
     onCurrentPageChanged: (TextPage) -> Unit = {},
     onSelectionStartMove: (TextPos) -> Unit = {},
     onSelectionEndMove: (TextPos) -> Unit = {},
@@ -1530,6 +1577,13 @@ private fun PageContentBox(
     }
 
     val isCurrentDisplayPage = pageIndex == currentPage
+    // Filter chapter-wide highlight set down to those overlapping THIS page's
+    // character range. Cheap (O(highlights × 1)); avoids re-scanning unrelated
+    // ranges inside the per-line draw loop.
+    val pageStart = page.chapterPosition
+    val pageEnd = pageStart + page.lines.sumOf { it.charSize }
+    val pageHighlights = if (chapterHighlights.isEmpty()) emptyList() else
+        chapterHighlights.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
     Box(modifier = Modifier.fillMaxSize().background(backgroundColor)) {
         PageCanvas(
             page = page,
@@ -1548,6 +1602,7 @@ private fun PageContentBox(
             searchResultColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
             bookmarkColor = MaterialTheme.colorScheme.error,
             readAloudChapterPosition = readAloudChapterPosition,
+            highlights = pageHighlights,
             modifier = Modifier.fillMaxSize(),
         )
         if (isCurrentDisplayPage) {

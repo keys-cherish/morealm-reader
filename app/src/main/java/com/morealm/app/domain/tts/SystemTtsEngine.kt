@@ -36,6 +36,88 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
     @Volatile private var initResult: InitResult? = null
     private val pendingReadyCallbacks = mutableListOf<(InitResult) -> Unit>()
 
+    // ── 批量入队模式（仿 Legado TTSReadAloudService）────────────────────────────
+    //
+    // 旧的 [speak] 实现每段都重建 callbackFlow + 替换 OnUtteranceProgressListener，
+    // 串行 await 一段读完再喂下一段。问题：
+    //   1. 引擎合并/延迟 onDone 时，旧 utteranceId 触发的回调走到新 listener 里
+    //      `id == 旧utteranceId` 不匹配 → Flow 永不 close → 整个 speakLoop 卡死。
+    //   2. 段间多一个 setListener+speak 调用周期，导致段间停顿明显。
+    //   3. 长段（一段 200+ 字）整体扔给引擎，引擎自己分句质量参差。
+    //
+    // Legado 的做法：入队前 setOnUtteranceProgressListener 一次（全局常驻 listener），
+    // 然后 `for(i) tts.speak(text, QUEUE_FLUSH/QUEUE_ADD, "id$i")` 一次性把整章全
+    // 部入队，listener 用 utteranceId 区分回调来源。这里照搬此模型，给 host 用。
+    interface BatchCallback {
+        fun onUtteranceStart(utteranceId: String) {}
+        fun onUtteranceDone(utteranceId: String) {}
+        fun onUtteranceError(utteranceId: String, errorCode: Int) {}
+        /** 引擎播报到 utterance 内 [start, end) 字符；用于句中位置追踪。 */
+        fun onRangeStart(utteranceId: String, start: Int, end: Int) {}
+    }
+
+    @Volatile private var batchCallback: BatchCallback? = null
+
+    /** 全局常驻 listener — 注册一次后所有 utterance 都走这里，按 utteranceId 分发。 */
+    private val globalUtteranceListener = object : UtteranceProgressListener() {
+        override fun onStart(id: String?) {
+            id ?: return
+            batchCallback?.onUtteranceStart(id)
+        }
+        override fun onDone(id: String?) {
+            id ?: return
+            batchCallback?.onUtteranceDone(id)
+        }
+        override fun onError(id: String?, errorCode: Int) {
+            id ?: return
+            batchCallback?.onUtteranceError(id, errorCode)
+        }
+        @Deprecated("Deprecated in Java")
+        override fun onError(id: String?) {
+            id ?: return
+            batchCallback?.onUtteranceError(id, -1)
+        }
+        override fun onRangeStart(id: String?, start: Int, end: Int, frame: Int) {
+            id ?: return
+            batchCallback?.onRangeStart(id, start, end)
+        }
+    }
+
+    /**
+     * 装配批量回调。传 null 解除（pause/stop 后保留 listener 但停止分发，避免回调
+     * 调用已失效的对象）。每次重新启动批量都要重置一次 callback；旧 callback 上的
+     * pending 回调会被静默吞掉。
+     */
+    fun setBatchCallback(cb: BatchCallback?) {
+        batchCallback = cb
+        if (cb != null) {
+            tts?.setOnUtteranceProgressListener(globalUtteranceListener)
+        }
+    }
+
+    /** 设置全局语速（影响后续所有入队 utterance）。 */
+    fun setSpeechRate(speed: Float) {
+        tts?.setSpeechRate(speed.coerceIn(0.3f, 4.0f))
+    }
+
+    /**
+     * 把 [text] 加入 TTS 引擎的播放队列。
+     * @param queueMode [TextToSpeech.QUEUE_FLUSH]（清队首段）或 [TextToSpeech.QUEUE_ADD]（追加）
+     * @return [TextToSpeech.SUCCESS] 或 [TextToSpeech.ERROR]
+     */
+    fun enqueue(text: String, utteranceId: String, queueMode: Int): Int {
+        val engine = tts ?: return TextToSpeech.ERROR
+        return runCatching {
+            engine.speak(text, queueMode, null, utteranceId)
+        }.getOrElse {
+            com.morealm.app.core.log.AppLog.warn(
+                "TTS",
+                "SystemTtsEngine.enqueue threw: ${it.message} (id=$utteranceId)",
+            )
+            TextToSpeech.ERROR
+        }
+    }
+
     /**
      * Kick off async init. The callback receives the final [InitResult].
      * Failure cases include: no TTS engine installed, init returned ERROR,
