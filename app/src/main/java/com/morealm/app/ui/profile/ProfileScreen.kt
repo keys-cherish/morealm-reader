@@ -72,6 +72,7 @@ fun ProfileScreen(
     onNavigateAppLog: () -> Unit = {},
     onNavigateCacheBook: () -> Unit = {},
     onNavigateThemeEditor: () -> Unit = {},
+    onNavigateDonate: () -> Unit = {},
 ) {
     val moColors = LocalMoRealmColors.current
     val activeTheme by themeViewModel.activeTheme.collectAsStateWithLifecycle()
@@ -305,6 +306,16 @@ fun ProfileScreen(
             SettingsItem(Icons.Default.BugReport, "应用日志",
                 subtitle = "查看运行日志和错误信息", onClick = onNavigateAppLog)
         }
+
+        // 捐赠入口 — 放「关于」之后是有意为之：能滚到这里的人多半是在系统性
+        // 浏览设置，对软件有了基本了解；比放在顶部"突然伸手要钱"舒服得多。
+        SettingsCard(
+            icon = Icons.Default.Favorite,
+            title = "请作者喝杯咖啡",
+            desc = "MoRealm 永久免费、无广告。如果它陪你读了很多书，欢迎请作者喝一杯",
+            onClick = onNavigateDonate,
+        )
+
         Spacer(Modifier.height(96.dp))
     }
 

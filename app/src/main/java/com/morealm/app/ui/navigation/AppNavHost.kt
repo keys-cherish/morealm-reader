@@ -32,7 +32,9 @@ import com.morealm.app.ui.detail.BookDetailScreen
 import com.morealm.app.ui.listen.ListenScreen
 import com.morealm.app.ui.profile.AboutScreen
 import com.morealm.app.ui.profile.ChangelogScreen
+import com.morealm.app.ui.profile.DonateScreen
 import com.morealm.app.ui.profile.ProfileScreen
+import com.morealm.app.ui.profile.RemoteBookScreen
 import com.morealm.app.ui.profile.ReplaceRuleScreen
 import com.morealm.app.ui.profile.ThemeEditorScreen
 import com.morealm.app.ui.profile.WebDavScreen
@@ -59,7 +61,7 @@ fun MoRealmNavHost(
     val moColors = LocalMoRealmColors.current
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route.startsWith("theme_editor")
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -125,6 +127,7 @@ fun MoRealmNavHost(
                 val onNavAppLog = remember { { navController.safeNavigate("app_log") } }
                 val onNavCacheBook = remember { { navController.safeNavigate("cache_book") } }
                 val onNavThemeEditor = remember { { navController.safeNavigate("theme_editor") } }
+                val onNavDonate = remember { { navController.safeNavigate("donate") } }
                 val onSearchBack = remember(switchTab) { { switchTab(0) } }
 
                 var dragAmount by remember { mutableFloatStateOf(0f) }
@@ -235,6 +238,7 @@ fun MoRealmNavHost(
                             onNavigateAppLog = onNavAppLog,
                             onNavigateCacheBook = onNavCacheBook,
                             onNavigateThemeEditor = onNavThemeEditor,
+                            onNavigateDonate = onNavDonate,
                         )
                                 }
                             }
@@ -244,7 +248,14 @@ fun MoRealmNavHost(
             }
 
             composable("webdav") {
-                WebDavScreen(onBack = { navController.safePopBackStack() })
+                WebDavScreen(
+                    onBack = { navController.safePopBackStack() },
+                    onNavigateRemoteBooks = { navController.safeNavigate("remote_books") },
+                )
+            }
+
+            composable("remote_books") {
+                RemoteBookScreen(onBack = { navController.safePopBackStack() })
             }
 
             composable("about") {
@@ -256,6 +267,10 @@ fun MoRealmNavHost(
 
             composable("changelog") {
                 ChangelogScreen(onBack = { navController.safePopBackStack() })
+            }
+
+            composable("donate") {
+                DonateScreen(onBack = { navController.safePopBackStack() })
             }
 
             composable("source_manage") {

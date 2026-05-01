@@ -456,15 +456,19 @@ fun FolderListItem(
         ) {
             if (coverUrl != null) {
                 val context = LocalContext.current
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
+                // remember 同 BookGridItem / FolderCard 修复 — 滚动时不重建 ImageRequest
+                val req = remember(context, coverUrl) {
+                    ImageRequest.Builder(context)
                         .data(resolveCoverData(coverUrl))
                         .size(180, 252)
                         .crossfade(80)
                         .memoryCachePolicy(CachePolicy.ENABLED)
                         .diskCachePolicy(CachePolicy.ENABLED)
                         .allowHardware(true)
-                        .build(),
+                        .build()
+                }
+                AsyncImage(
+                    model = req,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -537,13 +541,21 @@ fun FolderCard(
             val validCovers = coverUrls.filterNotNull().take(4)
             if (validCovers.isNotEmpty()) {
                 // Show cover mosaic: 1 cover = full, 2 = side by side, 3-4 = 2x2 grid
+                //
+                // 性能要点：每个 AsyncImage 的 ImageRequest 用 remember 缓存。
+                // 之前每次重组都重新 build()，滚动时一屏 4 个 folder × 4 张图 = 16 个
+                // 新对象/帧，主线程构建 + Coil pipeline 检查导致明显卡顿。
+                // BookGridItem 早就用了同样的 remember 模式，FolderCard 这里漏了。
                 when (validCovers.size) {
                     1 -> {
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
+                        val req = remember(context, validCovers[0]) {
+                            ImageRequest.Builder(context)
                                 .data(resolveCoverData(validCovers[0])).size(240, 340).crossfade(80)
                                 .memoryCachePolicy(CachePolicy.ENABLED).diskCachePolicy(CachePolicy.ENABLED)
-                                .allowHardware(true).build(),
+                                .allowHardware(true).build()
+                        }
+                        AsyncImage(
+                            model = req,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize(),
@@ -551,22 +563,44 @@ fun FolderCard(
                     }
                     else -> {
                         // 2x2 grid (or 2x1 for 2 covers)
+                        val req0 = remember(context, validCovers[0]) {
+                            ImageRequest.Builder(context)
+                                .data(resolveCoverData(validCovers[0])).size(120, 170).crossfade(80)
+                                .memoryCachePolicy(CachePolicy.ENABLED).diskCachePolicy(CachePolicy.ENABLED)
+                                .allowHardware(true).build()
+                        }
+                        val req1 = remember(context, validCovers[1]) {
+                            ImageRequest.Builder(context)
+                                .data(resolveCoverData(validCovers[1])).size(120, 170).crossfade(80)
+                                .memoryCachePolicy(CachePolicy.ENABLED).diskCachePolicy(CachePolicy.ENABLED)
+                                .allowHardware(true).build()
+                        }
+                        val req2 = if (validCovers.size >= 3) {
+                            remember(context, validCovers[2]) {
+                                ImageRequest.Builder(context)
+                                    .data(resolveCoverData(validCovers[2])).size(120, 170).crossfade(80)
+                                    .memoryCachePolicy(CachePolicy.ENABLED).diskCachePolicy(CachePolicy.ENABLED)
+                                    .allowHardware(true).build()
+                            }
+                        } else null
+                        val req3 = if (validCovers.size >= 4) {
+                            remember(context, validCovers[3]) {
+                                ImageRequest.Builder(context)
+                                    .data(resolveCoverData(validCovers[3])).size(120, 170).crossfade(80)
+                                    .memoryCachePolicy(CachePolicy.ENABLED).diskCachePolicy(CachePolicy.ENABLED)
+                                    .allowHardware(true).build()
+                            }
+                        } else null
                         Column(Modifier.fillMaxSize()) {
                             Row(Modifier.weight(1f).fillMaxWidth()) {
                                 AsyncImage(
-                                    model = ImageRequest.Builder(context)
-                                        .data(resolveCoverData(validCovers[0])).size(120, 170).crossfade(80)
-                                        .memoryCachePolicy(CachePolicy.ENABLED).diskCachePolicy(CachePolicy.ENABLED)
-                                        .allowHardware(true).build(),
+                                    model = req0,
                                     contentDescription = null,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.weight(1f).fillMaxHeight().padding(end = 0.5.dp),
                                 )
                                 AsyncImage(
-                                    model = ImageRequest.Builder(context)
-                                        .data(resolveCoverData(validCovers[1])).size(120, 170).crossfade(80)
-                                        .memoryCachePolicy(CachePolicy.ENABLED).diskCachePolicy(CachePolicy.ENABLED)
-                                        .allowHardware(true).build(),
+                                    model = req1,
                                     contentDescription = null,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.weight(1f).fillMaxHeight().padding(start = 0.5.dp),
@@ -575,20 +609,14 @@ fun FolderCard(
                             if (validCovers.size >= 3) {
                                 Row(Modifier.weight(1f).fillMaxWidth().padding(top = 1.dp)) {
                                     AsyncImage(
-                                        model = ImageRequest.Builder(context)
-                                            .data(resolveCoverData(validCovers[2])).size(120, 170).crossfade(80)
-                                            .memoryCachePolicy(CachePolicy.ENABLED).diskCachePolicy(CachePolicy.ENABLED)
-                                            .allowHardware(true).build(),
+                                        model = req2!!,
                                         contentDescription = null,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.weight(1f).fillMaxHeight().padding(end = 0.5.dp),
                                     )
                                     if (validCovers.size >= 4) {
                                         AsyncImage(
-                                            model = ImageRequest.Builder(context)
-                                                .data(resolveCoverData(validCovers[3])).size(120, 170).crossfade(80)
-                                                .memoryCachePolicy(CachePolicy.ENABLED).diskCachePolicy(CachePolicy.ENABLED)
-                                                .allowHardware(true).build(),
+                                            model = req3!!,
                                             contentDescription = null,
                                             contentScale = ContentScale.Crop,
                                             modifier = Modifier.weight(1f).fillMaxHeight().padding(start = 0.5.dp),

@@ -19,17 +19,17 @@ class BackupRepository @Inject constructor(
         return client.exists("")
     }
 
-    suspend fun exportBackup(uri: Uri): Boolean =
-        BackupManager.exportBackup(context, db, uri)
+    suspend fun exportBackup(uri: Uri, password: String = ""): Boolean =
+        BackupManager.exportBackup(context, db, uri, password)
 
-    suspend fun importBackup(uri: Uri): Boolean =
-        BackupManager.importBackup(context, db, uri)
+    suspend fun importBackup(uri: Uri, password: String = ""): Boolean =
+        BackupManager.importBackup(context, db, uri, password)
 
-    suspend fun generateBackupBytes(): ByteArray? =
-        BackupManager.generateBackupBytes(context, db)
+    suspend fun generateBackupBytes(password: String = ""): ByteArray? =
+        BackupManager.generateBackupBytes(context, db, password)
 
-    suspend fun importBackupFromBytes(data: ByteArray): Boolean =
-        BackupManager.importBackupFromBytes(context, db, data)
+    suspend fun importBackupFromBytes(data: ByteArray, password: String = ""): Boolean =
+        BackupManager.importBackupFromBytes(context, db, data, password)
 
     fun createWebDavClient(url: String, user: String, pass: String): WebDavClient =
         WebDavClient(url.trimEnd('/'), user, pass)

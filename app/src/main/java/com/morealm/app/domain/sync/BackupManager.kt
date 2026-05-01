@@ -60,15 +60,30 @@ object BackupManager {
 
     // ── Public entry points ───────────────────────────────────────────────
 
-    /** Export backup to a SAF Uri (local file). */
-    suspend fun exportBackup(context: Context, db: AppDatabase, outputUri: Uri): Boolean =
+    /**
+     * Export backup to a SAF Uri (local file).
+     *
+     * @param password optional AES-GCM password; non-empty wraps the zip
+     *                 with [BackupCrypto.encrypt]. Empty = legacy plain
+     *                 zip, which is forward-compatible with restore code
+     *                 detecting the magic header.
+     */
+    suspend fun exportBackup(
+        context: Context,
+        db: AppDatabase,
+        outputUri: Uri,
+        password: String = "",
+    ): Boolean =
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 runCatching {
-                    val bytes = zipBackup(buildBackupData(db))
-                    context.contentResolver.openOutputStream(outputUri)?.use { it.write(bytes) }
+                    val plainZip = zipBackup(buildBackupData(db))
+                    val finalBytes = if (password.isNotEmpty()) {
+                        BackupCrypto.encrypt(plainZip, password)
+                    } else plainZip
+                    context.contentResolver.openOutputStream(outputUri)?.use { it.write(finalBytes) }
                         ?: error("openOutputStream returned null for $outputUri")
-                    AppLog.info("Backup", "Export completed (${bytes.size} bytes)")
+                    AppLog.info("Backup", "Export completed (${finalBytes.size} bytes, encrypted=${password.isNotEmpty()})")
                     true
                 }.getOrElse {
                     AppLog.error("Backup", "Export failed: ${it.message}")
@@ -77,14 +92,27 @@ object BackupManager {
             }
         }
 
-    /** Import backup from a SAF Uri. */
-    suspend fun importBackup(context: Context, db: AppDatabase, inputUri: Uri): Boolean =
+    /**
+     * Import backup from a SAF Uri.
+     *
+     * Auto-detects encryption: if the first bytes match `MoREncBk`, the
+     * blob is decrypted with [password] before unzipping. A wrong (or
+     * blank) password against an encrypted blob returns false with an
+     * `AppLog.warn` rather than crashing.
+     */
+    suspend fun importBackup(
+        context: Context,
+        db: AppDatabase,
+        inputUri: Uri,
+        password: String = "",
+    ): Boolean =
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 runCatching {
-                    val text = context.contentResolver.openInputStream(inputUri)?.use {
-                        readBackupJson(it)
-                    } ?: ""
+                    val raw = context.contentResolver.openInputStream(inputUri)?.use { it.readBytes() }
+                        ?: ByteArray(0)
+                    val plainZip = unwrapMaybeEncrypted(raw, password) ?: return@runCatching false
+                    val text = ByteArrayInputStream(plainZip).use { readBackupJson(it) }
                     if (text.isEmpty()) return@runCatching false
                     val data = json.decodeFromString<BackupData>(text)
                     applyBackup(db, data)
@@ -98,23 +126,35 @@ object BackupManager {
         }
 
     /** Generate backup as a ByteArray — used by WebDav upload. */
-    suspend fun generateBackupBytes(@Suppress("UNUSED_PARAMETER") context: Context, db: AppDatabase): ByteArray? =
+    suspend fun generateBackupBytes(
+        @Suppress("UNUSED_PARAMETER") context: Context,
+        db: AppDatabase,
+        password: String = "",
+    ): ByteArray? =
         withContext(Dispatchers.IO) {
             mutex.withLock {
-                runCatching { zipBackup(buildBackupData(db)) }
-                    .getOrElse {
-                        AppLog.error("Backup", "Generate bytes failed: ${it.message}")
-                        null
-                    }
+                runCatching {
+                    val plain = zipBackup(buildBackupData(db))
+                    if (password.isNotEmpty()) BackupCrypto.encrypt(plain, password) else plain
+                }.getOrElse {
+                    AppLog.error("Backup", "Generate bytes failed: ${it.message}")
+                    null
+                }
             }
         }
 
     /** Apply a backup ByteArray — used by WebDav restore. */
-    suspend fun importBackupFromBytes(@Suppress("UNUSED_PARAMETER") context: Context, db: AppDatabase, data: ByteArray): Boolean =
+    suspend fun importBackupFromBytes(
+        @Suppress("UNUSED_PARAMETER") context: Context,
+        db: AppDatabase,
+        data: ByteArray,
+        password: String = "",
+    ): Boolean =
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 runCatching {
-                    val text = ByteArrayInputStream(data).use { readBackupJson(it) }
+                    val plain = unwrapMaybeEncrypted(data, password) ?: return@runCatching false
+                    val text = ByteArrayInputStream(plain).use { readBackupJson(it) }
                     if (text.isEmpty()) return@runCatching false
                     val parsed = json.decodeFromString<BackupData>(text)
                     applyBackup(db, parsed)
@@ -126,6 +166,24 @@ object BackupManager {
                 }
             }
         }
+
+    /**
+     * If [raw] looks encrypted, decrypt with [password] (returns null if
+     * decryption fails — caller treats as restore-failed). Otherwise
+     * return [raw] unchanged so legacy plain-zip backups still work.
+     */
+    private fun unwrapMaybeEncrypted(raw: ByteArray, password: String): ByteArray? {
+        if (!BackupCrypto.isEncrypted(raw)) return raw
+        if (password.isEmpty()) {
+            AppLog.warn("Backup", "Encrypted backup but no password provided")
+            return null
+        }
+        val plain = BackupCrypto.decrypt(raw, password)
+        if (plain == null) {
+            AppLog.warn("Backup", "Decryption failed — wrong password or tampered blob")
+        }
+        return plain
+    }
 
     // ── Shared core ───────────────────────────────────────────────────────
 

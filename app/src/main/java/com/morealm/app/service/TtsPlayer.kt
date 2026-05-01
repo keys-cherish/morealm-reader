@@ -63,9 +63,25 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
 
     private fun loadCover(url: String) {
         if (url.isBlank()) return
-        if (url.startsWith("content://") || url.startsWith("file://")) {
+
+        // 三种 cover URL 形态都要支持：
+        //   1. content://...                                 — Android SAF / MediaStore
+        //   2. file:///data/...                              — 显式 file URI
+        //   3. /data/user/0/.../epub_covers/.../cover.jpg    — 裸绝对文件路径（EPUB 解压缓存）
+        // 之前只判断 1 和 2，裸路径会 fall through 到 URL(url).openStream()
+        // 抛 MalformedURLException("no protocol: /data/...") 然后被吞掉，
+        // 导致通知栏 cover 静默不显示但日志里一片 Cover load failed 噪音。
+        val isLocal = url.startsWith("content://") ||
+            url.startsWith("file://") ||
+            url.startsWith("/")
+
+        if (isLocal) {
             try {
-                val uri = Uri.parse(url)
+                val uri = if (url.startsWith("/")) {
+                    Uri.fromFile(java.io.File(url))
+                } else {
+                    Uri.parse(url)
+                }
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeStream(stream, null, opts)
@@ -80,9 +96,14 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
                     }
                 }
                 android.os.Handler(Looper.getMainLooper()).post { invalidateState() }
-                return
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                AppLog.debug("TtsPlayer", "Local cover load failed: ${e.message}")
+            }
+            // 关键：local 分支无论成功失败都 return，不再 fall through 到 URL
+            // 网络分支 — 裸路径喂给 URL() 必抛 MalformedURLException。
+            return
         }
+
         scope.launch {
             try {
                 val bytes = URL(url).openStream().use { it.readBytes() }
