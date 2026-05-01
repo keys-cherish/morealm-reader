@@ -74,6 +74,7 @@ fun ProfileScreen(
     onNavigateCacheBook: () -> Unit = {},
     onNavigateThemeEditor: () -> Unit = {},
     onNavigateDonate: () -> Unit = {},
+    onNavigateBackupExport: () -> Unit = {},
 ) {
     val moColors = LocalMoRealmColors.current
     val activeTheme by themeViewModel.activeTheme.collectAsStateWithLifecycle()
@@ -86,35 +87,25 @@ fun ProfileScreen(
     var showDeleteThemeConfirm by remember { mutableStateOf<String?>(null) }
     var showAnnualReport by remember { mutableStateOf(false) }
 
-    val backupExportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/zip")
-    ) { uri ->
-        uri?.let { profileViewModel.exportBackup(it) }
-    }
-
     val backupImportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let { profileViewModel.importBackup(it) }
     }
 
-    // Surface backup result (export / import success or failure-with-reason) as a Toast
-    // so users get feedback at the moment the operation completes, regardless of where
-    // they are scrolled. The intermediate "导出中..."/"导入中..." statuses are skipped —
-    // those are written to backupStatus only as a step indicator and would be noisy as
-    // toasts. Final messages always end without "..." so the suffix check is reliable.
-    val backupStatus by profileViewModel.backupStatus.collectAsStateWithLifecycle()
-    val toastContext = LocalContext.current
-    LaunchedEffect(backupStatus) {
-        if (backupStatus.isNotBlank() && !backupStatus.endsWith("...")) {
-            Toast.makeText(toastContext, backupStatus, Toast.LENGTH_LONG).show()
-        }
-    }
-
     val themeExportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         uri?.let { themeViewModel.exportTheme(it) }
+    }
+
+    // 「导出全部自定义主题」走单独 launcher：和单主题导出共用一个 launcher 时，
+    // CreateDocument 的回调拿不到「用户点的是哪个按钮」，混在一起容易把 bundle
+    // 写到「单主题」文件名上。两个 launcher 各管各的更直观。
+    val themeExportAllLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        uri?.let { themeViewModel.exportAllCustomThemes(it) }
     }
 
     val themeImportLauncher = rememberLauncherForActivityResult(
@@ -254,6 +245,22 @@ fun ProfileScreen(
                         Text("导入主题", style = MaterialTheme.typography.labelSmall)
                     }
                 }
+                // 「导出全部自定义主题」入口：仅在用户已有 ≥1 个自定义主题时显示，
+                // 否则按钮按下去会得到一个空 bundle（ViewModel 也会直接 return），
+                // 没有意义还制造点错觉。
+                if (customThemes.isNotEmpty()) {
+                    TextButton(
+                        onClick = {
+                            themeExportAllLauncher.launch("morealm-themes.json")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            "→ 导出全部自定义主题（${customThemes.size}）",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
             }
         }
 
@@ -268,12 +275,8 @@ fun ProfileScreen(
             "题材关键词、阈值与忽略列表，可导出分享", onClick = onNavigateAutoGroupRules)
         SettingsSection("备份与恢复") {
             SettingsItem(Icons.Default.Upload, "导出备份",
-                subtitle = "书架/进度/书源/书签导出为 ZIP",
-                onClick = {
-                    val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.getDefault())
-                        .format(java.util.Date())
-                    backupExportLauncher.launch("MoRealm_backup_$ts.zip")
-                })
+                subtitle = "选择需要导出的数据并查看大小",
+                onClick = { onNavigateBackupExport() })
             SettingsItem(Icons.Default.Download, "导入备份",
                 subtitle = "从 ZIP 文件恢复数据",
                 onClick = { backupImportLauncher.launch(arrayOf("application/zip", "application/octet-stream")) })
