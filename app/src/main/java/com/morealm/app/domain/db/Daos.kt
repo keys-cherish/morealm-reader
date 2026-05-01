@@ -379,6 +379,40 @@ interface BookmarkDao {
     suspend fun getAllSync(): List<Bookmark>
 }
 
+/**
+ * Highlights — 用户在阅读器选中文字后保存的彩色标注。
+ *
+ * 查询模式
+ * - [getForChapter] 在阅读器加载新章节时拉一次，过滤到 (bookId, chapterIndex)，
+ *   渲染器据此画底色矩形。
+ * - [getForBook] 给「我的高亮」总览页用（按时间降序，给读者按"最新→历史"
+ *   顺序回顾）。
+ * - [getAllSync] 给备份导出 / 全局统计用，不分页。
+ */
+@Dao
+interface HighlightDao {
+    @Query("SELECT * FROM highlights WHERE bookId = :bookId AND chapterIndex = :chapterIndex ORDER BY startChapterPos")
+    fun getForChapter(bookId: String, chapterIndex: Int): Flow<List<Highlight>>
+
+    @Query("SELECT * FROM highlights WHERE bookId = :bookId AND chapterIndex = :chapterIndex ORDER BY startChapterPos")
+    suspend fun getForChapterSync(bookId: String, chapterIndex: Int): List<Highlight>
+
+    @Query("SELECT * FROM highlights WHERE bookId = :bookId ORDER BY chapterIndex, startChapterPos")
+    fun getForBook(bookId: String): Flow<List<Highlight>>
+
+    @Query("SELECT * FROM highlights ORDER BY createdAt DESC")
+    suspend fun getAllSync(): List<Highlight>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(highlight: Highlight)
+
+    @Query("DELETE FROM highlights WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM highlights WHERE bookId = :bookId")
+    suspend fun deleteByBookId(bookId: String)
+}
+
 @Dao
 interface ReplaceRuleDao {
     @Query("SELECT * FROM replace_rules WHERE enabled = 1 ORDER BY sortOrder")

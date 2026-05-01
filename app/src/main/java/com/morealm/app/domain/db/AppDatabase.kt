@@ -16,6 +16,7 @@ import com.morealm.app.domain.entity.*
         ThemeEntity::class,
         ReadStats::class,
         Bookmark::class,
+        Highlight::class,
         ReplaceRule::class,
         ReaderStyle::class,
         TxtTocRule::class,
@@ -24,7 +25,7 @@ import com.morealm.app.domain.entity.*
         Cookie::class,
         SearchBookCache::class,
     ],
-    version = 20,
+    version = 21,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -38,6 +39,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun themeDao(): ThemeDao
     abstract fun readStatsDao(): ReadStatsDao
     abstract fun bookmarkDao(): BookmarkDao
+    abstract fun highlightDao(): HighlightDao
     abstract fun replaceRuleDao(): ReplaceRuleDao
     abstract fun readerStyleDao(): ReaderStyleDao
     abstract fun txtTocRuleDao(): TxtTocRuleDao

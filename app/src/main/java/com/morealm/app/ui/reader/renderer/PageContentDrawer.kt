@@ -97,6 +97,12 @@ fun PageCanvas(
     searchResultColor: Color = DEFAULT_SEARCH_RESULT_COLOR,
     hasBookmark: Boolean = false,
     bookmarkColor: Color = DEFAULT_BOOKMARK_COLOR,
+    /**
+     * TTS 当前段在章节内的字符偏移；仅用作 Compose 重组依赖。
+     * 不传时（-1）按非朗读路径走 canvasRecorder 缓存；变化时重组+重算 hasOverlay，
+     * 让 page.lines.isReadAloud 的改动能触发画面刷新。
+     */
+    readAloudChapterPosition: Int = -1,
     modifier: Modifier = Modifier,
 ) {
     val selColorArgb = selectionColor.toArgb()
@@ -104,8 +110,16 @@ fun PageCanvas(
     val searchColorArgb = searchResultColor.toArgb()
     val bmColorArgb = bookmarkColor.toArgb()
 
-    // Invalidate recorder when dynamic overlay state changes (selection, TTS highlight)
-    val hasOverlay = selectionStart != null || aloudLineIndex >= 0
+    // 必须把 page.lines.any { it.isReadAloud } 也算进来：
+    // CanvasRenderer 走的是 LaunchedEffect 直接修改 page.lines 的 isReadAloud 字段，
+    // aloudLineIndex 这个 API 入参一直是 -1（默认值），原判断 selectionStart != null
+    // || aloudLineIndex >= 0 会让 hasOverlay 永远 false → 走 canvasRecorder 缓存了
+    // 第一帧（无高亮），后续 isReadAloud 变化全部被吃掉。再附 readAloudChapterPosition
+    // 作为重组依赖，确保 host 推新位置时这里能重新评估 hasOverlay。
+    @Suppress("UNUSED_VARIABLE") // 仅作为 Compose snapshot 读取触发
+    val readAloudKey = readAloudChapterPosition
+    val hasOverlay = selectionStart != null || aloudLineIndex >= 0 ||
+        page.lines.any { it.isReadAloud }
     Canvas(modifier = modifier.fillMaxSize()) {
         val canvas = drawContext.canvas.nativeCanvas
         val w = size.width.toInt()

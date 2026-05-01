@@ -31,6 +31,7 @@ import androidx.navigation.navArgument
 import com.morealm.app.ui.detail.BookDetailScreen
 import com.morealm.app.ui.listen.ListenScreen
 import com.morealm.app.ui.profile.AboutScreen
+import com.morealm.app.ui.profile.BackupExportScreen
 import com.morealm.app.ui.profile.ChangelogScreen
 import com.morealm.app.ui.profile.DonateScreen
 import com.morealm.app.ui.profile.ProfileScreen
@@ -60,8 +61,22 @@ fun MoRealmNavHost(
     val currentDestination = navBackStackEntry?.destination
     val moColors = LocalMoRealmColors.current
 
+    // Global one-shot toast collector for backup import/export results.
+    // Lives at NavHost top-level so it stays subscribed regardless of which
+    // screen triggered the operation — fixes the "import 成功 toast replays
+    // when ProfileScreen recomposes after returning from BackupExportScreen"
+    // bug. SharedFlow has replay=0, so re-subscriptions don't see stale events.
+    val toastCtx = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        com.morealm.app.domain.sync.BackupStatusBus.events.collect { msg ->
+            if (msg.isNotBlank()) {
+                android.widget.Toast.makeText(toastCtx, msg, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route.startsWith("theme_editor")
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -128,6 +143,7 @@ fun MoRealmNavHost(
                 val onNavCacheBook = remember { { navController.safeNavigate("cache_book") } }
                 val onNavThemeEditor = remember { { navController.safeNavigate("theme_editor") } }
                 val onNavDonate = remember { { navController.safeNavigate("donate") } }
+                val onNavBackupExport = remember { { navController.safeNavigate("backup_export") } }
                 val onSearchBack = remember(switchTab) { { switchTab(0) } }
 
                 var dragAmount by remember { mutableFloatStateOf(0f) }
@@ -239,6 +255,7 @@ fun MoRealmNavHost(
                             onNavigateCacheBook = onNavCacheBook,
                             onNavigateThemeEditor = onNavThemeEditor,
                             onNavigateDonate = onNavDonate,
+                            onNavigateBackupExport = onNavBackupExport,
                         )
                                 }
                             }
@@ -271,6 +288,10 @@ fun MoRealmNavHost(
 
             composable("donate") {
                 DonateScreen(onBack = { navController.safePopBackStack() })
+            }
+
+            composable("backup_export") {
+                BackupExportScreen(onBack = { navController.safePopBackStack() })
             }
 
             composable("source_manage") {

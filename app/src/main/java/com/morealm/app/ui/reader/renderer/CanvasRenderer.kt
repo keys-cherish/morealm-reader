@@ -1045,6 +1045,7 @@ fun CanvasRenderer(
                     autoPageOverlayProgress = autoPageProgress,
                     autoPageNextPage = if (autoPageProgress > 0) coordinator.getRelativePage(pageIndex, 1) else null,
                     autoPageAccentColor = accentColor,
+                    readAloudChapterPosition = readAloudChapterPosition,
                     onCurrentPageChanged = {},
                     onSelectionStartMove = { textPos ->
                         selectedTextPage = coordinator.getPageAt(pageIndex)
@@ -1507,6 +1508,8 @@ private fun PageContentBox(
     autoPageOverlayProgress: Int = 0,
     autoPageNextPage: TextPage? = null,
     autoPageAccentColor: Color = Color.Transparent,
+    /** TTS 当前段位置；透传给 PageCanvas 触发重组以刷新高亮。-1 = 非朗读态。 */
+    readAloudChapterPosition: Int = -1,
     onCurrentPageChanged: (TextPage) -> Unit = {},
     onSelectionStartMove: (TextPos) -> Unit = {},
     onSelectionEndMove: (TextPos) -> Unit = {},
@@ -1544,6 +1547,7 @@ private fun PageContentBox(
             aloudColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
             searchResultColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
             bookmarkColor = MaterialTheme.colorScheme.error,
+            readAloudChapterPosition = readAloudChapterPosition,
             modifier = Modifier.fillMaxSize(),
         )
         if (isCurrentDisplayPage) {

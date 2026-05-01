@@ -74,6 +74,14 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     // ── Long press detection ──
     private var longPressRunnable: Runnable? = null
     private val longPressTimeout = android.view.ViewConfiguration.getLongPressTimeout().toLong()
+    /**
+     * Set inside the long-press [Runnable] right before invoking [onLongPress].
+     * ACTION_UP checks this to suppress the otherwise-immediate `handleTap`
+     * page-turn — without it, a finger that long-pressed to start text
+     * selection and then lifted straight away would also flip the page.
+     * Cleared on every ACTION_DOWN.
+     */
+    private var longPressHandled = false
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -91,20 +99,40 @@ class SimulationReadView(context: Context) : android.view.View(context) {
                 // Legado: abortAnim() + onDown()
                 abortAnim()
                 onDown()
+                longPressHandled = false
                 startX = event.x
                 startY = event.y
                 touchX = event.x
                 touchY = event.y
 
-                // Start long press timer
+                // Capture down coordinates as primitives — MotionEvent is
+                // recycled by the framework after onTouchEvent returns, so
+                // reading event.x/y inside the delayed Runnable could yield
+                // stale or unrelated coordinates and break the hit test.
+                val downX = event.x
+                val downY = event.y
                 cancelLongPressTimer()
                 longPressRunnable = Runnable {
-                    onLongPress?.invoke(event.x, event.y)
+                    longPressHandled = true
+                    onLongPress?.invoke(downX, downY)
                 }.also { postDelayed(it, longPressTimeout) }
             }
 
             MotionEvent.ACTION_MOVE -> {
-                cancelLongPressTimer()
+                // Only abort the long-press timer when the finger has actually
+                // travelled past touch slop — the framework fires sub-pixel
+                // ACTION_MOVE events from natural finger jitter at 60-120 Hz,
+                // and unconditionally cancelling here used to make long-press
+                // virtually unreachable on simulation flip mode (you'd need
+                // to hold the finger perfectly still to ever clear the 500 ms
+                // timeout). Slop matches the threshold `onScroll` itself uses
+                // before flipping into drag mode, so we never enter a state
+                // where dragging starts but the long-press is still armed.
+                val dx = event.x - startX
+                val dy = event.y - startY
+                if (dx * dx + dy * dy > slopSquare) {
+                    cancelLongPressTimer()
+                }
                 touchX = event.x
                 touchY = event.y
                 onScroll(event.x, event.y)
@@ -114,7 +142,13 @@ class SimulationReadView(context: Context) : android.view.View(context) {
                 cancelLongPressTimer()
                 touchX = event.x
                 touchY = event.y
-                if (!isMoved) {
+                if (longPressHandled) {
+                    // Long-press already produced a selection; do NOT treat
+                    // the lift as a tap. Without this guard a quick lift
+                    // after long-press would call handleTap and flip the page
+                    // out from underneath the new selection.
+                    longPressHandled = false
+                } else if (!isMoved) {
                     // Tap — determine zone
                     handleTap(event.x, event.y)
                 } else {
@@ -125,6 +159,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
 
             MotionEvent.ACTION_CANCEL -> {
                 cancelLongPressTimer()
+                longPressHandled = false
                 abortAnim()
             }
         }
