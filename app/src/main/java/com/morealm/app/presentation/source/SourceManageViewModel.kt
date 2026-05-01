@@ -72,7 +72,11 @@ class BookSourceManageViewModel @Inject constructor(
                     _importResult.value = "成功导入 ${imported.size} 个书源"
                     AppLog.info("SourceManage", "Imported ${imported.size} sources from JSON")
                 } else {
-                    _importResult.value = "未识别到有效书源"
+                    // Surface the importer's diagnostic — previously the silent
+                    // catch produced "未识别到有效书源" with zero hint about
+                    // why, making bad-format pastes impossible to diagnose.
+                    val why = BookSourceImporter.lastImportError
+                    _importResult.value = if (why.isNullOrBlank()) "未识别到有效书源" else "未识别到有效书源：$why"
                 }
             } catch (e: Exception) {
                 _importResult.value = "导入失败: ${e.message}"
@@ -105,7 +109,8 @@ class BookSourceManageViewModel @Inject constructor(
                     _importResult.value = "成功导入 ${imported.size} 个书源"
                     AppLog.info("SourceManage", "Imported ${imported.size} sources")
                 } else {
-                    _importResult.value = "未识别到有效书源"
+                    val why = BookSourceImporter.lastImportError
+                    _importResult.value = if (why.isNullOrBlank()) "未识别到有效书源" else "未识别到有效书源：$why"
                 }
             } catch (e: Exception) {
                 _importResult.value = "导入失败: ${e.message}"
@@ -133,7 +138,8 @@ class BookSourceManageViewModel @Inject constructor(
                     _importResult.value = "成功导入 ${imported.size} 个书源"
                     AppLog.info("SourceManage", "Imported ${imported.size} sources from file")
                 } else {
-                    _importResult.value = "未识别到有效书源"
+                    val why = BookSourceImporter.lastImportError
+                    _importResult.value = if (why.isNullOrBlank()) "未识别到有效书源" else "未识别到有效书源：$why"
                 }
             } catch (e: Exception) {
                 _importResult.value = "导入失败: ${e.message}"

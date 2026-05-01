@@ -262,6 +262,13 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             // P1 自动备份调度
             ChangelogItem(ChangeType.NEW, "自动备份调度 — App 启动后检查上次备份是否超 24h，是则后台静默上传（开关可关）"),
             ChangelogItem(ChangeType.REFACTOR, "WebDavBackupRunner 单例统一手动按钮与自动调度的备份路径，杜绝代码漂移"),
+
+            // ── 书源 JSON 导入 ──
+            ChangelogItem(ChangeType.FIX, "JSON 粘贴 / 直接粘到导入框现可识别 — 之前 BookSourceImporter 把所有解析错误吞掉只剩一句「未识别到有效书源」无任何线索"),
+            ChangelogItem(ChangeType.NEW, "导入器支持 Legado 类常见 JSON 包装：{\"sources\":[…]} / {\"bookSources\":[…]} / {\"data\":[…]} / {\"list\":[…]} / {\"items\":[…]} 自动解包"),
+            ChangelogItem(ChangeType.IMPROVE, "导入失败时把首条解析异常透到 UI（如「期望 String 但收到 Number」），用户能立刻定位坏字段"),
+            ChangelogItem(ChangeType.IMPROVE, "数组整体解码失败回退逐项解析 — 一个坏书源不再导致整批 0 导入"),
+            ChangelogItem(ChangeType.FIX, "剪贴板粘贴导入按钮在 Android 12+ 偶尔为空 — 改用 Android 原生 ClipboardManager 替代 Compose LocalClipboardManager；并按内容前缀自动分流：[/{ 走 JSON、http(s):// 走 URL、其它给出明确「不识别」提示"),
         ),
     ),
     ChangelogEntry(

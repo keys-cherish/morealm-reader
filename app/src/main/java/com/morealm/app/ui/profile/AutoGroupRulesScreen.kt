@@ -1,6 +1,7 @@
 package com.morealm.app.ui.profile
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -9,8 +10,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.IosShare
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,6 +86,11 @@ fun AutoGroupRulesScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
+        // 内置 GENRE 整段默认折叠 —— 大多数用户不会修改预设关键词，
+        // 进屏先看自己创建的 USER 标签更直观。点击 section 头展开。
+        var genreSectionExpanded by rememberSaveable { mutableStateOf(false) }
+        val genreTags = tags.filter { it.type == TagType.GENRE }
+        val userTags = tags.filter { it.type == TagType.USER }
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -108,22 +117,30 @@ fun AutoGroupRulesScreen(
                     )
                 }
             }
-            item("section_genre") {
-                SectionTitle("题材标签", "命中关键词时自动归入对应文件夹")
-            }
-            items(tags.filter { it.type == TagType.GENRE }, key = { it.id }) { tag ->
-                TagCard(
-                    tag = tag,
-                    onKeywordsChange = { viewModel.updateKeywords(tag, it) },
-                    onRename = { viewModel.renameTag(tag, it) },
-                )
-            }
-            val userTags = tags.filter { it.type == TagType.USER }
+            // ── 我的标签 (USER) ── 默认始终展开，用户的自定义最重要
             if (userTags.isNotEmpty()) {
                 item("section_user") {
-                    SectionTitle("我的标签", "你创建的标签同样参与自动归类")
+                    SectionTitle("我的标签 (${userTags.size})", "你创建的标签同样参与自动归类")
                 }
                 items(userTags, key = { it.id }) { tag ->
+                    TagCard(
+                        tag = tag,
+                        onKeywordsChange = { viewModel.updateKeywords(tag, it) },
+                        onRename = { viewModel.renameTag(tag, it) },
+                    )
+                }
+            }
+            // ── 题材标签 (GENRE 内置) ── 折叠 section，点击 header 展开
+            item("section_genre") {
+                CollapsibleSectionHeader(
+                    title = "内置题材标签",
+                    count = genreTags.size,
+                    expanded = genreSectionExpanded,
+                    onToggle = { genreSectionExpanded = !genreSectionExpanded },
+                )
+            }
+            if (genreSectionExpanded) {
+                items(genreTags, key = { it.id }) { tag ->
                     TagCard(
                         tag = tag,
                         onKeywordsChange = { viewModel.updateKeywords(tag, it) },
@@ -241,6 +258,56 @@ private fun SectionTitle(title: String, subtitle: String) {
     }
 }
 
+/**
+ * 可折叠 section 标题：内置题材标签默认折叠，避免 30+ 卡片淹没主列表。
+ * 整行可点 toggle expanded，右侧 chevron 直观提示状态。
+ */
+@Composable
+private fun CollapsibleSectionHeader(
+    title: String,
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { onToggle() }
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text(
+                if (expanded) "命中关键词时自动归入对应文件夹" else "默认折叠 — 点击展开后可调整内置关键词",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+        ) {
+            Text(
+                "$count",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        Icon(
+            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = if (expanded) "收起" else "展开",
+            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
 @Composable
 private fun TagCard(
     tag: TagDefinition,
@@ -250,80 +317,129 @@ private fun TagCard(
     var keywords by remember(tag.id, tag.keywords) { mutableStateOf(tag.keywords) }
     var name by remember(tag.id, tag.name) { mutableStateOf(tag.name) }
     val keyboard = LocalSoftwareKeyboardController.current
+    // 卡片默认折叠：只露 emoji + name + 关键词数量。点击行展开后才显示输入框，
+    // 把 30+ 内置标签的视觉密度从「整屏输入框」降到「整屏小行」，需要修
+    // 改时再单点展开。展开状态用 rememberSaveable 跟随 tagId 持久化，列表
+    // 重组不会重置。
+    var expanded by rememberSaveable(tag.id) { mutableStateOf(false) }
+    val keywordCount = remember(keywords) {
+        keywords.split(',', '，', ';', '；', '\n', '|', '/', '、', ' ')
+            .count { it.isNotBlank() }
+    }
+    val hasUnsaved = keywords != tag.keywords || (!tag.builtin && name != tag.name)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            // Header: emoji + name (editable iff USER) + builtin lock badge
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            // ── Header（始终可见）── 点击切换展开
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 if (!tag.icon.isNullOrBlank()) {
                     Text(tag.icon, fontSize = 18.sp)
                     Spacer(Modifier.width(8.dp))
                 }
-                if (tag.builtin) {
+                Text(
+                    tag.name,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                // 关键词数量徽章 —— 一眼判断该标签当前命中能力
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                ) {
                     Text(
-                        tag.name,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        modifier = Modifier.weight(1f),
+                        "$keywordCount 个",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                if (hasUnsaved) {
+                    // 未保存提示点 —— 折叠状态也能看到「这张卡有改动」
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.error),
                     )
                     Spacer(Modifier.width(6.dp))
+                }
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (expanded) "收起" else "展开",
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+
+            // ── 展开后的编辑区 ──
+            if (expanded) {
+                Spacer(Modifier.height(10.dp))
+                if (!tag.builtin) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        singleLine = true,
+                        label = { Text("标签名", fontSize = 11.sp) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                } else {
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
                             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
                             .padding(horizontal = 6.dp, vertical = 1.dp),
                     ) {
-                        Text("内置", fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f))
+                        Text(
+                            "内置标签 · 名称不可修改",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        )
                     }
-                } else {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        modifier = Modifier.weight(1f),
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                        singleLine = true,
-                        label = { Text("标签名", fontSize = 11.sp) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                    )
+                    Spacer(Modifier.height(8.dp))
                 }
-            }
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(
-                value = keywords,
-                onValueChange = { keywords = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("关键词（用逗号 / 顿号 / 空格分隔）") },
-                placeholder = { Text("如：玄幻,魔法,异界,斗气", fontSize = 12.sp) },
-                textStyle = MaterialTheme.typography.bodySmall,
-                minLines = 2,
-                maxLines = 4,
-                supportingText = {
-                    val n = keywords.split(',', '，', ';', '；', '\n', '|', '/', '、', ' ')
-                        .count { it.isNotBlank() }
-                    Text("$n 个关键词", fontSize = 10.sp)
-                },
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                if (!tag.builtin && name != tag.name) {
-                    TextButton(onClick = {
-                        onRename(name)
-                        keyboard?.hide()
-                    }) { Text("重命名") }
-                    Spacer(Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = keywords,
+                    onValueChange = { keywords = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("关键词（用逗号 / 顿号 / 空格分隔）") },
+                    placeholder = { Text("如：玄幻,魔法,异界,斗气", fontSize = 12.sp) },
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    minLines = 2,
+                    maxLines = 4,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    if (!tag.builtin && name != tag.name) {
+                        TextButton(onClick = {
+                            onRename(name)
+                            keyboard?.hide()
+                        }) { Text("重命名") }
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Button(
+                        onClick = {
+                            onKeywordsChange(keywords)
+                            keyboard?.hide()
+                        },
+                        enabled = keywords != tag.keywords,
+                    ) { Text("保存关键词") }
                 }
-                Button(
-                    onClick = {
-                        onKeywordsChange(keywords)
-                        keyboard?.hide()
-                    },
-                    enabled = keywords != tag.keywords,
-                ) { Text("保存关键词") }
             }
         }
     }

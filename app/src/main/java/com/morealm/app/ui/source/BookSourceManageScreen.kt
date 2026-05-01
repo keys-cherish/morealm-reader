@@ -21,7 +21,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -43,7 +42,6 @@ fun BookSourceManageScreen(
 ) {
     val moColors = LocalMoRealmColors.current
     val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
     val sources by viewModel.sources.collectAsStateWithLifecycle()
     val isImporting by viewModel.isImporting.collectAsStateWithLifecycle()
     val importProgress by viewModel.importProgress.collectAsStateWithLifecycle()
@@ -53,6 +51,12 @@ fun BookSourceManageScreen(
     val checkTotal by viewModel.checkTotal.collectAsStateWithLifecycle()
     val checkResults by viewModel.checkResults.collectAsStateWithLifecycle()
     val loginUiState by loginViewModel.uiState.collectAsStateWithLifecycle()
+    // 预算缓存：进屏 + sources 变化时后台跑 evalJS，UI 只 O(1) 查表，
+    // 滚动不再卡顿。详见 SourceLoginViewModel.refreshLoginStatuses。
+    val loginStatusMap by loginViewModel.loginStatusMap.collectAsStateWithLifecycle()
+    LaunchedEffect(sources) {
+        if (sources.isNotEmpty()) loginViewModel.refreshLoginStatuses(sources)
+    }
     var showImportDialog by remember { mutableStateOf(false) }
     var importUrl by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
@@ -117,12 +121,33 @@ fun BookSourceManageScreen(
                         )
                     }
                     IconButton(onClick = {
-                        // Paste from clipboard
-                        val clip = clipboardManager.getText()?.text ?: ""
-                        if (clip.isNotBlank()) {
-                            viewModel.importFromJson(clip)
-                        } else {
-                            Toast.makeText(context, "剪贴板为空", Toast.LENGTH_SHORT).show()
+                        // Read clipboard via Android's native ClipboardManager
+                        // — Compose's LocalClipboardManager.getText() returns
+                        // null on Android 12+ when the focused field isn't a
+                        // text field, missing perfectly valid clipboard data.
+                        // Native API is also more permissive about reading
+                        // non-text clip mime types as plaintext.
+                        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                            as? android.content.ClipboardManager
+                        val clip = cm?.primaryClip?.takeIf { it.itemCount > 0 }
+                            ?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty().trim()
+                        when {
+                            clip.isBlank() -> {
+                                Toast.makeText(context, "剪贴板为空或无文本", Toast.LENGTH_SHORT).show()
+                            }
+                            clip.startsWith("[") || clip.startsWith("{") -> {
+                                viewModel.importFromJson(clip)
+                            }
+                            clip.startsWith("http://", true) || clip.startsWith("https://", true) -> {
+                                viewModel.importFromUrl(clip)
+                            }
+                            else -> {
+                                Toast.makeText(
+                                    context,
+                                    "剪贴板内容既不是 JSON 也不是 URL",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
                         }
                     }) {
                         Icon(Icons.Default.ContentPaste, "粘贴导入")
@@ -279,7 +304,8 @@ fun BookSourceManageScreen(
                 ) {
                     items(filteredSources, key = { it.bookSourceUrl }) { source ->
                         val checkResult = checkResults[source.bookSourceUrl]
-                        val isLoggedIn = remember(source) { loginViewModel.checkLoginStatus(source) }
+                        // 不再 inline 跑 evalJS —— 直接查 ViewModel 预算的 map。
+                        val isLoggedIn = loginStatusMap[source.bookSourceUrl] == true
                         SourceItem(
                             source = source,
                             checkResult = checkResult,
