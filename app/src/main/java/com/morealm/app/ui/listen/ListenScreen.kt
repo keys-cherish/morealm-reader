@@ -143,9 +143,9 @@ fun ListenScreen(
                     modifier = Modifier.size(22.dp),
                     tint = MaterialTheme.colorScheme.onBackground)
             }
-            // Rewind (prev paragraph — via PlayPause for now)
-            IconButton(onClick = {}, Modifier.size(48.dp)) {
-                Icon(Icons.Default.Replay10, "后退10秒",
+            // Rewind = 上一段 (TTS 没有"10秒"概念，复用 Replay10 图标表达"回退一段")
+            IconButton(onClick = { viewModel.sendPrevParagraph() }, Modifier.size(48.dp)) {
+                Icon(Icons.Default.Replay10, "上一段",
                     modifier = Modifier.size(22.dp),
                     tint = MaterialTheme.colorScheme.onBackground)
             }
@@ -165,9 +165,9 @@ fun ListenScreen(
                     tint = MaterialTheme.colorScheme.onPrimary,
                 )
             }
-            // Forward
-            IconButton(onClick = {}, Modifier.size(48.dp)) {
-                Icon(Icons.Default.Forward10, "快进10秒",
+            // Forward = 下一段
+            IconButton(onClick = { viewModel.sendNextParagraph() }, Modifier.size(48.dp)) {
+                Icon(Icons.Default.Forward10, "下一段",
                     modifier = Modifier.size(22.dp),
                     tint = MaterialTheme.colorScheme.onBackground)
             }

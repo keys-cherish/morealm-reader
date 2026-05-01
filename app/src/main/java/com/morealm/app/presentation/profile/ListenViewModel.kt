@@ -66,10 +66,15 @@ class ListenViewModel @Inject constructor(
 
     fun selectEngine(engineId: String) {
         viewModelScope.launch { prefs.setTtsEngine(engineId) }
+        // host 启动后只在 start() 里读了一次 prefs，之后只看 Command。
+        // 不发 Command 的话听书 Tab 的引擎切换形同虚设——音频继续走旧引擎。
+        TtsEventBus.sendCommand(TtsEventBus.Command.SetEngine(engineId))
     }
 
     fun selectSpeed(speed: Float) {
         viewModelScope.launch { prefs.setTtsSpeed(speed) }
+        // 同上：缺 SetSpeed 时 host 的 speed 字段不会更新，下一段仍按旧速朗读。
+        TtsEventBus.sendCommand(TtsEventBus.Command.SetSpeed(speed))
     }
 
     fun selectVoice(voiceId: String) {
@@ -83,18 +88,37 @@ class ListenViewModel @Inject constructor(
             }
             prefs.setTtsVoice(resolvedVoice)
         }
+        // 同上：只写 prefs 不发 Command 时，host 不会调用引擎的 setVoice，
+        // 即使下拉选了不同语音，朗读仍是旧的。
+        TtsEventBus.sendCommand(TtsEventBus.Command.SetVoice(resolvedVoice))
     }
 
     fun sendPlayPause() {
-        TtsEventBus.sendEvent(TtsEventBus.Event.PlayPause)
+        // 直接 sendCommand 而不是 sendEvent(PlayPause)：
+        // Event 是 Service→ViewModel 方向，依赖 ReaderViewModel 在线监听并转 Command。
+        // 听书 Tab 单独使用（reader 已退出）时 Event 无人响应，按钮失效。
+        if (TtsEventBus.playbackState.value.isPlaying) {
+            TtsEventBus.sendCommand(TtsEventBus.Command.Pause)
+        } else {
+            TtsEventBus.sendCommand(TtsEventBus.Command.Play)
+        }
     }
 
     fun sendPrevChapter() {
-        TtsEventBus.sendEvent(TtsEventBus.Event.PrevChapter)
+        // 新 Command 包装：host 收到会转发 Event.PrevChapter 给 reader VM 处理。
+        TtsEventBus.sendCommand(TtsEventBus.Command.PrevChapter)
     }
 
     fun sendNextChapter() {
-        TtsEventBus.sendEvent(TtsEventBus.Event.NextChapter)
+        TtsEventBus.sendCommand(TtsEventBus.Command.NextChapter)
+    }
+
+    fun sendPrevParagraph() {
+        TtsEventBus.sendCommand(TtsEventBus.Command.PrevParagraph)
+    }
+
+    fun sendNextParagraph() {
+        TtsEventBus.sendCommand(TtsEventBus.Command.NextParagraph)
     }
 
     private fun voiceEngineId(engine: String): String? =

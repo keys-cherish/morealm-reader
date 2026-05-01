@@ -317,6 +317,44 @@ private val MIGRATION_19_20 = object : Migration(19, 20) {
     }
 }
 
+/**
+ * v20→v21: 高亮表 highlights — 用户在阅读器选中文字后保存的彩色标注。
+ *
+ * 设计要点（与 Highlight.kt 注释呼应）：
+ * - 主键 id 是 UUID 字符串，避免和 Bookmark 自增 id 冲突，方便后续从备份 zip
+ *   原样还原。
+ * - 章节级字符 offset (startChapterPos / endChapterPos) 而非 (line, col)
+ *   作为定位主键 — 排版变化（字号/字体/页宽）下仍能命中同一段原文。
+ * - bookTitle / chapterTitle 冗余存盘，删除原书或换书源后高亮元数据仍可用。
+ * - 索引：(bookId) 给「我的高亮」总览，(bookId, chapterIndex) 给阅读器加载
+ *   单章高亮时点查，(createdAt) 给"最近高亮"列表排序。
+ */
+private val MIGRATION_20_21 = object : Migration(20, 21) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `highlights` (
+                `id` TEXT NOT NULL,
+                `bookId` TEXT NOT NULL,
+                `chapterIndex` INTEGER NOT NULL,
+                `chapterTitle` TEXT NOT NULL DEFAULT '',
+                `bookTitle` TEXT NOT NULL DEFAULT '',
+                `startChapterPos` INTEGER NOT NULL,
+                `endChapterPos` INTEGER NOT NULL,
+                `content` TEXT NOT NULL,
+                `colorArgb` INTEGER NOT NULL,
+                `note` TEXT NOT NULL DEFAULT '',
+                `createdAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_highlights_bookId` ON `highlights` (`bookId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_highlights_bookId_chapterIndex` ON `highlights` (`bookId`, `chapterIndex`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_highlights_createdAt` ON `highlights` (`createdAt`)")
+    }
+}
+
 private val MIGRATION_9_10 = object : Migration(9, 10) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // book_sources 表结构完全重构，删除旧表并重建
@@ -431,6 +469,7 @@ object AppModule {
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18,
                 MIGRATION_18_19,
                 MIGRATION_19_20,
+                MIGRATION_20_21,
             )
             // On downgrade: try restore from backup, otherwise keep tables as-is
             .addCallback(object : RoomDatabase.Callback() {

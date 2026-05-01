@@ -121,6 +121,12 @@ class TtsEngineHost(
             is TtsEventBus.Command.Pause -> pause()
             is TtsEventBus.Command.PrevParagraph -> prevParagraph()
             is TtsEventBus.Command.NextParagraph -> nextParagraph()
+            // host 不持有章节列表 → 只是把 Command 透传成对应 Event，
+            // 让 ReaderViewModel 的 Event.PrevChapter/NextChapter 处理分支接管真正的章节切换。
+            is TtsEventBus.Command.PrevChapter ->
+                TtsEventBus.sendEvent(TtsEventBus.Event.PrevChapter)
+            is TtsEventBus.Command.NextChapter ->
+                TtsEventBus.sendEvent(TtsEventBus.Event.NextChapter)
             is TtsEventBus.Command.SetSpeed -> setSpeed(cmd.speed)
             is TtsEventBus.Command.SetEngine -> setEngine(cmd.engine)
             is TtsEventBus.Command.SetVoice -> setVoice(cmd.voiceName)
@@ -361,7 +367,10 @@ class TtsEngineHost(
                     // 3-strikes terminal stop, mirroring Legado's recovery in
                     // TTSReadAloudService.
                     if (consecutiveErrors == 1 && engine is SystemTtsEngine) {
-                        AppLog.info("TTS", "Host.speakLoop: attempting SystemTtsEngine.reInit before retry")
+                        AppLog.info(
+                            "TtsHost",
+                            "speak error is recoverable — will reInit SystemTtsEngine and retry para $idx",
+                        )
                         runCatching { engine.reInit() }
                             .onFailure { AppLog.warn("TtsHost", "reInit threw: ${it.message}", it) }
                         // Re-apply the user's voice selection on the fresh
@@ -373,6 +382,10 @@ class TtsEngineHost(
                         // We DON'T emit the user-facing toast yet; if the retry
                         // succeeds the user never sees a stutter.
                         delay(150)
+                        AppLog.info(
+                            "TtsHost",
+                            "reInit complete; retrying paragraph $idx (silent recovery, no Toast)",
+                        )
                         // Loop will re-attempt this paragraph because we
                         // continue here — but the for-loop's idx has already
                         // advanced; explicitly retry by recursing into a tail
