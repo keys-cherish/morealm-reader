@@ -157,6 +157,12 @@ class ReaderViewModel @Inject constructor(
     val searching: StateFlow<Boolean> = search.searching
     val editingContent: StateFlow<Boolean> = contentEdit.editingContent
 
+    // ── EffectiveReplacesDialog forwards (#5) ──
+    /** 当前章里 result≠input 的 content 规则集合（真命中），由 ReaderChapterController 跟踪。 */
+    val hitContentRules: StateFlow<List<com.morealm.app.domain.entity.ReplaceRule>> = chapter.hitContentRules
+    /** 同上，title 路径。 */
+    val hitTitleRules: StateFlow<List<com.morealm.app.domain.entity.ReplaceRule>> = chapter.hitTitleRules
+
     // ── UI-only state (stays in ViewModel) ──
     private val _showControls = MutableStateFlow(false)
     val showControls: StateFlow<Boolean> = _showControls.asStateFlow()
@@ -166,6 +172,48 @@ class ReaderViewModel @Inject constructor(
 
     private val _showSettingsPanel = MutableStateFlow(false)
     val showSettingsPanel: StateFlow<Boolean> = _showSettingsPanel.asStateFlow()
+
+    /** EffectiveReplacesDialog (#5) 显示状态。toggle by Reader 顶栏按钮。 */
+    private val _showEffectiveReplacesDialog = MutableStateFlow(false)
+    val showEffectiveReplacesDialog: StateFlow<Boolean> = _showEffectiveReplacesDialog.asStateFlow()
+
+    fun showEffectiveReplacesDialog() { _showEffectiveReplacesDialog.value = true }
+    fun hideEffectiveReplacesDialog() { _showEffectiveReplacesDialog.value = false }
+
+    /**
+     * EffectiveReplacesDialog 内禁用某条规则 — 写库 + 刷新缓存（不立即重渲染，等 dialog 关闭统一来）。
+     */
+    fun disableReplaceRule(ruleId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            replaceRuleRepo.setEnabled(ruleId, false)
+            chapter.refreshReplaceRules()
+        }
+    }
+
+    /** 关闭繁简转换 — 等价于 Legado 占位条目的 ✕ 操作。 */
+    fun disableChineseConvert() {
+        viewModelScope.launch(Dispatchers.IO) { prefs.setChineseConvertMode(0) }
+    }
+
+    /** 切换繁简模式（0/1/2）— Legado 占位条目点击后弹的 selector。 */
+    fun setChineseConvertMode(mode: Int) {
+        viewModelScope.launch(Dispatchers.IO) { prefs.setChineseConvertMode(mode) }
+    }
+
+    /**
+     * 用户在 EffectiveReplacesDialog 内做了任何修改（禁用 / 编辑 / 改繁简） → dismiss 时调一次，
+     * 重拉规则缓存并请求重渲染当前章。Legado 等价 viewModel.replaceRuleChanged()。
+     */
+    fun refreshAfterReplaceRulesChanged() {
+        viewModelScope.launch(Dispatchers.IO) {
+            chapter.refreshReplaceRules()
+            // 重新加载当前章 — 走 loadChapter 同款路径，会清 hit 集合并重跑 applyReplaceRules。
+            val idx = chapter.currentChapterIndex.value
+            withContext(Dispatchers.Main) {
+                chapter.loadChapter(idx)
+            }
+        }
+    }
 
     private val _readerBrightness = MutableStateFlow(-1f)
     val readerBrightness: StateFlow<Float> = _readerBrightness.asStateFlow()
