@@ -23,7 +23,14 @@ class CacheBookViewModel @Inject constructor(
     val cacheStats: StateFlow<Map<String, CacheStat>> = _cacheStats.asStateFlow()
 
     val isDownloading: StateFlow<Boolean> = cacheRepo.isDownloading
-    val downloadProgress = cacheRepo.downloadProgress
+
+    /**
+     * 多本并行进度表（bookId → progress）。
+     * UI 顶栏对它聚合做"全局总进度"，单本卡片用 [progresses][book.id] 取自己的进度。
+     * 这样顶栏和卡片不再冲突 —— 顶栏永远是总览，卡片永远是单本。
+     */
+    val progresses: StateFlow<Map<String, com.morealm.app.service.CacheBookService.DownloadProgress>> =
+        cacheRepo.progresses
 
     /** Per-book TXT-export state. bookId → null (idle) | ExportState (running / done) */
     private val _exportState = MutableStateFlow<Map<String, ExportState>>(emptyMap())
@@ -46,7 +53,20 @@ class CacheBookViewModel @Inject constructor(
         val message: String = "",
     )
 
-    init { loadCacheStats() }
+    init {
+        // 自动跟随 webBooks 变化重拉 stats。
+        //
+        // 之前 `init { loadCacheStats() }` 在 webBooks 还没 emit 第一个非空值时执行 ——
+        // webBooks 是 cacheRepo.getWebBooks().stateIn(..., emptyList()) 异步加载，init
+        // 拿到的 .value 多半还是 emptyList()，结果 stats 永远是 emptyMap，UI 进入
+        // 缓存页时不显示任何"已缓存 X/Y"信息，必须等用户手动触发下载完毕才会刷新。
+        //
+        // 改成 collect — webBooks 每次变化（首次发 emptyList → 真实数据填上 → 用户加书）
+        // 都会重拉 stats。StateFlow 自带 distinct 去重，不会无谓重复。
+        viewModelScope.launch {
+            webBooks.collect { loadCacheStats() }
+        }
+    }
 
     fun loadCacheStats() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -63,6 +83,13 @@ class CacheBookViewModel @Inject constructor(
 
     fun startDownload(book: Book, startIndex: Int = 0, endIndex: Int = -1) {
         val sourceUrl = book.sourceUrl ?: return
+        // 重复点击检测：该书已经在缓存且未完成 → 提示后忽略，避免重复启动 Service
+        // 任务（且让用户清楚"我刚才已经点过了"）。
+        val existing = progresses.value[book.id]
+        if (existing != null && !existing.isComplete && existing.failed == 0) {
+            _oneShotToast.value = "「${book.title}」正在缓存中"
+            return
+        }
         cacheRepo.startDownload(book.id, sourceUrl, startIndex, endIndex)
     }
 

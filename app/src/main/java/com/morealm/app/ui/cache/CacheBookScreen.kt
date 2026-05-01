@@ -42,7 +42,7 @@ fun CacheBookScreen(
     val webBooks by viewModel.webBooks.collectAsStateWithLifecycle()
     val cacheStats by viewModel.cacheStats.collectAsStateWithLifecycle()
     val isDownloading by viewModel.isDownloading.collectAsStateWithLifecycle()
-    val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
+    val progresses by viewModel.progresses.collectAsStateWithLifecycle()
     val exportState by viewModel.exportState.collectAsStateWithLifecycle()
     // #4 multi-select state
     val multiSelectMode by viewModel.multiSelectMode.collectAsStateWithLifecycle()
@@ -186,27 +186,34 @@ fun CacheBookScreen(
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            // Global download progress
-            if (isDownloading) {
-                val prog = downloadProgress
+            // 顶栏全局总进度 — 跨所有正在缓存的书聚合 sum。这条条只展示总览，
+            // 不再表达任意一本书的状态；每本书的本地进度由 LazyColumn 中的卡片
+            // 各自显示（progresses[book.id]）。两者不再冲突。
+            if (isDownloading && progresses.isNotEmpty()) {
+                val all = progresses.values
+                val totalSum = all.sumOf { it.total }
+                val doneSum = all.sumOf { it.completed + it.failed + it.cached }
+                val failedSum = all.sumOf { it.failed }
+                val activeBooks = all.count { !it.isComplete }
                 Column(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    val done = prog.completed + prog.failed + prog.cached
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text(
-                            "下载中 $done/${prog.total}",
+                            // 单本时退化成"下载中 X/Y"；多本时显示"N 本进行中 · X/Y 章"
+                            if (activeBooks > 1) "$activeBooks 本进行中 · $doneSum/$totalSum 章"
+                            else "下载中 $doneSum/$totalSum",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                         )
-                        if (prog.failed > 0) {
+                        if (failedSum > 0) {
                             Text(
-                                "失败 ${prog.failed}",
+                                "失败 $failedSum",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -214,7 +221,7 @@ fun CacheBookScreen(
                     }
                     Spacer(Modifier.height(4.dp))
                     LinearProgressIndicator(
-                        progress = { if (prog.total > 0) done.toFloat() / prog.total else 0f },
+                        progress = { if (totalSum > 0) doneSum.toFloat() / totalSum else 0f },
                         modifier = Modifier.fillMaxWidth(),
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -259,6 +266,9 @@ fun CacheBookScreen(
                     items(webBooks, key = { it.id }) { book ->
                         val stat = cacheStats[book.id]
                         val export = exportState[book.id]
+                        // 每本书取自己的进度（若不在 map 中则没在缓存）。
+                        val bookProgress = progresses[book.id]
+                        val bookIsDownloading = bookProgress != null && !bookProgress.isComplete
                         // Pop a toast once per export-completion and clear the message
                         LaunchedEffect(export?.running, export?.message) {
                             val msg = export?.message
@@ -270,8 +280,8 @@ fun CacheBookScreen(
                         CacheBookItem(
                             book = book,
                             stat = stat,
-                            isDownloading = isDownloading && downloadProgress.bookId == book.id,
-                            downloadProgress = if (downloadProgress.bookId == book.id) downloadProgress else null,
+                            isDownloading = bookIsDownloading,
+                            downloadProgress = bookProgress,
                             exportState = export,
                             multiSelectMode = multiSelectMode,
                             isSelected = book.id in selectedIds,

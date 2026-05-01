@@ -92,6 +92,17 @@ class AppPreferences @Inject constructor(
         val IGNORE_LOCAL_BOOK = booleanPreferencesKey("ignore_local_book")
         /** When true, restore preserves the current device's reading-style / theme prefs instead of overwriting. */
         val IGNORE_READ_CONFIG = booleanPreferencesKey("ignore_read_config")
+        /**
+         * Backup encryption password. When non-empty, the backup zip is
+         * wrapped in AES-GCM via [com.morealm.app.domain.sync.BackupCrypto]
+         * before upload / SAF export. Empty = legacy plain zip behaviour.
+         *
+         * Stored in DataStore plain — same trust boundary as the WebDav
+         * password. Users worried about device theft can set the OS-level
+         * file encryption + screen lock; this field's purpose is to
+         * protect the backup-at-rest on the cloud drive, not on disk.
+         */
+        val BACKUP_PASSWORD = stringPreferencesKey("backup_password")
         val READER_ENGINE = stringPreferencesKey("reader_engine") // "canvas" or "webview"
         val RECORD_LOG = booleanPreferencesKey("record_log") // detailed file logging
         // Auto-folder (since v18) — tag ids whose auto-created folder was deleted by user.
@@ -306,6 +317,9 @@ class AppPreferences @Inject constructor(
 
     val ignoreReadConfig: Flow<Boolean> = context.dataStore.data.map { it[Keys.IGNORE_READ_CONFIG] ?: false }
     suspend fun setIgnoreReadConfig(enabled: Boolean) = update(Keys.IGNORE_READ_CONFIG, enabled)
+
+    val backupPassword: Flow<String> = context.dataStore.data.map { it[Keys.BACKUP_PASSWORD] ?: "" }
+    suspend fun setBackupPassword(pw: String) = update(Keys.BACKUP_PASSWORD, pw)
 
     val readerEngine: Flow<String> = context.dataStore.data.map { it[Keys.READER_ENGINE] ?: "canvas" }
     suspend fun setReaderEngine(engine: String) = update(Keys.READER_ENGINE, engine)

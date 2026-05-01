@@ -32,7 +32,25 @@ class CacheRepository @Inject constructor(
         .map { books -> books.filter { it.format == BookFormat.WEB && !it.sourceUrl.isNullOrBlank() } }
 
     val isDownloading: StateFlow<Boolean> = CacheBookService.isRunning
-    val downloadProgress: StateFlow<CacheBookService.DownloadProgress> = CacheBookService.progress
+
+    /**
+     * 多本并行进度表 — bookId → 该书当前 [CacheBookService.DownloadProgress]。
+     * UI 用这个做：
+     *   - 顶栏聚合（sum total / sum done）
+     *   - 单本卡片本地进度（map[bookId]）
+     * 替代了旧的单 downloadProgress（后者在多本并行时会"哪本最后更新就显示哪本"，
+     * 与单本卡片状态冲突）。
+     */
+    val progresses: StateFlow<Map<String, CacheBookService.DownloadProgress>> =
+        CacheBookService.progresses
+
+    /**
+     * Legacy 单本进度 — 转发 [CacheBookService.progress]。
+     * 现在仅用于 ShelfViewModel / BookDetailViewModel 这种"我只关心一本书"的订阅者。
+     * 新代码请用 [progresses] 自取所需。
+     */
+    val downloadProgress: StateFlow<CacheBookService.DownloadProgress> =
+        CacheBookService.progress
 
     suspend fun getCacheStat(bookId: String, sourceUrl: String): Pair<Int, Int> {
         val chapters = chapterDao.getChaptersList(bookId)
