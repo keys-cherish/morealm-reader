@@ -10,6 +10,8 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.Jsoup
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 
 /**
  * WebDAV client for cloud sync.
@@ -41,6 +43,13 @@ class WebDavClient(
     data class DavFile(
         val name: String, val href: String, val isDirectory: Boolean,
         val size: Long = 0, val lastModified: String = "",
+        /**
+         * Parsed RFC 1123 timestamp in epoch ms, or 0 when the server didn't
+         * return getlastmodified or the value couldn't be parsed. Used by
+         * "newest backup" / "fresher progress wins" comparisons — without
+         * this, the [lastModified] string alone can't be ordered reliably.
+         */
+        val lastModifiedEpoch: Long = 0L,
     )
 
     suspend fun upload(remotePath: String, data: ByteArray, contentType: String = "application/octet-stream") =
@@ -111,9 +120,27 @@ class WebDavClient(
             val size = response.select("getcontentlength, D\\:getcontentlength").text().toLongOrNull() ?: 0
             val lastMod = response.select("getlastmodified, D\\:getlastmodified").text()
 
-            files.add(DavFile(name, href, isDir, size, lastMod))
+            files.add(DavFile(name, href, isDir, size, lastMod, parseLastModifiedEpoch(lastMod)))
         }
         return files.sortedWith(compareByDescending<DavFile> { it.isDirectory }.thenBy { it.name })
+    }
+
+    /**
+     * Parse a `getlastmodified` value (RFC 1123, e.g. `Sun, 06 Nov 1994 08:49:37 GMT`)
+     * into epoch milliseconds. Returns 0 on blank input or any parse failure so
+     * the caller can treat 0 as "unknown timestamp" without crashing on a
+     * server that returns an unexpected format.
+     */
+    private fun parseLastModifiedEpoch(raw: String): Long {
+        val s = raw.trim()
+        if (s.isEmpty()) return 0L
+        return try {
+            ZonedDateTime.parse(s, DateTimeFormatter.RFC_1123_DATE_TIME)
+                .toInstant().toEpochMilli()
+        } catch (e: Exception) {
+            AppLog.warn("WebDAV", "Unparseable getlastmodified: $s -> ${e.message}")
+            0L
+        }
     }
 
     private fun resolveUrl(path: String): String {

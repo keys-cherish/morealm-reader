@@ -125,6 +125,36 @@ class ProfileViewModel @Inject constructor(
     private val _webDavStatus = MutableStateFlow("")
     val webDavStatus: StateFlow<String> = _webDavStatus.asStateFlow()
 
+    /**
+     * Set to true when the user clicks "从云端恢复" — the screen observes
+     * this and shows a confirmation dialog before any destructive write.
+     * Confirming calls [webDavRestore]; cancelling calls [cancelWebDavRestore].
+     * Without this gate the previous code overwrote the entire local
+     * database on a single tap.
+     */
+    private val _showRestoreConfirmation = MutableStateFlow(false)
+    val showRestoreConfirmation: StateFlow<Boolean> = _showRestoreConfirmation.asStateFlow()
+
+    /**
+     * Validate config and ask the screen to surface the restore confirmation
+     * dialog. The actual restore only fires after the user confirms via
+     * [webDavRestore]; this two-step flow is the P0 fix for "single-click
+     * accidentally wipes local data".
+     */
+    fun requestWebDavRestore() {
+        val url = webDavUrl.value
+        if (url.isBlank()) {
+            _webDavStatus.value = "请先配置 WebDAV"
+            return
+        }
+        _showRestoreConfirmation.value = true
+    }
+
+    /** User dismissed the confirmation dialog without confirming. */
+    fun cancelWebDavRestore() {
+        _showRestoreConfirmation.value = false
+    }
+
     fun webDavBackup() {
         val url = webDavUrl.value
         val user = webDavUser.value
@@ -153,7 +183,13 @@ class ProfileViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Actually perform the WebDav restore. Should ONLY be called from the
+     * confirmation dialog's positive button — the public entry point that
+     * the screen wires to the SyncItem click is [requestWebDavRestore].
+     */
     fun webDavRestore() {
+        _showRestoreConfirmation.value = false
         val url = webDavUrl.value
         val user = webDavUser.value
         val pass = webDavPass.value
