@@ -16,6 +16,7 @@ import com.morealm.app.domain.repository.ReadStatsRepository
 import com.morealm.app.domain.repository.ReplaceRuleRepository
 import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.service.TtsEventBus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -184,6 +185,15 @@ class ReaderViewModel @Inject constructor(
     private var readAloudParagraphPositions: List<Int>? = null
     private var visibleReadAloudChapterPosition: Int = -1
 
+    /**
+     * Set when a TTS-driven chapter transition is in flight: either the host finished
+     * the current chapter ([TtsEventBus.Event.ChapterFinished]) or the user pressed
+     * prev/next on the notification while playing. When `chapterContent` next emits a
+     * non-blank value, the ViewModel forwards it to the host via `Command.LoadAndPlay`
+     * so playback continues seamlessly across the boundary (Legado-equivalent behavior).
+     */
+    private var pendingTtsResumeOnNewChapter: Boolean = false
+
     // ── Cross-controller coordination ──
 
     fun ttsPlayPause() = tts.ttsPlayPause(
@@ -308,10 +318,44 @@ class ReaderViewModel @Inject constructor(
             getBookTitle = { chapter.book.value?.title ?: "" },
             getChapterTitle = { chapter.chapters.value.getOrNull(chapter.currentChapterIndex.value)?.title ?: "" },
         )
-        tts.collectChapterEvents(
-            onPrev = { _readAloudPageTurn.tryEmit(-1) },
-            onNext = { _readAloudPageTurn.tryEmit(1) },
-        )
+        // ── TTS event router ────────────────────────────────────────────────
+        // Single subscriber to TtsEventBus.events; routes notification actions and
+        // host signals into the correct ViewModel responses (chapter switch + resume).
+        viewModelScope.launch {
+            TtsEventBus.events.collect { event ->
+                when (event) {
+                    is TtsEventBus.Event.PlayPause -> {
+                        // Notification toggled play/pause — flip current state.
+                        if (tts.ttsPlaying.value) {
+                            TtsEventBus.sendCommand(TtsEventBus.Command.Pause)
+                        } else {
+                            TtsEventBus.sendCommand(TtsEventBus.Command.Play)
+                        }
+                    }
+                    is TtsEventBus.Event.PrevChapter -> {
+                        if (tts.ttsPlaying.value) pendingTtsResumeOnNewChapter = true
+                        _readAloudPageTurn.tryEmit(-1)
+                    }
+                    is TtsEventBus.Event.NextChapter -> {
+                        if (tts.ttsPlaying.value) pendingTtsResumeOnNewChapter = true
+                        _readAloudPageTurn.tryEmit(1)
+                    }
+                    is TtsEventBus.Event.ChapterFinished -> {
+                        // Host finished the current chapter — let the UI advance and the
+                        // chapterContent observer below will hand the new chapter back to
+                        // the host (Legado-equivalent seamless continuation).
+                        pendingTtsResumeOnNewChapter = true
+                        _readAloudPageTurn.tryEmit(1)
+                    }
+                    is TtsEventBus.Event.AddTimer -> tts.addTtsSleepTimer()
+                    is TtsEventBus.Event.AudioFocusLoss,
+                    is TtsEventBus.Event.AudioFocusGain -> {
+                        // Service-side host already handled the actual pause/resume;
+                        // ViewModel doesn't need to respond — UI observes via playbackState.
+                    }
+                }
+            }
+        }
         // When a chapter resolves to the empty-content placeholder, auto-show the
         // control bar so the toolbar (and "换源" entry) are immediately discoverable.
         // Without this prompt the user only sees the floating day/night button on a
@@ -320,6 +364,21 @@ class ReaderViewModel @Inject constructor(
             chapter.chapterContent.collect { text ->
                 if (isEmptyContentPlaceholder(text) && !_showControls.value) {
                     _showControls.value = true
+                }
+                // If TTS triggered the chapter switch, hand the new content to the host
+                // so playback continues from paragraph 0.
+                if (pendingTtsResumeOnNewChapter && text.isNotBlank() && !isEmptyContentPlaceholder(text)) {
+                    pendingTtsResumeOnNewChapter = false
+                    tts.ttsPlay(
+                        displayedContent = text,
+                        bookTitle = chapter.book.value?.title ?: "",
+                        chapterTitle = chapter.chapters.value
+                            .getOrNull(chapter.currentChapterIndex.value)?.title ?: "",
+                        coverUrl = chapter.book.value?.coverUrl,
+                        startChapterPosition = 0,
+                        paragraphPositions = readAloudParagraphPositions,
+                        onChapterFinished = null,
+                    )
                 }
             }
         }

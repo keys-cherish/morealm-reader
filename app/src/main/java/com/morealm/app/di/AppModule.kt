@@ -245,6 +245,78 @@ private val MIGRATION_16_17 = object : Migration(16, 17) {
     }
 }
 
+/**
+ * v17 → v18: BookGroup gains `auto` flag distinguishing auto-created folders
+ * from user-created ones.
+ *
+ *  - Existing groups are user-curated by definition (no auto-folder logic
+ *    existed before v18) → default `auto = 0` is correct.
+ *  - The flag drives UX: deleting an auto-folder records its source tag in
+ *    [AppPreferences.autoFolderIgnored] so it doesn't reappear; deleting a
+ *    user folder is a plain "you wanted it gone" delete.
+ */
+private val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE book_groups ADD COLUMN `auto` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
+ * v18 → v19: BookSource gains CheckSource result fields.
+ *
+ *   - errorMsg       — last failure reason (null = passed). Surfaces as red
+ *                      underline + tooltip on the source manage list.
+ *   - lastCheckTime  — wall-clock ms of last CheckSource pass; 0 = never.
+ *
+ * Existing rows are zeroed/null — they appear "unchecked" until the user runs
+ * a CheckSource pass. No reverse-migration concerns: errorMsg is a TEXT column
+ * defaulted NULL and lastCheckTime is INTEGER defaulted 0; both are append-only.
+ */
+private val MIGRATION_18_19 = object : Migration(18, 19) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE book_sources ADD COLUMN `errorMsg` TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE book_sources ADD COLUMN `lastCheckTime` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
+ * v19 → v20: SearchBookCache 表新增（换源候选缓存）。
+ *
+ * 复合主键 (bookUrl, origin) 使同一书源下相同书的写入幂等。三组索引覆盖换源对话框
+ * 的两条查询路径：(bookName, author) 拉候选；time 老化清理。
+ *
+ * 索引名遵循 Room 自动生成约定 `index_<table>_<col>` 以便后续 schema 校验通过。
+ */
+private val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `search_book_cache` (
+                `bookUrl` TEXT NOT NULL,
+                `origin` TEXT NOT NULL,
+                `originName` TEXT NOT NULL,
+                `bookName` TEXT NOT NULL,
+                `author` TEXT NOT NULL,
+                `type` INTEGER NOT NULL DEFAULT 0,
+                `coverUrl` TEXT,
+                `intro` TEXT,
+                `kind` TEXT,
+                `wordCount` TEXT,
+                `latestChapterTitle` TEXT,
+                `tocUrl` TEXT NOT NULL DEFAULT '',
+                `originOrder` INTEGER NOT NULL DEFAULT 0,
+                `responseTime` INTEGER NOT NULL DEFAULT 0,
+                `time` INTEGER NOT NULL,
+                PRIMARY KEY(`bookUrl`, `origin`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_book_cache_bookName` ON `search_book_cache` (`bookName`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_book_cache_author` ON `search_book_cache` (`author`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_book_cache_time` ON `search_book_cache` (`time`)")
+    }
+}
+
 private val MIGRATION_9_10 = object : Migration(9, 10) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // book_sources 表结构完全重构，删除旧表并重建
@@ -356,7 +428,9 @@ object AppModule {
                 MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                 MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                 MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
-                MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
+                MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18,
+                MIGRATION_18_19,
+                MIGRATION_19_20,
             )
             // On downgrade: try restore from backup, otherwise keep tables as-is
             .addCallback(object : RoomDatabase.Callback() {
@@ -383,6 +457,7 @@ object AppModule {
     @Provides fun provideTxtTocRuleDao(db: AppDatabase): TxtTocRuleDao = db.txtTocRuleDao()
     @Provides fun provideCacheDao(db: AppDatabase): CacheDao = db.cacheDao()
     @Provides fun provideCookieDao(db: AppDatabase): CookieDao = db.cookieDao()
+    @Provides fun provideSearchBookCacheDao(db: AppDatabase): SearchBookCacheDao = db.searchBookCacheDao()
 
     @Provides
     @Singleton

@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -54,8 +55,8 @@ fun ShelfScreen(
      * caller — typically AppNavHost — wants WEB books to land on the detail page first.
      */
     onBookOpen: ((Book) -> Unit)? = null,
-    /** Navigate into a smart-shelf detail screen (continue reading / following / etc). */
-    onNavigateSystemView: (com.morealm.app.presentation.shelf.SystemView) -> Unit = {},
+    /** Navigate to the auto-grouping rule editor in Profile. */
+    onNavigateAutoGroupRules: () -> Unit = {},
     viewModel: ShelfViewModel = hiltViewModel(),
 ) {
     val allBooks by viewModel.books.collectAsStateWithLifecycle()
@@ -80,7 +81,6 @@ fun ShelfScreen(
     val sortMode by viewModel.sortMode.collectAsStateWithLifecycle()
     val groupNames by viewModel.groupNames.collectAsStateWithLifecycle()
     val moColors = LocalMoRealmColors.current
-    var showSortMenu by remember { mutableStateOf(false) }
     var showImportMenu by remember { mutableStateOf(false) }
     var isListView by rememberSaveable { mutableStateOf(false) }
     // Folder navigation state: null = root (show all groups + ungrouped)
@@ -237,15 +237,16 @@ fun ShelfScreen(
                         tint = MaterialTheme.colorScheme.onBackground,
                     )
                 }
-                // Batch toc refresh — Legado parity. Spinning while in flight.
-                val isRefreshingToc by viewModel.isRefreshing.collectAsStateWithLifecycle()
+                // 自动分组规则的配置入口走 Profile 页，顶栏不再放置田字格按钮。
+                // 仅在此处持有 isOrganizing 给"立即整理"按钮 + 更多菜单同款项使用。
+                val isOrganizing by viewModel.isOrganizing.collectAsStateWithLifecycle()
+                // 立即整理书架（魔棒）— 高频操作上提到顶栏。
+                // 整理过程中按钮位置不变，用 spinner 替换图标提供进度反馈。
                 IconButton(
-                    onClick = {
-                        if (isRefreshingToc) viewModel.cancelRefresh()
-                        else viewModel.refreshAllBooks()
-                    },
+                    onClick = { viewModel.organizeShelf() },
+                    enabled = !isOrganizing,
                 ) {
-                    if (isRefreshingToc) {
+                    if (isOrganizing) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
                             strokeWidth = 2.dp,
@@ -253,23 +254,103 @@ fun ShelfScreen(
                         )
                     } else {
                         Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "刷新书架更新",
-                            tint = MaterialTheme.colorScheme.onBackground,
+                            Icons.Default.AutoFixHigh,
+                            contentDescription = "立即整理书架",
+                            tint = MaterialTheme.colorScheme.primary,
                         )
                     }
                 }
+                // 列表 / 网格视图切换 — 高频操作上提到顶栏。
+                IconButton(onClick = { isListView = !isListView }) {
+                    Icon(
+                        if (isListView) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
+                        contentDescription = if (isListView) "切换为网格视图" else "切换为列表视图",
+                        tint = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
+                IconButton(onClick = { showSearch = true }) {
+                    Icon(Icons.Default.Search, "搜索", tint = MaterialTheme.colorScheme.onBackground)
+                }
+                // ── More menu: 立即整理 / 检查更新 / 排序 / 视图 ──
+                // 顶栏已有同款按钮，这里保留入口便于习惯走二级菜单的用户。
+                val isRefreshingToc by viewModel.isRefreshing.collectAsStateWithLifecycle()
+                var showMoreMenu by remember { mutableStateOf(false) }
+                var showSortSubmenu by remember { mutableStateOf(false) }
                 Box {
-                    IconButton(onClick = { showSortMenu = true }) {
-                        Icon(Icons.Default.SortByAlpha, "排序",
-                            tint = MaterialTheme.colorScheme.onBackground)
+                    IconButton(onClick = { showMoreMenu = true }) {
+                        Icon(Icons.Default.MoreVert, "更多", tint = MaterialTheme.colorScheme.onBackground)
                     }
-                    DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
+                    DropdownMenu(expanded = showMoreMenu, onDismissRequest = {
+                        showMoreMenu = false; showSortSubmenu = false
+                    }) {
+                        DropdownMenuItem(
+                            text = { Text("立即整理书架") },
+                            leadingIcon = {
+                                if (isOrganizing) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                } else {
+                                    Icon(Icons.Default.AutoFixHigh, null,
+                                        tint = MaterialTheme.colorScheme.primary)
+                                }
+                            },
+                            enabled = !isOrganizing,
+                            onClick = { showMoreMenu = false; viewModel.organizeShelf() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (isRefreshingToc) "停止检查更新" else "检查更新") },
+                            leadingIcon = {
+                                if (isRefreshingToc) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Refresh, null)
+                                }
+                            },
+                            onClick = {
+                                showMoreMenu = false
+                                if (isRefreshingToc) viewModel.cancelRefresh()
+                                else viewModel.refreshAllBooks()
+                            },
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        DropdownMenuItem(
+                            text = { Text("排序方式") },
+                            leadingIcon = { Icon(Icons.Default.SortByAlpha, null) },
+                            trailingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                            onClick = { showSortSubmenu = true },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (isListView) "网格视图" else "列表视图") },
+                            leadingIcon = {
+                                Icon(
+                                    if (isListView) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
+                                    null,
+                                )
+                            },
+                            onClick = { isListView = !isListView; showMoreMenu = false },
+                        )
+                    }
+                    // Sort sub-menu rendered as a sibling Box so it overlays
+                    // independently — Compose has no native nested DropdownMenu.
+                    DropdownMenu(
+                        expanded = showSortSubmenu,
+                        onDismissRequest = {
+                            showSortSubmenu = false; showMoreMenu = false
+                        },
+                    ) {
                         listOf("recent" to "最近阅读", "addTime" to "导入时间", "title" to "书名排序", "format" to "格式分类")
                             .forEach { (key, label) ->
                                 DropdownMenuItem(
                                     text = { Text(label) },
-                                    onClick = { viewModel.setSortMode(key); showSortMenu = false },
+                                    onClick = {
+                                        viewModel.setSortMode(key)
+                                        showSortSubmenu = false
+                                        showMoreMenu = false
+                                    },
                                     trailingIcon = {
                                         if (sortMode == key) Icon(Icons.Default.Check, null,
                                             tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
@@ -277,16 +358,6 @@ fun ShelfScreen(
                                 )
                             }
                     }
-                }
-                IconButton(onClick = { isListView = !isListView }) {
-                    Icon(
-                        if (isListView) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
-                        contentDescription = if (isListView) "网格视图" else "列表视图",
-                        tint = MaterialTheme.colorScheme.onBackground,
-                    )
-                }
-                IconButton(onClick = { showSearch = true }) {
-                    Icon(Icons.Default.Search, "搜索", tint = MaterialTheme.colorScheme.onBackground)
                 }
                 Box {
                     IconButton(onClick = { showImportMenu = true }) {
@@ -328,16 +399,6 @@ fun ShelfScreen(
             FolderImportBanner(
                 state = folderImportState,
                 onDismiss = viewModel::clearFolderImportMessage,
-            )
-        }
-
-        // Smart-shelf row (since v17, P3): zero-config "继续阅读 / 追更中 / ..." entries.
-        // Hidden when drilled into a folder — that view is intentionally a clean focused list.
-        val systemViewCounts by viewModel.systemViewCounts.collectAsStateWithLifecycle()
-        if (currentFolderId == null && systemViewCounts.any { it.count > 0 }) {
-            com.morealm.app.ui.shelf.components.SmartShelfRow(
-                counts = systemViewCounts,
-                onSelect = onNavigateSystemView,
             )
         }
 

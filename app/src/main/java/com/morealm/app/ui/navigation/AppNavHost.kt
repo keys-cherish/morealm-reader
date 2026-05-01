@@ -59,7 +59,7 @@ fun MoRealmNavHost(
     val moColors = LocalMoRealmColors.current
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "app_log" || route == "cache_book" || route.startsWith("theme_editor") || route.startsWith("system_view/")
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -121,6 +121,7 @@ fun MoRealmNavHost(
                 val onNavSourceManage = remember { { navController.safeNavigate("source_manage") } }
                 val onNavReadingSettings = remember { { navController.safeNavigate("reading_settings") } }
                 val onNavReplaceRules = remember { { navController.safeNavigate("replace_rules") } }
+                val onNavAutoGroupRules = remember { { navController.safeNavigate("auto_group_rules") } }
                 val onNavAppLog = remember { { navController.safeNavigate("app_log") } }
                 val onNavCacheBook = remember { { navController.safeNavigate("cache_book") } }
                 val onNavThemeEditor = remember { { navController.safeNavigate("theme_editor") } }
@@ -213,9 +214,7 @@ fun MoRealmNavHost(
                                 isNightTheme = isNight,
                                 columns = columns,
                                 continueReadingRequest = continueReadingRequest,
-                                onNavigateSystemView = { view ->
-                                    navController.safeNavigate("system_view/${view.name}")
-                                },
+                                onNavigateAutoGroupRules = onNavAutoGroupRules,
                             )
                         }
                         BottomTab.Discover -> SearchScreen(
@@ -232,6 +231,7 @@ fun MoRealmNavHost(
                             onNavigateSourceManage = onNavSourceManage,
                             onNavigateReadingSettings = onNavReadingSettings,
                             onNavigateReplaceRules = onNavReplaceRules,
+                            onNavigateAutoGroupRules = onNavAutoGroupRules,
                             onNavigateAppLog = onNavAppLog,
                             onNavigateCacheBook = onNavCacheBook,
                             onNavigateThemeEditor = onNavThemeEditor,
@@ -258,26 +258,6 @@ fun MoRealmNavHost(
                 ChangelogScreen(onBack = { navController.safePopBackStack() })
             }
 
-            composable(
-                route = "system_view/{viewName}",
-                arguments = listOf(navArgument("viewName") { type = NavType.StringType }),
-            ) { backStackEntry ->
-                val viewName = backStackEntry.arguments?.getString("viewName").orEmpty()
-                com.morealm.app.ui.shelf.SystemViewScreen(
-                    viewName = viewName,
-                    onBack = { navController.safePopBackStack() },
-                    onBookOpen = { book ->
-                        // Same routing rule as the shelf: WEB to detail, local to reader.
-                        val route = if (book.format == com.morealm.app.domain.entity.BookFormat.WEB) {
-                            "detail/${book.id}"
-                        } else {
-                            "reader/${book.id}"
-                        }
-                        navController.safeNavigate(route)
-                    },
-                )
-            }
-
             composable("source_manage") {
                 BookSourceManageScreen(onBack = { navController.safePopBackStack() })
             }
@@ -288,6 +268,12 @@ fun MoRealmNavHost(
 
             composable("replace_rules") {
                 ReplaceRuleScreen(onBack = { navController.safePopBackStack() })
+            }
+
+            composable("auto_group_rules") {
+                com.morealm.app.ui.profile.AutoGroupRulesScreen(
+                    onBack = { navController.safePopBackStack() },
+                )
             }
 
             composable("app_log") {

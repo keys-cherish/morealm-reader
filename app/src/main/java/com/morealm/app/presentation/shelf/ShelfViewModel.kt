@@ -54,7 +54,6 @@ class ShelfViewModel @Inject constructor(
     private val prefs: AppPreferences,
     private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
     private val refreshController: ShelfRefreshController,
-    private val systemViewController: ShelfSystemViewController,
     private val databaseSeeder: com.morealm.app.domain.db.DatabaseSeeder,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
@@ -65,16 +64,6 @@ class ShelfViewModel @Inject constructor(
 
     val lastReadBook: StateFlow<Book?> = bookRepo.getLastReadBook()
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
-
-    // ── Smart-shelf views (since v17, P3) ───────────────────────────────────
-    val selectedSystemView: StateFlow<SystemView?> = systemViewController.selectedView
-    val systemViewCounts: StateFlow<List<SystemViewCount>> =
-        systemViewController.observeCounts(viewModelScope)
-    val booksInSystemView: Flow<List<Book>> =
-        systemViewController.observeBooksInSelectedView()
-    val sourceGroups = systemViewController.observeSourceGroups()
-
-    fun selectSystemView(view: SystemView?) = systemViewController.selectView(view)
 
     init {
         // Seed built-in genre tags once per install (idempotent — no-op if seeded).
@@ -526,6 +515,15 @@ class ShelfViewModel @Inject constructor(
 
     fun deleteFolder(folderId: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            // If the folder was auto-created, remember its source tag so the
+            // classifier doesn't recreate it next time matching books appear.
+            // Auto-folder ids have the shape "auto:<tagId>" — strip the prefix.
+            val group = groupRepo.getById(folderId)
+            if (group?.auto == true && folderId.startsWith("auto:")) {
+                val tagId = folderId.removePrefix("auto:")
+                prefs.addAutoFolderIgnored(tagId)
+                AppLog.info("Shelf", "Ignoring future auto-folder for tag $tagId")
+            }
             bookRepo.deleteFolder(folderId)
             AppLog.info("Shelf", "Deleted folder: $folderId")
         }
@@ -632,6 +630,60 @@ class ShelfViewModel @Inject constructor(
                 moved++
             }
             AppLog.info("Shelf", "Auto grouped $moved books")
+        }
+    }
+
+    private val _isOrganizing = MutableStateFlow(false)
+    /** True while a full-shelf classify pass is in flight. UI shows a spinner. */
+    val isOrganizing: StateFlow<Boolean> = _isOrganizing.asStateFlow()
+
+    private val _organizeReport = MutableStateFlow<String?>(null)
+    /** Last "moved N, created M folders" message — UI shows it as a snackbar then clears. */
+    val organizeReport: StateFlow<String?> = _organizeReport.asStateFlow()
+    fun consumeOrganizeReport() { _organizeReport.value = null }
+
+    /**
+     * "Organize shelf now" — re-runs [AutoGroupClassifier.classify] for every
+     * book that hasn't been manually pinned, letting [AutoFolderManager]
+     * promote any genres that have crossed the threshold since last pass.
+     *
+     * Skipped books:
+     *   - `groupLocked = true` (user said hands off)
+     *   - `tagsAssignedBy = MANUAL` AND `folderId != null` (user moved it to a folder by hand)
+     *
+     * The pass is idempotent — running twice in a row produces the same
+     * shelf, just refreshes book_tags scores against latest metadata.
+     */
+    fun organizeShelf() {
+        if (_isOrganizing.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isOrganizing.value = true
+            try {
+                val before = groupRepo.getAllGroupsSync().count { it.auto }
+                var touched = 0
+                for (book in bookRepo.getAllBooksSync()) {
+                    if (book.groupLocked) continue
+                    if (book.folderId != null && book.tagsAssignedBy == "MANUAL") continue
+                    val newId = autoGroupClassifier.classify(book)
+                    if (newId != book.folderId) {
+                        bookRepo.update(book.copy(folderId = newId))
+                        touched++
+                    }
+                }
+                val after = groupRepo.getAllGroupsSync().count { it.auto }
+                val newFolders = (after - before).coerceAtLeast(0)
+                _organizeReport.value = when {
+                    touched == 0 && newFolders == 0 -> "书架已是最新状态"
+                    newFolders > 0 -> "整理完成：移动 $touched 本书，新建 $newFolders 个文件夹"
+                    else -> "整理完成：移动 $touched 本书"
+                }
+                AppLog.info("Shelf", "Organize: touched=$touched newFolders=$newFolders")
+            } catch (e: Exception) {
+                AppLog.error("Shelf", "Organize failed: ${e.message}", e)
+                _organizeReport.value = "整理失败：${e.message?.take(60)}"
+            } finally {
+                _isOrganizing.value = false
+            }
         }
     }
 
