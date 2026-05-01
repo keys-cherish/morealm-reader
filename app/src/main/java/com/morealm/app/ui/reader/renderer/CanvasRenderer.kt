@@ -539,17 +539,51 @@ fun CanvasRenderer(
     // Pager state — always start at 0, then jump after layout completes
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { renderPageCount })
 
-    // Page-turn coordinator — replaces local page-turn functions and state
+    // Page-turn coordinator — replaces local page-turn functions and state.
+    //
+    // 跨章闪烁 / 滚动→仿真跳首页防御第二层（参见 docs/issues/）：在 remember
+    // 构造块里 *同步* 算出 initialPage 并写入新 coordinator，让它"出生即正确"。
+    //
+    // 没有这一步时，新 coordinator 默认 lastSettledDisplayPage=0，第一次重组的
+    // AndroidView.update lambda 同步执行，用 displayPage=0 渲染章节首页位图
+    // 装入 idleBitmap —— 屏幕闪一帧错的页。LaunchedEffect 修正是异步的，慢于
+    // update lambda，所以纯靠它兜底兜不住。
+    //
+    // initialPage 的取值分四种场景：
+    //   1. SCROLL 模式：0（滚动模式自己管位置，coordinator 的 lastSettled 不参与渲染）
+    //   2. 同章节、仅模式切换 (chapterIndex 没变)：readerPageIndex —— 这是
+    //      ScrollRenderer / 翻页模式都在维护的逻辑页索引，是当前阅读位置的
+    //      "单一真值"。这条路径专门修「滚动→仿真跳首页」的 bug。
+    //   3. PREV 跨章 (startFromLastPage=true)：上一章末页。优先读 prelayoutCache
+    //      因为新章节的 renderPageCount 重组初期可能还没算好。
+    //   4. 其它（首次进入 / NEXT 跨章）：0。
+    val lastChapterIdxHolder = remember { intArrayOf(Int.MIN_VALUE) }
     val coordinator = remember(chapterIndex, pageAnimType) {
-        // Diagnostic for cross-chapter flicker (docs/issues/simulation-page-turn-flicker.md
-        // root cause #2). Each rebuild starts with lastSettledDisplayPage=0,
-        // which is the source of "shows page 1 of new chapter for one frame".
+        val sameChapter = lastChapterIdxHolder[0] == chapterIndex
+        lastChapterIdxHolder[0] = chapterIndex
+        val initialPage = when {
+            pageAnimType == PageAnimType.SCROLL -> 0
+            sameChapter -> readerPageIndex.coerceIn(
+                0, (renderPageCount - 1).coerceAtLeast(0)
+            )
+            startFromLastPage -> {
+                val cachedPageCount = prelayoutCache[currentChapterKey]?.pageSize ?: renderPageCount
+                (cachedPageCount - 1).coerceAtLeast(0)
+            }
+            else -> 0
+        }
         AppLog.debug(
             "PageTurnFlicker",
             "[2] coordinator REBUILD chapterIndex=$chapterIndex pageAnimType=$pageAnimType" +
-                " (default lastSettledDisplayPage=0)",
+                " sameChapter=$sameChapter readerPageIndex=$readerPageIndex" +
+                " startFromLastPage=$startFromLastPage initialPage=$initialPage",
         )
-        PageTurnCoordinator(scope, pageAnimType, onNextChapter, onPrevChapter, onProgress, onVisiblePageChanged)
+        PageTurnCoordinator(
+            scope, pageAnimType, onNextChapter, onPrevChapter, onProgress, onVisiblePageChanged
+        ).apply {
+            lastSettledDisplayPage = initialPage
+            ignoredSettledDisplayPage = initialPage
+        }
     }
     // Update deps on each recomposition so coordinator always sees latest values
     coordinator.updateDeps(pageFactory, pagerState, chapterIndex, pageCount, renderPageCount)
@@ -1163,6 +1197,7 @@ fun CanvasRenderer(
             onTranslateText = onTranslateText,
             onLookupWord = onLookupWord,
             onShareQuote = { text -> shareQuoteText = text },
+            onAddHighlight = { start, end, text, argb -> onAddHighlight(start, end, text, argb) },
         )
 
         // Quote share dialog
@@ -1696,6 +1731,11 @@ private fun ReaderSelectionToolbar(
     onTranslateText: (String) -> Unit,
     onLookupWord: (String) -> Unit,
     onShareQuote: (String) -> Unit,
+    /**
+     * 选中后用户挑色面板里的色 → 保存高亮。回调收到本次选区的章节字符 offset
+     * 范围与原文，由 ReaderViewModel 落到 DB；toolbar 调用后会自动 clear()。
+     */
+    onAddHighlight: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
 ) {
     if (!selectionState.isActive) return
 
@@ -1735,6 +1775,20 @@ private fun ReaderSelectionToolbar(
         return startPage.chapterPosition + startPage.getPosByLineColumn(actualStart.lineIndex, actualStart.columnIndex)
     }
 
+    /**
+     * 选区结束位置在章节字符流里的 offset。和 [selectedStartChapterPosition]
+     * 配对组成 Highlight 的 startChapterPos / endChapterPos。columnIndex 接受
+     * Int.MAX_VALUE 表示行末（跨页选择时上半段就这么传）。
+     */
+    fun selectedEndChapterPosition(): Int {
+        val textPage = page ?: return 0
+        val start = selectionState.startPos ?: return textPage.chapterPosition
+        val end = selectionState.endPos ?: return textPage.chapterPosition
+        val actualEnd = if (start.compare(end) <= 0) end else start
+        val endPage = relativePageProvider(actualEnd.relativePagePos) ?: textPage
+        return endPage.chapterPosition + endPage.getPosByLineColumn(actualEnd.lineIndex, actualEnd.columnIndex)
+    }
+
     SelectionToolbar(
         offset = toolbarOffset,
         onCopy = { onCopyText(selectedText()); selectionState.clear() },
@@ -1742,6 +1796,17 @@ private fun ReaderSelectionToolbar(
         onTranslate = { onTranslateText(selectedText()); selectionState.clear() },
         onShare = { onShareQuote(selectedText()); selectionState.clear() },
         onLookup = { onLookupWord(selectedText()); selectionState.clear() },
+        onHighlight = onAddHighlight?.let { cb ->
+            { argb ->
+                val text = selectedText()
+                val sStart = selectedStartChapterPosition()
+                val sEnd = selectedEndChapterPosition()
+                if (sEnd > sStart && text.isNotBlank()) {
+                    cb(sStart, sEnd, text, argb)
+                }
+                selectionState.clear()
+            }
+        },
         onDismiss = { selectionState.clear() },
     )
 }
