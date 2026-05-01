@@ -31,6 +31,15 @@ class BackupRepository @Inject constructor(
     suspend fun importBackupFromBytes(data: ByteArray, password: String = ""): Boolean =
         BackupManager.importBackupFromBytes(context, db, data, password)
 
+    /**
+     * Read-and-clear the most recent backup error diagnostic. Call this immediately
+     * after a [exportBackup] / [importBackup] / [generateBackupBytes] /
+     * [importBackupFromBytes] returned `false` / null to surface the underlying
+     * exception message to the user (toast / status field) instead of a generic
+     * "导出失败" with no actionable detail.
+     */
+    fun consumeLastBackupError(): String? = BackupManager.consumeLastErrorMessage()
+
     fun createWebDavClient(url: String, user: String, pass: String): WebDavClient =
         WebDavClient(url.trimEnd('/'), user, pass)
 }

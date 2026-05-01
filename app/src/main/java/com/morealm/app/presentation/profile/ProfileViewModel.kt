@@ -158,7 +158,15 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             _backupStatus.value = "导出中..."
             val ok = backupRepo.exportBackup(uri, backupPassword.value)
-            _backupStatus.value = if (ok) "导出成功" else "导出失败"
+            _backupStatus.value = if (ok) {
+                "导出成功"
+            } else {
+                // BackupManager records the underlying exception message so we can
+                // tell the user *why* the export failed (e.g. "Unexpected NaN value
+                // at $.books[3].lastReadOffset") instead of a generic failure.
+                val reason = backupRepo.consumeLastBackupError()
+                if (reason.isNullOrBlank()) "导出失败" else "导出失败：$reason"
+            }
         }
     }
 
@@ -166,7 +174,15 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             _backupStatus.value = "导入中..."
             val ok = backupRepo.importBackup(uri, backupPassword.value)
-            _backupStatus.value = if (ok) "导入成功" else "导入失败（密码错误或文件损坏？）"
+            _backupStatus.value = if (ok) {
+                "导入成功"
+            } else {
+                val reason = backupRepo.consumeLastBackupError()
+                when {
+                    !reason.isNullOrBlank() -> "导入失败：$reason"
+                    else -> "导入失败（密码错误或文件损坏？）"
+                }
+            }
         }
     }
 
