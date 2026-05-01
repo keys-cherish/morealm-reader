@@ -43,7 +43,7 @@ class TtsEngineHost(
     private val systemTtsEngine by lazy {
         SystemTtsEngine(context).also { it.initialize() }
     }
-    private val edgeTtsEngine by lazy { EdgeTtsEngine() }
+    private val edgeTtsEngine by lazy { EdgeTtsEngine(context) }
 
     // ── Mutable state (host is single source of truth) ───────────────────────
     private var paragraphs: List<String> = emptyList()
@@ -883,7 +883,14 @@ class TtsEngineHost(
 
     private suspend fun loadVoicesForEngine(engine: String): List<TtsVoice> {
         return if (engine == "edge") {
-            EdgeTtsEngine.VOICES
+            // 优先远程拉 600+ 多语种音色（带 24h 文件缓存 + 失败回退到硬编码）。
+            // EdgeTtsEngine.fetchRemoteVoices 内部已 try/catch，不会抛出，但稳妥
+            // 起见再加一层 runCatching —— 任何意外都退到硬编码列表，保证语音设置
+            // 至少有 21 个 zh-* 可选。
+            runCatching { edgeTtsEngine.fetchRemoteVoices() }
+                .getOrNull()
+                ?.takeIf { it.isNotEmpty() }
+                ?: EdgeTtsEngine.VOICES
         } else {
             // Same timeout-bounded init resolution used by speakLoop —
             // prevents the voice picker from hanging forever when the device

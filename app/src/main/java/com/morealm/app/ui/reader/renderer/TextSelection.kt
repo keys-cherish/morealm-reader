@@ -257,11 +257,16 @@ fun getSelectedText(page: TextPage, start: TextPos, end: TextPos): String {
 
 /**
  * Bubble-style selection mini menu — pill shape with arrow, two-row expandable.
- * Ported from MoRealm HTML prototype.
  *
- * Main row: 复制 | 朗读 | 更多
- * Extra row 1 (展开时): 翻译 | 分享 | 查词
- * Extra row 2 (展开时): 5 色高亮调色板 — 点哪个色就以那个色保存高亮
+ * 渲染由用户在「阅读设置 → 选区菜单按钮」配置的 [SelectionMenuConfig] 决定：
+ *   - MAIN 行：始终可见，最多 3 个动作；如果 [SelectionMenuPosition.EXPANDED]
+ *     桶里至少有一个动作，主行尾部追加「更多」按钮切换展开行可见性。
+ *   - EXPANDED 行：点开「更多」后显示。
+ *   - HIGHLIGHT：作为一个普通按钮放进 MAIN 或 EXPANDED；点击不直接保存，
+ *     而是切换底部的 5 色调色板浮层，用户挑色后才落 DB。
+ *   - HIDDEN 桶里的动作根本不渲染。
+ *
+ * 没有传 [config] 时退回 [com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT]，保持和老调用方等价。
  */
 @Composable
 fun SelectionToolbar(
@@ -272,28 +277,63 @@ fun SelectionToolbar(
     onShare: () -> Unit,
     onLookup: () -> Unit,
     /**
-     * 色盘点击回调；参数为 ARGB Int。null 时不显示调色板（兼容老调用方）。
-     * 实现方收到回调后应自行 commit Highlight + clear selection。
+     * 色盘点击回调；参数为 ARGB Int。null 时调色板永远不显示，HIGHLIGHT 按钮
+     * 自动从渲染列表里摘掉（即便 config 把它放在 MAIN）。
      */
     onHighlight: ((colorArgb: Int) -> Unit)? = null,
     onDismiss: () -> Unit,
+    config: com.morealm.app.domain.entity.SelectionMenuConfig =
+        com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     var expanded by remember { mutableStateOf(false) }
+    /** HIGHLIGHT 按钮点开调色板的开关。和 [expanded] 解耦：用户在主行点
+     *  HIGHLIGHT 不展开扩展行；在扩展行点 HIGHLIGHT 也不收起扩展行。 */
+    var paletteVisible by remember { mutableStateOf(false) }
     val arrowColor = MaterialTheme.colorScheme.surfaceContainerHigh
+
+    // 按 position 切分，并把 HIDDEN / 不可用的 HIGHLIGHT 摘掉。如果 onHighlight
+    // 为 null，HIGHLIGHT 这个动作即使在 config 里被设为 MAIN/EXPANDED 也忽略。
+    val grouped = remember(config, onHighlight) {
+        val raw = config.groupedByPosition()
+        val filterHighlight = onHighlight == null
+        fun List<com.morealm.app.domain.entity.SelectionMenuItem>?.cleaned() =
+            this.orEmpty().filter {
+                !filterHighlight || it != com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT
+            }
+        val main = raw[com.morealm.app.domain.entity.SelectionMenuPosition.MAIN].cleaned().take(3)
+        val ext = raw[com.morealm.app.domain.entity.SelectionMenuPosition.EXPANDED].cleaned()
+        main to ext
+    }
+    val mainItems = grouped.first
+    val expandedItems = grouped.second
+    val hasExpandedRow = expandedItems.isNotEmpty()
+
+    // 动态宽度：每个 MenuBtn ~52dp + 「更多」按钮 ~36dp + 两侧内边距 ~12dp。
+    // 下限 120dp 保证箭头 / 调色板不被挤瘦得难看；上限不越屏。
+    val mainColumns = mainItems.size + if (hasExpandedRow) 1 else 0
+    val menuWidthDp = (mainColumns.coerceAtLeast(1) * 56 + 16)
+        .coerceAtLeast(120)
+        .coerceAtMost(configuration.screenWidthDp - 16)
+    val menuWidth = menuWidthDp.dp
 
     // Position: center on offset, clamp to screen
     val xDp = with(density) { offset.x.toDp() }
     val yDp = with(density) { offset.y.toDp() }
     val screenWidth = configuration.screenWidthDp.dp
     val screenHeight = configuration.screenHeightDp.dp
-    val menuWidth = 188.dp
-    // 高度根据展开状态 + 是否有调色板浮动；展开后多一行 (~36.dp)。
-    val paletteRow = onHighlight != null
-    val expandedExtra = if (paletteRow) 78.dp else 40.dp
-    val menuHeight = if (expanded) 46.dp + expandedExtra else 46.dp
+    // 高度估算：主行 46dp；扩展行（如果展开且有内容）+~40dp；调色板（如果可见
+    // 且 HIGHLIGHT 存在于某个可见行）+~38dp。这是 menu 整体下边界检测用，
+    // 不影响实际渲染高度。
+    val highlightVisibleInMainOrExpanded =
+        com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in mainItems ||
+            (expanded && com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in expandedItems)
+    var menuHeightDp = 46
+    if (expanded && hasExpandedRow) menuHeightDp += 40
+    if (paletteVisible && onHighlight != null && highlightVisibleInMainOrExpanded) menuHeightDp += 38
+    val menuHeight = menuHeightDp.dp
     val showBelow = yDp - menuHeight - 12.dp < 8.dp
     val menuX = (xDp - menuWidth / 2).coerceIn(8.dp, screenWidth - menuWidth - 8.dp)
     val menuY = if (showBelow) {
@@ -322,29 +362,39 @@ fun SelectionToolbar(
                 modifier = Modifier.widthIn(max = menuWidth),
             ) {
                 Column {
-                    // Main row
+                    // ── Main row ──
                     Row(
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        MenuBtn(Icons.Default.ContentCopy, "复制", onCopy)
-                        MenuSep()
-                        MenuBtn(Icons.Default.VolumeUp, "朗读", onSpeak)
-                        MenuSep()
-                        // More button (icon only)
-                        IconButton(
-                            onClick = { expanded = !expanded },
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.MoreHoriz, "更多",
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                modifier = Modifier.size(16.dp),
+                        mainItems.forEachIndexed { idx, item ->
+                            if (idx > 0) MenuSep()
+                            ItemButton(
+                                item = item,
+                                onCopy = onCopy,
+                                onSpeak = onSpeak,
+                                onTranslate = onTranslate,
+                                onShare = onShare,
+                                onLookup = onLookup,
+                                onToggleHighlight = { paletteVisible = !paletteVisible },
                             )
                         }
+                        if (hasExpandedRow) {
+                            if (mainItems.isNotEmpty()) MenuSep()
+                            IconButton(
+                                onClick = { expanded = !expanded },
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.MoreHoriz, "更多",
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
                     }
-                    // Extra row
-                    androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+                    // ── Expanded row ──
+                    androidx.compose.animation.AnimatedVisibility(visible = expanded && hasExpandedRow) {
                         Column {
                             HorizontalDivider(
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
@@ -355,38 +405,50 @@ fun SelectionToolbar(
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                MenuBtn(Icons.Default.Translate, "翻译", onTranslate)
-                                MenuSep()
-                                MenuBtn(Icons.Default.Share, "分享", onShare)
-                                MenuSep()
-                                MenuBtn(Icons.Default.Search, "查词", onLookup)
+                                expandedItems.forEachIndexed { idx, item ->
+                                    if (idx > 0) MenuSep()
+                                    ItemButton(
+                                        item = item,
+                                        onCopy = onCopy,
+                                        onSpeak = onSpeak,
+                                        onTranslate = onTranslate,
+                                        onShare = onShare,
+                                        onLookup = onLookup,
+                                        onToggleHighlight = { paletteVisible = !paletteVisible },
+                                    )
+                                }
                             }
-                            // Highlight palette row — 5 preset colors. Tap any =
-                            // commit a Highlight with that ARGB and dismiss the
-                            // toolbar via the onHighlight callback (which is
-                            // expected to clear selectionState too).
-                            if (onHighlight != null) {
-                                HorizontalDivider(
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
-                                    thickness = 0.5.dp,
-                                    modifier = Modifier.padding(horizontal = 8.dp),
-                                )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceEvenly,
-                                ) {
-                                    HighlightPalette.PRESETS.forEach { argb ->
-                                        Box(
-                                            modifier = Modifier
-                                                .size(20.dp)
-                                                .clip(CircleShape)
-                                                .background(Color(argb))
-                                                .clickable { onHighlight(argb) },
-                                        )
-                                    }
+                        }
+                    }
+                    // ── Highlight palette row ──
+                    // 仅当 onHighlight 非空、调色板被显式打开、且 HIGHLIGHT 按钮
+                    // 当前真的在某个可见行（主行 / 已展开的扩展行）才渲染，
+                    // 防止"HIGHLIGHT 在 EXPANDED 但用户没点更多"的情况下空显示。
+                    val showPalette = paletteVisible && onHighlight != null &&
+                        (com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in mainItems ||
+                            (expanded && com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in expandedItems))
+                    androidx.compose.animation.AnimatedVisibility(visible = showPalette) {
+                        Column {
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                thickness = 0.5.dp,
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                            ) {
+                                HighlightPalette.PRESETS.forEach { argb ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(argb))
+                                            .clickable { onHighlight?.invoke(argb) },
+                                    )
                                 }
                             }
                         }
@@ -398,6 +460,35 @@ fun SelectionToolbar(
                 ToolbarArrow(arrowColor, pointsDown = true, modifier = Modifier.offset(x = arrowX - menuWidth / 2))
             }
         }
+    }
+}
+
+/** 把 [com.morealm.app.domain.entity.SelectionMenuItem] 映射到对应的图标 +
+ *  标签 + 点击回调。HIGHLIGHT 的点击不直接落 DB —— 而是切换调色板浮层，由
+ *  用户在调色板里挑色才真正保存。 */
+@Composable
+private fun ItemButton(
+    item: com.morealm.app.domain.entity.SelectionMenuItem,
+    onCopy: () -> Unit,
+    onSpeak: () -> Unit,
+    onTranslate: () -> Unit,
+    onShare: () -> Unit,
+    onLookup: () -> Unit,
+    onToggleHighlight: () -> Unit,
+) {
+    when (item) {
+        com.morealm.app.domain.entity.SelectionMenuItem.COPY ->
+            MenuBtn(Icons.Default.ContentCopy, "复制", onCopy)
+        com.morealm.app.domain.entity.SelectionMenuItem.SPEAK ->
+            MenuBtn(Icons.Default.VolumeUp, "朗读", onSpeak)
+        com.morealm.app.domain.entity.SelectionMenuItem.TRANSLATE ->
+            MenuBtn(Icons.Default.Translate, "翻译", onTranslate)
+        com.morealm.app.domain.entity.SelectionMenuItem.SHARE ->
+            MenuBtn(Icons.Default.Share, "分享", onShare)
+        com.morealm.app.domain.entity.SelectionMenuItem.LOOKUP ->
+            MenuBtn(Icons.Default.Search, "查词", onLookup)
+        com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT ->
+            MenuBtn(Icons.Default.FormatColorFill, "高亮", onToggleHighlight)
     }
 }
 

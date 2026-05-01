@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.domain.source.BookSourceImporter
 import com.morealm.app.domain.webbook.CheckSource
@@ -20,6 +21,7 @@ import javax.inject.Inject
 @HiltViewModel
 class BookSourceManageViewModel @Inject constructor(
     private val sourceRepo: SourceRepository,
+    private val prefs: AppPreferences,
 ) : ViewModel() {
 
     data class ImportProgress(
@@ -30,6 +32,68 @@ class BookSourceManageViewModel @Inject constructor(
 
     val sources: StateFlow<List<BookSource>> = sourceRepo.getAllSources()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * 列表分组模式（持久化在 AppPreferences）：
+     *   "none" / "group_name" / "domain" / "type"
+     *
+     * UI 直接对字符串做相等判断，未知值（旧版本写入的脏数据 / 用户手动改 DataStore）
+     * 一律走默认 "none" 分支，不会崩。
+     */
+    val groupMode: StateFlow<String> = prefs.sourceGroupMode
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "none")
+
+    /** 切换分组模式并持久化；写入失败由 DataStore 自身的重试与错误处理保底。 */
+    fun setGroupMode(mode: String) {
+        viewModelScope.launch {
+            // 记录用户的分组方式切换 —— 排查"列表显示不对"反馈时第一时间能看到当前 mode；
+            // 写之前打日志（而不是写之后）即便 DataStore 抛异常也能看到用户意图。
+            AppLog.info("SourceManage", "groupMode set -> '$mode'")
+            prefs.setSourceGroupMode(mode)
+        }
+    }
+
+    /**
+     * 批量启用 / 停用一组 URL 对应的书源。供分组 header 的"全启用 / 全停用"菜单调用。
+     *
+     * - 按 `bookSourceUrl` 主键查找当前内存里的 [BookSource] 行，filter 掉本来就处于
+     *   目标状态的（避免无意义写）；
+     * - 仅写差量，命中行用 `copy(enabled = ...)` 后走 [SourceRepository.insert]
+     *   (REPLACE) 持久化，DB 主键 PrimaryKey 即 url，UPSERT 安全；
+     * - 命中条数为 0 时直接 return，避免空 IO 调度。
+     *
+     * 不返回结果：列表 StateFlow 自身订阅了 DAO，UPSERT 后 UI 自然刷新。
+     *
+     * 日志：入口、空命中、有命中三条都打 INFO，便于回放"用户点了停用整组但部分书源
+     * 仍亮着"这类反馈 —— 看 hits/urls 比例就知道是 already-in-target 还是 DB 漏写。
+     */
+    fun setEnabledForUrls(urls: Collection<String>, enabled: Boolean) {
+        if (urls.isEmpty()) {
+            AppLog.info("SourceManage", "bulk enable=$enabled rejected (empty url list)")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val targets = sources.value.filter {
+                it.bookSourceUrl in urls && it.enabled != enabled
+            }
+            if (targets.isEmpty()) {
+                AppLog.info(
+                    "SourceManage",
+                    "bulk enable=$enabled noop urls=${urls.size} (all already in target state)",
+                )
+                return@launch
+            }
+            AppLog.info(
+                "SourceManage",
+                "bulk enable=$enabled writing hits=${targets.size}/${urls.size}",
+            )
+            targets.forEach { sourceRepo.insert(it.copy(enabled = enabled)) }
+            AppLog.info(
+                "SourceManage",
+                "bulk enable=$enabled done hits=${targets.size}",
+            )
+        }
+    }
 
     private val _isImporting = MutableStateFlow(false)
     val isImporting: StateFlow<Boolean> = _isImporting.asStateFlow()

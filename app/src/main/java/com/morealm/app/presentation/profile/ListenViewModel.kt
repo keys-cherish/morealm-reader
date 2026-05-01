@@ -33,8 +33,20 @@ class ListenViewModel @Inject constructor(
 
     private val systemTtsEngine = SystemTtsEngine(context)
 
+    /**
+     * Edge 引擎实例，仅用于在「听书」页拉取远程音色列表 + 失效缓存。
+     * 不参与实际朗读 —— 朗读由 [com.morealm.app.service.TtsEngineHost] 自己持有的引擎执行。
+     * 两个实例共享同一个 `cacheDir/edge_tts/` 目录，所以 [EdgeTtsEngine.invalidateRemoteVoicesCache]
+     * 在这边删了 voices.json，host 那边下次重拉也会走网络。
+     */
+    private val edgeTtsEngine by lazy { EdgeTtsEngine(context) }
+
     private val _voices = MutableStateFlow<List<TtsVoice>>(emptyList())
     val voices: StateFlow<List<TtsVoice>> = _voices.asStateFlow()
+
+    /** 远程音色加载状态，UI 用来显示 spinner 和禁用刷新按钮。 */
+    private val _voicesRefreshing = MutableStateFlow(false)
+    val voicesRefreshing: StateFlow<Boolean> = _voicesRefreshing.asStateFlow()
 
     val selectedEngine: StateFlow<String> = prefs.ttsEngine
         .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
@@ -137,30 +149,56 @@ class ListenViewModel @Inject constructor(
             _voices.value = emptyList()
             return
         }
-        _voices.value = when (engineId) {
-            "edge" -> EdgeTtsEngine.VOICES
-            else -> {
-                // Mirror the host-side fix: bound the wait so a missing/broken system
-                // TTS engine doesn't leave the picker spinning. Failed init surfaces
-                // as a TtsEventBus.Error so the settings UI can react via snackbar.
-                when (val initRes = systemTtsEngine.awaitReadyResult()) {
-                    is SystemTtsEngine.InitResult.Failed -> {
-                        TtsEventBus.sendEvent(
-                            TtsEventBus.Event.Error(initRes.reason, canOpenSettings = true)
-                        )
-                        emptyList()
+        _voicesRefreshing.value = true
+        try {
+            _voices.value = when (engineId) {
+                "edge" -> {
+                    // 远程拉 600+ 条 zh/en/ja/... 音色（带 24h voices.json 缓存 + 失败回退到硬编码）
+                    runCatching { edgeTtsEngine.fetchRemoteVoices() }
+                        .getOrNull()?.takeIf { it.isNotEmpty() }
+                        ?: EdgeTtsEngine.VOICES
+                }
+                else -> {
+                    // Mirror the host-side fix: bound the wait so a missing/broken system
+                    // TTS engine doesn't leave the picker spinning. Failed init surfaces
+                    // as a TtsEventBus.Error so the settings UI can react via snackbar.
+                    when (val initRes = systemTtsEngine.awaitReadyResult()) {
+                        is SystemTtsEngine.InitResult.Failed -> {
+                            TtsEventBus.sendEvent(
+                                TtsEventBus.Event.Error(initRes.reason, canOpenSettings = true)
+                            )
+                            emptyList()
+                        }
+                        SystemTtsEngine.InitResult.Success -> systemTtsEngine.getChineseVoices()
                     }
-                    SystemTtsEngine.InitResult.Success -> systemTtsEngine.getChineseVoices()
                 }
             }
+            val savedVoice = if (engineId == "edge") {
+                prefs.ttsEdgeVoice.first()
+            } else {
+                prefs.ttsSystemVoice.first()
+            }.ifBlank { prefs.ttsVoice.first() }
+            if (savedVoice.isNotBlank() && validVoiceOrDefault(savedVoice, _voices.value).isBlank()) {
+                selectVoice("")
+            }
+        } finally {
+            _voicesRefreshing.value = false
         }
-        val savedVoice = if (engineId == "edge") {
-            prefs.ttsEdgeVoice.first()
-        } else {
-            prefs.ttsSystemVoice.first()
-        }.ifBlank { prefs.ttsVoice.first() }
-        if (savedVoice.isNotBlank() && validVoiceOrDefault(savedVoice, _voices.value).isBlank()) {
-            selectVoice("")
+    }
+
+    /**
+     * 用户主动「刷新音色列表」入口（"语音"区刷新按钮点击）。
+     * - Edge：先 [EdgeTtsEngine.invalidateRemoteVoicesCache] 删 voices.json，然后重新拉远程
+     * - System：重新初始化 + 重读 [TextToSpeech.getVoices][android.speech.tts.TextToSpeech.getVoices]
+     *   （比如用户刚装/卸载了 multiTTS / 讯飞 / 三星 TTS 后过来刷一下）
+     */
+    fun refreshVoiceListNow() {
+        viewModelScope.launch {
+            val engine = selectedEngine.value
+            if (engine == "edge") {
+                edgeTtsEngine.invalidateRemoteVoicesCache()
+            }
+            refreshVoices(engine)
         }
     }
 

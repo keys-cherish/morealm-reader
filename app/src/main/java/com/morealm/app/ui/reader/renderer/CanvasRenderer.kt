@@ -152,6 +152,12 @@ fun CanvasRenderer(
     onDeleteHighlight: (id: String) -> Unit = {},
     /** 用户分享一条高亮内容（生成卡片图）。 */
     onShareHighlight: (Highlight) -> Unit = {},
+    /**
+     * 选区 mini-menu 的可见性 / 顺序 / 主行分配自定义配置；默认全部按预设。
+     * 由 ReaderScreen 从 ReaderSettingsController 收到的 StateFlow 取值传入。
+     */
+    selectionMenuConfig: com.morealm.app.domain.entity.SelectionMenuConfig =
+        com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1288,6 +1294,7 @@ fun CanvasRenderer(
             onLookupWord = onLookupWord,
             onShareQuote = { text -> shareQuoteText = text },
             onAddHighlight = { start, end, text, argb -> onAddHighlight(start, end, text, argb) },
+            menuConfig = selectionMenuConfig,
         )
 
         // Quote share dialog
@@ -1853,6 +1860,9 @@ private fun ReaderSelectionToolbar(
      * 范围与原文，由 ReaderViewModel 落到 DB；toolbar 调用后会自动 clear()。
      */
     onAddHighlight: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
+    /** 用户自定义按钮配置。透传给底层 [SelectionToolbar]。 */
+    menuConfig: com.morealm.app.domain.entity.SelectionMenuConfig =
+        com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
 ) {
     if (!selectionState.isActive) return
 
@@ -1925,5 +1935,6 @@ private fun ReaderSelectionToolbar(
             }
         },
         onDismiss = { selectionState.clear() },
+        config = menuConfig,
     )
 }

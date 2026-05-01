@@ -329,7 +329,7 @@ fun ProfileScreen(
         SettingsCard(
             icon = Icons.Default.Favorite,
             title = "请作者喝杯咖啡",
-            desc = "MoRealm 永久免费、无广告。如果它陪你读了很多书，欢迎请作者喝一杯",
+            desc = "MoRealm 无广告、高性能。如果它陪你读了很多书，欢迎请作者喝一杯",
             onClick = onNavigateDonate,
         )
 

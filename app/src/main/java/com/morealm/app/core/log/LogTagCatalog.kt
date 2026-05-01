@@ -44,6 +44,9 @@ object LogTagCatalog {
         "TtsSettings" to Entry("TTS/Settings", "朗读设置页（速度/语音/引擎）", "设置不生效 / 配置丢失"),
         "TtsNotif" to Entry("TTS/Notification", "通知栏 MediaNotificationProvider", "通知栏永远是占位文案、按钮不响应"),
         "HttpTTS" to Entry("TTS/Http", "Http 流式 TTS 引擎（Edge / 自定义 API）", "Edge 没声音、URL 拼接错、SSML 异常"),
+        "EdgeTTS" to Entry("TTS/Edge", "Edge TTS WSS 通信 + MediaCodec 流式解码 + 远程音色", "Edge 播放卡 / 首字慢 / 401 403 / 音色列表为空"),
+        "EdgeTtsAuth" to Entry("TTS/EdgeAuth", "Sec-MS-GEC token 生成与时钟偏移自校正", "Edge 偶发 401/403、长句被切断、握手被拒"),
+        "EdgeTtsCache" to Entry("TTS/EdgeCache", "Edge TTS MP3 LRU 缓存（cacheDir/edge_tts/）", "重听仍走网络、缓存写入失败、占用过大"),
 
         // ── 阅读器 ──────────────────────────────────────────────────
         "CanvasRenderer" to Entry("Reader/Render", "翻页模式 Canvas 渲染主流程", "翻页渲染异常 / 高亮不显示"),
@@ -54,6 +57,8 @@ object LogTagCatalog {
         "Edit" to Entry("Reader/Edit", "章节正文编辑", "编辑保存失败、内容覆盖"),
         "Search" to Entry("Reader/Search", "全文搜索 / 站内搜索", "搜索无结果、跳转错位"),
         "Highlight" to Entry("Reader/Highlight", "标注/高亮持久化（HighlightRepository）", "标注丢失、跨章异常"),
+        "ReaderKey" to Entry("Reader/Key", "物理按键翻页（音量键 / 耳机 / 蓝牙翻页器）", "音量键不响应、长按无翻章、方向反向"),
+        "SelectionMenu" to Entry("Reader/SelectionMenu", "选区 mini-menu 自定义（显示 / 顺序 / 主行分配）", "按钮顺序不对、主行 cap 误判、解析回退默认"),
 
         // ── 解析器 ──────────────────────────────────────────────────
         "EpubParser" to Entry("Parser/Epub", "EPUB 解压 + 章节抽取", "EPUB 打不开 / 章节缺失"),

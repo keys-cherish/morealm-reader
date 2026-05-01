@@ -27,6 +27,15 @@ class ReadingSettingsViewModel @Inject constructor(
     val volumeKeyPage: StateFlow<Boolean> = prefs.volumeKeyPage
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
+    val volumeKeyReverse: StateFlow<Boolean> = prefs.volumeKeyReverse
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val headsetButtonPage: StateFlow<Boolean> = prefs.headsetButtonPage
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val volumeKeyLongPress: StateFlow<String> = prefs.volumeKeyLongPress
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "off")
+
     val resumeLastRead: StateFlow<Boolean> = prefs.resumeLastRead
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
@@ -57,6 +66,16 @@ class ReadingSettingsViewModel @Inject constructor(
     val readerBgImageNight: StateFlow<String> = prefs.readerBgImageNight
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    /**
+     * 选区 mini-menu 自定义配置（显示 / 顺序 / 主行分配）。订阅 prefs，设置页 UI
+     * 通过 [setSelectionMenuConfig] 写回 —— reader 端通过自己持有的
+     * [com.morealm.app.presentation.reader.ReaderSettingsController.selectionMenuConfig]
+     * 自动收到新值，无需手动通知。
+     */
+    val selectionMenuConfig: StateFlow<com.morealm.app.domain.entity.SelectionMenuConfig> =
+        prefs.selectionMenuConfig
+            .stateIn(viewModelScope, SharingStarted.Eagerly, com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT)
+
     fun setPageAnim(v: String) = viewModelScope.launch {
         prefs.setPageAnim(v)
         val activeId = prefs.activeReaderStyle.first()
@@ -66,6 +85,9 @@ class ReadingSettingsViewModel @Inject constructor(
     }
     fun setTapLeftAction(v: String) = viewModelScope.launch { prefs.setTapLeftAction(v) }
     fun setVolumeKeyPage(v: Boolean) = viewModelScope.launch { prefs.setVolumeKeyPage(v) }
+    fun setVolumeKeyReverse(v: Boolean) = viewModelScope.launch { prefs.setVolumeKeyReverse(v) }
+    fun setHeadsetButtonPage(v: Boolean) = viewModelScope.launch { prefs.setHeadsetButtonPage(v) }
+    fun setVolumeKeyLongPress(v: String) = viewModelScope.launch { prefs.setVolumeKeyLongPress(v) }
     fun setResumeLastRead(v: Boolean) = viewModelScope.launch { prefs.setResumeLastRead(v) }
     fun setLongPressUnderline(v: Boolean) = viewModelScope.launch { prefs.setLongPressUnderline(v) }
     fun setScreenTimeout(v: Int) = viewModelScope.launch { prefs.setScreenTimeout(v) }
@@ -76,4 +98,21 @@ class ReadingSettingsViewModel @Inject constructor(
     fun setTtsSkipPattern(v: String) = viewModelScope.launch { prefs.setTtsSkipPattern(v) }
     fun setReaderBgImageDay(v: String) = viewModelScope.launch { prefs.setReaderBgImageDay(v) }
     fun setReaderBgImageNight(v: String) = viewModelScope.launch { prefs.setReaderBgImageNight(v) }
+
+    /**
+     * 保存选区菜单配置 —— 落 DataStore 前打 INFO 日志，记录三个桶的项数 +
+     * 列表顺序中各 item 的位置缩写，方便排查"用户报按钮顺序丢了"。
+     *
+     * 不打整段 JSON：1) 项不多，缩写够诊断；2) 避免 logcat 行变得过长。
+     */
+    fun setSelectionMenuConfig(v: com.morealm.app.domain.entity.SelectionMenuConfig) =
+        viewModelScope.launch {
+            com.morealm.app.core.log.AppLog.info(
+                "SelectionMenu",
+                "save config: ${v.summary()} order=[${
+                    v.items.joinToString(",") { "${it.item.name.first()}:${it.position.name.first()}" }
+                }]",
+            )
+            prefs.setSelectionMenuConfig(v)
+        }
 }
