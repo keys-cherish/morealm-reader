@@ -549,3 +549,105 @@ object HighlightPalette {
 
     val PRESETS: List<Int> = listOf(YELLOW, GREEN, BLUE, PINK, PURPLE)
 }
+
+/**
+ * 把页面坐标 (x, y) 映射回章节字符 offset；命中 line 外区域返回 null。
+ *
+ * 实现思路：先用现成的 [hitTestPage] 拿到 TextPos，再走
+ * `page.chapterPosition + getPosByLineColumn` 转回 chapter-level 字符位置。
+ * 这是 ReaderSelectionToolbar.selectedStartChapterPosition() 的复用版本，
+ * 单独抽出来给"点击已存高亮"的命中检测路径用。
+ */
+fun chapterPositionAt(page: TextPage, x: Float, y: Float): Int? {
+    val pos = hitTestPage(page, x, y) ?: return null
+    return page.chapterPosition + page.getPosByLineColumn(pos.lineIndex, pos.columnIndex)
+}
+
+/**
+ * 已存高亮的弹窗式动作菜单（删除 / 分享）。
+ *
+ * 与 [SelectionToolbar] 共用气泡造型，但功能精简到两按钮，避免和编辑选区时的
+ * 主 toolbar 视觉混淆。颜色徽章左侧让用户瞥一眼就能确认点中了哪条高亮。
+ */
+@Composable
+fun HighlightActionToolbar(
+    offset: Offset,
+    colorArgb: Int,
+    onDelete: () -> Unit,
+    onShare: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    val arrowColor = MaterialTheme.colorScheme.surfaceContainerHigh
+
+    val xDp = with(density) { offset.x.toDp() }
+    val yDp = with(density) { offset.y.toDp() }
+    val screenWidth = configuration.screenWidthDp.dp
+    val screenHeight = configuration.screenHeightDp.dp
+    val menuWidth = 156.dp
+    val menuHeight = 46.dp
+    val showBelow = yDp - menuHeight - 12.dp < 8.dp
+    val menuX = (xDp - menuWidth / 2).coerceIn(8.dp, screenWidth - menuWidth - 8.dp)
+    val menuY = if (showBelow) {
+        (yDp + 16.dp).coerceAtMost(screenHeight - menuHeight - 16.dp)
+    } else {
+        (yDp - menuHeight - 12.dp).coerceAtLeast(8.dp)
+    }
+    val arrowX = (xDp - menuX - 7.dp).coerceIn(18.dp, menuWidth - 18.dp)
+
+    Box(modifier = modifier.fillMaxSize()) {
+        // Tap-outside dismiss layer — covers the whole screen with a transparent
+        // box that swallows clicks. Without it the user has to tap precisely
+        // outside the toolbar to dismiss; here ANY tap that isn't on a button
+        // closes the menu (matches the behaviour of SelectionToolbar's
+        // backdrop, except SelectionToolbar relies on selection.clear() being
+        // called from each action).
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+        )
+        Column(
+            modifier = Modifier
+                .offset(x = menuX, y = menuY)
+                .width(menuWidth),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (showBelow) {
+                ToolbarArrow(arrowColor, pointsDown = false, modifier = Modifier.offset(x = arrowX - menuWidth / 2))
+            }
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shadowElevation = 12.dp,
+                tonalElevation = 2.dp,
+                modifier = Modifier.widthIn(max = menuWidth),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(14.dp)
+                            .clip(CircleShape)
+                            .background(Color(colorArgb)),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    MenuBtn(Icons.Default.Share, "分享", onShare)
+                    MenuSep()
+                    MenuBtn(Icons.Default.Delete, "删除", onDelete)
+                }
+            }
+            if (!showBelow) {
+                ToolbarArrow(arrowColor, pointsDown = true, modifier = Modifier.offset(x = arrowX - menuWidth / 2))
+            }
+        }
+    }
+}

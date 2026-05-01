@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.TextPage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -118,6 +119,29 @@ internal class PageTurnCoordinator(
             return null
         }
         if (content.boundaryDirection != null) {
+            // 跨章闪烁防御第三层：把"目标章节的目标 displayIndex"回写到
+            // lastSettledDisplayPage。
+            //   - PREV：跳到上一章的末页（factory.prevChapterLastDisplayIndex）
+            //   - NEXT：跳到下一章的首页（恒为 0）
+            // 这个写入的 coordinator 实例即将被 chapterIndex 变化触发的
+            // remember 重建销毁，从该实例本身看回写"白做了"——但配合层 2
+            // (CanvasRenderer 的 coordinator 同步初始化) 后，构造块会读 prelayout
+            // cache / readerPageIndex 算出同一个值。两层独立计算同一个目标，互
+            // 为 cross-check：只要任一层正确，displayPage 就是对的。
+            val targetDisplayIndex = when (content.boundaryDirection) {
+                ReaderPageDirection.PREV -> factory.prevChapterLastDisplayIndex() ?: 0
+                ReaderPageDirection.NEXT -> 0
+                ReaderPageDirection.NONE -> null
+            }
+            AppLog.debug(
+                "PageTurnFlicker",
+                "[1] commitPageTurn BOUNDARY direction=$direction inputDisplayIdx=$displayIndex" +
+                    " contentCurrentIdx=${content.currentDisplayIndex}" +
+                    " boundaryDir=${content.boundaryDirection}" +
+                    " lastSettledBefore=$lastSettledDisplayPage" +
+                    " writeBackTo=$targetDisplayIndex",
+            )
+            targetDisplayIndex?.let { lastSettledDisplayPage = it }
             pageDelegateState.stopScroll()
             return null
         }

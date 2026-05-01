@@ -62,23 +62,49 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
     private val globalUtteranceListener = object : UtteranceProgressListener() {
         override fun onStart(id: String?) {
             id ?: return
-            batchCallback?.onUtteranceStart(id)
+            val cb = batchCallback
+            if (cb == null) {
+                // batchCallback 为 null 但回调还在触发——可能是 oneShot 残留，或
+                // 引擎在 setBatchCallback(null) 之后还有 pending utterance。仅
+                // debug 级别记录，不当作错误。
+                com.morealm.app.core.log.AppLog.debug(
+                    "TTS", "engine.onStart dropped (no cb): id=$id"
+                )
+                return
+            }
+            com.morealm.app.core.log.AppLog.debug("TTS", "engine.onStart → cb id=$id")
+            cb.onUtteranceStart(id)
         }
         override fun onDone(id: String?) {
             id ?: return
-            batchCallback?.onUtteranceDone(id)
+            val cb = batchCallback
+            if (cb == null) {
+                com.morealm.app.core.log.AppLog.debug(
+                    "TTS", "engine.onDone dropped (no cb): id=$id"
+                )
+                return
+            }
+            com.morealm.app.core.log.AppLog.debug("TTS", "engine.onDone → cb id=$id")
+            cb.onUtteranceDone(id)
         }
         override fun onError(id: String?, errorCode: Int) {
             id ?: return
+            com.morealm.app.core.log.AppLog.warn(
+                "TTS", "engine.onError id=$id code=$errorCode (cb=${batchCallback != null})"
+            )
             batchCallback?.onUtteranceError(id, errorCode)
         }
         @Deprecated("Deprecated in Java")
         override fun onError(id: String?) {
             id ?: return
+            com.morealm.app.core.log.AppLog.warn(
+                "TTS", "engine.onError(legacy) id=$id (cb=${batchCallback != null})"
+            )
             batchCallback?.onUtteranceError(id, -1)
         }
         override fun onRangeStart(id: String?, start: Int, end: Int, frame: Int) {
             id ?: return
+            // 高频回调，不在这里打日志；上层 BatchCallback 自己做去重打印。
             batchCallback?.onRangeStart(id, start, end)
         }
     }
@@ -89,6 +115,9 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
      * pending 回调会被静默吞掉。
      */
     fun setBatchCallback(cb: BatchCallback?) {
+        com.morealm.app.core.log.AppLog.debug(
+            "TTS", "setBatchCallback: ${if (cb != null) "registered" else "cleared"}"
+        )
         batchCallback = cb
         if (cb != null) {
             tts?.setOnUtteranceProgressListener(globalUtteranceListener)
@@ -97,7 +126,9 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
 
     /** 设置全局语速（影响后续所有入队 utterance）。 */
     fun setSpeechRate(speed: Float) {
-        tts?.setSpeechRate(speed.coerceIn(0.3f, 4.0f))
+        val coerced = speed.coerceIn(0.3f, 4.0f)
+        com.morealm.app.core.log.AppLog.debug("TTS", "setSpeechRate: $speed → $coerced")
+        tts?.setSpeechRate(coerced)
     }
 
     /**
@@ -106,7 +137,13 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
      * @return [TextToSpeech.SUCCESS] 或 [TextToSpeech.ERROR]
      */
     fun enqueue(text: String, utteranceId: String, queueMode: Int): Int {
-        val engine = tts ?: return TextToSpeech.ERROR
+        val engine = tts
+        if (engine == null) {
+            com.morealm.app.core.log.AppLog.warn(
+                "TTS", "enqueue: engine null, returning ERROR (id=$utteranceId)"
+            )
+            return TextToSpeech.ERROR
+        }
         return runCatching {
             engine.speak(text, queueMode, null, utteranceId)
         }.getOrElse {

@@ -55,6 +55,14 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     var onTapPrev: (() -> Unit)? = null
     var onTapNext: (() -> Unit)? = null
     var onLongPress: ((x: Float, y: Float) -> Unit)? = null
+    /**
+     * Pre-zone tap callback — invoked before [handleTap] routes the tap to
+     * prev/center/next zones. Return `true` to indicate the tap was consumed
+     * (e.g. user tapped on a saved highlight to bring up its action menu);
+     * the zone routing is then skipped. Used by ReaderScreen to hit-test
+     * highlights without losing the simple tap-anywhere page-turn fallback.
+     */
+    var onSingleTap: ((x: Float, y: Float) -> Boolean)? = null
     var canTurnNext: (() -> Boolean)? = null
     var canTurnPrev: (() -> Boolean)? = null
     var bgMeanColor: Int = 0xFFFFFFFF.toInt()
@@ -66,16 +74,44 @@ class SimulationReadView(context: Context) : android.view.View(context) {
 
     private var idleBitmap: Bitmap? = null
 
-    fun setIdleBitmap(bitmap: Bitmap?) {
-        // Diagnostic for cross-chapter flicker (docs/issues/simulation-page-turn-flicker.md
-        // root cause #3). identityHashCode lets us tell two distinct bitmap
-        // instances apart in the log so we can confirm whether the wrong
-        // bitmap is being installed and then replaced one frame later.
+    /**
+     * Cross-chapter flicker防御：当动画刚结束 ([onAnimStop] commit 路径) 时把
+     * `prev/nextBitmap`（动画中露出的"对侧页"）直接 promote 为 `idleBitmap`
+     * 并把这个标志拉起，**拒绝所有外部 [setIdleBitmap] 覆盖**直到下一次
+     * `ACTION_DOWN`（用户开始下次交互）才解锁。
+     *
+     * 原因：跨章 PREV 时 update lambda 在新 coordinator 重建后用
+     * `displayPage=0` 同步算出"目标章首页"位图传进来，会瞬间覆盖掉动画刚刚
+     * 落下的对侧页（应该是上一章末页）—— 屏幕会闪一帧错的页。pin 住后这个
+     * 写入被拒，等 LaunchedEffect 把 `lastSettledDisplayPage` 修对、再次重组
+     * 时，新位图才真正生效。
+     *
+     * 解锁时机选 `ACTION_DOWN`：用户开始下次操作 = "翻页结束态"已经被消费，
+     * 后续 update lambda 写什么都不会再被立刻看见（要么被新动画的 curl 覆盖，
+     * 要么停在新的稳定页位）。比"超时解锁"或"显式 unpin 接口"都简单。
+     */
+    private var idleBitmapPinned = false
+
+    /**
+     * @param force `true` 用于内部 promote 路径（[onAnimStop]），跳过 pin 检查。
+     *              UI 调用永远走默认 `false`。
+     */
+    fun setIdleBitmap(bitmap: Bitmap?, force: Boolean = false) {
+        if (idleBitmapPinned && !force) {
+            AppLog.debug(
+                "PageTurnFlicker",
+                "[3b] setIdleBitmap REJECTED (pinned)" +
+                    " incomingId=${bitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                    " currentIdleId=${idleBitmap?.let { System.identityHashCode(it) } ?: "null"}",
+            )
+            return
+        }
         AppLog.debug(
             "PageTurnFlicker",
             "[3b] setIdleBitmap RECV bitmapId=${bitmap?.let { System.identityHashCode(it) } ?: "null"}" +
                 " isMoved=$isMoved isRunning=$isRunning" +
-                " currentIdleId=${idleBitmap?.let { System.identityHashCode(it) } ?: "null"}",
+                " currentIdleId=${idleBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                " force=$force",
         )
         idleBitmap = bitmap
         if (!isMoved && !isRunning) postInvalidate()
@@ -109,6 +145,10 @@ class SimulationReadView(context: Context) : android.view.View(context) {
                 // Legado: abortAnim() + onDown()
                 abortAnim()
                 onDown()
+                // 用户开始新交互 → 解锁 idleBitmap：上次动画产生的"自我升格"
+                // 位图已被消费，继续 pin 会让正常的主题切换 / 章节加载完成后
+                // 的 update lambda 写不进去。详见 [idleBitmapPinned] 的注释。
+                idleBitmapPinned = false
                 longPressHandled = false
                 startX = event.x
                 startY = event.y
@@ -183,6 +223,11 @@ class SimulationReadView(context: Context) : android.view.View(context) {
 
     // ── Tap handling (3-column zones, like Legado ReadView.onSingleTapUp) ──
     private fun handleTap(x: Float, y: Float) {
+        // Highlight hit-test (or any consumer-defined precedence) takes priority
+        // over the prev/center/next zone routing — lets users tap a saved
+        // highlight anywhere on screen to bring up its action menu without
+        // having to dodge the prev/next page zones.
+        if (onSingleTap?.invoke(x, y) == true) return
         val third = width / 3f
         when {
             x < third -> {
@@ -361,6 +406,20 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     // ── Animation complete — Legado SimulationPageDelegate.onAnimStop ──
     private fun onAnimStop() {
         if (!isCancel) {
+            // 跨章闪烁防御第一层：把动画露出的对侧页 (prev/nextBitmap) 直接
+            // promote 为 idleBitmap 并 pin。这样即使 onPageTurnCompleted 回调
+            // 链路触发了 chapterIndex 变化 → coordinator 重建 → update lambda
+            // 用 displayPage=0 写入"新章首页"位图，pin 也会拒绝这次覆盖，
+            // 屏幕保持显示动画落下的那一帧（视觉正确）直到 ACTION_DOWN 解锁。
+            val settled = if (isNext) nextBitmap else prevBitmap
+            if (settled != null && !settled.isRecycled) {
+                idleBitmap = settled
+                idleBitmapPinned = true
+                AppLog.debug(
+                    "Simulation",
+                    "onAnimStop promoted bitmapId=${System.identityHashCode(settled)} pinned",
+                )
+            }
             AppLog.debug("Simulation", "SimulationView onAnimStop commit isNext=$isNext")
             onPageTurnCompleted?.invoke(isNext)
         } else {

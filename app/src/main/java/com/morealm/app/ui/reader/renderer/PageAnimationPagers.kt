@@ -125,6 +125,11 @@ class SimulationParams(
     val onFillPage: (Int, ReaderPageDirection) -> Int?,
     val onTapCenter: () -> Unit = {},
     val onLongPress: ((Offset) -> Unit)? = null,
+    /**
+     * 在 simulation 模式下做"已存高亮命中检测"的入口。返回 true = 本次 tap
+     * 已被消费（弹出高亮 action menu），SimulationReadView 不再走 zone 翻页路由。
+     */
+    val onSingleTap: ((Offset) -> Boolean)? = null,
 )
 
 /**
@@ -343,6 +348,7 @@ private fun SimulationPager(
             }
             view.onTapCenter = { params.onTapCenter() }
             view.onLongPress = { x, y -> params.onLongPress?.invoke(Offset(x, y)) }
+            view.onSingleTap = { x, y -> params.onSingleTap?.invoke(Offset(x, y)) ?: false }
             view.onPageTurnCompleted = { isNext ->
                 val direction = if (isNext) ReaderPageDirection.NEXT else ReaderPageDirection.PREV
                 val committedPage = params.onFillPage(displayPage, direction)
@@ -357,6 +363,14 @@ private fun SimulationPager(
             val h = view.height
             if (w > 0 && h > 0) {
                 val page = params.pageForTurn(displayPage, 0)
+                // Diagnostic — pairs with setIdleBitmap's RECV log so we can
+                // see which displayPage the wrong bitmap was rendered from.
+                AppLog.debug(
+                    "PageTurnFlicker",
+                    "[3a] setIdleBitmap CALLED displayPage=$displayPage" +
+                        " pageHash=${page?.hashCode() ?: "null"}" +
+                        " pageCount=$pageCount viewWxH=${w}x$h",
+                )
                 view.setIdleBitmap(if (page != null) renderPageToBitmap(
                     w, h, params.bgColor, page,
                     params.titlePaint, params.contentPaint,

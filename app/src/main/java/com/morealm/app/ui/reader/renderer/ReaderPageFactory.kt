@@ -88,6 +88,27 @@ internal class ReaderPageFactory(
             dataSource.hasNextChapter()
     }
 
+    /**
+     * Last `displayIndex` of the *previous* chapter, or `null` if there is no
+     * previous chapter / it has no pages snapshotted yet.
+     *
+     * Used by [PageTurnCoordinator.commitPageTurn] on the PREV boundary path
+     * (cross-chapter flicker fix layer 3). When the user turns past the first
+     * page of the current chapter, `commitPageTurn` writes this value back to
+     * `lastSettledDisplayPage` so that — should the new coordinator be able to
+     * read it before re-init clobbers it — the simulation view starts at the
+     * incoming chapter's last page rather than its first page.
+     *
+     * Layer 2 (synchronous coordinator init in CanvasRenderer) is the one that
+     * actually persists across coordinator rebuild; layer 3 is the in-memory
+     * paper trail that lets layer 2 verify "yes, the user really did want the
+     * last page of this chapter, not the first."
+     */
+    fun prevChapterLastDisplayIndex(): Int? {
+        if (prevPages.isEmpty()) return null
+        return prevPages.lastIndex
+    }
+
     fun pageAt(displayIndex: Int): TextPage {
         return pages.getOrNull(displayIndex.coerceIn(0, pageCount - 1)) ?: curPage
     }

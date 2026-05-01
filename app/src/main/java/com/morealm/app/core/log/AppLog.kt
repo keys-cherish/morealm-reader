@@ -242,9 +242,46 @@ class RollingFileSink(
 
     fun todayFile(): File = File(logDir, "log_${dateFmt.get()!!.format(Date())}.txt")
 
-    fun cleanOld(maxDays: Int) {
-        val cutoff = System.currentTimeMillis() - maxDays * 86_400_000L
-        logDir.listFiles()?.forEach { if (it.lastModified() < cutoff) it.delete() }
+    /**
+     * Enforce age + count limits on every file in [logDir]. Called from
+     * `AppLog.init` once per app start.
+     *
+     * Order matters:
+     *   1. Age cull — anything older than [maxAgeDays] days is deleted regardless
+     *      of category. This is the cheap pass; most older files have been gone
+     *      for a while and never get re-checked.
+     *   2. Count cull — survivors are split by filename prefix and the
+     *      newest-first window of [maxLogFiles] / [maxCrashFiles] is kept;
+     *      the rest are deleted. Files that don't match either prefix
+     *      (e.g. cached export zips) are left alone.
+     *
+     * Idempotent and cheap (single `listFiles` + small in-memory sort).
+     * Silently no-ops if [logDir] doesn't exist.
+     *
+     * Replaces the previous `cleanOld(maxDays)` which only enforced age and
+     * let crash files accumulate without bound — under sustained crash bursts
+     * this filled the log directory faster than the 7-day window could clear it.
+     */
+    fun enforceLimits(maxAgeDays: Int, maxLogFiles: Int, maxCrashFiles: Int) {
+        val files = logDir.listFiles() ?: return
+        val ageCutoff = System.currentTimeMillis() - maxAgeDays * 86_400_000L
+
+        val survivors = files.filter { f ->
+            if (f.lastModified() < ageCutoff) {
+                f.delete()
+                false
+            } else true
+        }
+
+        fun cullByCount(items: List<File>, keep: Int) {
+            if (items.size <= keep) return
+            items.sortedByDescending { it.lastModified() }
+                .drop(keep)
+                .forEach { it.delete() }
+        }
+
+        cullByCount(survivors.filter { it.name.startsWith("log_") }, maxLogFiles)
+        cullByCount(survivors.filter { it.name.startsWith("crash_") }, maxCrashFiles)
     }
 }
 
@@ -268,6 +305,14 @@ object AppLog {
 
     private const val TAG = "MoRealm"
     private const val MAX_LOG_DAYS = 7
+    /** Hard cap on `log_*.txt` rolling files in the log dir. With single-day
+     *  rotation at 4 MB × 5 slices and 7-day retention, the natural ceiling
+     *  is 35 files per device. Setting the cap a touch above that ensures
+     *  size-based rotation never bumps into the count cap on a normal day. */
+    private const val MAX_LOG_FILES = 40
+    /** Hard cap on `crash_*.txt`. We keep more than the UI shows (10) so the
+     *  most recent week of incidents survives even if the user has a bad day. */
+    private const val MAX_CRASH_FILES = 20
     private val idCounter = java.util.concurrent.atomic.AtomicLong(0)
     fun nextId(): Long = idCounter.incrementAndGet()
 
@@ -276,6 +321,13 @@ object AppLog {
     private var fileSink: RollingFileSink? = null
     private var deviceInfo: String = ""
     private var initialized = false
+
+    /** SharedPreferences for [setRecordLog] persistence. Kept tiny + separate
+     *  from the user-facing app prefs (`morealm_settings`) so the DataStore
+     *  there isn't hit on every log toggle. */
+    private var logPrefs: android.content.SharedPreferences? = null
+    private const val LOG_PREFS_NAME = "morealm_log_prefs"
+    private const val KEY_RECORD_LOG = "record_log_enabled"
 
     /** Reactive log records for Compose UI */
     val logs: StateFlow<List<LogRecord>>
@@ -300,7 +352,16 @@ object AppLog {
         sinks += listOf(logcat, memory, file)
 
         deviceInfo = collectDeviceInfo(context)
-        file.cleanOld(MAX_LOG_DAYS)
+        file.enforceLimits(MAX_LOG_DAYS, MAX_LOG_FILES, MAX_CRASH_FILES)
+
+        // Persisted "详细日志记录" toggle. Read once on init so a user who
+        // turned it on yesterday still has DEBUG file logging today after a
+        // process kill — without this the toggle was UI-only and reset every
+        // launch, which is exactly what bit us when chasing the page-turn
+        // flicker (DEBUG logs in memory + nothing on disk).
+        logPrefs = context.getSharedPreferences(LOG_PREFS_NAME, Context.MODE_PRIVATE)
+        val savedRecordLog = logPrefs?.getBoolean(KEY_RECORD_LOG, false) ?: false
+        if (savedRecordLog) file.minLevel = LogLevel.DEBUG
         // Load previous crash files first so they appear in UI
         memory.loadCrashFiles(logDir)
         memory.loadFromFile(file.todayFile(), SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()))
@@ -366,10 +427,19 @@ object AppLog {
     /** Check if there are crash files from previous sessions */
     fun hasPendingCrash(): Boolean = getCrashFiles().isNotEmpty()
 
-    /** Enable/disable detailed file logging (recordLog toggle) */
+    /** Enable/disable detailed file logging (recordLog toggle). Persists to
+     *  [LOG_PREFS_NAME] so the choice survives process kill — the toggle is
+     *  read back in [init]. UI passes through here on every state change. */
     fun setRecordLog(enabled: Boolean) {
         fileSink?.minLevel = if (enabled) LogLevel.DEBUG else LogLevel.WARN
+        logPrefs?.edit()?.putBoolean(KEY_RECORD_LOG, enabled)?.apply()
     }
+
+    /** Current persisted state of [setRecordLog] — UI uses this to seed the
+     *  switch's initial state so it doesn't visually drift from the actual
+     *  fileSink minLevel after a process restart. */
+    fun isRecordLogEnabled(): Boolean =
+        logPrefs?.getBoolean(KEY_RECORD_LOG, false) ?: false
 
     fun coroutineExceptionHandler(tag: String = "Coroutine"): CoroutineExceptionHandler =
         CoroutineExceptionHandler { context, throwable ->

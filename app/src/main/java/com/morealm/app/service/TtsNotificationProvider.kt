@@ -11,6 +11,7 @@ import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
 import com.google.common.collect.ImmutableList
 import com.morealm.app.R
+import com.morealm.app.core.log.AppLog
 
 /**
  * Custom notification provider for the TTS service — ported visual semantics from
@@ -46,6 +47,18 @@ class TtsNotificationProvider(private val service: TtsService) : MediaNotificati
         val cover = player?.coverBitmap
         val isPlaying = player?.isPlaying == true
         val sleepMinutes = player?.sleepMinutes ?: 0
+
+        // 诊断"通知栏永远显示『朗读中』"问题：
+        // - 如果 createNotification 被调用 → 说明 Provider 已生效，问题在 metadata
+        //   传递（bookTitle/chapterTitle 一直空）；
+        // - 如果从不被调用 → Media3 的 setMediaNotificationProvider 没生效，
+        //   服务还在用 onCreate() 里的 earlyNotification 占位。
+        AppLog.debug(
+            "TtsNotif",
+            "createNotification: book='$bookTitle', chapter='$chapterTitle', " +
+                "isPlaying=$isPlaying, sleepMin=$sleepMinutes, " +
+                "playerType=${player?.javaClass?.simpleName}",
+        )
 
         // Legado-style title template
         val statePrefix = when {
