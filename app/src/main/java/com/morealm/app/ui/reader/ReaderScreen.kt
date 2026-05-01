@@ -68,6 +68,11 @@ fun ReaderScreen(
     bookId: String,
     onBack: () -> Unit,
     onNavigateToBook: (String) -> Unit = {},
+    /**
+     * 跳转到替换规则编辑（EffectiveReplacesDialog 内点击规则名时触发）。
+     * 接收 ruleId；导航到 replace_rules?editId=$ruleId 自动弹编辑框。
+     */
+    onNavigateToReplaceRule: (ruleId: String) -> Unit = {},
     themeViewModel: ThemeViewModel? = null,
     viewModel: ReaderViewModel = hiltViewModel(),
 ) {
@@ -716,6 +721,32 @@ fun ReaderScreen(
                 accentColor = MaterialTheme.colorScheme.primary,
                 onConfirm = { viewModel.openNextLinkedBook() },
                 onDismiss = { viewModel.dismissNextBookPrompt() },
+            )
+        }
+
+        // ── #5 EffectiveReplacesDialog ──
+        // 显示当前章「真命中」的替换规则 + 繁简转换占位。
+        // dismiss 时若用户做了改动（禁用 / 编辑 / 改繁简），重渲染当前章让规则立即生效。
+        val showEffectiveDialog by viewModel.showEffectiveReplacesDialog.collectAsStateWithLifecycle()
+        if (showEffectiveDialog) {
+            val hitContent by viewModel.hitContentRules.collectAsStateWithLifecycle()
+            val hitTitle by viewModel.hitTitleRules.collectAsStateWithLifecycle()
+            val cnMode by viewModel.settings.chineseConvertMode.collectAsStateWithLifecycle()
+            EffectiveReplacesDialog(
+                contentRules = hitContent,
+                titleRules = hitTitle,
+                chineseConvertMode = cnMode,
+                onDismiss = { isEdit ->
+                    viewModel.hideEffectiveReplacesDialog()
+                    if (isEdit) viewModel.refreshAfterReplaceRulesChanged()
+                },
+                onEditRule = { ruleId ->
+                    viewModel.hideEffectiveReplacesDialog()
+                    onNavigateToReplaceRule(ruleId)
+                },
+                onDisableRule = { viewModel.disableReplaceRule(it) },
+                onSetChineseConvertMode = { viewModel.setChineseConvertMode(it) },
+                onDisableChineseConvert = { viewModel.disableChineseConvert() },
             )
         }
     }
