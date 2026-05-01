@@ -187,10 +187,21 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.0-alpha4",
+        date = "2026-05-01",
+        title = "备份导出可选 · 操作即时反馈 · 仿真翻页长按选词",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            ChangelogItem(ChangeType.NEW, "备份导出新增「选项页」：可勾选要导出的数据类别（书籍 / 书源 / 进度 / 主题 / 阅读样式…），并实时显示压缩后体积，避免因书源等占大头让用户误以为备份失败"),
+            ChangelogItem(ChangeType.NEW, "备份导入 / 导出 / WebDav 操作完成时显示 Toast：成功 / 失败 / 失败原因；不再静默失败"),
+            ChangelogItem(ChangeType.IMPROVE, "仿真翻页模式支持长按文字呼出选择菜单（之前几乎不可触发）"),
+            ChangelogItem(ChangeType.IMPROVE, "文字选区手柄拖动调整范围时不再闪烁 / 跳跃，可平滑追随手指"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.0-alpha3",
         date = "2026-05-01",
         title = "自动分组重构 · 多标签 · 自动建文件夹 · Legado 全链路对齐",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             // ── 自动分组重构（本次重点） ──
             // P0 数据透传修复
