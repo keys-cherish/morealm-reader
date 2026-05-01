@@ -240,6 +240,28 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             ChangelogItem(ChangeType.NEW, "关于页面增加「更新日志」入口卡片，可一键跳转查看历史版本变更"),
             ChangelogItem(ChangeType.NEW, "关于页面显示作者署名：光坂镇"),
             ChangelogItem(ChangeType.IMPROVE, "更新日志页支持「最新」与「里程碑」徽章，便于快速识别重要版本"),
+
+            // ── WebDav 同步全面对齐 Legado（P0 + P1） ──
+            // P0 数据安全 / 正确性
+            ChangelogItem(ChangeType.FIX, "WebDav 上传 zip 现在包含主题与阅读样式 — 修 generateBackupBytes 漏写两字段导致跨设备恢复主题 / 阅读样式静默丢失"),
+            ChangelogItem(ChangeType.FIX, "备份 / 恢复 4 个入口加 Mutex 单飞 — 双击或备份恢复并发不再写脏数据库"),
+            ChangelogItem(ChangeType.NEW, "「从云端恢复」加二次确认弹窗 — 列出会被覆盖的表，不再单击秒覆盖整库"),
+            ChangelogItem(ChangeType.NEW, "WebDav lastModified 字段解析为 epoch 毫秒（RFC 1123），为「最新备份」「进度比对」奠基"),
+            ChangelogItem(ChangeType.IMPROVE, "WebDav 屏幕显示备份 / 恢复实时状态（成功 / 失败 / 进行中三色），并去除冗余 saveWebDav；备份 / 恢复在配置未保存时禁用并红字提示"),
+            ChangelogItem(ChangeType.FIX, "删除「自动同步」死 UI 项（占位 onClick 无逻辑），后续以真实开关回归"),
+            // P1 协议层
+            ChangelogItem(ChangeType.NEW, "支持 davs:// / dav:// scheme — 自动重写为 https:// / http://，从其它阅读器导出的链接可直接粘贴"),
+            ChangelogItem(ChangeType.IMPROVE, "WebDav 401 错误细化 — 检查 WWW-Authenticate 头，区分「密码错」与「服务器不支持 BasicAuth（仅 Digest / NTLM）」"),
+            // P1 多设备能力
+            ChangelogItem(ChangeType.NEW, "WebDav 设备名输入 — 备份文件名追加 _<设备名> 后缀，多设备备份互不覆盖"),
+            ChangelogItem(ChangeType.NEW, "「选择备份文件恢复」入口 — 列出云端 backup_*.zip 按时间倒序，可挑历史版本恢复"),
+            ChangelogItem(ChangeType.NEW, "五个同步开关：自动备份 / 只保留最新 / 同步阅读进度 / 恢复时跳过本地书 / 恢复时保留本机阅读样式"),
+            // P1 进度同步（多端读到哪同步）
+            ChangelogItem(ChangeType.NEW, "BookProgress 进度同步 — 切章节后台 fire-and-forget 上传，App 启动批量拉取并按「时间戳更新 + 进度更前」合并"),
+            ChangelogItem(ChangeType.IMPROVE, "进度同步按章节级节流 — 同章节内滚动不再刷网络"),
+            // P1 自动备份调度
+            ChangelogItem(ChangeType.NEW, "自动备份调度 — App 启动后检查上次备份是否超 24h，是则后台静默上传（开关可关）"),
+            ChangelogItem(ChangeType.REFACTOR, "WebDavBackupRunner 单例统一手动按钮与自动调度的备份路径，杜绝代码漂移"),
         ),
     ),
     ChangelogEntry(
