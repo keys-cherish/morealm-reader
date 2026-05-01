@@ -415,6 +415,19 @@ fun BookSourceManageScreen(
         }
         com.morealm.app.presentation.source.LoginUiState.Idle -> {}
     }
+
+    // ── #2 CheckSource 完成弹窗 ──
+    val showInvalidDialog by viewModel.showInvalidResultsDialog.collectAsStateWithLifecycle()
+    if (showInvalidDialog) {
+        val invalidResults by viewModel.invalidCheckResults.collectAsStateWithLifecycle()
+        CheckResultsDialog(
+            invalidResults = invalidResults,
+            onDismiss = { viewModel.dismissInvalidResultsDialog() },
+            onDelete = { selectedUrls ->
+                viewModel.deleteInvalidSources(selectedUrls)
+            },
+        )
+    }
 }
 
 @Composable
