@@ -60,20 +60,24 @@ class AutoFolderManager @Inject constructor(
         autoCreateThreshold: Int? = null,
     ): String? {
         val threshold = autoCreateThreshold ?: prefs.getAutoFolderThreshold()
-        // Pick the first non-source tag — source tags ("起点" etc.) make poor
-        // folders because they mix every genre. They stay as filter chips elsewhere.
+        // 优先取非 source 的 GENRE/USER 标签作主分组依据。
+        // 若 web 书因书源解析失败导致 kind/category/description 全空，GENRE
+        // 一个也没命中 —— 此时只剩 source 标签。开启 allowSourceFallback 后
+        // 让 source 升级为兜底文件夹（id 形如 auto:source:起点中文），
+        // 否则按原逻辑返回 null（书停留在根目录由「未分组」虚拟夹收纳）。
         val primaryTag = scoredTags.firstOrNull { !it.tagId.startsWith("source:") }
+            ?: scoredTags.firstOrNull { it.tagId.startsWith("source:") && prefs.getAllowSourceFallback() }
             ?: return null
         val tagDef = tagRepo.getTag(primaryTag.tagId) ?: return null
 
-        // Skip USER tags here — those map 1:1 to existing user folders that
-        // the migration already linked via folderId; nothing to "promote".
-        // Only GENRE tags become auto-folders.
-        if (tagDef.type != TagType.GENRE) {
-            // For USER tags, the tagId == groupId (set up by the v17 migration),
-            // so just return it directly. Group already exists.
+        // USER tags 直接走 v17 迁移建好的同 id 分组（不需要 promotion）。
+        // GENRE / SOURCE 都走下方 promotion 路径，差别只在 threshold —— SOURCE
+        // 用 1 表示「单本就给它建 source 文件夹」，因为同 source 的书天然
+        // 应该聚一起，不存在 GENRE 那种「凑够 3 本才像真兴趣」的语义。
+        if (tagDef.type == TagType.USER) {
             return tagDef.id.takeIf { groupRepo.getById(it) != null }
         }
+        val effectiveThreshold = if (tagDef.type == TagType.SOURCE) 1 else threshold
 
         // 1. Folder already exists for this genre? Use it.
         existingGroupForGenre(tagDef)?.let { return it.id }
@@ -85,7 +89,7 @@ class AutoFolderManager @Inject constructor(
         // 3. Threshold check — count AUTO-tagged books for this genre across the shelf.
         val peers = tagRepo.getBookIdsByTag(tagDef.id).toMutableSet()
         peers.add(book.id) // include the book that triggered this call
-        if (peers.size < threshold) return null
+        if (peers.size < effectiveThreshold) return null
 
         // 4. Create the auto-folder.
         val groupId = "auto:${tagDef.id}"

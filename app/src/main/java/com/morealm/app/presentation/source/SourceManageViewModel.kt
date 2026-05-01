@@ -219,6 +219,12 @@ class BookSourceManageViewModel @Inject constructor(
                 val results = _checkResults.value
                 val valid = results.values.count { it.isValid }
                 _importResult.value = "校验完成: $valid/${allSources.size} 可用"
+                // 仅当有失效本时弹出删除询问对话框（与"全部有效→只 toast"区分开）。
+                val invalid = results.values.filter { !it.isValid }
+                if (invalid.isNotEmpty()) {
+                    _invalidCheckResults.value = invalid
+                    _showInvalidResultsDialog.value = true
+                }
             } catch (e: Exception) {
                 _importResult.value = "校验失败: ${e.message}"
             } finally {
@@ -230,6 +236,41 @@ class BookSourceManageViewModel @Inject constructor(
     fun cancelCheckSources() {
         checkJob?.cancel()
         _isChecking.value = false
+    }
+
+    // ── CheckSource 完成弹窗 ──
+    /** 仅当有失效书源时为 true；UI 据此弹删除询问对话框。 */
+    private val _showInvalidResultsDialog = MutableStateFlow(false)
+    val showInvalidResultsDialog: StateFlow<Boolean> = _showInvalidResultsDialog.asStateFlow()
+
+    /** 失效书源结果快照（弹窗展示数据源；包含 sourceUrl/sourceName/error）。 */
+    private val _invalidCheckResults = MutableStateFlow<List<CheckSource.CheckResult>>(emptyList())
+    val invalidCheckResults: StateFlow<List<CheckSource.CheckResult>> = _invalidCheckResults.asStateFlow()
+
+    fun dismissInvalidResultsDialog() {
+        _showInvalidResultsDialog.value = false
+    }
+
+    /**
+     * 批量删除用户选中的失效书源。删除调用 sourceRepo.delete 走持久化；db 实时刷新让
+     * sources StateFlow 自动重发。删完关弹窗。
+     */
+    fun deleteInvalidSources(sourceUrls: Collection<String>) {
+        if (sourceUrls.isEmpty()) {
+            _showInvalidResultsDialog.value = false
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val toDelete = sources.value.filter { it.bookSourceUrl in sourceUrls }
+            for (s in toDelete) {
+                runCatching { sourceRepo.delete(s) }
+                    .onFailure {
+                        AppLog.warn("CheckSource", "delete failed ${s.bookSourceUrl}: ${it.message}")
+                    }
+            }
+            _showInvalidResultsDialog.value = false
+            _importResult.value = "已删除 ${toDelete.size} 个失效书源"
+        }
     }
 
     fun removeInvalidSources() {

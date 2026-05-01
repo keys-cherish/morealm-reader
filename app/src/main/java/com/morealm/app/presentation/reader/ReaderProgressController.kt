@@ -1,5 +1,6 @@
 package com.morealm.app.presentation.reader
 
+import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.ReadProgress
 import com.morealm.app.domain.entity.ReadStats
 import com.morealm.app.domain.repository.BookRepository
@@ -26,6 +27,13 @@ class ReaderProgressController(
     private val scope: CoroutineScope,
     /** Lazily provide the page turn mode from settings */
     private val pageTurnMode: () -> PageTurnMode,
+    /**
+     * Hook fired AFTER a successful local progress save. Used by the
+     * WebDav per-book progress sync to fire-and-forget upload the new
+     * cursor without coupling this controller to network code. Default
+     * is a no-op so unit tests / non-sync builds aren't affected.
+     */
+    private val onProgressSaved: suspend (Book, ReadProgress) -> Unit = { _, _ -> },
 ) {
     // ── State ──
     val _scrollProgress = MutableStateFlow(0)
@@ -125,6 +133,11 @@ class ReaderProgressController(
             lastQueuedVisibleReadProgress = _visiblePage.value.readProgress
             lastQueuedChapterPosition = chapterPosition
             flushReadingStats()
+            // Fire-and-forget hook for WebDav progress sync. Wrapped in
+            // runCatching because a network failure here must NOT bubble
+            // up and mask the local save success.
+            runCatching { onProgressSaved(book, progress) }
+                .onFailure { AppLog.warn("Progress", "onProgressSaved hook threw: ${it.message}") }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {

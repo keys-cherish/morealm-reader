@@ -75,6 +75,31 @@ class ProfileViewModel @Inject constructor(
     val webDavPass: StateFlow<String> = prefs.webDavPass
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    // ── WebDav P1 settings (read) ────────────────────────────────────────
+    val webDavDir: StateFlow<String> = prefs.webDavDir
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "MoRealm")
+    val webDavDeviceName: StateFlow<String> = prefs.webDavDeviceName
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+    val syncBookProgress: StateFlow<Boolean> = prefs.syncBookProgress
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val onlyLatestBackup: StateFlow<Boolean> = prefs.onlyLatestBackup
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val ignoreLocalBook: StateFlow<Boolean> = prefs.ignoreLocalBook
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val ignoreReadConfig: StateFlow<Boolean> = prefs.ignoreReadConfig
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val autoBackup: StateFlow<Boolean> = prefs.autoBackup
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    // ── WebDav P1 settings (write) ───────────────────────────────────────
+    fun setWebDavDir(dir: String) = viewModelScope.launch(Dispatchers.IO) { prefs.setWebDavDir(dir) }
+    fun setWebDavDeviceName(name: String) = viewModelScope.launch(Dispatchers.IO) { prefs.setWebDavDeviceName(name) }
+    fun setSyncBookProgress(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) { prefs.setSyncBookProgress(enabled) }
+    fun setOnlyLatestBackup(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) { prefs.setOnlyLatestBackup(enabled) }
+    fun setIgnoreLocalBook(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) { prefs.setIgnoreLocalBook(enabled) }
+    fun setIgnoreReadConfig(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) { prefs.setIgnoreReadConfig(enabled) }
+    fun setAutoBackup(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) { prefs.setAutoBackup(enabled) }
+
     private val _testResult = MutableStateFlow("")
     val testResult: StateFlow<String> = _testResult.asStateFlow()
 
@@ -136,6 +161,28 @@ class ProfileViewModel @Inject constructor(
     val showRestoreConfirmation: StateFlow<Boolean> = _showRestoreConfirmation.asStateFlow()
 
     /**
+     * Picker state: when true the screen shows a dialog listing all
+     * `backup_*.zip` entries on the remote, sorted by lastModifiedEpoch
+     * descending. The user picks one or "use latest"; that selection sinks
+     * into [_pendingRestorePath] and triggers the confirmation dialog.
+     */
+    private val _showBackupPicker = MutableStateFlow(false)
+    val showBackupPicker: StateFlow<Boolean> = _showBackupPicker.asStateFlow()
+
+    private val _backupList = MutableStateFlow<List<com.morealm.app.domain.sync.WebDavClient.DavFile>>(emptyList())
+    val backupList: StateFlow<List<com.morealm.app.domain.sync.WebDavClient.DavFile>> = _backupList.asStateFlow()
+
+    private val _backupListLoading = MutableStateFlow(false)
+    val backupListLoading: StateFlow<Boolean> = _backupListLoading.asStateFlow()
+
+    /**
+     * Path picked from the backup file picker. `null` means "use the
+     * default `backup_latest<deviceSuffix>.zip`". Captured at pick-time and
+     * consumed by [webDavRestore].
+     */
+    private val _pendingRestorePath = MutableStateFlow<String?>(null)
+
+    /**
      * Validate config and ask the screen to surface the restore confirmation
      * dialog. The actual restore only fires after the user confirms via
      * [webDavRestore]; this two-step flow is the P0 fix for "single-click
@@ -147,11 +194,65 @@ class ProfileViewModel @Inject constructor(
             _webDavStatus.value = "请先配置 WebDAV"
             return
         }
+        _pendingRestorePath.value = null  // default = latest
+        _showRestoreConfirmation.value = true
+    }
+
+    /**
+     * Open the backup-file picker dialog and asynchronously load the list
+     * of `backup_*.zip` files on the remote. The picker is the long-form
+     * counterpart to [requestWebDavRestore]: it lets the user pick a
+     * specific historical backup instead of always using "latest".
+     */
+    fun requestBackupPicker() {
+        val url = webDavUrl.value
+        val user = webDavUser.value
+        val pass = webDavPass.value
+        if (url.isBlank()) {
+            _webDavStatus.value = "请先配置 WebDAV"
+            return
+        }
+        _showBackupPicker.value = true
+        _backupListLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val client = backupRepo.createWebDavClient(url, user, pass)
+                val dir = webDavDir.value.ifBlank { "MoRealm" }.trim('/')
+                val files = client.listFiles(dir)
+                    .filter { !it.isDirectory && it.name.startsWith("backup") && it.name.endsWith(".zip") }
+                    .sortedByDescending { it.lastModifiedEpoch }
+                _backupList.value = files
+            } catch (e: Exception) {
+                _webDavStatus.value = "读取备份列表失败：${e.message}"
+                AppLog.error("WebDAV", "List backups failed", e)
+                _backupList.value = emptyList()
+                _showBackupPicker.value = false
+            } finally {
+                _backupListLoading.value = false
+            }
+        }
+    }
+
+    /** User dismissed the backup-picker dialog without picking. */
+    fun cancelBackupPicker() {
+        _showBackupPicker.value = false
+    }
+
+    /**
+     * User picked a backup file from the picker. Builds the relative path
+     * (`<dir>/<filename>`), stashes it in [_pendingRestorePath], closes the
+     * picker, and opens the confirmation dialog.
+     */
+    fun selectBackupFile(file: com.morealm.app.domain.sync.WebDavClient.DavFile) {
+        val dir = webDavDir.value.ifBlank { "MoRealm" }.trim('/')
+        _pendingRestorePath.value = "$dir/${file.name}"
+        _showBackupPicker.value = false
         _showRestoreConfirmation.value = true
     }
 
     /** User dismissed the confirmation dialog without confirming. */
     fun cancelWebDavRestore() {
+        _pendingRestorePath.value = null
         _showRestoreConfirmation.value = false
     }
 
@@ -161,21 +262,36 @@ class ProfileViewModel @Inject constructor(
         val pass = webDavPass.value
         if (url.isBlank()) { _webDavStatus.value = "请先配置 WebDAV"; return }
 
+        // Read P1 settings at trigger-time so a user setting change is picked
+        // up on the next click without having to restart the screen.
+        val dir = webDavDir.value.ifBlank { "MoRealm" }.trim('/')
+        val device = webDavDeviceName.value.trim()
+        val onlyLatest = onlyLatestBackup.value
+
         viewModelScope.launch(Dispatchers.IO) {
             _webDavStatus.value = "备份中..."
             try {
                 val client = backupRepo.createWebDavClient(url, user, pass)
-                client.mkdir("MoRealm")
+                client.mkdir(dir)
                 val backupData = backupRepo.generateBackupBytes()
                 if (backupData == null) {
                     _webDavStatus.value = "备份数据生成失败"
                     return@launch
                 }
+                // Filename strategy:
+                //  • onlyLatest=true → single file, overwritten each time
+                //  • else → timestamped + always update latest pointer
+                //  • device suffix appended when set, so multi-device backups
+                //    don't clobber each other's "today's" file
                 val ts = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
-                client.upload("MoRealm/backup_$ts.zip", backupData)
-                client.upload("MoRealm/backup_latest.zip", backupData)
+                val deviceSuffix = if (device.isNotEmpty()) "_${device.replace(Regex("[^A-Za-z0-9_-]"), "")}" else ""
+                if (!onlyLatest) {
+                    client.upload("$dir/backup_${ts}${deviceSuffix}.zip", backupData)
+                }
+                client.upload("$dir/backup_latest${deviceSuffix}.zip", backupData)
+                prefs.setLastAutoBackup(System.currentTimeMillis())
                 _webDavStatus.value = "备份成功"
-                AppLog.info("WebDAV", "Backup uploaded: ${backupData.size} bytes")
+                AppLog.info("WebDAV", "Backup uploaded: ${backupData.size} bytes (onlyLatest=$onlyLatest, device=$device)")
             } catch (e: Exception) {
                 _webDavStatus.value = "备份失败：${e.message}"
                 AppLog.error("WebDAV", "Backup failed", e)
@@ -188,18 +304,32 @@ class ProfileViewModel @Inject constructor(
      * confirmation dialog's positive button — the public entry point that
      * the screen wires to the SyncItem click is [requestWebDavRestore].
      */
+    /**
+     * Actually perform the WebDav restore. Should ONLY be called from the
+     * confirmation dialog's positive button — the public entry points are
+     * [requestWebDavRestore] (latest) or [selectBackupFile] (specific file
+     * picked from the backup picker). Reads the path from
+     * [_pendingRestorePath]; null means "use the default latest pointer".
+     */
     fun webDavRestore() {
+        val remotePath = _pendingRestorePath.value
+        _pendingRestorePath.value = null
         _showRestoreConfirmation.value = false
         val url = webDavUrl.value
         val user = webDavUser.value
         val pass = webDavPass.value
         if (url.isBlank()) { _webDavStatus.value = "请先配置 WebDAV"; return }
 
+        val dir = webDavDir.value.ifBlank { "MoRealm" }.trim('/')
+        val device = webDavDeviceName.value.trim()
+        val deviceSuffix = if (device.isNotEmpty()) "_${device.replace(Regex("[^A-Za-z0-9_-]"), "")}" else ""
+        val path = remotePath?.takeIf { it.isNotBlank() } ?: "$dir/backup_latest${deviceSuffix}.zip"
+
         viewModelScope.launch(Dispatchers.IO) {
             _webDavStatus.value = "恢复中..."
             try {
                 val client = backupRepo.createWebDavClient(url, user, pass)
-                val data = client.download("MoRealm/backup_latest.zip")
+                val data = client.download(path)
                 if (data.isEmpty()) {
                     _webDavStatus.value = "未找到备份文件"
                     return@launch

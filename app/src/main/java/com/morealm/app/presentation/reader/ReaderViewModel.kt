@@ -69,6 +69,7 @@ class ReaderViewModel @Inject constructor(
     private val replaceRuleRepo: ReplaceRuleRepository,
     private val styleRepo: com.morealm.app.domain.repository.ReaderStyleRepository,
     private val sourceRepo: SourceRepository,
+    private val progressSync: com.morealm.app.domain.sync.WebDavBookProgressSync,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -99,6 +100,10 @@ class ReaderViewModel @Inject constructor(
         readStatsRepo = readStatsRepo,
         scope = viewModelScope,
         pageTurnMode = { settings.pageTurnMode.value },
+        // P1-B WebDav progress sync hook — `maybeUpload` self-throttles on
+        // chapter-index change so scroll-only progress saves don't hit the
+        // network, and is a no-op when the user has the toggle off.
+        onProgressSaved = { book, p -> progressSync.maybeUpload(book, p) },
     )
 
     val navigation = ReaderNavigationController(

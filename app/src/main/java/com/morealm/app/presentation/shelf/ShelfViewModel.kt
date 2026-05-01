@@ -10,12 +10,15 @@ import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.BookGroup
+import com.morealm.app.domain.entity.SearchBook
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.AutoGroupClassifier
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.BookGroupRepository
+import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.domain.parser.EpubParser
 import com.morealm.app.domain.parser.PdfParser
+import com.morealm.app.domain.webbook.WebBook
 import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -31,9 +34,14 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.util.UUID
 import javax.inject.Inject
@@ -55,6 +63,7 @@ class ShelfViewModel @Inject constructor(
     private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
     private val refreshController: ShelfRefreshController,
     private val databaseSeeder: com.morealm.app.domain.db.DatabaseSeeder,
+    private val sourceRepo: SourceRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -660,6 +669,23 @@ class ShelfViewModel @Inject constructor(
             _isOrganizing.value = true
             try {
                 val before = groupRepo.getAllGroupsSync().count { it.auto }
+
+                // ── Stage A：metadata 预补全 ──
+                // 部分 web 书源详情解析失败导致 kind/category/description 全空，
+                // TagResolver 没有任何关键词字段可匹配 GENRE。先批量调
+                // WebBook.getBookInfoAwait 重抓详情（仅对三字段都 blank 的
+                // WEB 书），避免后续分类阶段全靠 title 撞关键词。
+                val sparse = bookRepo.getAllBooksSync().filter { b ->
+                    b.format == BookFormat.WEB &&
+                        !b.groupLocked &&
+                        b.kind.isNullOrBlank() &&
+                        b.category.isNullOrBlank() &&
+                        b.description.isNullOrBlank() &&
+                        !b.sourceUrl.isNullOrBlank()
+                }
+                val refreshed = if (sparse.isNotEmpty()) prefetchWebMetadata(sparse) else 0
+
+                // ── Stage B：分类 + 自动建组（含 source 兜底）──
                 var touched = 0
                 for (book in bookRepo.getAllBooksSync()) {
                     if (book.groupLocked) continue
@@ -670,14 +696,52 @@ class ShelfViewModel @Inject constructor(
                         touched++
                     }
                 }
+
+                // ── Stage C：保底「无法识别」分组 ──
+                // 仍 folderId == null 的 WEB 书统一塞入 auto:unrecognized，
+                // 让用户在书架上能看到这批被算法漏掉的书，而不是默默留在根目录。
+                val orphans = bookRepo.getAllBooksSync().filter { b ->
+                    b.format == BookFormat.WEB &&
+                        b.folderId == null &&
+                        !b.groupLocked &&
+                        b.tagsAssignedBy != "MANUAL"
+                }
+                var rescued = 0
+                if (orphans.isNotEmpty()) {
+                    val unId = "auto:unrecognized"
+                    if (groupRepo.getById(unId) == null) {
+                        val nextOrder = (groupRepo.getAllGroupsSync().maxOfOrNull { it.sortOrder } ?: 0) + 1
+                        groupRepo.insert(
+                            BookGroup(
+                                id = unId,
+                                name = "无法识别",
+                                emoji = "❓",
+                                sortOrder = nextOrder,
+                                auto = true,
+                            )
+                        )
+                    }
+                    orphans.forEach {
+                        bookRepo.update(it.copy(folderId = unId))
+                        rescued++
+                    }
+                }
+
                 val after = groupRepo.getAllGroupsSync().count { it.auto }
                 val newFolders = (after - before).coerceAtLeast(0)
-                _organizeReport.value = when {
-                    touched == 0 && newFolders == 0 -> "书架已是最新状态"
-                    newFolders > 0 -> "整理完成：移动 $touched 本书，新建 $newFolders 个文件夹"
-                    else -> "整理完成：移动 $touched 本书"
+                // 报告聚合：拼出「补全 X / 移动 Y / 收纳 Z / 新建 N」之类的串
+                val parts = buildList {
+                    if (refreshed > 0) add("补全 $refreshed 本")
+                    if (touched > 0) add("移动 $touched 本")
+                    if (rescued > 0) add("收纳 $rescued 本到「无法识别」")
+                    if (newFolders > 0) add("新建 $newFolders 个文件夹")
                 }
-                AppLog.info("Shelf", "Organize: touched=$touched newFolders=$newFolders")
+                _organizeReport.value = if (parts.isEmpty()) "书架已是最新状态"
+                else "整理完成：" + parts.joinToString("，")
+                AppLog.info(
+                    "Shelf",
+                    "Organize: refreshed=$refreshed touched=$touched rescued=$rescued newFolders=$newFolders",
+                )
             } catch (e: Exception) {
                 AppLog.error("Shelf", "Organize failed: ${e.message}", e)
                 _organizeReport.value = "整理失败：${e.message?.take(60)}"
@@ -685,6 +749,58 @@ class ShelfViewModel @Inject constructor(
                 _isOrganizing.value = false
             }
         }
+    }
+
+    /**
+     * 并发度 4，对元数据稀疏的 web 书重新拉取 BookInfo，把 kind / description /
+     * coverUrl / wordCount 合并写回 DB。返回真正发生变化的本数。
+     *
+     * 失败容错：单本失败 (网络 / 书源失效 / 规则报错) 只 warn，不影响其他书。
+     */
+    private suspend fun prefetchWebMetadata(books: List<Book>): Int {
+        var refreshed = 0
+        coroutineScope {
+            val semaphore = Semaphore(4)
+            books.map { book ->
+                async(Dispatchers.IO) {
+                    semaphore.withPermit {
+                        try {
+                            val srcUrl = book.sourceUrl ?: return@withPermit false
+                            val source = sourceRepo.getByUrl(srcUrl) ?: return@withPermit false
+                            val sb = SearchBook(
+                                bookUrl = book.bookUrl,
+                                origin = book.origin,
+                                originName = book.originName,
+                                name = book.title,
+                                author = book.author,
+                                kind = book.kind,
+                                coverUrl = book.coverUrl,
+                                intro = book.description,
+                                tocUrl = book.tocUrl.orEmpty(),
+                            )
+                            val updated = WebBook.getBookInfoAwait(source, sb)
+                            val merged = book.copy(
+                                kind = updated.kind?.takeIf { it.isNotBlank() } ?: book.kind,
+                                description = updated.intro?.takeIf { it.isNotBlank() } ?: book.description,
+                                coverUrl = updated.coverUrl?.takeIf { it.isNotBlank() } ?: book.coverUrl,
+                                wordCount = updated.wordCount?.takeIf { it.isNotBlank() } ?: book.wordCount,
+                            )
+                            if (merged != book) {
+                                bookRepo.update(merged)
+                                true
+                            } else false
+                        } catch (e: Exception) {
+                            AppLog.warn(
+                                "Shelf",
+                                "Metadata prefetch 失败 ${book.title}: ${e.message?.take(40)}",
+                            )
+                            false
+                        }
+                    }
+                }
+            }.awaitAll().forEach { if (it) refreshed++ }
+        }
+        return refreshed
     }
 
     private suspend fun applyAutoGroup(book: Book): Book {

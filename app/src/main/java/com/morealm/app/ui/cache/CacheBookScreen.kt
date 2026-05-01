@@ -283,15 +283,29 @@ private fun CacheBookItem(
                         )
                     }
                     if (stat != null) {
-                        val pct = if (stat.totalChapters > 0) stat.cachedChapters * 100 / stat.totalChapters else 0
+                        // 下载该书过程中，stat 是开始前的快照（cachedChapters=0），实时进度由 service
+                        // 推送的 downloadProgress 提供。否则 UI 顶部显示 123/1123 时这里却显示 0/1123。
+                        // 下载结束后 LaunchedEffect(isDownloading) 会重新拉 stat，此时回到正常分支。
+                        val realtimeOverride = isDownloading && downloadProgress != null
+                        val displayCached: Int
+                        val displayTotal: Int
+                        if (realtimeOverride) {
+                            displayCached = downloadProgress!!.completed + downloadProgress.cached
+                            // total: 优先用 stat（全本章节数），缺失时退回 progress.total（仅当前批次）
+                            displayTotal = if (stat.totalChapters > 0) stat.totalChapters else downloadProgress.total
+                        } else {
+                            displayCached = stat.cachedChapters
+                            displayTotal = stat.totalChapters
+                        }
+                        val pct = if (displayTotal > 0) displayCached * 100 / displayTotal else 0
                         Text(
-                            if (stat.totalChapters > 0) {
-                                "已缓存 ${stat.cachedChapters}/${stat.totalChapters} ($pct%)"
-                            } else {
-                                "未获取到章节，可能需要换源"
+                            when {
+                                displayTotal == 0 -> "未获取到章节，可能需要换源"
+                                realtimeOverride -> "下载中 $displayCached/$displayTotal ($pct%)"
+                                else -> "已缓存 $displayCached/$displayTotal ($pct%)"
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (stat.totalChapters == 0) {
+                            color = if (displayTotal == 0) {
                                 MaterialTheme.colorScheme.error
                             } else if (pct >= 100) {
                                 MaterialTheme.colorScheme.tertiary
