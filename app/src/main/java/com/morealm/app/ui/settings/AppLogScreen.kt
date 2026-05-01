@@ -1,24 +1,35 @@
 package com.morealm.app.ui.settings
 
 import android.content.Intent
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -26,6 +37,7 @@ import androidx.core.content.FileProvider
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.core.log.LogLevel
 import com.morealm.app.core.log.LogRecord
+import com.morealm.app.core.log.LogTagCatalog
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -47,28 +59,138 @@ fun AppLogScreen(onBack: () -> Unit) {
     val crashFiles = remember { mutableStateOf(AppLog.getCrashFiles()) }
     var selectedCrashFile by remember { mutableStateOf<File?>(null) }
     var crashContent by remember { mutableStateOf("") }
-    var recordLog by remember { mutableStateOf(false) }
+    var recordLog by remember { mutableStateOf(AppLog.isRecordLogEnabled()) }
+
+    // Tag filter — null 表示「全部」。可选 tag 列表从当前 logs 动态推算，
+    // 这样新出现的 tag（比如临时埋点 PageTurnFlicker）会自动出现在 chip 行
+    // 里，不需要硬编码。当前选中的 tag 在 logs 变化时若已不存在（如清空后），
+    // 会被自动重置为 null —— 见 LaunchedEffect。
+    var tagFilter by remember { mutableStateOf<String?>(null) }
+    val availableTags by remember(logs) {
+        derivedStateOf {
+            logs.map { it.tag }.distinct().sorted()
+        }
+    }
+    LaunchedEffect(availableTags) {
+        if (tagFilter != null && tagFilter !in availableTags) tagFilter = null
+    }
+
+    // 搜索：仅作用于「运行日志」tab；切到崩溃记录 tab 时关闭搜索栏并清空 query。
+    // searchExpanded 控制搜索栏是否在 TabRow 下方展开；点 actions 区的 Search
+    // 图标 toggle，再点一次（已展开）则收起并清空——这样手指不需要去点 ✕。
+    // 注意声明顺序：必须在 filteredLogs 之前，Kotlin 不允许向前引用 var。
+    var searchExpanded by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    // tag 速查 dialog：用户点顶栏 ? 图标弹出，列出所有已知 tag 的中文用途
+    // 和「出什么问题看它」。这是 LogTagCatalog 的可视化窗口，避免用户对着
+    // 一堆生疏 tag 不知道挑哪个看。
+    var tagCatalogOpen by remember { mutableStateOf(false) }
+
+    val filteredLogs = remember(logs, tagFilter, searchQuery) {
+        val byTag = if (tagFilter == null) logs else logs.filter { it.tag == tagFilter }
+        if (searchQuery.isBlank()) byTag else {
+            // 不区分大小写，匹配 tag / message / throwable 任一字段。
+            // contains 比 regex 简单稳定 —— 用户输入"speak"想找"speakLoop"
+            // 不需要他自己写 ".*speak.*"。throwable 也搜进去是因为崩溃堆栈关
+            // 键词（如 "NullPointerException"）经常是用户最想定位的线索。
+            val q = searchQuery.trim()
+            byTag.filter { record ->
+                record.message.contains(q, ignoreCase = true) ||
+                    record.tag.contains(q, ignoreCase = true) ||
+                    record.throwable?.contains(q, ignoreCase = true) == true
+            }
+        }
+    }
+
+    // 顶层提一份 clipboard / Toast 触发器：批量复制按钮（actions 区）和 LogListTab
+    // 单条长按复制（item 区）都用这一份；避免每个调用点都各自去 LocalComposition 拿。
+    val clipboard = LocalClipboardManager.current
+
+    // 多选模式：长按 item 进入；selectionMode = true 时点击 = toggle 选中。
+    // selectedIds 用 LogRecord.id（AtomicLong 自增，进程内唯一）做 key —— 但
+    // logs 是 ring buffer 会被淘汰，所以渲染时 selectedIds 与 filteredLogs
+    // 取交集即可，不必主动清理 selectedIds（旧 id 自然被忽略）。
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+
+    LaunchedEffect(selectedTab) {
+        // 切 tab 时复位搜索 + 退出多选（多选/搜索只对运行日志生效）。
+        if (selectedTab != 0) {
+            searchExpanded = false
+            searchQuery = ""
+            selectionMode = false
+            selectedIds = emptySet()
+        }
+    }
+    val selectedRecords = remember(filteredLogs, selectedIds) {
+        filteredLogs.filter { it.id in selectedIds }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("应用日志") },
+                title = { LogScreenTitle(selectionMode, selectedRecords.size) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
-                    }
+                    LogScreenNavIcon(
+                        selectionMode = selectionMode,
+                        onBack = onBack,
+                        onExitSelection = {
+                            selectionMode = false
+                            selectedIds = emptySet()
+                        },
+                    )
                 },
                 actions = {
-                    // Export/share button
-                    IconButton(onClick = {
-                        shareLogZip(context)
-                    }) {
-                        Icon(Icons.Default.Share, "导出日志")
-                    }
-                    if (selectedTab == 0) {
-                        IconButton(onClick = { AppLog.clear() }) {
-                            Icon(Icons.Default.Delete, "清空")
-                        }
+                    if (selectionMode) {
+                        SelectionModeActions(
+                            selectedRecords = selectedRecords,
+                            filteredLogs = filteredLogs,
+                            allSelected = selectedIds.size == filteredLogs.size && filteredLogs.isNotEmpty(),
+                            onCopy = {
+                                clipboard.setText(AnnotatedString(joinRecordsText(selectedRecords)))
+                                Toast.makeText(context, "已复制 ${selectedRecords.size} 条", Toast.LENGTH_SHORT).show()
+                                selectionMode = false
+                                selectedIds = emptySet()
+                            },
+                            onToggleSelectAll = {
+                                selectedIds = if (selectedIds.size == filteredLogs.size)
+                                    emptySet()
+                                else filteredLogs.map { it.id }.toSet()
+                            },
+                        )
+                    } else {
+                        NormalModeActions(
+                            tabIsLogs = selectedTab == 0,
+                            filteredLogs = filteredLogs,
+                            tagFilter = tagFilter,
+                            searchActive = searchExpanded || searchQuery.isNotEmpty(),
+                            onToggleSearch = {
+                                if (searchExpanded) {
+                                    // 收起：把 query 也清空，避免"看不见的过滤"造成困惑
+                                    searchExpanded = false
+                                    searchQuery = ""
+                                } else {
+                                    searchExpanded = true
+                                }
+                            },
+                            onOpenTagCatalog = { tagCatalogOpen = true },
+                            onEnterSelection = {
+                                selectionMode = true
+                                selectedIds = emptySet()
+                            },
+                            onCopyAll = {
+                                clipboard.setText(AnnotatedString(joinRecordsText(filteredLogs)))
+                                val label = if (tagFilter != null) "tag=$tagFilter" else "全部"
+                                Toast.makeText(
+                                    context,
+                                    "已复制 ${filteredLogs.size} 条（$label）",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            },
+                            onShareZip = { shareLogZip(context) },
+                            onClear = { AppLog.clear() },
+                        )
                     }
                 },
             )
@@ -118,10 +240,98 @@ fun AppLogScreen(onBack: () -> Unit) {
                 )
             }
 
-            when (selectedTab) {
-                0 -> LogListTab(logs, selected, timeFmt) { record ->
-                    selected = if (selected == record) null else record
+            // 搜索栏：仅在「运行日志」tab + 用户点 actions 区 Search 图标后展开。
+            // 选用普通 OutlinedTextField 而不是 SearchBar：SearchBar 是带建议
+            // 列表的全屏组件，吃高度太多；这里只需要纯文本过滤。
+            if (selectedTab == 0 && searchExpanded) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    placeholder = {
+                        Text("搜索 message / tag / 异常堆栈…",
+                            style = MaterialTheme.typography.bodySmall)
+                    },
+                    leadingIcon = { Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp)) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, "清空", modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        imeAction = ImeAction.Search,
+                    ),
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                )
+            }
+
+            // Tag 过滤 chip 行：仅在「运行日志」tab 显示。空列表时整行隐藏。
+            // FilterChip + LazyRow 横向滚动；选中的 chip 会再调一次 onClick
+            // 取消选中（toggle 语义），便于一键回到「全部」。
+            if (selectedTab == 0 && availableTags.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    item {
+                        FilterChip(
+                            selected = tagFilter == null,
+                            onClick = { tagFilter = null },
+                            label = { Text("全部 (${logs.size})", style = MaterialTheme.typography.labelSmall) },
+                        )
+                    }
+                    items(availableTags, key = { it }) { tag ->
+                        val count = logs.count { it.tag == tag }
+                        FilterChip(
+                            selected = tagFilter == tag,
+                            onClick = { tagFilter = if (tagFilter == tag) null else tag },
+                            label = {
+                                Text("$tag ($count)", style = MaterialTheme.typography.labelSmall)
+                            },
+                        )
+                    }
                 }
+            }
+
+            when (selectedTab) {
+                0 -> LogListTab(
+                    logs = filteredLogs,
+                    selected = selected,
+                    timeFmt = timeFmt,
+                    selectionMode = selectionMode,
+                    selectedIds = selectedIds,
+                    emptyMessage = when {
+                        searchQuery.isNotEmpty() -> "无匹配「$searchQuery」"
+                        tagFilter != null -> "tag = $tagFilter 下暂无日志"
+                        else -> "暂无日志"
+                    },
+                    onItemClick = { record ->
+                        if (selectionMode) {
+                            selectedIds = if (record.id in selectedIds)
+                                selectedIds - record.id
+                            else
+                                selectedIds + record.id
+                        } else {
+                            selected = if (selected == record) null else record
+                        }
+                    },
+                    onItemLongPress = { record ->
+                        // 普通模式长按：进入多选并选中本条。多选模式下长按无操作，
+                        // 避免和「单击切换选中」语义打架（Android 系统图库 / 文件
+                        // 管理器的常用手势惯例）。
+                        if (!selectionMode) {
+                            selectionMode = true
+                            selectedIds = setOf(record.id)
+                        }
+                    },
+                )
                 1 -> CrashFilesTab(
                     crashFiles = crashFiles.value,
                     selectedFile = selectedCrashFile,
@@ -140,18 +350,216 @@ fun AppLogScreen(onBack: () -> Unit) {
             }
         }
     }
+
+    // tag 速查 dialog —— 放 Scaffold 之外，由顶栏 Help 按钮控制。
+    if (tagCatalogOpen) {
+        TagCatalogDialog(onDismiss = { tagCatalogOpen = false })
+    }
 }
 
+/**
+ * 「日志 tag 速查」对话框：按模块分节列出所有已知 tag 的中文用途和「出问题
+ * 看它」。这是 LogTagCatalog 的可视化窗口，让用户对着陌生 tag 时不必查代码。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TagCatalogDialog(onDismiss: () -> Unit) {
+    val groups = LogTagCatalog.allEntriesByModule
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        },
+        title = {
+            Column {
+                Text("日志 tag 速查", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "出问题时按模块找对应 tag，配合顶部 tag 过滤 / 搜索使用",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+            }
+        },
+        text = {
+            // 用 LazyColumn 而不是 verticalScroll(rememberScrollState())，避免
+            // 因为内容较长造成 dialog 一次性测量超大尺寸。
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 480.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                groups.forEach { (module, entries) ->
+                    item(key = "header-$module") {
+                        Text(
+                            module,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                    items(entries, key = { "row-$module-${it.first}" }) { (tag, entry) ->
+                        Column(modifier = Modifier.padding(start = 8.dp, bottom = 2.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    tag,
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "→  ${entry.canonical}",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                )
+                            }
+                            Text(
+                                entry.purpose,
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                            )
+                            Text(
+                                "看它：${entry.whenToCheck}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                            )
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+// ── TopAppBar slots — 抽出来避免 Scaffold lambda 嵌套到 4 层。每块只关心
+//    自己的 state，主屏幕只负责把回调连起来。
+
+@Composable
+private fun LogScreenTitle(selectionMode: Boolean, selectedCount: Int) {
+    Text(
+        if (selectionMode) "已选 $selectedCount 条" else "应用日志",
+        style = if (selectionMode) MaterialTheme.typography.titleMedium
+                else MaterialTheme.typography.titleLarge,
+    )
+}
+
+@Composable
+private fun LogScreenNavIcon(
+    selectionMode: Boolean,
+    onBack: () -> Unit,
+    onExitSelection: () -> Unit,
+) {
+    // 多选时返回键退出多选而不是 pop screen — 配合系统返回键的预期手势更顺。
+    IconButton(onClick = if (selectionMode) onExitSelection else onBack) {
+        Icon(
+            if (selectionMode) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
+            if (selectionMode) "退出多选" else "返回",
+        )
+    }
+}
+
+@Composable
+private fun SelectionModeActions(
+    selectedRecords: List<LogRecord>,
+    filteredLogs: List<LogRecord>,
+    allSelected: Boolean,
+    onCopy: () -> Unit,
+    onToggleSelectAll: () -> Unit,
+) {
+    IconButton(onClick = onCopy, enabled = selectedRecords.isNotEmpty()) {
+        Icon(
+            Icons.Default.ContentCopy, "复制选中",
+            tint = if (selectedRecords.isNotEmpty()) MaterialTheme.colorScheme.primary
+                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+        )
+    }
+    TextButton(onClick = onToggleSelectAll, enabled = filteredLogs.isNotEmpty()) {
+        Text(
+            if (allSelected) "取消全选" else "全选",
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun NormalModeActions(
+    tabIsLogs: Boolean,
+    filteredLogs: List<LogRecord>,
+    @Suppress("UNUSED_PARAMETER") tagFilter: String?,
+    searchActive: Boolean,
+    onToggleSearch: () -> Unit,
+    onOpenTagCatalog: () -> Unit,
+    onEnterSelection: () -> Unit,
+    onCopyAll: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onShareZip: () -> Unit,
+    onClear: () -> Unit,
+) {
+    // 顶栏按钮顺序：搜索 / tag 速查 / 多选 / 复制全部 / 清空。
+    // 「分享日志」被移除——按钮太多挤掉了 TopAppBar 标题。仍保留导出能力，
+    // 但走「多选 → 复制」或者「复制全部」走剪贴板，可由用户手动粘贴到任何地方。
+    if (tabIsLogs) {
+        IconButton(onClick = onToggleSearch) {
+            Icon(
+                if (searchActive) Icons.Default.Close else Icons.Default.Search,
+                if (searchActive) "关闭搜索" else "搜索",
+                tint = if (searchActive) MaterialTheme.colorScheme.primary
+                       else LocalContentColor.current,
+            )
+        }
+        // tag 速查：弹 dialog 列出已知 tag 的中文含义。比 chip 行更适合查询陌生 tag。
+        IconButton(onClick = onOpenTagCatalog) {
+            Icon(Icons.AutoMirrored.Filled.HelpOutline, "tag 速查")
+        }
+    }
+    if (tabIsLogs && filteredLogs.isNotEmpty()) {
+        IconButton(onClick = onEnterSelection) {
+            Icon(Icons.Default.Checklist, "多选")
+        }
+        // 复制全部当前过滤结果（配合上面的 tag chip 用 —— 选 PageTurnFlicker
+        // 后点这个就能一键把整段诊断发我）。
+        IconButton(onClick = onCopyAll) {
+            Icon(Icons.Default.ContentCopy, "复制全部")
+        }
+    }
+    if (tabIsLogs) {
+        IconButton(onClick = onClear) {
+            Icon(Icons.Default.Delete, "清空")
+        }
+    }
+}
+
+/** Concatenate records with throwable appended. Shared by selection-mode
+ *  copy-selected and normal-mode copy-all to keep formatting identical. */
+private fun joinRecordsText(records: List<LogRecord>): String =
+    records.joinToString("\n") { record ->
+        buildString {
+            append(record.format())
+            if (record.throwable != null) {
+                append('\n')
+                append(record.throwable)
+            }
+        }
+    }
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LogListTab(
     logs: List<LogRecord>,
     selected: LogRecord?,
     timeFmt: SimpleDateFormat,
-    onSelect: (LogRecord) -> Unit,
+    selectionMode: Boolean,
+    selectedIds: Set<Long>,
+    emptyMessage: String = "暂无日志",
+    onItemClick: (LogRecord) -> Unit,
+    onItemLongPress: (LogRecord) -> Unit,
 ) {
     if (logs.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("暂无日志", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+            Text(emptyMessage, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
         }
     } else {
         LazyColumn(
@@ -168,37 +576,67 @@ private fun LogListTab(
                     LogLevel.DEBUG -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     LogLevel.VERBOSE -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
                 }
-                Column(
+                val isChecked = record.id in selectedIds
+                val rowBg = when {
+                    isChecked -> MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                    record.level.priority >= LogLevel.WARN.priority -> color.copy(alpha = 0.06f)
+                    else -> Color.Transparent
+                }
+                Row(
                     modifier = Modifier.fillMaxWidth()
-                        .clickable { onSelect(record) }
-                        .background(
-                            if (record.level.priority >= LogLevel.WARN.priority) color.copy(alpha = 0.06f) else Color.Transparent,
-                            MaterialTheme.shapes.extraSmall,
+                        .combinedClickable(
+                            onClick = { onItemClick(record) },
+                            onLongClick = { onItemLongPress(record) },
                         )
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .background(rowBg, MaterialTheme.shapes.extraSmall)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(timeFmt.format(Date(record.time)),
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontFamily = FontFamily.Monospace),
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
-                        Spacer(Modifier.width(6.dp))
-                        Text(record.level.label,
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = color)
-                        Spacer(Modifier.width(6.dp))
-                        Text(record.tag,
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                    if (selectionMode) {
+                        Checkbox(
+                            checked = isChecked,
+                            onCheckedChange = { onItemClick(record) },
+                            modifier = Modifier.size(28.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
                     }
-                    Text(record.message,
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = if (selected == record) Int.MAX_VALUE else 2,
-                        overflow = TextOverflow.Ellipsis)
-                    if (selected == record && record.throwable != null) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(record.throwable,
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, fontFamily = FontFamily.Monospace),
-                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(timeFmt.format(Date(record.time)),
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontFamily = FontFamily.Monospace),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+                            Spacer(Modifier.width(6.dp))
+                            Text(record.level.label,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = color)
+                            Spacer(Modifier.width(6.dp))
+                            Text(record.tag,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                        }
+                        Text(record.message,
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = if (selected == record) Int.MAX_VALUE else 2,
+                            overflow = TextOverflow.Ellipsis)
+                        if (selected == record && record.throwable != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(record.throwable,
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, fontFamily = FontFamily.Monospace),
+                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f))
+                        }
+                        // 单条选中时副文显示 tag 中文用途：用户看到「TtsHost: speak error」
+                        // 时不一定知道 TtsHost 是什么；这一行立刻告诉他「TTS/Host —
+                        // TTS 引擎宿主」。未注册的 tag 不显示，避免视觉噪音。
+                        if (selected == record) {
+                            LogTagCatalog.describe(record.tag)?.let { hint ->
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "ⓘ $hint",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                )
+                            }
+                        }
                     }
                 }
             }

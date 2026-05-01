@@ -233,8 +233,19 @@ class TtsEngineHost(
     }
 
     private fun resume() {
-        if (paragraphs.isEmpty()) return
-        if (TtsEventBus.playbackState.value.isPlaying && speakJob?.isActive == true) return
+        AppLog.info(
+            "TtsHost",
+            "resume() called: paragraphIndex=$paragraphIndex paragraphStartPos=$paragraphStartPos " +
+                "isPlaying=${TtsEventBus.playbackState.value.isPlaying} jobActive=${speakJob?.isActive == true}",
+        )
+        if (paragraphs.isEmpty()) {
+            AppLog.warn("TtsHost", "resume: paragraphs empty, ignored")
+            return
+        }
+        if (TtsEventBus.playbackState.value.isPlaying && speakJob?.isActive == true) {
+            AppLog.debug("TtsHost", "resume: already playing+active, no-op")
+            return
+        }
         scope.launch {
             controlMutex.withLock {
                 speakJob?.cancelAndJoin()
@@ -245,6 +256,11 @@ class TtsEngineHost(
     }
 
     private fun pause() {
+        AppLog.info(
+            "TtsHost",
+            "pause() called: paragraphIndex=$paragraphIndex paragraphStartPos=$paragraphStartPos " +
+                "(startPos preserved for sentence-level resume)",
+        )
         scope.launch {
             controlMutex.withLock {
                 speakJob?.cancelAndJoin()
@@ -255,6 +271,10 @@ class TtsEngineHost(
     }
 
     private fun stopPlayback() {
+        AppLog.info(
+            "TtsHost",
+            "stopPlayback() called: resetting paragraphIndex/StartPos to 0",
+        )
         scope.launch {
             controlMutex.withLock {
                 speakJob?.cancelAndJoin()
@@ -275,8 +295,15 @@ class TtsEngineHost(
     }
 
     private fun prevParagraph() {
-        if (paragraphs.isEmpty()) return
+        if (paragraphs.isEmpty()) {
+            AppLog.warn("TtsHost", "prevParagraph: paragraphs empty, ignored")
+            return
+        }
         val newIdx = (paragraphIndex - 1).coerceAtLeast(0)
+        AppLog.info(
+            "TtsHost",
+            "prevParagraph: $paragraphIndex → $newIdx (startPos $paragraphStartPos → 0)",
+        )
         if (newIdx == paragraphIndex && !TtsEventBus.playbackState.value.isPlaying) return
         paragraphIndex = newIdx
         paragraphStartPos = 0 // 用户主动切段，断点信息作废
@@ -295,8 +322,15 @@ class TtsEngineHost(
     }
 
     private fun nextParagraph() {
-        if (paragraphs.isEmpty()) return
+        if (paragraphs.isEmpty()) {
+            AppLog.warn("TtsHost", "nextParagraph: paragraphs empty, ignored")
+            return
+        }
         val newIdx = (paragraphIndex + 1).coerceAtMost(paragraphs.size - 1)
+        AppLog.info(
+            "TtsHost",
+            "nextParagraph: $paragraphIndex → $newIdx (startPos $paragraphStartPos → 0)",
+        )
         if (newIdx == paragraphIndex && !TtsEventBus.playbackState.value.isPlaying) return
         paragraphIndex = newIdx
         paragraphStartPos = 0
@@ -414,20 +448,51 @@ class TtsEngineHost(
 
         val cb = object : SystemTtsEngine.BatchCallback {
             override fun onUtteranceStart(utteranceId: String) {
-                val parsed = parseUtteranceId(utteranceId) ?: return
-                val (paraIdx, _) = parsed
-                if (paraIdx != paragraphIndex) {
+                val parsed = parseUtteranceId(utteranceId)
+                if (parsed == null) {
+                    AppLog.warn("TtsHost", "cb.onStart: parse failed id=$utteranceId")
+                    return
+                }
+                val (paraIdx, subIdx) = parsed
+                val oldIdx = paragraphIndex
+                if (paraIdx != oldIdx) {
+                    // 段切换：info 级别——这是 logcat 里追"进度推进"最重要的信号。
+                    // 用户反馈"进度卡 1/N"时，就看这条 advance 行；如果整段朗读
+                    // 期间这条没出现，就说明段没切换或回调没分发到 host。
+                    AppLog.info(
+                        "TtsHost",
+                        "para advance: $oldIdx → $paraIdx (sub=$subIdx, id=$utteranceId)",
+                    )
                     paragraphIndex = paraIdx
                     paragraphStartPos = 0 // 段切换重置句中位置
+                } else {
+                    // 同段内子句切换：debug 级别。subIdx > 0 才打，避免重复（首子句
+                    // 已被 advance 那条覆盖）。
+                    if (subIdx > 0) {
+                        AppLog.debug(
+                            "TtsHost",
+                            "cb.onStart sub-only id=$utteranceId paraIdx=$paraIdx subIdx=$subIdx",
+                        )
+                    }
                 }
                 publishState(playing = true)
             }
 
             override fun onUtteranceDone(utteranceId: String) {
-                val parsed = parseUtteranceId(utteranceId) ?: return
+                val parsed = parseUtteranceId(utteranceId)
+                if (parsed == null) {
+                    AppLog.warn("TtsHost", "cb.onDone: parse failed id=$utteranceId")
+                    return
+                }
                 val (paraIdx, subIdx) = parsed
-                if (paraIdx == lastUtt.paraIdx && subIdx == lastUtt.subIdx) {
-                    if (!finished.isCompleted) finished.complete(Unit)
+                val isLast = paraIdx == lastUtt.paraIdx && subIdx == lastUtt.subIdx
+                AppLog.debug(
+                    "TtsHost",
+                    "cb.onDone id=$utteranceId paraIdx=$paraIdx subIdx=$subIdx isLast=$isLast",
+                )
+                if (isLast && !finished.isCompleted) {
+                    AppLog.info("TtsHost", "cb.onDone: chapter all utterances finished")
+                    finished.complete(Unit)
                 }
             }
 
@@ -438,7 +503,13 @@ class TtsEngineHost(
                 if (parsed != null) {
                     val (paraIdx, subIdx) = parsed
                     if (paraIdx == lastUtt.paraIdx && subIdx == lastUtt.subIdx) {
-                        if (!finished.isCompleted) finished.complete(Unit)
+                        if (!finished.isCompleted) {
+                            AppLog.info(
+                                "TtsHost",
+                                "cb.onError on last utt → completing finished anyway",
+                            )
+                            finished.complete(Unit)
+                        }
                     }
                 }
             }
@@ -451,7 +522,19 @@ class TtsEngineHost(
                     val sliceOffset = if (subIdx == 0 && paraIdx == paragraphIndex) {
                         paragraphStartPosBaseForFirstSub
                     } else 0
+                    val oldStartPos = paragraphStartPos
                     paragraphStartPos = (sliceOffset + start).coerceAtLeast(0)
+                    // onRangeStart 在长段里会触发很多次（每个字 / 每个词），全打
+                    // 会刷屏；只在「跳了 >= 5 字」时记一次，足够追踪进度同时不淹没
+                    // 其他日志。第一次进入新段（oldStartPos == 0 且 paragraphStartPos > 0）
+                    // 也强制打一条做信号。
+                    if (oldStartPos == 0 || (paragraphStartPos - oldStartPos) >= 5) {
+                        AppLog.debug(
+                            "TtsHost",
+                            "cb.onRangeStart id=$utteranceId range=[$start,$end) " +
+                                "base=$sliceOffset → paragraphStartPos $oldStartPos→$paragraphStartPos",
+                        )
+                    }
                 }
             }
         }
@@ -464,11 +547,19 @@ class TtsEngineHost(
 
         engine.setBatchCallback(cb)
 
-        // 入队
+        // 入队：逐条 debug 记录 (id, queueMode, len, result)。这是诊断「multitts
+        // 不发声」最直接的证据——若所有 enqueue 都返回 SUCCESS 但听不到，说明
+        // 引擎收下了但合成阶段静默；若全部 ERROR，说明根本没入队成功。
+        AppLog.info("TtsHost", "enqueue starting: ${plan.size} utterances")
         for ((i, utt) in plan.withIndex()) {
             val mode = if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
             val id = "morealm_${utt.paraIdx}_${utt.subIdx}"
             val result = engine.enqueue(utt.text, id, mode)
+            AppLog.debug(
+                "TtsHost",
+                "enqueue[$i] id=$id mode=${if (mode == TextToSpeech.QUEUE_FLUSH) "FLUSH" else "ADD"} " +
+                    "len=${utt.text.length} result=$result",
+            )
             if (result == TextToSpeech.ERROR) {
                 AppLog.error("TtsHost", "batch enqueue ERROR at i=$i id=$id, aborting")
                 engine.setBatchCallback(null)
@@ -479,6 +570,7 @@ class TtsEngineHost(
                 return
             }
         }
+        AppLog.info("TtsHost", "enqueue done: all ${plan.size} utterances accepted by engine")
 
         // 等整章读完或被取消
         try {
@@ -736,6 +828,13 @@ class TtsEngineHost(
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    /**
+     * 上一次推送给 [TtsEventBus.playbackState] 的关键三元组：(idx, total, isPlaying)。
+     * 仅用于 [publishState] 内部的日志去重——只有这三项变化时才打印一行 debug，
+     * 避免 onRangeStart 里频繁调用 publishState 时刷屏。
+     */
+    private var lastPublishedTriple: Triple<Int, Int, Boolean>? = null
+
     private fun publishState(playing: Boolean) {
         val total = paragraphs.size
         val pos = paragraphPositions.getOrNull(paragraphIndex) ?: 0
@@ -753,6 +852,17 @@ class TtsEngineHost(
                 speed = speed,
                 engine = engineId,
                 voiceName = voiceName,
+            )
+        }
+        // 只在 (idx, total, playing) 变化时记日志：onRangeStart 高频触发时
+        // 不会刷屏，但段切换、章切换、暂停/恢复都会留下记录。
+        val triple = Triple(paragraphIndex, total, playing)
+        if (triple != lastPublishedTriple) {
+            lastPublishedTriple = triple
+            AppLog.debug(
+                "TtsHost",
+                "publishState: idx=$paragraphIndex/$total chapterPos=$pos " +
+                    "playing=$playing engine=$engineId",
             )
         }
     }

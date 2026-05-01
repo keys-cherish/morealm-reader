@@ -44,13 +44,26 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
     private var coverArtBytes: ByteArray? = null
 
     fun updateMetadata(book: String, chapter: String, coverUrl: String? = null) {
+        val changed = bookTitle != book || chapterTitle != chapter || coverUrl != null
         bookTitle = book
         chapterTitle = chapter
         if (coverUrl != null) loadCover(coverUrl)
         invalidateState()
+        // 通知栏要靠 player 字段拉数据。如果 logcat 里看到「TtsNotif: createNotification:
+        // book='', chapter=''」，往上找这条 updateMetadata 看是否真的被传进来。
+        if (changed) {
+            AppLog.debug(
+                "TtsPlayer",
+                "updateMetadata: book='$book' chapter='$chapter' " +
+                    "coverUrl=${coverUrl?.take(60) ?: "<unchanged>"}",
+            )
+        }
     }
 
     fun setPlaying(isPlaying: Boolean) {
+        if (playing != isPlaying) {
+            AppLog.debug("TtsPlayer", "setPlaying: $playing → $isPlaying")
+        }
         playing = isPlaying
         invalidateState()
     }
@@ -105,6 +118,17 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
         }
 
         scope.launch {
+            // 网络分支前的最后一道闸：URL() 只接受带 http(s) 协议的字符串，
+            // 否则抛 MalformedURLException("no protocol: ...")。我们之前看到日志
+            // 被相对路径（"covers/xxx.jpg"）和空串频繁触发，刷屏却毫无意义——
+            // 因为既不影响通知栏正常工作（cover 不显示而已），也无从恢复。
+            // 这里直接放弃这种 URL，debug 级别记一行不当 warn。
+            val isHttp = url.startsWith("http://", ignoreCase = true) ||
+                url.startsWith("https://", ignoreCase = true)
+            if (!isHttp) {
+                AppLog.debug("TtsPlayer", "Skip cover (unsupported scheme): $url")
+                return@launch
+            }
             try {
                 val bytes = URL(url).openStream().use { it.readBytes() }
                 val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }

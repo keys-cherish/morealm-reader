@@ -527,6 +527,12 @@ fun CanvasRenderer(
     var selectedTextPage by remember(chapterIndex) { mutableStateOf<TextPage?>(null) }
     var scrollRelativePages by remember(chapterIndex) { mutableStateOf<Map<Int, TextPage>>(emptyMap()) }
     var toolbarOffset by remember { mutableStateOf(Offset.Zero) }
+    /**
+     * 当前正在弹「删除 / 分享」action menu 的高亮（用户点中已存高亮时填充）。
+     * 与选区 toolbar 互斥：一旦设值，selection 自动清掉避免两个浮层同屏抢戏。
+     */
+    var highlightActionTarget by remember(chapterIndex) { mutableStateOf<Highlight?>(null) }
+    var highlightActionOffset by remember { mutableStateOf(Offset.Zero) }
     // Share quote dialog state
     var shareQuoteText by remember { mutableStateOf<String?>(null) }
     var scrollPageIndex by remember(chapterIndex) { mutableIntStateOf(0) }
@@ -563,9 +569,19 @@ fun CanvasRenderer(
         lastChapterIdxHolder[0] = chapterIndex
         val initialPage = when {
             pageAnimType == PageAnimType.SCROLL -> 0
-            sameChapter -> readerPageIndex.coerceIn(
-                0, (renderPageCount - 1).coerceAtLeast(0)
-            )
+            sameChapter -> {
+                // renderPageCount 在 coordinator 重建瞬间常常 reset 到 1（章节
+                // 布局还没算好，prelayout 还在增量产出页面），coerceIn(0, 0)
+                // 会把 readerPageIndex=N>0 强行夹成 0 —— 这是「滚动→仿真跳
+                // 首页」第一次实测仍然复发的根因（见 18:15:42.948 日志）。
+                // 优先用 prelayoutCache 的稳定 pageSize；缓存没命中再退回
+                // renderPageCount，但只在 > 1 时使用；都不行就不设上限，
+                // 让 LaunchedEffect 后续 scrollToPage 兜底处理越界。
+                val cap = prelayoutCache[currentChapterKey]?.pageSize
+                    ?: renderPageCount.takeIf { it > 1 }
+                    ?: Int.MAX_VALUE
+                readerPageIndex.coerceIn(0, (cap - 1).coerceAtLeast(0))
+            }
             startFromLastPage -> {
                 val cachedPageCount = prelayoutCache[currentChapterKey]?.pageSize ?: renderPageCount
                 (cachedPageCount - 1).coerceAtLeast(0)
@@ -576,6 +592,8 @@ fun CanvasRenderer(
             "PageTurnFlicker",
             "[2] coordinator REBUILD chapterIndex=$chapterIndex pageAnimType=$pageAnimType" +
                 " sameChapter=$sameChapter readerPageIndex=$readerPageIndex" +
+                " renderPageCount=$renderPageCount" +
+                " cachedPageCount=${prelayoutCache[currentChapterKey]?.pageSize}" +
                 " startFromLastPage=$startFromLastPage initialPage=$initialPage",
         )
         PageTurnCoordinator(
@@ -588,20 +606,62 @@ fun CanvasRenderer(
     // Update deps on each recomposition so coordinator always sees latest values
     coordinator.updateDeps(pageFactory, pagerState, chapterIndex, pageCount, renderPageCount)
 
+    /**
+     * Stable upper bound for `coordinator.lastSettledDisplayPage.coerceIn(...)`.
+     *
+     * `renderPageCount` is sometimes 1 immediately after a coordinator rebuild
+     * (the prelayout pipeline streams pages in incrementally — see the bursts
+     * of `[3a] pageCount=1, 8, 29, 84, ...` in flicker logs). Using `renderPageCount - 1`
+     * directly as the upper bound clamps a `lastSettledDisplayPage = 5` back to
+     * `0` while pages 1..N are still being laid out — exactly the «显示首页一帧»
+     * we just spent three layers fighting.
+     *
+     * Resolution order:
+     *   1. `prelayoutCache.pageSize` — stable, computed once per chapter.
+     *   2. `renderPageCount` if > 1 — covers the post-stable case after layout
+     *      finished but no cache entry was written (rare).
+     *   3. `Int.MAX_VALUE` — don't clamp at all when nothing else is known.
+     *      Worst case the rendered TextPage is null/placeholder and the bitmap
+     *      ends up blank; this is safer than clamping to 0 because LaunchedEffect
+     *      will scrollToPage / re-render once a real bound is available.
+     */
+    val safeDisplayMax: Int = run {
+        val cap = prelayoutCache[currentChapterKey]?.pageSize
+            ?: renderPageCount.takeIf { it > 1 }
+            ?: Int.MAX_VALUE
+        (cap - 1).coerceAtLeast(0)
+    }
+
+    // 独立的 chapter tracker 给 LaunchedEffect 用 —— coordinator remember 块的
+    // holder 在 composition 阶段就被覆盖成 chapterIndex 自己，effect 拿到的永远
+    // 是 sameChapter=true，没法区分。这个 holder 只在 effect 真正执行时更新。
+    val effectLastChapterHolder = remember { intArrayOf(Int.MIN_VALUE) }
+
     LaunchedEffect(currentChapterKey, pageAnimType) {
-        if (pageAnimType != PageAnimType.SCROLL) {
-            // When navigating to prev chapter, start from the last page to avoid flash.
-            // Use prelayout cache page count if available, otherwise fall back to current renderPageCount.
-            val initialPage = if (startFromLastPage) {
-                val cachedPageCount = prelayoutCache[currentChapterKey]?.pageSize ?: renderPageCount
-                (cachedPageCount - 1).coerceAtLeast(0)
-            } else 0
-            coordinator.ignoredSettledDisplayPage = initialPage
-            coordinator.pendingSettledDirection = null
-            coordinator.lastSettledDisplayPage = initialPage
-            coordinator.lastReaderContent = null
-            pagerState.scrollToPage(initialPage)
+        if (pageAnimType == PageAnimType.SCROLL) {
+            effectLastChapterHolder[0] = chapterIndex
+            return@LaunchedEffect
         }
+        val sameChapter = effectLastChapterHolder[0] == chapterIndex
+        effectLastChapterHolder[0] = chapterIndex
+        if (sameChapter) {
+            // 仅模式切换（如 SCROLL→SIMULATION）：coordinator remember 块里已
+            // 经用 readerPageIndex 同步算出 initialPage 并写入 lastSettled，
+            // 这里再写一次 0 反而会把它覆盖掉 —— 这是用户实测后第二次"滚动
+            // →仿真跳首页"复发的真正元凶。pagerState 在模式切换时不重建，
+            // currentPage 也保留着原页位，所以 scrollToPage 也不需要。
+            return@LaunchedEffect
+        }
+        // 真章节切换：跟 remember 块的逻辑保持等价（startFromLastPage 才跳末页）。
+        val initialPage = if (startFromLastPage) {
+            val cachedPageCount = prelayoutCache[currentChapterKey]?.pageSize ?: renderPageCount
+            (cachedPageCount - 1).coerceAtLeast(0)
+        } else 0
+        coordinator.ignoredSettledDisplayPage = initialPage
+        coordinator.pendingSettledDirection = null
+        coordinator.lastSettledDisplayPage = initialPage
+        coordinator.lastReaderContent = null
+        pagerState.scrollToPage(initialPage)
     }
 
     LaunchedEffect(chapter, pendingSearchSelection) {
@@ -786,6 +846,18 @@ fun CanvasRenderer(
                     coordinator.commitPageTurn(displayIndex, direction) { readerPageIndex = it }
                 },
                 onTapCenter = onTapCenter,
+                onSingleTap = if (chapterHighlights.isEmpty()) null else { offset ->
+                    val page = coordinator.getPageAt(coordinator.lastSettledDisplayPage)
+                    val pos = chapterPositionAt(page, offset.x, offset.y)
+                    val hit = pos?.let { p ->
+                        chapterHighlights.firstOrNull { p in it.startChapterPos until it.endChapterPos }
+                    }
+                    if (hit != null) {
+                        highlightActionTarget = hit
+                        highlightActionOffset = offset
+                        true
+                    } else false
+                },
                 onLongPress = { offset ->
                     val page = coordinator.getPageAt(coordinator.lastSettledDisplayPage)
                     val col = hitTestColumn(page, offset.x, offset.y)
@@ -885,6 +957,24 @@ fun CanvasRenderer(
                                 if (selectionState.isActive) {
                                     selectionState.clear()
                                     return@detectTapGestures
+                                }
+                                // Highlight hit-test takes priority — let
+                                // taps on saved highlights bring up the
+                                // delete/share menu before falling through
+                                // to image / column / 9-zone tap handling.
+                                if (chapterHighlights.isNotEmpty()) {
+                                    val page = coordinator.getPageAt(pagerState.currentPage)
+                                    val pos = chapterPositionAt(page, offset.x, offset.y)
+                                    if (pos != null) {
+                                        val hit = chapterHighlights.firstOrNull {
+                                            pos in it.startChapterPos until it.endChapterPos
+                                        }
+                                        if (hit != null) {
+                                            highlightActionTarget = hit
+                                            highlightActionOffset = offset
+                                            return@detectTapGestures
+                                        }
+                                    }
                                 }
                                 // Reset delegate state on tap — matches Legado's onDown()
                                 // which always runs before any page-turn request. Without
@@ -1077,7 +1167,7 @@ fun CanvasRenderer(
                 animType = pageAnimType,
                 modifier = Modifier.fillMaxSize(),
                 simulationParams = simulationParams,
-                simulationDisplayPage = coordinator.lastSettledDisplayPage.coerceIn(0, (renderPageCount - 1).coerceAtLeast(0)),
+                simulationDisplayPage = coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax),
                 onPageSettled = { settledPage ->
                     if (!progressRestored) {
                         coordinator.pendingSettledDirection = null
@@ -1090,7 +1180,7 @@ fun CanvasRenderer(
                 page = coordinator.getPageAt(pageIndex),
                     pageIndex = pageIndex,
                     currentPage = if (pageAnimType == PageAnimType.SIMULATION) {
-                        coordinator.lastSettledDisplayPage.coerceIn(0, renderPageCount - 1)
+                        coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax)
                     } else {
                         pagerState.currentPage
                     },
@@ -1175,7 +1265,7 @@ fun CanvasRenderer(
 
         // Selection toolbar
         val currentDisplayForSelection = if (pageAnimType == PageAnimType.SIMULATION) {
-            coordinator.lastSettledDisplayPage.coerceIn(0, renderPageCount - 1)
+            coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax)
         } else {
             pagerState.currentPage
         }
