@@ -2,7 +2,7 @@ package com.morealm.app.ui.detail
 
 import androidx.compose.foundation.background
 import com.morealm.app.presentation.profile.BookDetailViewModel
-import com.morealm.app.presentation.profile.SearchStatus
+import com.morealm.app.presentation.source.SearchStatus
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
