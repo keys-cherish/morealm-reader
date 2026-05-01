@@ -37,6 +37,7 @@ fun WebDavScreen(
     // emitted "备份中..." / "备份成功" / "备份失败：…" but the screen never
     // collected the flow, leaving the user with no feedback after a click.
     val webDavStatus by viewModel.webDavStatus.collectAsStateWithLifecycle()
+    val showRestoreConfirmation by viewModel.showRestoreConfirmation.collectAsStateWithLifecycle()
     var url by remember(savedUrl) { mutableStateOf(savedUrl) }
     var user by remember(savedUser) { mutableStateOf(savedUser) }
     var pass by remember(savedPass) { mutableStateOf(savedPass) }
@@ -223,7 +224,7 @@ fun WebDavScreen(
                     title = "从云端恢复",
                     desc = "下载并覆盖本地数据",
                     enabled = isConfigSaved,
-                    onClick = { viewModel.webDavRestore() },
+                    onClick = { viewModel.requestWebDavRestore() },
                 )
                 // "自动同步" item removed — it was a dead {} onClick with no
                 // VM binding. It will return in the P1 auto-backup phase as a
@@ -271,6 +272,48 @@ fun WebDavScreen(
         }
 
         Spacer(Modifier.height(32.dp))
+    }
+
+    // P0-3 destructive-action gate: confirm before overwriting local data.
+    // Without this, a single tap on "从云端恢复" wiped the entire local
+    // database. The dialog is opt-in via the VM's request/cancel/confirm
+    // tri-state so the same pattern can be reused for SAF import later.
+    if (showRestoreConfirmation) {
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelWebDavRestore() },
+            icon = {
+                Icon(
+                    Icons.Default.Warning, null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(28.dp),
+                )
+            },
+            title = { Text("确认从云端恢复？") },
+            text = {
+                Text(
+                    "此操作会下载云端备份并覆盖本地的：\n" +
+                    "• 书架与分组\n" +
+                    "• 阅读进度\n" +
+                    "• 书源、替换规则\n" +
+                    "• 主题与阅读样式\n\n" +
+                    "本地未上传的修改将丢失，无法撤销。",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { viewModel.webDavRestore() },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text("确认覆盖") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelWebDavRestore() }) {
+                    Text("取消")
+                }
+            },
+        )
     }
 }
 
