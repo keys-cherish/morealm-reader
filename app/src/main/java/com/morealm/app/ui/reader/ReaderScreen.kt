@@ -451,6 +451,7 @@ fun ReaderScreen(
                     exportLauncher.launch(fileName)
                 },
                 onBookmark = { viewModel.addBookmark() },
+                onEffectiveReplaces = { viewModel.showEffectiveReplacesDialog() },
             )
         }
 
