@@ -79,6 +79,19 @@ class AppPreferences @Inject constructor(
         val FOOTER_RIGHT = stringPreferencesKey("footer_right")
         val AUTO_BACKUP = booleanPreferencesKey("auto_backup")
         val LAST_AUTO_BACKUP = longPreferencesKey("last_auto_backup")
+        // ── WebDav P1 keys ─────────────────────────────────────────────
+        /** Sub-folder appended to the user-supplied WebDav root (default: "MoRealm"). */
+        val WEBDAV_DIR = stringPreferencesKey("webdav_dir")
+        /** Optional device name appended to backup filename (e.g. "Pixel" → backup_20260501_Pixel.zip). */
+        val WEBDAV_DEVICE_NAME = stringPreferencesKey("webdav_device_name")
+        /** When true, reader chapter changes upload BookProgress JSON; startup fetches and merges. */
+        val SYNC_BOOK_PROGRESS = booleanPreferencesKey("sync_book_progress")
+        /** When true, only `backup_latest.zip` is kept on remote (overwritten); else timestamped + latest. */
+        val ONLY_LATEST_BACKUP = booleanPreferencesKey("only_latest_backup")
+        /** When true, restore skips local-file books to avoid invalid file-path entries from another device. */
+        val IGNORE_LOCAL_BOOK = booleanPreferencesKey("ignore_local_book")
+        /** When true, restore preserves the current device's reading-style / theme prefs instead of overwriting. */
+        val IGNORE_READ_CONFIG = booleanPreferencesKey("ignore_read_config")
         val READER_ENGINE = stringPreferencesKey("reader_engine") // "canvas" or "webview"
         val RECORD_LOG = booleanPreferencesKey("record_log") // detailed file logging
         // Auto-folder (since v18) — tag ids whose auto-created folder was deleted by user.
@@ -89,6 +102,10 @@ class AppPreferences @Inject constructor(
         // classifier promotes that tag into a real folder. Lower = folders appear
         // sooner with less curation; higher = only "real" interests get a folder.
         val AUTO_FOLDER_THRESHOLD = intPreferencesKey("auto_folder_threshold")
+        // 当一本 web 书没有任何 GENRE 标签命中时（典型：书源详情解析失败导致
+        // kind/category/description 全空），是否允许 source 标签升级为兜底文件夹。
+        // 默认 true —— 用户预期「立即整理」之后没有书停留在根目录看不到。
+        val ALLOW_SOURCE_FALLBACK = booleanPreferencesKey("allow_source_fallback")
     }
 
     /**
@@ -271,6 +288,25 @@ class AppPreferences @Inject constructor(
     val lastAutoBackup: Flow<Long> = context.dataStore.data.map { it[Keys.LAST_AUTO_BACKUP] ?: 0L }
     suspend fun setLastAutoBackup(time: Long) = update(Keys.LAST_AUTO_BACKUP, time)
 
+    // ── WebDav P1 settings ─────────────────────────────────────────────
+    val webDavDir: Flow<String> = context.dataStore.data.map { it[Keys.WEBDAV_DIR] ?: "MoRealm" }
+    suspend fun setWebDavDir(dir: String) = update(Keys.WEBDAV_DIR, dir.trim().trim('/'))
+
+    val webDavDeviceName: Flow<String> = context.dataStore.data.map { it[Keys.WEBDAV_DEVICE_NAME] ?: "" }
+    suspend fun setWebDavDeviceName(name: String) = update(Keys.WEBDAV_DEVICE_NAME, name.trim())
+
+    val syncBookProgress: Flow<Boolean> = context.dataStore.data.map { it[Keys.SYNC_BOOK_PROGRESS] ?: false }
+    suspend fun setSyncBookProgress(enabled: Boolean) = update(Keys.SYNC_BOOK_PROGRESS, enabled)
+
+    val onlyLatestBackup: Flow<Boolean> = context.dataStore.data.map { it[Keys.ONLY_LATEST_BACKUP] ?: false }
+    suspend fun setOnlyLatestBackup(enabled: Boolean) = update(Keys.ONLY_LATEST_BACKUP, enabled)
+
+    val ignoreLocalBook: Flow<Boolean> = context.dataStore.data.map { it[Keys.IGNORE_LOCAL_BOOK] ?: true }
+    suspend fun setIgnoreLocalBook(enabled: Boolean) = update(Keys.IGNORE_LOCAL_BOOK, enabled)
+
+    val ignoreReadConfig: Flow<Boolean> = context.dataStore.data.map { it[Keys.IGNORE_READ_CONFIG] ?: false }
+    suspend fun setIgnoreReadConfig(enabled: Boolean) = update(Keys.IGNORE_READ_CONFIG, enabled)
+
     val readerEngine: Flow<String> = context.dataStore.data.map { it[Keys.READER_ENGINE] ?: "canvas" }
     suspend fun setReaderEngine(engine: String) = update(Keys.READER_ENGINE, engine)
 
@@ -369,6 +405,17 @@ class AppPreferences @Inject constructor(
     suspend fun setAutoFolderThreshold(value: Int) {
         context.dataStore.edit { prefs ->
             prefs[Keys.AUTO_FOLDER_THRESHOLD] = value.coerceIn(2, 10)
+        }
+    }
+
+    val allowSourceFallback: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.ALLOW_SOURCE_FALLBACK] ?: true }
+
+    suspend fun getAllowSourceFallback(): Boolean = allowSourceFallback.first()
+
+    suspend fun setAllowSourceFallback(value: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.ALLOW_SOURCE_FALLBACK] = value
         }
     }
 }

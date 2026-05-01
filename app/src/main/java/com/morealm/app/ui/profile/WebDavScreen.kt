@@ -38,6 +38,18 @@ fun WebDavScreen(
     // collected the flow, leaving the user with no feedback after a click.
     val webDavStatus by viewModel.webDavStatus.collectAsStateWithLifecycle()
     val showRestoreConfirmation by viewModel.showRestoreConfirmation.collectAsStateWithLifecycle()
+    val showBackupPicker by viewModel.showBackupPicker.collectAsStateWithLifecycle()
+    val backupList by viewModel.backupList.collectAsStateWithLifecycle()
+    val backupListLoading by viewModel.backupListLoading.collectAsStateWithLifecycle()
+    // P1-D settings: collected directly from VM so user toggles propagate
+    // through to the next backup / restore cycle without screen restart.
+    val savedDeviceName by viewModel.webDavDeviceName.collectAsStateWithLifecycle()
+    val autoBackup by viewModel.autoBackup.collectAsStateWithLifecycle()
+    val onlyLatestBackup by viewModel.onlyLatestBackup.collectAsStateWithLifecycle()
+    val syncBookProgress by viewModel.syncBookProgress.collectAsStateWithLifecycle()
+    val ignoreLocalBook by viewModel.ignoreLocalBook.collectAsStateWithLifecycle()
+    val ignoreReadConfig by viewModel.ignoreReadConfig.collectAsStateWithLifecycle()
+    var deviceName by remember(savedDeviceName) { mutableStateOf(savedDeviceName) }
     var url by remember(savedUrl) { mutableStateOf(savedUrl) }
     var user by remember(savedUser) { mutableStateOf(savedUser) }
     var pass by remember(savedPass) { mutableStateOf(savedPass) }
@@ -144,6 +156,27 @@ fun WebDavScreen(
                         focusedLabelColor = MaterialTheme.colorScheme.primary,
                     ),
                 )
+                // Optional device name — appended to backup filename
+                // (e.g. backup_20260501_Pixel.zip). Lets multi-device users
+                // keep separate backup streams instead of overwriting each
+                // other's "today's" backup.
+                OutlinedTextField(
+                    value = deviceName,
+                    onValueChange = {
+                        deviceName = it
+                        viewModel.setWebDavDeviceName(it)
+                    },
+                    label = { Text("设备名（可选）") },
+                    placeholder = { Text("留空则不区分设备") },
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Default.PhoneAndroid, null, modifier = Modifier.size(20.dp)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedLabelColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
             }
         }
 
@@ -221,10 +254,19 @@ fun WebDavScreen(
                     color = MaterialTheme.colorScheme.outlineVariant)
                 SyncItem(
                     icon = Icons.Default.CloudDownload,
-                    title = "从云端恢复",
+                    title = "从云端恢复（最新）",
                     desc = "下载并覆盖本地数据",
                     enabled = isConfigSaved,
                     onClick = { viewModel.requestWebDavRestore() },
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant)
+                SyncItem(
+                    icon = Icons.Default.History,
+                    title = "选择备份文件恢复",
+                    desc = "查看历史备份并选择一个版本",
+                    enabled = isConfigSaved,
+                    onClick = { viewModel.requestBackupPicker() },
                 )
                 // "自动同步" item removed — it was a dead {} onClick with no
                 // VM binding. It will return in the P1 auto-backup phase as a
@@ -248,6 +290,56 @@ fun WebDavScreen(
                 },
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
             )
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        // ── P1-D: Sync options switches ──────────────────────────────────
+        // Five toggles that fine-tune backup / restore behaviour. Each
+        // setting flows back to AppPreferences via the VM and is consumed
+        // on the NEXT click of the matching action — toggles take effect
+        // without a screen restart.
+        Text("同步选项", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 20.dp))
+        Spacer(Modifier.height(8.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        ) {
+            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                SwitchRow(
+                    title = "自动备份",
+                    desc = "App 启动时如距上次备份超过 24 小时则自动上传",
+                    checked = autoBackup,
+                    onCheckedChange = { viewModel.setAutoBackup(it) },
+                )
+                SwitchRow(
+                    title = "只保留最新一份",
+                    desc = "云端只保留 backup_latest.zip，不写时间戳副本",
+                    checked = onlyLatestBackup,
+                    onCheckedChange = { viewModel.setOnlyLatestBackup(it) },
+                )
+                SwitchRow(
+                    title = "同步阅读进度",
+                    desc = "每次切换章节自动上传进度，多端读到哪同步",
+                    checked = syncBookProgress,
+                    onCheckedChange = { viewModel.setSyncBookProgress(it) },
+                )
+                SwitchRow(
+                    title = "恢复时跳过本地书",
+                    desc = "避免从其它设备恢复带来无效本地文件路径",
+                    checked = ignoreLocalBook,
+                    onCheckedChange = { viewModel.setIgnoreLocalBook(it) },
+                )
+                SwitchRow(
+                    title = "恢复时保留本机阅读样式",
+                    desc = "不让云端覆盖当前主题、字体、间距等阅读偏好",
+                    checked = ignoreReadConfig,
+                    onCheckedChange = { viewModel.setIgnoreReadConfig(it) },
+                )
+            }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -313,6 +405,94 @@ fun WebDavScreen(
                     Text("取消")
                 }
             },
+        )
+    }
+
+    // P1-C backup file picker — lists every `backup_*.zip` on the remote
+    // root sorted newest-first; tapping a row stages the path into the
+    // ViewModel and opens the destructive confirmation dialog above.
+    if (showBackupPicker) {
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelBackupPicker() },
+            title = { Text("选择要恢复的备份") },
+            text = {
+                when {
+                    backupListLoading -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text("正在读取云端备份列表…", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    backupList.isEmpty() -> Text(
+                        "云端目录里没有找到任何 backup_*.zip 文件",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                    else -> Column(modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                        backupList.forEach { file ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable { viewModel.selectBackupFile(file) }
+                                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Default.Archive, null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(file.name, style = MaterialTheme.typography.bodyMedium)
+                                    val size = if (file.size > 0) "${file.size / 1024} KB · " else ""
+                                    val date = file.lastModified.takeIf { it.isNotBlank() } ?: "未知时间"
+                                    Text(
+                                        "$size$date",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelBackupPicker() }) {
+                    Text("关闭")
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun SwitchRow(
+    title: String,
+    desc: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                desc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
         )
     }
 }

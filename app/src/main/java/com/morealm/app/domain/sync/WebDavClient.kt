@@ -17,12 +17,33 @@ import java.time.format.DateTimeFormatter
  * WebDAV client for cloud sync.
  * Supports PROPFIND (with XML body), GET, PUT, MKCOL, DELETE, file listing.
  * All IO runs on Dispatchers.IO (non-blocking).
+ *
+ * Scheme rewrites at construction:
+ *  - `davs://` → `https://`
+ *  - `dav://`  → `http://`
+ * matching Legado / generic WebDAV client conventions so users can paste a
+ * URL exported from another reader without manual editing.
+ *
+ * Error mapping centralised via [describeError]:
+ *  - 401 inspects `WWW-Authenticate` to distinguish "wrong password" from
+ *    "server rejects BasicAuth entirely" (Digest-only servers, etc.).
+ *  - 404 mapped to a clear "resource not found" message.
  */
 class WebDavClient(
-    private val baseUrl: String,
+    baseUrl: String,
     private val username: String,
     private val password: String,
 ) {
+    /**
+     * Normalised base URL: `davs://` / `dav://` rewritten to standard
+     * `https://` / `http://`, trailing slash stripped so [resolveUrl] can
+     * append paths predictably.
+     */
+    private val baseUrl: String = baseUrl
+        .replaceFirst(Regex("^davs://", RegexOption.IGNORE_CASE), "https://")
+        .replaceFirst(Regex("^dav://", RegexOption.IGNORE_CASE), "http://")
+        .trimEnd('/')
+
     private val credential = Credentials.basic(username, password)
     private val client = OkHttpClient.Builder()
         .addInterceptor { chain ->
@@ -57,13 +78,13 @@ class WebDavClient(
             val url = resolveUrl(remotePath)
             val response = client.newCall(Request.Builder().url(url)
                 .put(data.toRequestBody(contentType.toMediaType())).build()).execute()
-            response.use { if (!it.isSuccessful) throw WebDavException("Upload failed: ${it.code}") }
+            response.use { if (!it.isSuccessful) throw WebDavException(describeError(it, "Upload")) }
         }
 
     suspend fun download(remotePath: String): ByteArray = withContext(Dispatchers.IO) {
         val response = client.newCall(Request.Builder().url(resolveUrl(remotePath)).get().build()).execute()
         response.use {
-            if (!it.isSuccessful) throw WebDavException("Download failed: ${it.code}")
+            if (!it.isSuccessful) throw WebDavException(describeError(it, "Download"))
             it.body?.bytes() ?: ByteArray(0)
         }
     }
@@ -76,7 +97,7 @@ class WebDavClient(
     suspend fun delete(remotePath: String) = withContext(Dispatchers.IO) {
         val response = client.newCall(Request.Builder().url(resolveUrl(remotePath))
             .delete().build()).execute()
-        response.use { if (!it.isSuccessful && it.code != 404) throw WebDavException("Delete failed: ${it.code}") }
+        response.use { if (!it.isSuccessful && it.code != 404) throw WebDavException(describeError(it, "Delete")) }
     }
 
     suspend fun exists(remotePath: String): Boolean = withContext(Dispatchers.IO) {
@@ -140,6 +161,31 @@ class WebDavClient(
         } catch (e: Exception) {
             AppLog.warn("WebDAV", "Unparseable getlastmodified: $s -> ${e.message}")
             0L
+        }
+    }
+
+    /**
+     * Build a user-friendly error message for a non-2xx response. The 401
+     * branch inspects `WWW-Authenticate` so we can surface "server rejects
+     * BasicAuth entirely" (e.g. Digest-only or NTLM-only servers) versus
+     * the more common "your password is wrong" — both produce a 401 but
+     * have very different fixes.
+     */
+    private fun describeError(resp: Response, action: String): String {
+        return when (resp.code) {
+            401 -> {
+                val wwwAuth = resp.headers("WWW-Authenticate")
+                val supportsBasic = wwwAuth.any { it.startsWith("Basic", ignoreCase = true) }
+                if (wwwAuth.isNotEmpty() && !supportsBasic) {
+                    "$action: 服务器不支持 Basic 认证（仅支持 ${wwwAuth.joinToString()}），" +
+                        "请改用支持 Basic 的 WebDAV 服务或联系服务器管理员"
+                } else {
+                    "$action: 认证失败 (401) — 用户名或密码错误"
+                }
+            }
+            403 -> "$action: 服务器拒绝访问 (403) — 检查账号权限或目录写入权限"
+            404 -> "$action: 资源不存在 (404)"
+            else -> "$action failed: ${resp.code} ${resp.message}".trim()
         }
     }
 
