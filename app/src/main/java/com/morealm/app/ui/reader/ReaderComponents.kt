@@ -37,7 +37,14 @@ import com.morealm.app.presentation.reader.PageTurnMode
 // ── Top Bar ─────────────────────────────────────────────
 
 @Composable
-fun ReaderTopBar(bookTitle: String, onBack: () -> Unit, onExport: () -> Unit = {}, onBookmark: () -> Unit = {}) {
+fun ReaderTopBar(
+    bookTitle: String,
+    onBack: () -> Unit,
+    onExport: () -> Unit = {},
+    onBookmark: () -> Unit = {},
+    /** 顶栏「生效规则」按钮 — 打开 EffectiveReplacesDialog (#5)。 */
+    onEffectiveReplaces: () -> Unit = {},
+) {
     val moColors = LocalMoRealmColors.current
     var showMenu by remember { mutableStateOf(false) }
     Surface(
@@ -68,6 +75,17 @@ fun ReaderTopBar(bookTitle: String, onBack: () -> Unit, onExport: () -> Unit = {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            IconButton(
+                onClick = onEffectiveReplaces,
+                modifier = Modifier.semantics {
+                    contentDescription = "当前章生效规则"
+                    role = Role.Button
+                },
+            ) {
+                Icon(Icons.Default.FilterAlt, "生效规则",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp))
+            }
             IconButton(
                 onClick = onBookmark,
                 modifier = Modifier.semantics {

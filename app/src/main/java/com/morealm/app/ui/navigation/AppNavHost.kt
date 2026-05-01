@@ -266,8 +266,21 @@ fun MoRealmNavHost(
                 ReadingSettingsScreen(onBack = { navController.safePopBackStack() })
             }
 
-            composable("replace_rules") {
-                ReplaceRuleScreen(onBack = { navController.safePopBackStack() })
+            composable(
+                "replace_rules?editId={editId}",
+                arguments = listOf(
+                    navArgument("editId") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                ),
+            ) { entry ->
+                val editId = entry.arguments?.getString("editId")
+                ReplaceRuleScreen(
+                    onBack = { navController.safePopBackStack() },
+                    autoEditId = editId,
+                )
             }
 
             composable("auto_group_rules") {

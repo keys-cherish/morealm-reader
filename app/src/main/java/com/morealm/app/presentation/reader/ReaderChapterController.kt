@@ -363,6 +363,8 @@ class ReaderChapterController(
         chapterLoadJob?.cancel()
         val loadToken = ++chapterLoadToken
         _loading.value = true
+        // EffectiveReplacesDialog: hit tracking is per-chapter, reset before this chapter starts processing.
+        if (prevIndex != index) clearHitTracking()
         val targetProgress = restoreProgress.coerceIn(0, 100)
         val targetChapterPosition = restoreChapterPosition.coerceAtLeast(0)
         resetTtsParagraphIndex()
@@ -700,13 +702,53 @@ class ReaderChapterController(
 
     // ── Replace Rules ──
 
+    /**
+     * 当前章「真命中」规则集合 — 在 [applyReplaceRules] / [applyLoadedReplaceRulesSync] 内
+     * 当 result != input 时记录该 rule。EffectiveReplacesDialog 通过 [hitContentRules] /
+     * [hitTitleRules] 暴露给 UI。
+     *
+     * 「真命中」语义：rule.replace 真的改变了内容才算（含正则全局替换零次匹配 → 不算命中）。
+     * 这与 Legado curTextChapter.effectiveReplaceRules 等价。
+     *
+     * 切章时：在 setChapterIndex / loadCurrentChapter 头部调用 [clearHitTracking] 重置。
+     */
+    private val hitContentRulesSet = java.util.Collections.synchronizedSet(linkedSetOf<com.morealm.app.domain.entity.ReplaceRule>())
+    private val hitTitleRulesSet = java.util.Collections.synchronizedSet(linkedSetOf<com.morealm.app.domain.entity.ReplaceRule>())
+
+    private val _hitContentRules = MutableStateFlow<List<com.morealm.app.domain.entity.ReplaceRule>>(emptyList())
+    val hitContentRules: StateFlow<List<com.morealm.app.domain.entity.ReplaceRule>> = _hitContentRules.asStateFlow()
+
+    private val _hitTitleRules = MutableStateFlow<List<com.morealm.app.domain.entity.ReplaceRule>>(emptyList())
+    val hitTitleRules: StateFlow<List<com.morealm.app.domain.entity.ReplaceRule>> = _hitTitleRules.asStateFlow()
+
+    /** Reset hit-tracking sets — must be called when current chapter changes. */
+    fun clearHitTracking() {
+        hitContentRulesSet.clear()
+        hitTitleRulesSet.clear()
+        _hitContentRules.value = emptyList()
+        _hitTitleRules.value = emptyList()
+    }
+
+    /** Re-pull rules from db (called after EffectiveReplacesDialog disables/edits a rule). */
+    suspend fun refreshReplaceRules() {
+        cachedReplaceRules = replaceRuleRepo.getRulesForBook(bookId)
+        // 不在此处 clear hits — 重渲染时会自然刷新
+    }
+
+    private fun publishHits() {
+        _hitContentRules.value = hitContentRulesSet.toList()
+        _hitTitleRules.value = hitTitleRulesSet.toList()
+    }
+
     suspend fun applyReplaceRules(content: String, isTitle: Boolean = false): String {
         if (cachedReplaceRules.isEmpty()) return content
         var result = content
+        var anyHit = false
         for (rule in cachedReplaceRules) {
             if (!rule.enabled || !rule.isValid()) continue
             if (isTitle && !rule.scopeTitle) continue
             if (!isTitle && !rule.scopeContent) continue
+            val before = result
             try {
                 result = if (rule.isRegex) {
                     try {
@@ -722,17 +764,24 @@ class ReaderChapterController(
                     result.replace(rule.pattern, rule.replacement)
                 }
             } catch (_: Exception) {}
+            if (result != before) {
+                if (isTitle) hitTitleRulesSet.add(rule) else hitContentRulesSet.add(rule)
+                anyHit = true
+            }
         }
+        if (anyHit) publishHits()
         return result
     }
 
     fun applyLoadedReplaceRulesSync(content: String, isTitle: Boolean = false): String {
         if (cachedReplaceRules.isEmpty()) return content
         var result = content
+        var anyHit = false
         for (rule in cachedReplaceRules) {
             if (!rule.enabled || !rule.isValid()) continue
             if (isTitle && !rule.scopeTitle) continue
             if (!isTitle && !rule.scopeContent) continue
+            val before = result
             try {
                 result = if (rule.isRegex) {
                     result.replace(getCachedRegex(rule.pattern), rule.replacement)
@@ -741,7 +790,12 @@ class ReaderChapterController(
                 }
             } catch (_: Exception) {
             }
+            if (result != before) {
+                if (isTitle) hitTitleRulesSet.add(rule) else hitContentRulesSet.add(rule)
+                anyHit = true
+            }
         }
+        if (anyHit) publishHits()
         return result
     }
 

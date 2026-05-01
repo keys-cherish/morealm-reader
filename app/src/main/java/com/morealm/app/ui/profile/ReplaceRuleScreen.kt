@@ -11,6 +11,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,12 +24,32 @@ import com.morealm.app.ui.theme.LocalMoRealmColors
 @Composable
 fun ReplaceRuleScreen(
     onBack: () -> Unit,
+    /**
+     * 可选的「打开后自动弹该规则编辑框」入口 — EffectiveReplacesDialog 跳来时使用。
+     * null = 普通进入；非空 = 列表加载后等到匹配 id 出现时自动打开 ReplaceRuleDialog。
+     * 该效果只触发一次（用 LaunchedEffect 的 key 是 editId 自身）。
+     */
+    autoEditId: String? = null,
     viewModel: ReplaceRuleViewModel = hiltViewModel(),
 ) {
     val moColors = LocalMoRealmColors.current
     val rules by viewModel.allRules.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
     var editingRuleId by remember { mutableStateOf<String?>(null) }
+    /** Guard: autoEditId 触发只走一次，否则旋转屏 / recomposition 会反复弹窗。 */
+    var autoEditConsumed by rememberSaveable { mutableStateOf(false) }
+
+    // 从 EffectiveReplacesDialog 跳来：等 rules 加载好后自动弹编辑框。
+    LaunchedEffect(autoEditId, rules) {
+        val target = autoEditId ?: return@LaunchedEffect
+        if (autoEditConsumed) return@LaunchedEffect
+        if (rules.isEmpty()) return@LaunchedEffect  // 还在加载
+        if (rules.any { it.id == target }) {
+            editingRuleId = target
+            showAddDialog = true
+            autoEditConsumed = true
+        }
+    }
 
     Scaffold(
         topBar = {

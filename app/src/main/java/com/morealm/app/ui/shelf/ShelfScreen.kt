@@ -129,6 +129,16 @@ fun ShelfScreen(
         }
     }
 
+    // 订阅"立即整理"结果上报：ViewModel 写入 organizeReport 后弹 Toast 并消费掉，
+    // 避免重复弹（recomposition 不会再次触发，因为消费后 flow 变 null）。
+    val organizeReport by viewModel.organizeReport.collectAsStateWithLifecycle()
+    LaunchedEffect(organizeReport) {
+        organizeReport?.let { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            viewModel.consumeOrganizeReport()
+        }
+    }
+
     // Derive display books based on current folder
     val displayBooks = remember(allBooks, currentFolderId) {
         if (currentFolderId != null) {
@@ -242,8 +252,14 @@ fun ShelfScreen(
                 val isOrganizing by viewModel.isOrganizing.collectAsStateWithLifecycle()
                 // 立即整理书架（魔棒）— 高频操作上提到顶栏。
                 // 整理过程中按钮位置不变，用 spinner 替换图标提供进度反馈。
+                // 起始 Toast 让用户立刻知道操作已生效，结束 Toast 由 organizeReport 订阅触发。
                 IconButton(
-                    onClick = { viewModel.organizeShelf() },
+                    onClick = {
+                        if (!isOrganizing) {
+                            Toast.makeText(context, "开始整理书架…", Toast.LENGTH_SHORT).show()
+                            viewModel.organizeShelf()
+                        }
+                    },
                     enabled = !isOrganizing,
                 ) {
                     if (isOrganizing) {
@@ -271,92 +287,43 @@ fun ShelfScreen(
                 IconButton(onClick = { showSearch = true }) {
                     Icon(Icons.Default.Search, "搜索", tint = MaterialTheme.colorScheme.onBackground)
                 }
-                // ── More menu: 立即整理 / 检查更新 / 排序 / 视图 ──
-                // 顶栏已有同款按钮，这里保留入口便于习惯走二级菜单的用户。
-                val isRefreshingToc by viewModel.isRefreshing.collectAsStateWithLifecycle()
-                var showMoreMenu by remember { mutableStateOf(false) }
-                var showSortSubmenu by remember { mutableStateOf(false) }
+                // ── 排序按钮 ──
+                // 立即整理 / 列表视图切换已上提到顶栏；检查更新走后台自动刷新。
+                // 这里直接放排序按钮，点击展开 4 个排序选项，去掉一层中转的"更多"菜单。
+                var showSortMenu by remember { mutableStateOf(false) }
                 Box {
-                    IconButton(onClick = { showMoreMenu = true }) {
-                        Icon(Icons.Default.MoreVert, "更多", tint = MaterialTheme.colorScheme.onBackground)
-                    }
-                    DropdownMenu(expanded = showMoreMenu, onDismissRequest = {
-                        showMoreMenu = false; showSortSubmenu = false
-                    }) {
-                        DropdownMenuItem(
-                            text = { Text("立即整理书架") },
-                            leadingIcon = {
-                                if (isOrganizing) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
-                                        color = MaterialTheme.colorScheme.primary,
-                                    )
-                                } else {
-                                    Icon(Icons.Default.AutoFixHigh, null,
-                                        tint = MaterialTheme.colorScheme.primary)
-                                }
-                            },
-                            enabled = !isOrganizing,
-                            onClick = { showMoreMenu = false; viewModel.organizeShelf() },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(if (isRefreshingToc) "停止检查更新" else "检查更新") },
-                            leadingIcon = {
-                                if (isRefreshingToc) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
-                                    )
-                                } else {
-                                    Icon(Icons.Default.Refresh, null)
-                                }
-                            },
-                            onClick = {
-                                showMoreMenu = false
-                                if (isRefreshingToc) viewModel.cancelRefresh()
-                                else viewModel.refreshAllBooks()
-                            },
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                        DropdownMenuItem(
-                            text = { Text("排序方式") },
-                            leadingIcon = { Icon(Icons.Default.SortByAlpha, null) },
-                            trailingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
-                            onClick = { showSortSubmenu = true },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(if (isListView) "网格视图" else "列表视图") },
-                            leadingIcon = {
-                                Icon(
-                                    if (isListView) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
-                                    null,
-                                )
-                            },
-                            onClick = { isListView = !isListView; showMoreMenu = false },
+                    IconButton(onClick = { showSortMenu = true }) {
+                        Icon(
+                            Icons.Default.SortByAlpha,
+                            contentDescription = "排序方式",
+                            tint = MaterialTheme.colorScheme.onBackground,
                         )
                     }
-                    // Sort sub-menu rendered as a sibling Box so it overlays
-                    // independently — Compose has no native nested DropdownMenu.
                     DropdownMenu(
-                        expanded = showSortSubmenu,
-                        onDismissRequest = {
-                            showSortSubmenu = false; showMoreMenu = false
-                        },
+                        expanded = showSortMenu,
+                        onDismissRequest = { showSortMenu = false },
                     ) {
-                        listOf("recent" to "最近阅读", "addTime" to "导入时间", "title" to "书名排序", "format" to "格式分类")
-                            .forEach { (key, label) ->
-                                DropdownMenuItem(
-                                    text = { Text(label) },
-                                    onClick = {
-                                        viewModel.setSortMode(key)
-                                        showSortSubmenu = false
-                                        showMoreMenu = false
-                                    },
-                                    trailingIcon = {
-                                        if (sortMode == key) Icon(Icons.Default.Check, null,
-                                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                    },
-                                )
-                            }
+                        listOf(
+                            "recent" to "最近阅读",
+                            "addTime" to "导入时间",
+                            "title" to "书名排序",
+                            "format" to "格式分类",
+                        ).forEach { (key, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    viewModel.setSortMode(key)
+                                    showSortMenu = false
+                                },
+                                trailingIcon = {
+                                    if (sortMode == key) Icon(
+                                        Icons.Default.Check, null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                            )
+                        }
                     }
                 }
                 Box {
