@@ -6,7 +6,15 @@ import kotlinx.serialization.Serializable
 
 /**
  * MoRealm theme entity. Stores both built-in and user-imported themes.
+ *
+ * Marked `@Serializable` so [BackupManager.buildBackupData] can include
+ * the user's themes in exported `.zip` backups. Without this, the export
+ * path threw `SerializationException: Serializer for class 'ThemeEntity'
+ * is not found`, which (combined with the now-fixed runCatching swallow)
+ * produced 0-byte backup files. All fields are plain primitives / String /
+ * String?; no custom types so the default generated serializer suffices.
  */
+@Serializable
 @Entity(tableName = "themes")
 data class ThemeEntity(
     @PrimaryKey val id: String,
