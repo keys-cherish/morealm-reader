@@ -164,14 +164,48 @@ class TtsEngineHost(
                 chapterTitle = cmd.chapterTitle
                 coverUrl = cmd.coverUrl ?: coverUrl
 
-                paragraphs = parseParagraphs(cmd.content)
-                paragraphPositions = cmd.paragraphPositions ?: buildSequentialPositions(paragraphs)
+                // Legado-style single-source-of-truth: when the ViewModel hands
+                // us authoritative paragraph offsets (computed from
+                // TextChapter.getParagraphs — the same data the renderer uses
+                // for `upPageAloudSpan`), slice [content] at those offsets
+                // instead of independently re-parsing. That guarantees
+                // `paragraphs.size == paragraphPositions.size` so the
+                // [paragraphIndex → chapterPosition] lookup never falls back to
+                // 0, which previously caused the highlight to freeze on the
+                // first paragraph whenever the two splitters disagreed.
+                val pos = cmd.paragraphPositions
+                val sliceMode: String
+                if (pos != null && pos.isNotEmpty()) {
+                    paragraphs = paragraphsFromPositions(cmd.content, pos)
+                    paragraphPositions = pos
+                    sliceMode = "fromPositions(${pos.size})"
+                } else {
+                    paragraphs = parseParagraphs(cmd.content)
+                    paragraphPositions = buildSequentialPositions(paragraphs)
+                    sliceMode = "parseParagraphs"
+                }
                 paragraphIndex = paragraphIndexForPosition(cmd.startChapterPosition)
                 waitingForNextChapter = false
+
+                // TTS-DIAG #5 — what the host actually loaded. Sample the first
+                // 60 chars of the first non-blank paragraph so we can spot
+                // "content cleaned to nothing" failures on real chapters.
+                val firstNonBlank = paragraphs.firstOrNull { it.isNotBlank() }
+                AppLog.info(
+                    "TTS",
+                    "Host.loadAndPlay: contentLen=${cmd.content.length}, " +
+                        "mode=$sliceMode, paragraphs=${paragraphs.size}, " +
+                        "positions=${paragraphPositions.size}, startIdx=$paragraphIndex, " +
+                        "engine=$engineId, voice='$voiceName', speed=$speed, " +
+                        "firstPara='${firstNonBlank?.take(60) ?: "<all blank>"}'",
+                )
 
                 publishState(playing = paragraphs.isNotEmpty())
                 if (paragraphs.isEmpty()) {
                     AppLog.warn("TtsHost", "LoadAndPlay with empty paragraphs")
+                    TtsEventBus.sendEvent(
+                        TtsEventBus.Event.Error("无法朗读：本章节无可读文本", canOpenSettings = false)
+                    )
                     return@withLock
                 }
                 speakJob = scope.launch { speakLoop() }
@@ -263,11 +297,19 @@ class TtsEngineHost(
         var consecutiveErrors = 0
         try {
             val engine = currentEngine()
+            // TTS-DIAG #6 — speak loop entered. If you see #5 but never #6,
+            // the speakJob coroutine never actually got scheduled.
+            AppLog.info(
+                "TTS",
+                "Host.speakLoop: ENTER engine=${engine.javaClass.simpleName}, " +
+                    "paragraphs=${paragraphs.size}, startIdx=$paragraphIndex",
+            )
             if (engine is SystemTtsEngine) {
                 // Resolve init with a hard timeout (4s default inside SystemTtsEngine).
                 // On failure, surface a user-facing reason and bail out cleanly instead
                 // of letting the speak loop deadlock on a never-ready engine.
                 val initRes = engine.awaitReadyResult()
+                AppLog.info("TTS", "Host.speakLoop: SystemTtsEngine awaitReadyResult=$initRes")
                 if (initRes is SystemTtsEngine.InitResult.Failed) {
                     AppLog.error("TtsHost", "System TTS init failed: ${initRes.reason}")
                     TtsEventBus.sendEvent(
@@ -279,21 +321,90 @@ class TtsEngineHost(
             }
 
             for (idx in paragraphIndex until paragraphs.size) {
-                if (!TtsEventBus.playbackState.value.isPlaying) return
+                if (!TtsEventBus.playbackState.value.isPlaying) {
+                    AppLog.info("TTS", "Host.speakLoop: isPlaying flipped to false, exiting at idx=$idx")
+                    return
+                }
                 paragraphIndex = idx
                 publishState(playing = true)
 
+                val paragraphText = paragraphs[idx]
+                // Legado parity: skip blank / punctuation-only paragraphs but
+                // still advance the highlight so the user can see TTS scrolling
+                // through silent gaps (chapter dividers, image-only lines).
+                if (paragraphText.isBlank() ||
+                    skipRegex?.containsMatchIn(paragraphText) == true) {
+                    AppLog.debug("TTS", "Host.speakLoop: skip idx=$idx (blank or matches skipRegex)")
+                    continue
+                }
+
                 try {
-                    engine.speak(paragraphs[idx], speed).collect { /* drain */ }
+                    AppLog.info(
+                        "TTS",
+                        "Host.speakLoop: speak idx=$idx/${paragraphs.size} " +
+                            "len=${paragraphText.length} text='${paragraphText.take(40)}'",
+                    )
+                    engine.speak(paragraphText, speed).collect { /* drain */ }
+                    AppLog.debug("TTS", "Host.speakLoop: speak idx=$idx returned normally")
                     consecutiveErrors = 0
                 } catch (ce: CancellationException) {
+                    AppLog.debug("TTS", "Host.speakLoop: cancelled at idx=$idx")
                     throw ce
                 } catch (e: Exception) {
                     consecutiveErrors++
                     AppLog.warn("TtsHost", "speak error on para $idx (consec=$consecutiveErrors)", e)
+                    // Recovery path A — when the system engine reports a
+                    // synchronous ERROR (most often a corrupted voice binding
+                    // after the language pack changed under us), tearing down
+                    // and rebinding TextToSpeech almost always clears the
+                    // problem. We do this on the FIRST failure, before the
+                    // 3-strikes terminal stop, mirroring Legado's recovery in
+                    // TTSReadAloudService.
+                    if (consecutiveErrors == 1 && engine is SystemTtsEngine) {
+                        AppLog.info("TTS", "Host.speakLoop: attempting SystemTtsEngine.reInit before retry")
+                        runCatching { engine.reInit() }
+                            .onFailure { AppLog.warn("TtsHost", "reInit threw: ${it.message}", it) }
+                        // Re-apply the user's voice selection on the fresh
+                        // binding; otherwise the rebinding could have dropped
+                        // back to system default.
+                        applyVoiceToEngine()
+                        // Retry the SAME paragraph by stepping idx back one —
+                        // the for-loop will increment again on next iteration.
+                        // We DON'T emit the user-facing toast yet; if the retry
+                        // succeeds the user never sees a stutter.
+                        delay(150)
+                        // Loop will re-attempt this paragraph because we
+                        // continue here — but the for-loop's idx has already
+                        // advanced; explicitly retry by recursing into a tail
+                        // call of speakLoop with paragraphIndex = idx.
+                        paragraphIndex = idx
+                        speakLoop()
+                        return
+                    }
+                    // Surface the very first failure of a streak immediately so
+                    // the user gets a Toast instead of staring at a silent
+                    // reader. TtsErrorPresenter dedupes within 3s, so a retry
+                    // storm won't produce a flood of toasts.
+                    if (consecutiveErrors == 1) {
+                        TtsEventBus.sendEvent(
+                            TtsEventBus.Event.Error(
+                                e.message ?: "TTS 朗读失败",
+                                canOpenSettings = engineId == "system",
+                            )
+                        )
+                    }
                     if (consecutiveErrors >= 3) {
                         if (engineId != "system") {
                             AppLog.info("TtsHost", "Falling back to system engine after repeated errors")
+                            // Tell the user *why* the voice just changed —
+                            // previously this was a silent fallback and users
+                            // assumed the engine setting had been forgotten.
+                            TtsEventBus.sendEvent(
+                                TtsEventBus.Event.Error(
+                                    "Edge TTS 多次失败，已自动切换为系统朗读",
+                                    canOpenSettings = false,
+                                )
+                            )
                             // Persist the fallback so it survives next launch.
                             withContext(NonCancellable) { prefs.setTtsEngine("system") }
                             engineId = "system"
@@ -309,6 +420,15 @@ class TtsEngineHost(
                             return
                         }
                         AppLog.error("TtsHost", "Engine repeatedly failing, stopping playback", e)
+                        // Terminal stop after 3 strikes on the system engine.
+                        // Without this Error event the user previously just saw
+                        // the play button toggle off with no explanation.
+                        TtsEventBus.sendEvent(
+                            TtsEventBus.Event.Error(
+                                "TTS 连续 3 次朗读失败，已停止：${e.message ?: "未知错误"}",
+                                canOpenSettings = true,
+                            )
+                        )
                         publishState(playing = false)
                         return
                     }
@@ -522,6 +642,43 @@ class TtsEngineHost(
             .filter { it.isNotBlank() && it.length > 1 }
         val skip = skipRegex
         return if (skip != null) paras.filter { !skip.containsMatchIn(it) } else paras
+    }
+
+    /**
+     * Slice [content] at the supplied paragraph offsets to produce a paragraph
+     * list whose size and ordering exactly matches [positions]. Each slice is
+     * lightly cleaned (HTML tag strip + entity decode + trim) so the engine
+     * speaks readable text, but blank slices are KEPT in place — the speak
+     * loop skips them at iteration time so the highlight still advances
+     * across silent gaps.
+     *
+     * Why this exists: when the renderer hands us authoritative offsets via
+     * `Command.LoadAndPlay.paragraphPositions`, re-parsing with
+     * [parseParagraphs] would drop empty / single-char paragraphs and put the
+     * lists out of step with the renderer — making the highlight stick at
+     * paragraph 0 because `paragraphPositions.getOrNull(idx)` returns null
+     * partway through. Slicing keeps the 1:1 invariant.
+     */
+    private fun paragraphsFromPositions(content: String, positions: List<Int>): List<String> {
+        if (positions.isEmpty()) return emptyList()
+        val out = ArrayList<String>(positions.size)
+        for (i in positions.indices) {
+            val rawStart = positions[i]
+            val rawEnd = positions.getOrNull(i + 1) ?: content.length
+            val start = rawStart.coerceIn(0, content.length)
+            val end = rawEnd.coerceIn(start, content.length)
+            val cleaned = content.substring(start, end)
+                .replace(AppPattern.htmlImgRegex, "")
+                .replace(AppPattern.htmlSvgRegex, "")
+                .replace(AppPattern.htmlDivCloseRegex, "\n")
+                .replace(AppPattern.htmlBrRegex, "\n")
+                .replace(AppPattern.htmlTagRegex, "")
+                .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'")
+                .trim()
+            out.add(cleaned)
+        }
+        return out
     }
 
     private fun buildSequentialPositions(paras: List<String>): List<Int> {
