@@ -7,7 +7,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +34,8 @@ import com.morealm.app.service.CacheBookService
 @Composable
 fun CacheBookScreen(
     onBack: () -> Unit,
+    /** 单击书卡片直接进阅读器 — 任务 #3。 */
+    onOpenReader: (bookId: String) -> Unit = {},
     viewModel: CacheBookViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -43,6 +44,23 @@ fun CacheBookScreen(
     val isDownloading by viewModel.isDownloading.collectAsStateWithLifecycle()
     val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
     val exportState by viewModel.exportState.collectAsStateWithLifecycle()
+    // #4 multi-select state
+    val multiSelectMode by viewModel.multiSelectMode.collectAsStateWithLifecycle()
+    val selectedIds by viewModel.selectedBookIds.collectAsStateWithLifecycle()
+    val oneShotToast by viewModel.oneShotToast.collectAsStateWithLifecycle()
+
+    /** ⋮ 菜单展开状态（顶栏）。 */
+    var showTopMenu by remember { mutableStateOf(false) }
+    /** 「全部清空」二次确认对话框。 */
+    var showClearAllConfirm by remember { mutableStateOf(false) }
+
+    // 一次性 toast 消费
+    LaunchedEffect(oneShotToast) {
+        oneShotToast?.let {
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+            viewModel.consumeToast()
+        }
+    }
 
     // SAF document picker for TXT export. The MIME hint "text/plain" makes most file
     // managers default to .txt extension; the user-suggested filename is set per-launch.
@@ -67,16 +85,92 @@ fun CacheBookScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("离线缓存", fontWeight = FontWeight.Bold) },
+                title = {
+                    if (multiSelectMode) {
+                        Text("已选 ${selectedIds.size} 本", fontWeight = FontWeight.Bold)
+                    } else {
+                        Text("离线缓存", fontWeight = FontWeight.Bold)
+                    }
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
+                    if (multiSelectMode) {
+                        IconButton(onClick = { viewModel.exitMultiSelect() }) {
+                            Icon(Icons.Default.Close, "退出多选")
+                        }
+                    } else {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
+                        }
                     }
                 },
                 actions = {
-                    if (isDownloading) {
-                        IconButton(onClick = { viewModel.stopDownload() }) {
-                            Icon(Icons.Default.Close, "停止下载")
+                    when {
+                        multiSelectMode -> {
+                            // 多选模式：全选 + 删除
+                            IconButton(onClick = { viewModel.selectAll() }) {
+                                Icon(Icons.Default.SelectAll, "全选")
+                            }
+                            IconButton(
+                                onClick = { viewModel.clearSelectedCaches() },
+                                enabled = selectedIds.isNotEmpty(),
+                            ) {
+                                Icon(
+                                    Icons.Default.DeleteOutline,
+                                    "清空选中",
+                                    tint = if (selectedIds.isNotEmpty()) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                    },
+                                )
+                            }
+                        }
+                        isDownloading -> {
+                            IconButton(onClick = { viewModel.stopDownload() }) {
+                                Icon(Icons.Default.Close, "停止下载")
+                            }
+                        }
+                        else -> {
+                            Box {
+                                IconButton(onClick = { showTopMenu = true }) {
+                                    Icon(Icons.Default.MoreVert, "更多")
+                                }
+                                DropdownMenu(
+                                    expanded = showTopMenu,
+                                    onDismissRequest = { showTopMenu = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("选择多本") },
+                                        leadingIcon = { Icon(Icons.Default.CheckBox, null) },
+                                        onClick = {
+                                            showTopMenu = false
+                                            viewModel.enterMultiSelect()
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("清理无效缓存") },
+                                        leadingIcon = { Icon(Icons.Default.CleaningServices, null) },
+                                        onClick = {
+                                            showTopMenu = false
+                                            viewModel.clearOrphanedCache()
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("全部清空", color = MaterialTheme.colorScheme.error) },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.DeleteForever,
+                                                null,
+                                                tint = MaterialTheme.colorScheme.error,
+                                            )
+                                        },
+                                        onClick = {
+                                            showTopMenu = false
+                                            showClearAllConfirm = true
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 },
@@ -179,6 +273,10 @@ fun CacheBookScreen(
                             isDownloading = isDownloading && downloadProgress.bookId == book.id,
                             downloadProgress = if (downloadProgress.bookId == book.id) downloadProgress else null,
                             exportState = export,
+                            multiSelectMode = multiSelectMode,
+                            isSelected = book.id in selectedIds,
+                            onToggleSelect = { viewModel.toggleSelected(book.id) },
+                            onOpenReader = { onOpenReader(book.id) },
                             onDownloadAll = {
                                 viewModel.startDownload(book)
                             },
@@ -211,6 +309,28 @@ fun CacheBookScreen(
             }
         }
     }
+
+    // #4: 「全部清空」二次确认 — 危险操作，必须经用户再次同意才执行。
+    if (showClearAllConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearAllConfirm = false },
+            title = { Text("全部清空？") },
+            text = { Text("将删除全部 ${webBooks.size} 本网络书的章节缓存，此操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearAllConfirm = false
+                    viewModel.clearAllCaches()
+                }) {
+                    Text("全部清空", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearAllConfirm = false }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -221,25 +341,52 @@ private fun CacheBookItem(
     isDownloading: Boolean,
     downloadProgress: CacheBookService.DownloadProgress?,
     exportState: CacheBookViewModel.ExportState? = null,
+    /** #4：是否处于多选模式。true → 行单击 = toggleSelect，左侧显示 Checkbox。 */
+    multiSelectMode: Boolean = false,
+    /** 多选模式下当前书是否被选中。 */
+    isSelected: Boolean = false,
+    onToggleSelect: () -> Unit = {},
+    /** #3：普通模式下行单击直接进阅读器。 */
+    onOpenReader: () -> Unit = {},
     onDownloadAll: () -> Unit,
     onDownloadFromCurrent: () -> Unit,
     onClearCache: () -> Unit,
     onExportTxt: () -> Unit = {},
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    /** 操作菜单展开状态（普通模式下右侧 ⋮ 按钮触发）。 */
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    val rowBgColor = if (multiSelectMode && isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = rowBgColor,
     ) {
         Column {
             Row(
                 modifier = Modifier
-                    .clickable { expanded = !expanded }
+                    .clickable {
+                        if (multiSelectMode) onToggleSelect() else onOpenReader()
+                    }
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (multiSelectMode) {
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = { onToggleSelect() },
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = MaterialTheme.colorScheme.primary,
+                        ),
+                        modifier = Modifier.size(28.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
                 // Cover
                 Box(
                     modifier = Modifier
@@ -333,12 +480,51 @@ private fun CacheBookItem(
                         strokeWidth = 2.dp,
                         color = MaterialTheme.colorScheme.primary,
                     )
-                } else {
-                    Icon(
-                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        null,
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                    )
+                } else if (!multiSelectMode) {
+                    // #3: 普通模式右侧 ⋮ 按钮 — 弹 DropdownMenu，包含原本展开后的 4 个动作。
+                    Box {
+                        IconButton(
+                            onClick = { menuExpanded = true },
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.MoreVert, "操作菜单",
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("全部缓存") },
+                                leadingIcon = { Icon(Icons.Default.CloudDownload, null) },
+                                onClick = { menuExpanded = false; onDownloadAll() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("从当前章") },
+                                leadingIcon = { Icon(Icons.Default.Download, null) },
+                                onClick = { menuExpanded = false; onDownloadFromCurrent() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("导出 TXT") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Article, null,
+                                        tint = MaterialTheme.colorScheme.tertiary)
+                                },
+                                onClick = { menuExpanded = false; onExportTxt() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("清除", color = MaterialTheme.colorScheme.error) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.DeleteOutline, null,
+                                        tint = MaterialTheme.colorScheme.error)
+                                },
+                                onClick = { menuExpanded = false; onClearCache() },
+                            )
+                        }
+                    }
                 }
             }
 
@@ -380,59 +566,7 @@ private fun CacheBookItem(
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Expanded actions
-            if (expanded && !isDownloading && exportState?.running != true) {
-                FlowRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = onDownloadAll,
-                        shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    ) {
-                        Icon(Icons.Default.CloudDownload, null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("全部缓存", style = MaterialTheme.typography.labelSmall)
-                    }
-                    OutlinedButton(
-                        onClick = onDownloadFromCurrent,
-                        shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    ) {
-                        Icon(Icons.Default.Download, null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("从当前章", style = MaterialTheme.typography.labelSmall)
-                    }
-                    OutlinedButton(
-                        onClick = onExportTxt,
-                        shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.tertiary,
-                        ),
-                    ) {
-                        Icon(Icons.Default.Article, null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("导出TXT", style = MaterialTheme.typography.labelSmall)
-                    }
-                    OutlinedButton(
-                        onClick = onClearCache,
-                        shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error,
-                        ),
-                    ) {
-                        Icon(Icons.Default.DeleteOutline, null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("清除", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            }
+            // Expanded actions removed in #3 — 操作菜单移到顶部 Row 右侧的 ⋮ DropdownMenu。
         }
     }
 }

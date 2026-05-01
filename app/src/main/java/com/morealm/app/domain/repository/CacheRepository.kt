@@ -48,6 +48,57 @@ class CacheRepository @Inject constructor(
         cacheDao.deleteByPrefix("chapter_content_${sourceUrl}_")
     }
 
+    /**
+     * 批量清缓存：对每个 sourceUrl 调 [clearCache]。事务级一次性删除。返回受影响 source 数。
+     */
+    suspend fun clearCacheBatch(sourceUrls: Collection<String>): Int {
+        var n = 0
+        for (url in sourceUrls) {
+            if (url.isBlank()) continue
+            cacheDao.deleteByPrefix("chapter_content_${url}_")
+            n++
+        }
+        return n
+    }
+
+    /**
+     * 清理无效缓存（孤儿）— 任务 #4。
+     *
+     * 「无效」 = cache 表里某个 sourceUrl 已经没有任何 Book 在用。覆盖三种情况：
+     *  1. 用户从书架删了书，BookSource 还在；
+     *  2. 用户给某本书换了源，旧源缓存留下；
+     *  3. 用户彻底删了 BookSource，cache 还残留。
+     *
+     * 算法：拉所有书的 sourceUrl 集合 → 扫描 chapter_content_* 全部 key → 对每个 key
+     * 检查是否有任何 active sourceUrl 是它的前缀；不匹配就删。
+     *
+     * 注意：sourceUrl 中可能含 `_`（如 `https://book_x.com`），所以不用从 key 反推
+     * sourceUrl，而是用 startsWith 暴力匹配。一次扫描 O(N×M)，N=cache 条目数，
+     * M=活跃源数，量级万级×百级仍可秒级完成。
+     *
+     * @return 删除的孤儿条目数。
+     */
+    suspend fun clearOrphanedCache(): Int = withContext(Dispatchers.IO) {
+        val activeSourceUrls = bookDao.getAllBooksSync()
+            .mapNotNull { it.sourceUrl?.takeIf { url -> url.isNotBlank() } }
+            .toSet()
+        // 即使一本书都没有也得扫描（删全部）—— 允许返回正数代表确实清了东西。
+        val keys = cacheDao.getAllChapterContentKeys()
+        var deleted = 0
+        for (key in keys) {
+            // key 形如 chapter_content_<sourceUrl>_<chapterUrl>。
+            val isOrphan = activeSourceUrls.none { src ->
+                key.startsWith("chapter_content_${src}_")
+            }
+            if (isOrphan) {
+                cacheDao.delete(key)
+                deleted++
+            }
+        }
+        AppLog.info("CacheCleanup", "Cleared $deleted orphaned cache entries (${activeSourceUrls.size} active sources)")
+        deleted
+    }
+
     fun startDownload(bookId: String, sourceUrl: String, startIndex: Int = 0, endIndex: Int = -1) {
         CacheBookService.start(context, bookId, sourceUrl, startIndex, endIndex)
     }

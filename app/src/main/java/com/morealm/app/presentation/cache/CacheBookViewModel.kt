@@ -78,6 +78,81 @@ class CacheBookViewModel @Inject constructor(
         }
     }
 
+    // ── #4 多选模式 + 批量删除 + 清理无效缓存 ──
+
+    private val _multiSelectMode = MutableStateFlow(false)
+    val multiSelectMode: StateFlow<Boolean> = _multiSelectMode.asStateFlow()
+
+    /** 选中的书 id 集合。退出多选模式时清空。 */
+    private val _selectedBookIds = MutableStateFlow<Set<String>>(emptySet())
+    val selectedBookIds: StateFlow<Set<String>> = _selectedBookIds.asStateFlow()
+
+    /** 一次性后台任务的提示文案（"已清理 5 条孤儿缓存"等）— UI 用 Toast 消费。 */
+    private val _oneShotToast = MutableStateFlow<String?>(null)
+    val oneShotToast: StateFlow<String?> = _oneShotToast.asStateFlow()
+
+    fun consumeToast() { _oneShotToast.value = null }
+
+    fun enterMultiSelect() {
+        _multiSelectMode.value = true
+        _selectedBookIds.value = emptySet()
+    }
+
+    fun exitMultiSelect() {
+        _multiSelectMode.value = false
+        _selectedBookIds.value = emptySet()
+    }
+
+    fun toggleSelected(bookId: String) {
+        _selectedBookIds.update { current ->
+            if (bookId in current) current - bookId else current + bookId
+        }
+    }
+
+    fun selectAll() {
+        _selectedBookIds.value = webBooks.value.map { it.id }.toSet()
+    }
+
+    /**
+     * 批量清空选中本书的缓存。结束后退出多选模式 + 弹 toast 报告条数。
+     * 注意：这里只清缓存，不删 Book 自身。
+     */
+    fun clearSelectedCaches() {
+        val ids = _selectedBookIds.value
+        if (ids.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val targets = webBooks.value.filter { it.id in ids }
+            val urls = targets.mapNotNull { it.sourceUrl }
+            val n = cacheRepo.clearCacheBatch(urls)
+            loadCacheStats()
+            exitMultiSelect()
+            _oneShotToast.value = "已清空 $n 本书的缓存"
+        }
+    }
+
+    /**
+     * 清理无效缓存（孤儿条目）— 不影响任何活跃书的缓存。完成后弹 toast。
+     */
+    fun clearOrphanedCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val n = cacheRepo.clearOrphanedCache()
+            loadCacheStats()
+            _oneShotToast.value = if (n > 0) "已清理 $n 条无效缓存" else "未发现无效缓存"
+        }
+    }
+
+    /**
+     * 全部清空 — 危险操作，UI 必须先弹二次确认。
+     */
+    fun clearAllCaches() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val all = webBooks.value.mapNotNull { it.sourceUrl }
+            val n = cacheRepo.clearCacheBatch(all)
+            loadCacheStats()
+            _oneShotToast.value = "已清空 $n 本书的缓存"
+        }
+    }
+
     /**
      * Export a book's cached chapters to a TXT file at [uri] (the SAF document the user picked).
      * Updates [exportState] with running progress and a final summary message.

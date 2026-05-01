@@ -294,7 +294,12 @@ fun MoRealmNavHost(
             }
 
             composable("cache_book") {
-                CacheBookScreen(onBack = { navController.safePopBackStack() })
+                CacheBookScreen(
+                    onBack = { navController.safePopBackStack() },
+                    onOpenReader = { bookId ->
+                        navController.safeNavigate("reader/$bookId")
+                    },
+                )
             }
 
             composable("theme_editor") {
