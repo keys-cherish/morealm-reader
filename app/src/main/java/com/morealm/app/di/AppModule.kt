@@ -491,6 +491,7 @@ object AppModule {
     @Provides fun provideThemeDao(db: AppDatabase): ThemeDao = db.themeDao()
     @Provides fun provideReadStatsDao(db: AppDatabase): ReadStatsDao = db.readStatsDao()
     @Provides fun provideBookmarkDao(db: AppDatabase): BookmarkDao = db.bookmarkDao()
+    @Provides fun provideHighlightDao(db: AppDatabase): HighlightDao = db.highlightDao()
     @Provides fun provideReplaceRuleDao(db: AppDatabase): ReplaceRuleDao = db.replaceRuleDao()
     @Provides fun provideReaderStyleDao(db: AppDatabase): ReaderStyleDao = db.readerStyleDao()
     @Provides fun provideTxtTocRuleDao(db: AppDatabase): TxtTocRuleDao = db.txtTocRuleDao()

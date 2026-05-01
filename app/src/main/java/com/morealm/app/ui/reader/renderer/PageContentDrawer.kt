@@ -32,6 +32,25 @@ internal val DEFAULT_ALOUD_COLOR = Color(0x3300C853)       // green @ 20%
 internal val DEFAULT_SEARCH_RESULT_COLOR = Color(0x40FFEB3B) // yellow @ 25%
 internal val DEFAULT_BOOKMARK_COLOR = Color(0xFFFF5252)     // error red
 
+/**
+ * Per-page representation of a saved user highlight.
+ *
+ * The renderer doesn't need the full DB row — only the chapter-position
+ * range (排版无关定位) + ARGB color, plus the original `id` so a tap can be
+ * routed back to delete/share UI without recomputing.
+ *
+ * Range semantics: `[startChapterPos, endChapterPos)` — inclusive start,
+ * exclusive end, matching how `TextLine.chapterPosition + line.charSize`
+ * advertises a line's character span. A column is highlighted iff
+ * `columnStart < endChapterPos && columnEnd > startChapterPos`.
+ */
+data class HighlightSpan(
+    val id: String,
+    val startChapterPos: Int,
+    val endChapterPos: Int,
+    val colorArgb: Int,
+)
+
 /** Bookmark triangle size (px) drawn at top-right corner */
 private const val BOOKMARK_TRIANGLE_SIZE = 40f
 
@@ -103,6 +122,12 @@ fun PageCanvas(
      * 让 page.lines.isReadAloud 的改动能触发画面刷新。
      */
     readAloudChapterPosition: Int = -1,
+    /**
+     * 用户保存的高亮（若有）— 渲染时画在文字底下、选区/朗读高亮上面。
+     * 空列表时走 canvasRecorder 缓存；非空时强制走 hasOverlay 直绘路径，
+     * 因为高亮内容会随用户增删而变，缓存版本不再准确。
+     */
+    highlights: List<HighlightSpan> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     val selColorArgb = selectionColor.toArgb()
@@ -118,8 +143,11 @@ fun PageCanvas(
     // 作为重组依赖，确保 host 推新位置时这里能重新评估 hasOverlay。
     @Suppress("UNUSED_VARIABLE") // 仅作为 Compose snapshot 读取触发
     val readAloudKey = readAloudChapterPosition
+    // highlights.size 也作为重组 trigger — 用户增删高亮时强制重算 hasOverlay。
+    @Suppress("UNUSED_VARIABLE")
+    val highlightsKey = highlights.size
     val hasOverlay = selectionStart != null || aloudLineIndex >= 0 ||
-        page.lines.any { it.isReadAloud }
+        page.lines.any { it.isReadAloud } || highlights.isNotEmpty()
     Canvas(modifier = modifier.fillMaxSize()) {
         val canvas = drawContext.canvas.nativeCanvas
         val w = size.width.toInt()
@@ -146,6 +174,7 @@ fun PageCanvas(
                 hasBookmark = hasBookmark,
                 bmColorArgb = bmColorArgb,
                 canvasWidth = size.width,
+                highlights = highlights,
             )
         } else {
             // No overlay — use CanvasRecorder: record once, replay on subsequent frames
@@ -198,6 +227,13 @@ fun drawPageContent(
     hasBookmark: Boolean = false,
     bmColorArgb: Int = DEFAULT_BOOKMARK_COLOR.toArgb(),
     canvasWidth: Float = 0f,
+    /**
+     * 用户保存的高亮 — 在 search-result 之后、selection-highlight 之前画底色矩形。
+     * 顺序选择理由：search 是临时的 navigation 视觉，应该最底；user 高亮是持久数据
+     * 视觉，盖在 search 之上但被实时 selection 盖住，避免选择时看不到当前选区边界。
+     * TTS 朗读高亮再画在最上面，朗读期间用户能清楚看到当前段。
+     */
+    highlights: List<HighlightSpan> = emptyList(),
 ) {
     val highlightPaint = sharedHighlightPaint
     val spacingPaint = sharedSpacingPaint
@@ -217,6 +253,45 @@ fun drawPageContent(
             if (col is TextBaseColumn && col.isSearchResult) {
                 highlightPaint.color = searchColorArgb
                 canvas.drawRect(col.start, lineTop, col.end, lineBottom, highlightPaint)
+            }
+        }
+
+        // 1b. User-saved highlights (Highlight entity).
+        // For each highlight overlapping this line's chapter-position range,
+        // walk the columns in order to find the leftmost column that starts
+        // before highlightEnd and rightmost column that ends after
+        // highlightStart, then draw one rect from leftmost.start to
+        // rightmost.end. Multi-line highlights paint per-line — a single
+        // highlight produces one rect per line it touches.
+        if (highlights.isNotEmpty()) {
+            val lineStart = line.chapterPosition
+            val lineCharCount = line.charSize
+            // line.chapterPosition advances by `+1` past paragraph end (see
+            // ChapterProvider.kt:538 — accounts for the implicit '\n' of a
+            // paragraph break). For overlap detection we use the visible
+            // character span only.
+            val lineEnd = lineStart + lineCharCount
+            for (h in highlights) {
+                if (h.startChapterPos >= lineEnd || h.endChapterPos <= lineStart) continue
+                // Overlap exists. Walk columns to find x range.
+                var charPos = lineStart
+                var leftX: Float? = null
+                var rightX: Float? = null
+                for (col in line.columns) {
+                    if (col is TextBaseColumn) {
+                        val colStart = charPos
+                        val colEnd = charPos + col.charData.length
+                        if (colEnd > h.startChapterPos && colStart < h.endChapterPos) {
+                            if (leftX == null) leftX = col.start
+                            rightX = col.end
+                        }
+                        charPos = colEnd
+                    }
+                }
+                if (leftX != null && rightX != null) {
+                    highlightPaint.color = h.colorArgb
+                    canvas.drawRect(leftX, lineTop, rightX, lineBottom, highlightPaint)
+                }
             }
         }
 
