@@ -317,6 +317,9 @@ fun MoRealmNavHost(
                             popUpTo("reader/$bookId") { inclusive = true }
                         }
                     },
+                    onNavigateToReplaceRule = { ruleId ->
+                        navController.safeNavigate("replace_rules?editId=$ruleId")
+                    },
                     themeViewModel = themeViewModel,
                 )
             }

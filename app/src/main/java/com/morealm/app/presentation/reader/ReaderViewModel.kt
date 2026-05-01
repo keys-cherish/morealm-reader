@@ -195,11 +195,6 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) { prefs.setChineseConvertMode(0) }
     }
 
-    /** 切换繁简模式（0/1/2）— Legado 占位条目点击后弹的 selector。 */
-    fun setChineseConvertMode(mode: Int) {
-        viewModelScope.launch(Dispatchers.IO) { prefs.setChineseConvertMode(mode) }
-    }
-
     /**
      * 用户在 EffectiveReplacesDialog 内做了任何修改（禁用 / 编辑 / 改繁简） → dismiss 时调一次，
      * 重拉规则缓存并请求重渲染当前章。Legado 等价 viewModel.replaceRuleChanged()。
