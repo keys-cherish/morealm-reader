@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -31,6 +32,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.morealm.app.domain.entity.TtsVoice
 import com.morealm.app.presentation.profile.ListenViewModel
+import com.morealm.app.service.TtsSystemSettings
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -52,13 +54,14 @@ fun ListenScreen(
         label = "ttsProgress",
     )
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
         Spacer(Modifier.height(64.dp))
 
         // Gradient title
@@ -219,6 +222,31 @@ fun ListenScreen(
                 }
             }
 
+            // System-TTS troubleshooting entry: a one-tap shortcut to the OS's
+            // TTS settings page. Useful when the system engine fails to bind
+            // (the corresponding Toast also tells users to come here), or when
+            // the user wants to switch the underlying engine / install voice data.
+            // We surface it unconditionally rather than gating on `selectedEngine == "system"`
+            // because Edge TTS users may still need to fall back to system TTS offline.
+            val context = LocalContext.current
+            Spacer(Modifier.height(6.dp))
+            TextButton(
+                onClick = { TtsSystemSettings.open(context) },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Icon(
+                    Icons.Default.Settings,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "打开系统 TTS 设置",
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+
             Spacer(Modifier.height(14.dp))
 
             TtsVoiceSelector(
@@ -267,6 +295,14 @@ fun ListenScreen(
         }
 
         Spacer(Modifier.height(120.dp))
+    }
+
+        com.morealm.app.ui.widget.TtsErrorSnackbarHost(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 8.dp)
+        )
     }
 }
 

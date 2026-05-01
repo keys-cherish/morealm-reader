@@ -116,8 +116,18 @@ class ListenViewModel @Inject constructor(
         _voices.value = when (engineId) {
             "edge" -> EdgeTtsEngine.VOICES
             else -> {
-                systemTtsEngine.awaitReady()
-                systemTtsEngine.getChineseVoices()
+                // Mirror the host-side fix: bound the wait so a missing/broken system
+                // TTS engine doesn't leave the picker spinning. Failed init surfaces
+                // as a TtsEventBus.Error so the settings UI can react via snackbar.
+                when (val initRes = systemTtsEngine.awaitReadyResult()) {
+                    is SystemTtsEngine.InitResult.Failed -> {
+                        TtsEventBus.sendEvent(
+                            TtsEventBus.Event.Error(initRes.reason, canOpenSettings = true)
+                        )
+                        emptyList()
+                    }
+                    SystemTtsEngine.InitResult.Success -> systemTtsEngine.getChineseVoices()
+                }
             }
         }
         val savedVoice = if (engineId == "edge") {

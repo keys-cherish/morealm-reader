@@ -49,6 +49,21 @@ object TtsEventBus {
         data object AddTimer : Event()
         /** Service finished reading the last paragraph; ViewModel should advance to next chapter. */
         data object ChapterFinished : Event()
+
+        /**
+         * TTS engine failure surfaced to the UI as a toast/snackbar.
+         *
+         * @param message Chinese, user-facing reason (e.g. "系统未识别到可用的 TTS 引擎...").
+         * @param canOpenSettings if true, UI may render an action button that launches
+         *                        `Intent("com.android.settings.TTS_SETTINGS")` (with a
+         *                        fallback to `Settings.ACTION_VOICE_INPUT_SETTINGS`).
+         *                        Set false for transient errors where opening settings
+         *                        wouldn't help (e.g. one-off speak() failure on a single paragraph).
+         */
+        data class Error(
+            val message: String,
+            val canOpenSettings: Boolean = false,
+        ) : Event()
     }
 
     /** ViewModel → Service */

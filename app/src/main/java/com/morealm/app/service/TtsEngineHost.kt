@@ -263,7 +263,20 @@ class TtsEngineHost(
         var consecutiveErrors = 0
         try {
             val engine = currentEngine()
-            if (engine is SystemTtsEngine) engine.awaitReady()
+            if (engine is SystemTtsEngine) {
+                // Resolve init with a hard timeout (4s default inside SystemTtsEngine).
+                // On failure, surface a user-facing reason and bail out cleanly instead
+                // of letting the speak loop deadlock on a never-ready engine.
+                val initRes = engine.awaitReadyResult()
+                if (initRes is SystemTtsEngine.InitResult.Failed) {
+                    AppLog.error("TtsHost", "System TTS init failed: ${initRes.reason}")
+                    TtsEventBus.sendEvent(
+                        TtsEventBus.Event.Error(initRes.reason, canOpenSettings = true)
+                    )
+                    publishState(playing = false)
+                    return
+                }
+            }
 
             for (idx in paragraphIndex until paragraphs.size) {
                 if (!TtsEventBus.playbackState.value.isPlaying) return
@@ -395,11 +408,30 @@ class TtsEngineHost(
         oneShotJob = scope.launch {
             try {
                 val engine = currentEngine()
-                if (engine is SystemTtsEngine) engine.awaitReady()
+                if (engine is SystemTtsEngine) {
+                    val initRes = engine.awaitReadyResult()
+                    if (initRes is SystemTtsEngine.InitResult.Failed) {
+                        AppLog.error("TtsHost", "speakOneShot: TTS init failed: ${initRes.reason}")
+                        TtsEventBus.sendEvent(
+                            TtsEventBus.Event.Error(initRes.reason, canOpenSettings = true)
+                        )
+                        return@launch
+                    }
+                }
                 engine.speak(text, speed).collect { /* drain */ }
             } catch (_: CancellationException) {
             } catch (e: Exception) {
                 AppLog.warn("TtsHost", "speakOneShot failed", e)
+                // One-shot failures (試聽片段) — opening system settings rarely helps,
+                // so leave canOpenSettings = false. The exception's localized message
+                // (set by SystemTtsEngine.speak's IllegalStateException path) carries
+                // the actionable reason already.
+                TtsEventBus.sendEvent(
+                    TtsEventBus.Event.Error(
+                        e.message ?: "TTS 朗读失败",
+                        canOpenSettings = false,
+                    )
+                )
             }
         }
     }
@@ -445,8 +477,19 @@ class TtsEngineHost(
         return if (engine == "edge") {
             EdgeTtsEngine.VOICES
         } else {
-            systemTtsEngine.awaitReady()
-            systemTtsEngine.getChineseVoices()
+            // Same timeout-bounded init resolution used by speakLoop —
+            // prevents the voice picker from hanging forever when the device
+            // has no TTS engine bound.
+            when (val initRes = systemTtsEngine.awaitReadyResult()) {
+                is SystemTtsEngine.InitResult.Failed -> {
+                    AppLog.warn("TtsHost", "loadVoicesForEngine: ${initRes.reason}")
+                    TtsEventBus.sendEvent(
+                        TtsEventBus.Event.Error(initRes.reason, canOpenSettings = true)
+                    )
+                    emptyList()
+                }
+                SystemTtsEngine.InitResult.Success -> systemTtsEngine.getChineseVoices()
+            }
         }
     }
 
