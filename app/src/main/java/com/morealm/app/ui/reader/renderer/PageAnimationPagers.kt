@@ -312,7 +312,14 @@ private fun SimulationPager(
     val scope = rememberCoroutineScope()
     val pages = params.pages
     val pageCount = pages.size.coerceAtLeast(1)
-    val displayPage = currentDisplayPage.coerceIn(0, pageCount - 1)
+    // 不能用 coerceIn(0, pageCount - 1) —— SimulationPager 重组时 pages 可能
+    // 还在 prelayout 增量产出，size=1 会把 caller 算好的 currentDisplayPage=N
+    // 强行夹回 0，导致「滚动→仿真切回时第一帧渲染章节首页」。把 cap 抬高到
+    // 至少容纳 currentDisplayPage 自己，让 pageForTurn 自己处理越界（越界时
+    // 它返回 null，bitmap 留白比闪一帧错的页更好）。同步修复见
+    // CanvasRenderer.kt 的 safeDisplayMax 注释。
+    val cap = (pageCount - 1).coerceAtLeast(currentDisplayPage)
+    val displayPage = currentDisplayPage.coerceIn(0, cap)
 
     // Single-layer: SimulationReadView handles both idle display and animation.
     // Idle state draws idleBitmap (rendered with correct theme bgColor).

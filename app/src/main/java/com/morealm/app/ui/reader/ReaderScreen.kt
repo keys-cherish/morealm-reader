@@ -411,6 +411,25 @@ fun ReaderScreen(
                     )
                 },
                 onDeleteHighlight = { id -> viewModel.highlight.delete(id) },
+                onShareHighlight = { highlight ->
+                    val ok = com.morealm.app.ui.reader.share.HighlightShareCard
+                        .shareAsImage(context, highlight)
+                    if (!ok) {
+                        // 失败兜底：用纯文本 share，不让用户什么都拿不到
+                        com.morealm.app.core.log.AppLog.warn("Highlight",
+                            "share-card render failed; fall back to text-only share id=${highlight.id}")
+                        runCatching {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(
+                                    android.content.Intent.EXTRA_TEXT,
+                                    "${highlight.content}\n\n— 《${highlight.bookTitle}》· ${highlight.chapterTitle}",
+                                )
+                            }
+                            context.startActivity(android.content.Intent.createChooser(intent, "分享高亮"))
+                        }
+                    }
+                },
                 onReadAloudParagraphPositions = { positions -> viewModel.updateReadAloudParagraphPositions(positions) },
                 onVisibleReadAloudPosition = { index, position -> viewModel.updateVisibleReadAloudPosition(index, position) },
                 pendingSearchSelection = pendingSearchSelection,

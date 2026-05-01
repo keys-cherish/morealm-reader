@@ -1301,6 +1301,33 @@ fun CanvasRenderer(
                 onDismiss = { shareQuoteText = null },
             )
         }
+
+        // 已存高亮的「删除 / 分享」action menu — 与选区 toolbar 互斥（一旦点中
+        // 已存高亮就清掉选区，避免两个浮层叠在一起）。点击 action 调用回调，
+        // 调用方负责持久化操作（删除走 ReaderViewModel.highlight.delete，
+        // 分享走 HighlightShareCard.shareAsImage）。
+        highlightActionTarget?.let { target ->
+            HighlightActionToolbar(
+                offset = highlightActionOffset,
+                colorArgb = target.colorArgb,
+                onDelete = {
+                    com.morealm.app.core.log.AppLog.info("Highlight",
+                        "user delete via action menu id=${target.id} chIdx=${target.chapterIndex} " +
+                            "range=${target.startChapterPos}..${target.endChapterPos} contentLen=${target.content.length}",
+                    )
+                    onDeleteHighlight(target.id)
+                    highlightActionTarget = null
+                },
+                onShare = {
+                    com.morealm.app.core.log.AppLog.info("Highlight",
+                        "user share via action menu id=${target.id} chIdx=${target.chapterIndex} contentLen=${target.content.length}",
+                    )
+                    onShareHighlight(target)
+                    highlightActionTarget = null
+                },
+                onDismiss = { highlightActionTarget = null },
+            )
+        }
     }
 }
 
