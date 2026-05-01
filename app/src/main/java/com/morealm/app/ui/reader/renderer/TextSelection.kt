@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -255,11 +256,12 @@ fun getSelectedText(page: TextPage, start: TextPos, end: TextPos): String {
 }
 
 /**
- * Bubble-style selection mini menu 鈥?pill shape with arrow, two-row expandable.
+ * Bubble-style selection mini menu — pill shape with arrow, two-row expandable.
  * Ported from MoRealm HTML prototype.
  *
  * Main row: 复制 | 朗读 | 更多
- * Extra row: 翻译 | 分享 | 查词
+ * Extra row 1 (展开时): 翻译 | 分享 | 查词
+ * Extra row 2 (展开时): 5 色高亮调色板 — 点哪个色就以那个色保存高亮
  */
 @Composable
 fun SelectionToolbar(
@@ -269,6 +271,11 @@ fun SelectionToolbar(
     onTranslate: () -> Unit,
     onShare: () -> Unit,
     onLookup: () -> Unit,
+    /**
+     * 色盘点击回调；参数为 ARGB Int。null 时不显示调色板（兼容老调用方）。
+     * 实现方收到回调后应自行 commit Highlight + clear selection。
+     */
+    onHighlight: ((colorArgb: Int) -> Unit)? = null,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -283,7 +290,10 @@ fun SelectionToolbar(
     val screenWidth = configuration.screenWidthDp.dp
     val screenHeight = configuration.screenHeightDp.dp
     val menuWidth = 188.dp
-    val menuHeight = if (expanded) 86.dp else 46.dp
+    // 高度根据展开状态 + 是否有调色板浮动；展开后多一行 (~36.dp)。
+    val paletteRow = onHighlight != null
+    val expandedExtra = if (paletteRow) 78.dp else 40.dp
+    val menuHeight = if (expanded) 46.dp + expandedExtra else 46.dp
     val showBelow = yDp - menuHeight - 12.dp < 8.dp
     val menuX = (xDp - menuWidth / 2).coerceIn(8.dp, screenWidth - menuWidth - 8.dp)
     val menuY = if (showBelow) {
@@ -350,6 +360,34 @@ fun SelectionToolbar(
                                 MenuBtn(Icons.Default.Share, "分享", onShare)
                                 MenuSep()
                                 MenuBtn(Icons.Default.Search, "查词", onLookup)
+                            }
+                            // Highlight palette row — 5 preset colors. Tap any =
+                            // commit a Highlight with that ARGB and dismiss the
+                            // toolbar via the onHighlight callback (which is
+                            // expected to clear selectionState too).
+                            if (onHighlight != null) {
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                    thickness = 0.5.dp,
+                                    modifier = Modifier.padding(horizontal = 8.dp),
+                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceEvenly,
+                                ) {
+                                    HighlightPalette.PRESETS.forEach { argb ->
+                                        Box(
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(argb))
+                                                .clickable { onHighlight(argb) },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -486,4 +524,28 @@ fun CursorHandle(
                 }
             }
     )
+}
+
+/**
+ * 高亮调色板预设。
+ *
+ * 5 色覆盖常用的「黄绿蓝粉紫」语义集，alpha 0.4 让底色透出文字 — 类似 Apple Books
+ * / Legado 的可读性折衷：太浅看不见标记，太深盖住字。
+ *
+ * 色相按可见度排序（黄最显眼放最左，紫最低调放最右），用户从左到右选 = 由强到弱
+ * 标记。每个 Int 是 ARGB；存到 Highlight.colorArgb。
+ */
+object HighlightPalette {
+    /** 黄 — 重点 */
+    const val YELLOW: Int = 0x66FFEB3B.toInt()
+    /** 绿 — 已读 / 同意 */
+    const val GREEN: Int = 0x6669F0AE.toInt()
+    /** 蓝 — 待查 / 引用 */
+    const val BLUE: Int = 0x6664B5F6.toInt()
+    /** 粉 — 情感 / 喜欢 */
+    const val PINK: Int = 0x66F48FB1.toInt()
+    /** 紫 — 疑问 / 待思考 */
+    const val PURPLE: Int = 0x66BA68C8.toInt()
+
+    val PRESETS: List<Int> = listOf(YELLOW, GREEN, BLUE, PINK, PURPLE)
 }

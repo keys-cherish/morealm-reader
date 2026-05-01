@@ -400,6 +400,17 @@ fun ReaderScreen(
                 onTranslateText = { text -> openTranslate(text) },
                 onLookupWord = { text -> openWebSearch(text) },
                 onImageClick = { src -> viewModel.onImageClick(src) },
+                chapterHighlights = viewModel.highlights.collectAsStateWithLifecycle().value,
+                onAddHighlight = { start, end, content, argb ->
+                    viewModel.highlight.add(
+                        chapterIndex = renderedChapter.index,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                    )
+                },
+                onDeleteHighlight = { id -> viewModel.highlight.delete(id) },
                 onReadAloudParagraphPositions = { positions -> viewModel.updateReadAloudParagraphPositions(positions) },
                 onVisibleReadAloudPosition = { index, position -> viewModel.updateVisibleReadAloudPosition(index, position) },
                 pendingSearchSelection = pendingSearchSelection,
