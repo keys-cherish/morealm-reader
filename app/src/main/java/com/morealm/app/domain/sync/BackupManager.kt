@@ -35,13 +35,50 @@ import java.util.zip.ZipOutputStream
  */
 object BackupManager {
 
-    private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
+    private val json = Json {
+        prettyPrint = true
+        ignoreUnknownKeys = true
+        // Tolerate NaN / Infinity in Float fields (e.g. Book.lastReadOffset can become
+        // NaN when a reader-progress row was saved before any layout completed). Without
+        // this flag, kotlinx-serialization throws IllegalArgumentException("Unexpected
+        // NaN value...") which used to silently abort the entire export through
+        // `runCatching` — the user only saw a 0-byte file. The flag round-trips the
+        // value as the literal string "NaN"/"Infinity" so restore is also lenient.
+        allowSpecialFloatingPointValues = true
+    }
 
     /**
      * Single-flight guard: serialises every backup / restore entry point so
      * concurrent invocations queue instead of racing the database.
      */
     private val mutex = Mutex()
+
+    /**
+     * Last error surfaced by any of the four entry points, set when an exception
+     * was caught and used to be silently swallowed by `runCatching`. Read-and-
+     * clear via [consumeLastErrorMessage] so the UI layer can show a meaningful
+     * "导出失败：xxx" instead of a generic "导出失败".
+     *
+     * Single string is safe because [mutex] serialises every entry point — there
+     * is at most one in-flight backup at a time.
+     */
+    @Volatile private var lastErrorMessage: String? = null
+
+    /**
+     * Read and clear the most recent failure message. The clear-on-read keeps
+     * stale errors from leaking into a later (successful) operation's status.
+     */
+    fun consumeLastErrorMessage(): String? {
+        val m = lastErrorMessage
+        lastErrorMessage = null
+        return m
+    }
+
+    /** Capture the diagnostic from a thrown exception in a UX-friendly way. */
+    private fun recordError(prefix: String, e: Throwable) {
+        lastErrorMessage = "${e.javaClass.simpleName}: ${e.message ?: "(no message)"}"
+        AppLog.error("Backup", "$prefix: ${e.javaClass.simpleName}: ${e.message}", e)
+    }
 
     @Serializable
     data class BackupData(
@@ -76,6 +113,7 @@ object BackupManager {
     ): Boolean =
         withContext(Dispatchers.IO) {
             mutex.withLock {
+                lastErrorMessage = null
                 runCatching {
                     val plainZip = zipBackup(buildBackupData(db))
                     val finalBytes = if (password.isNotEmpty()) {
@@ -86,7 +124,17 @@ object BackupManager {
                     AppLog.info("Backup", "Export completed (${finalBytes.size} bytes, encrypted=${password.isNotEmpty()})")
                     true
                 }.getOrElse {
-                    AppLog.error("Backup", "Export failed: ${it.message}")
+                    recordError("Export failed", it)
+                    // SAF (CreateDocument) created a 0-byte placeholder when the user
+                    // confirmed the save dialog. If we leave it there on failure the
+                    // user is staring at a 0-byte "successful" file. Delete the
+                    // placeholder so failure is visible. Best-effort: ignore secondary
+                    // exceptions from delete itself.
+                    runCatching {
+                        context.contentResolver.delete(outputUri, null, null)
+                    }.onFailure { delErr ->
+                        AppLog.warn("Backup", "Could not remove 0-byte placeholder: ${delErr.message}")
+                    }
                     false
                 }
             }
@@ -108,6 +156,7 @@ object BackupManager {
     ): Boolean =
         withContext(Dispatchers.IO) {
             mutex.withLock {
+                lastErrorMessage = null
                 runCatching {
                     val raw = context.contentResolver.openInputStream(inputUri)?.use { it.readBytes() }
                         ?: ByteArray(0)
@@ -119,7 +168,7 @@ object BackupManager {
                     AppLog.info("Backup", "Import completed")
                     true
                 }.getOrElse {
-                    AppLog.error("Backup", "Import failed: ${it.message}")
+                    recordError("Import failed", it)
                     false
                 }
             }
@@ -133,11 +182,12 @@ object BackupManager {
     ): ByteArray? =
         withContext(Dispatchers.IO) {
             mutex.withLock {
+                lastErrorMessage = null
                 runCatching {
                     val plain = zipBackup(buildBackupData(db))
                     if (password.isNotEmpty()) BackupCrypto.encrypt(plain, password) else plain
                 }.getOrElse {
-                    AppLog.error("Backup", "Generate bytes failed: ${it.message}")
+                    recordError("Generate bytes failed", it)
                     null
                 }
             }
@@ -152,6 +202,7 @@ object BackupManager {
     ): Boolean =
         withContext(Dispatchers.IO) {
             mutex.withLock {
+                lastErrorMessage = null
                 runCatching {
                     val plain = unwrapMaybeEncrypted(data, password) ?: return@runCatching false
                     val text = ByteArrayInputStream(plain).use { readBackupJson(it) }
@@ -161,7 +212,7 @@ object BackupManager {
                     AppLog.info("Backup", "Import from bytes completed")
                     true
                 }.getOrElse {
-                    AppLog.error("Backup", "Import from bytes failed: ${it.message}")
+                    recordError("Import from bytes failed", it)
                     false
                 }
             }
