@@ -509,13 +509,15 @@ fun ReaderScreen(
             )
         }
 
-        // Floating day/night toggle button (always visible, independent of control bar)
+        // Floating day/night toggle button (always visible, independent of control bar).
+        // Anchored at BottomCenter so the toggle is reachable with either thumb regardless
+        // of handedness — previously BottomEnd, which crowded right-handed page-turn taps.
         if (!showControls && !showSettings && !showTtsPanel && !showChapterList && !showBookmarks && !showFullSearch) {
             androidx.compose.material3.FilledIconButton(
                 onClick = { themeViewModel?.toggleDayNight() },
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(16.dp)
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp)
                     .size(36.dp),
                 colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
@@ -749,6 +751,16 @@ fun ReaderScreen(
                 onDisableChineseConvert = { viewModel.disableChineseConvert() },
             )
         }
+
+        // TTS engine error surface — must live inside the root Box so it can
+        // align to the bottom edge above the system nav bar without disturbing
+        // the reader's render layers stacked above it.
+        com.morealm.app.ui.widget.TtsErrorSnackbarHost(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 8.dp)
+        )
     }
 }
 
