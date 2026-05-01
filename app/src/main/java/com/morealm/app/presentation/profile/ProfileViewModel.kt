@@ -177,12 +177,18 @@ class ProfileViewModel @Inject constructor(
                 )
             }
             val ok = backupRepo.exportBackup(uri, backupPassword.value, options)
-            _backupStatus.value = if (ok) {
+            val finalMsg = if (ok) {
                 "导出成功"
             } else {
                 val reason = backupRepo.consumeLastBackupError()
                 if (reason.isNullOrBlank()) "导出失败" else "导出失败：$reason"
             }
+            _backupStatus.value = finalMsg
+            // One-shot event for the global toast collector. Routed through
+            // BackupStatusBus instead of relying on the StateFlow so a
+            // recomposition of ProfileScreen (e.g. after returning from
+            // BackupExportScreen) can't replay the wrong message.
+            com.morealm.app.domain.sync.BackupStatusBus.emit(finalMsg)
         }
     }
 
@@ -245,7 +251,7 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             _backupStatus.value = "导入中..."
             val ok = backupRepo.importBackup(uri, backupPassword.value)
-            _backupStatus.value = if (ok) {
+            val finalMsg = if (ok) {
                 "导入成功"
             } else {
                 val reason = backupRepo.consumeLastBackupError()
@@ -254,6 +260,8 @@ class ProfileViewModel @Inject constructor(
                     else -> "导入失败（密码错误或文件损坏？）"
                 }
             }
+            _backupStatus.value = finalMsg
+            com.morealm.app.domain.sync.BackupStatusBus.emit(finalMsg)
         }
     }
 

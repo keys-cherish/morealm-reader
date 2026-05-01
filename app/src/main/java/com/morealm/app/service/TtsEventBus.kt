@@ -105,6 +105,14 @@ object TtsEventBus {
         data object PrevParagraph : Command()
         data object NextParagraph : Command()
 
+        /**
+         * Listen-tab 的「上/下一章」按钮直发 Command。host 收到后转发为对应 Event，
+         * 真正的章节加载仍由订阅 Event 的 ReaderViewModel 完成（host 不持有书籍/章节列表）。
+         * 这层包装让 UI 调用方保持 sendCommand 的一致抽象。
+         */
+        data object PrevChapter : Command()
+        data object NextChapter : Command()
+
         data class SetSpeed(val speed: Float) : Command()
         /** Engine id: "system" | "edge" | "http_<id>" */
         data class SetEngine(val engine: String) : Command()

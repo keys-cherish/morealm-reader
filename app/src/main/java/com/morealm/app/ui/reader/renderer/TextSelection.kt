@@ -429,7 +429,26 @@ private fun MenuSep() {
 }
 
 /**
- * Cursor handle composable 鈥?a small draggable circle.
+ * Cursor handle composable — a small draggable circle.
+ *
+ * Coordinate handling
+ * - The previous version computed the global drag target as
+ *   `change.position + position - 8.dp`, where `change.position` is the
+ *   pointer location within the handle's own bounds. Two problems combined
+ *   to produce visible flicker / jumping while dragging:
+ *     1. `position` is read inside a `pointerInput(Unit)` scope. Because the
+ *        coroutine never restarts (key = Unit), the parameter captured
+ *        there was the value from the FIRST composition — never updated.
+ *     2. As `onDrag` updates the selection, the handle is re-laid-out at a
+ *        new position, which shifts the coordinate origin used by
+ *        `change.position`. The next event reports a position relative to
+ *        the new origin, but the formula adds the OLD `position`, so the
+ *        global value teleports between frames.
+ *
+ * Fix: snapshot the handle's anchor at drag start and accumulate framework-
+ * provided `dragAmount` deltas (which are in screen-stable coordinates and
+ * unaffected by the handle's own movement). [rememberUpdatedState] keeps the
+ * snapshot honest if the handle anchor changes between drags.
  */
 @Composable
 fun CursorHandle(
@@ -439,6 +458,7 @@ fun CursorHandle(
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
+    val positionState = rememberUpdatedState(position)
     Box(
         modifier = modifier
             .offset {
@@ -450,9 +470,19 @@ fun CursorHandle(
             .size(16.dp)
             .background(color, CircleShape)
             .pointerInput(Unit) {
-                detectDragGestures { change, dragAmount ->
+                var draggedTo = Offset.Zero
+                detectDragGestures(
+                    onDragStart = {
+                        // Take the latest anchor as the drag's starting global
+                        // coordinate. From here on we only add framework
+                        // dragAmount deltas, so the handle's own re-layout
+                        // doesn't perturb the running total.
+                        draggedTo = positionState.value
+                    },
+                ) { change, dragAmount ->
                     change.consume()
-                    onDrag(Offset(change.position.x + position.x - 8.dp.toPx(), change.position.y + position.y))
+                    draggedTo += dragAmount
+                    onDrag(draggedTo)
                 }
             }
     )

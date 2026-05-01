@@ -174,14 +174,21 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
                         "TTS",
                         "SystemTtsEngine.onError id=$id errorCode=$errorCode",
                     )
-                    close(Exception("TTS error: $errorCode"))
+                    // Embed errorCode + a short id tail in the exception message
+                    // so the host log line "(consec=N)" is still self-explanatory
+                    // after only seeing the wrapped exception (without unfolding
+                    // the AppLog "Caused by" trace).
+                    close(Exception("TTS synth error code=$errorCode id=…${id?.takeLast(6) ?: "?"}"))
                 }
             }
             @Deprecated("Deprecated in Java")
             override fun onError(id: String?) {
                 if (id == utteranceId) {
                     com.morealm.app.core.log.AppLog.warn("TTS", "SystemTtsEngine.onError(legacy) id=$id")
-                    close(Exception("TTS error"))
+                    // Legacy path has no errorCode — call this out so the user-facing
+                    // log makes clear *why* the cause string is so vague. The host's
+                    // reInit-and-retry recovery handles both paths identically.
+                    close(Exception("TTS synth error (legacy callback, no code) id=…${id?.takeLast(6) ?: "?"}"))
                 }
             }
         })
