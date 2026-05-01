@@ -90,6 +90,8 @@ class ProfileViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val autoBackup: StateFlow<Boolean> = prefs.autoBackup
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val backupPassword: StateFlow<String> = prefs.backupPassword
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     // ── WebDav P1 settings (write) ───────────────────────────────────────
     fun setWebDavDir(dir: String) = viewModelScope.launch(Dispatchers.IO) { prefs.setWebDavDir(dir) }
@@ -99,6 +101,29 @@ class ProfileViewModel @Inject constructor(
     fun setIgnoreLocalBook(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) { prefs.setIgnoreLocalBook(enabled) }
     fun setIgnoreReadConfig(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) { prefs.setIgnoreReadConfig(enabled) }
     fun setAutoBackup(enabled: Boolean) = viewModelScope.launch(Dispatchers.IO) { prefs.setAutoBackup(enabled) }
+    fun setBackupPassword(pw: String) = viewModelScope.launch(Dispatchers.IO) { prefs.setBackupPassword(pw) }
+
+    /** Wall-clock of the last successful backup; 0 means "never". UI renders as "上次备份: ..." */
+    val lastBackupTime: StateFlow<Long> = prefs.lastAutoBackup
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0L)
+
+    init {
+        // Subscribe to the cross-process status bus so background-only
+        // backup paths (auto-backup scheduler, future progress sync echoes)
+        // surface in `_webDavStatus`. Without this subscription the user
+        // never sees auto-backup outcomes — they fire-and-forget into the
+        // app-scope coroutine.
+        viewModelScope.launch {
+            com.morealm.app.domain.sync.WebDavStatusBus.statuses.collect { status ->
+                val prefix = when (status.source) {
+                    com.morealm.app.domain.sync.WebDavStatusBus.Source.AUTO -> "[自动] "
+                    com.morealm.app.domain.sync.WebDavStatusBus.Source.PROGRESS -> "[进度] "
+                    com.morealm.app.domain.sync.WebDavStatusBus.Source.MANUAL -> ""
+                }
+                _webDavStatus.value = "$prefix${status.message}"
+            }
+        }
+    }
 
     private val _testResult = MutableStateFlow("")
     val testResult: StateFlow<String> = _testResult.asStateFlow()
@@ -132,7 +157,7 @@ class ProfileViewModel @Inject constructor(
     fun exportBackup(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             _backupStatus.value = "导出中..."
-            val ok = backupRepo.exportBackup(uri)
+            val ok = backupRepo.exportBackup(uri, backupPassword.value)
             _backupStatus.value = if (ok) "导出成功" else "导出失败"
         }
     }
@@ -140,8 +165,8 @@ class ProfileViewModel @Inject constructor(
     fun importBackup(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             _backupStatus.value = "导入中..."
-            val ok = backupRepo.importBackup(uri)
-            _backupStatus.value = if (ok) "导入成功" else "导入失败"
+            val ok = backupRepo.importBackup(uri, backupPassword.value)
+            _backupStatus.value = if (ok) "导入成功" else "导入失败（密码错误或文件损坏？）"
         }
     }
 
@@ -334,8 +359,12 @@ class ProfileViewModel @Inject constructor(
                     _webDavStatus.value = "未找到备份文件"
                     return@launch
                 }
-                val ok = backupRepo.importBackupFromBytes(data)
-                _webDavStatus.value = if (ok) "恢复成功" else "恢复失败"
+                // P2: pass the user-set encryption password through; an
+                // empty pw means BackupManager treats the data as plain
+                // (legacy zip) and returns false only if the bytes carry
+                // the MoREncBk magic without a matching password.
+                val ok = backupRepo.importBackupFromBytes(data, backupPassword.value)
+                _webDavStatus.value = if (ok) "恢复成功" else "恢复失败（密码错误或备份损坏？）"
             } catch (e: Exception) {
                 _webDavStatus.value = "恢复失败：${e.message}"
                 AppLog.error("WebDAV", "Restore failed", e)

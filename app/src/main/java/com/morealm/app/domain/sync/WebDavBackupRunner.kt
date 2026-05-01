@@ -39,12 +39,18 @@ class WebDavBackupRunner @Inject constructor(
      * [AppPreferences.setLastAutoBackup]. The same logic backs both the
      * manual "备份到云端" button and the auto-backup scheduler so they
      * can never fall out of sync.
+     *
+     * @param source which pathway invoked the runner — affects the
+     *               [WebDavStatusBus] tag so the UI can label "自动" /
+     *               "手动" when echoing the message back to the user.
      */
-    suspend fun runOnce(): Result {
+    suspend fun runOnce(source: WebDavStatusBus.Source = WebDavStatusBus.Source.MANUAL): Result {
         val url = prefs.webDavUrl.first()
         val user = prefs.webDavUser.first()
         val pass = prefs.webDavPass.first()
-        if (url.isBlank()) return Result(false, "请先配置 WebDAV")
+        if (url.isBlank()) {
+            return Result(false, "请先配置 WebDAV").also { publish(source, it) }
+        }
 
         return try {
             val client = backupRepo.createWebDavClient(url, user, pass)
@@ -53,8 +59,12 @@ class WebDavBackupRunner @Inject constructor(
             val onlyLatest = prefs.onlyLatestBackup.first()
 
             client.mkdir(dir)
-            val data = backupRepo.generateBackupBytes()
-                ?: return Result(false, "备份数据生成失败")
+            // P2: pull the optional backup password just-in-time so a
+            // user changing it between Settings and clicking "备份" picks
+            // up the new value on the next run without needing to restart.
+            val backupPw = prefs.backupPassword.first()
+            val data = backupRepo.generateBackupBytes(backupPw)
+                ?: return Result(false, "备份数据生成失败").also { publish(source, it) }
 
             val ts = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
             val deviceSuffix = if (device.isNotEmpty()) {
@@ -70,12 +80,12 @@ class WebDavBackupRunner @Inject constructor(
             AppLog.info(
                 "WebDAV",
                 "Backup completed: ${data.size} bytes " +
-                    "(onlyLatest=$onlyLatest, device='$device', dir='$dir')",
+                    "(onlyLatest=$onlyLatest, device='$device', dir='$dir', source=$source)",
             )
-            Result(true, "备份成功", data.size.toLong())
+            Result(true, "备份成功", data.size.toLong()).also { publish(source, it) }
         } catch (e: Exception) {
             AppLog.error("WebDAV", "Backup failed", e)
-            Result(false, "备份失败：${e.message}")
+            Result(false, "备份失败：${e.message}").also { publish(source, it) }
         }
     }
 
@@ -90,7 +100,17 @@ class WebDavBackupRunner @Inject constructor(
         val threshold = TimeUnit.HOURS.toMillis(AUTO_BACKUP_INTERVAL_HOURS)
         if (System.currentTimeMillis() - last < threshold) return
         AppLog.info("WebDAV", "Auto-backup window reached (last=${Date(last)}); running")
-        runOnce()
+        runOnce(WebDavStatusBus.Source.AUTO)
+    }
+
+    private fun publish(source: WebDavStatusBus.Source, result: Result) {
+        WebDavStatusBus.emit(
+            WebDavStatusBus.Status(
+                source = source,
+                message = result.message,
+                success = result.success,
+            ),
+        )
     }
 
     companion object {

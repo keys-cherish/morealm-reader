@@ -26,6 +26,7 @@ import com.morealm.app.ui.theme.LocalMoRealmColors
 @Composable
 fun WebDavScreen(
     onBack: () -> Unit,
+    onNavigateRemoteBooks: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel(),
 ) {
     val moColors = LocalMoRealmColors.current
@@ -49,7 +50,11 @@ fun WebDavScreen(
     val syncBookProgress by viewModel.syncBookProgress.collectAsStateWithLifecycle()
     val ignoreLocalBook by viewModel.ignoreLocalBook.collectAsStateWithLifecycle()
     val ignoreReadConfig by viewModel.ignoreReadConfig.collectAsStateWithLifecycle()
+    val lastBackupTime by viewModel.lastBackupTime.collectAsStateWithLifecycle()
+    val savedBackupPassword by viewModel.backupPassword.collectAsStateWithLifecycle()
     var deviceName by remember(savedDeviceName) { mutableStateOf(savedDeviceName) }
+    var backupPwInput by remember(savedBackupPassword) { mutableStateOf(savedBackupPassword) }
+    var showBackupPw by remember { mutableStateOf(false) }
     var url by remember(savedUrl) { mutableStateOf(savedUrl) }
     var user by remember(savedUser) { mutableStateOf(savedUser) }
     var pass by remember(savedPass) { mutableStateOf(savedPass) }
@@ -177,6 +182,37 @@ fun WebDavScreen(
                         focusedLabelColor = MaterialTheme.colorScheme.primary,
                     ),
                 )
+                // P2: optional AES-GCM backup password. Empty = legacy
+                // plain-zip behaviour; set ⇒ all uploaded backups are
+                // encrypted and the same value is required to restore.
+                // Stored in DataStore so a single setting drives both
+                // the manual button and the auto-backup scheduler.
+                OutlinedTextField(
+                    value = backupPwInput,
+                    onValueChange = {
+                        backupPwInput = it
+                        viewModel.setBackupPassword(it)
+                    },
+                    label = { Text("备份加密密码（可选）") },
+                    placeholder = { Text("留空则不加密；设置后必须用同一密码恢复") },
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Default.EnhancedEncryption, null, modifier = Modifier.size(20.dp)) },
+                    trailingIcon = {
+                        IconButton(onClick = { showBackupPw = !showBackupPw }) {
+                            Icon(
+                                if (showBackupPw) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                null, modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    },
+                    visualTransformation = if (showBackupPw) VisualTransformation.None else PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedLabelColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
             }
         }
 
@@ -268,6 +304,16 @@ fun WebDavScreen(
                     enabled = isConfigSaved,
                     onClick = { viewModel.requestBackupPicker() },
                 )
+                // P2-C: cloud bookshelf — list `<webDavDir>/books/` and
+                // one-tap import. Only enabled once the user has saved
+                // a working WebDav config (same gate as backup actions).
+                SyncItem(
+                    icon = Icons.Default.CloudDownload,
+                    title = "WebDav 书架",
+                    desc = "浏览并导入云端 books/ 目录中的电子书",
+                    enabled = isConfigSaved,
+                    onClick = onNavigateRemoteBooks,
+                )
                 // "自动同步" item removed — it was a dead {} onClick with no
                 // VM binding. It will return in the P1 auto-backup phase as a
                 // real Switch wired to AppPreferences.autoBackup.
@@ -281,14 +327,25 @@ fun WebDavScreen(
                 webDavStatus,
                 style = MaterialTheme.typography.bodySmall,
                 color = when {
-                    webDavStatus.startsWith("备份成功") || webDavStatus.startsWith("恢复成功") ->
-                        MaterialTheme.colorScheme.primary
-                    webDavStatus.contains("失败") || webDavStatus.startsWith("请先") ||
-                        webDavStatus.startsWith("未找到") ->
-                        MaterialTheme.colorScheme.error
+                    webDavStatus.contains("成功") -> MaterialTheme.colorScheme.primary
+                    webDavStatus.contains("失败") || webDavStatus.contains("请先") ||
+                        webDavStatus.contains("未找到") -> MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                 },
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            )
+        }
+
+        // "Last backup" line — read-only echo of prefs.lastAutoBackup so
+        // the user can sanity-check that auto-backup is actually running
+        // (nothing else exposes this; previously they had to grep logs).
+        if (lastBackupTime > 0L) {
+            val ago = formatLastBackupAgo(lastBackupTime)
+            Text(
+                "上次备份: $ago",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
             )
         }
 
@@ -466,6 +523,24 @@ fun WebDavScreen(
                 }
             },
         )
+    }
+}
+
+/**
+ * Render the last-backup wall-clock as "刚刚 / N 分钟前 / N 小时前 / yyyy-MM-dd HH:mm"
+ * so the user can tell at a glance whether auto-backup is running on cadence.
+ * Cheap: computed on every recomposition of the WebDav screen, no caching needed.
+ */
+private fun formatLastBackupAgo(timestamp: Long): String {
+    val deltaMs = System.currentTimeMillis() - timestamp
+    return when {
+        deltaMs < 0 -> "时间异常"
+        deltaMs < 60_000L -> "刚刚"
+        deltaMs < 3_600_000L -> "${deltaMs / 60_000L} 分钟前"
+        deltaMs < 86_400_000L -> "${deltaMs / 3_600_000L} 小时前"
+        deltaMs < 7L * 86_400_000L -> "${deltaMs / 86_400_000L} 天前"
+        else -> java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(timestamp))
     }
 }
 
