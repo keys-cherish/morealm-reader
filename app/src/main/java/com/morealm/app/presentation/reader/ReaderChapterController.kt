@@ -500,6 +500,11 @@ class ReaderChapterController(
                 nextChapterCache = converted
                 _nextPreloadedChapter.value = PreloadedReaderChapter(nextIndex, chapterList[nextIndex].title, converted)
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 正常的：用户翻页时上一次 preload 协程会被 cancel，不是错误。
+            // 不记 log，但必须重抛 — CancellationException 一旦被吞，结构化并发的
+            // 取消传递就断了，上层 launch 会看到这个协程"成功完成"。
+            throw e
         } catch (e: Exception) {
             AppLog.warn("Chapter", "Preload next chapter $nextIndex failed", e)
         }
@@ -522,6 +527,9 @@ class ReaderChapterController(
                 prevChapterCache = converted
                 _prevPreloadedChapter.value = PreloadedReaderChapter(prevIndex, chapterList[prevIndex].title, converted)
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 同 preloadNextChapter — 翻页时上一轮 preload 被 cancel 是正常的。
+            throw e
         } catch (e: Exception) {
             AppLog.warn("Chapter", "Preload prev chapter $prevIndex failed", e)
         }

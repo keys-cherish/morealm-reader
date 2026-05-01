@@ -12,9 +12,11 @@ import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import java.util.Calendar
@@ -63,6 +65,21 @@ class ThemeViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             themeRepo.ensureBuiltinThemes()
             applyAutoThemeIfNeeded()
+        }
+        // 跟随系统时间持续切换：之前 applyAutoThemeIfNeeded 只在启动时跑一次，
+        // 用户在 App 里跨过 22:00 / 06:00 不会自动切换。这里加一个分钟级 polling，
+        // auto 关闭时 applyAutoThemeIfNeeded 会立即 return，几乎零开销。
+        // viewModelScope 在 ViewModel 销毁时自动取消，不需要手动管理生命周期。
+        viewModelScope.launch(Dispatchers.IO) {
+            // 等到下一个整分对齐再开始，让"22:00 准点切换"看起来更可靠。
+            val now = Calendar.getInstance()
+            val msToNextMinute = 60_000L - (now.get(Calendar.SECOND) * 1000L +
+                now.get(Calendar.MILLISECOND))
+            delay(msToNextMinute.coerceAtLeast(1_000L))
+            while (isActive) {
+                applyAutoThemeIfNeeded()
+                delay(60_000L)
+            }
         }
     }
 

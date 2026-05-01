@@ -22,6 +22,18 @@ class BackupRepository @Inject constructor(
     suspend fun exportBackup(uri: Uri, password: String = ""): Boolean =
         BackupManager.exportBackup(context, db, uri, password)
 
+    /**
+     * Selective export — only the categories whose flag is `true` in [options]
+     * land in the .zip. UI-side ProfileViewModel maps the user's "导出选项"
+     * toggles into [BackupManager.BackupOptions] and passes it here.
+     */
+    suspend fun exportBackup(uri: Uri, password: String, options: BackupManager.BackupOptions): Boolean =
+        BackupManager.exportBackup(context, db, uri, password, options)
+
+    /** Per-category preview rows (count + estimated json bytes) for the export-options page. */
+    suspend fun previewBackupSections(): List<BackupManager.BackupSectionInfo> =
+        BackupManager.previewBackupSections(db)
+
     suspend fun importBackup(uri: Uri, password: String = ""): Boolean =
         BackupManager.importBackup(context, db, uri, password)
 
