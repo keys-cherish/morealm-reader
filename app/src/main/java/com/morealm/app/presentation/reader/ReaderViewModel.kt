@@ -244,16 +244,29 @@ class ReaderViewModel @Inject constructor(
 
     // ── Cross-controller coordination ──
 
-    fun ttsPlayPause() = tts.ttsPlayPause(
-        displayedContent = chapter.chapterContent.value,
-        bookTitle = chapter.book.value?.title ?: "",
-        chapterTitle = chapter.chapters.value.getOrNull(chapter.currentChapterIndex.value)?.title ?: "",
-        coverUrl = chapter.book.value?.coverUrl,
-        startChapterPosition = visibleReadAloudChapterPosition
-            .takeIf { tts.ttsPlaying.value.not() && it >= 0 },
-        paragraphPositions = readAloudParagraphPositions,
-        onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
-    )
+    fun ttsPlayPause() {
+        // TTS-DIAG #1 — entry point. If this line never appears in the log,
+        // the click never reached the VM; check the Reader UI button wiring.
+        val content = chapter.chapterContent.value
+        val title = chapter.chapters.value.getOrNull(chapter.currentChapterIndex.value)?.title ?: ""
+        AppLog.info(
+            "TTS",
+            "VM.ttsPlayPause: isPlaying=${tts.ttsPlaying.value}, " +
+                "book='${chapter.book.value?.title ?: ""}', chapter='$title', " +
+                "contentLen=${content.length}, positions=${readAloudParagraphPositions?.size ?: -1}, " +
+                "startPos=${visibleReadAloudChapterPosition}",
+        )
+        tts.ttsPlayPause(
+            displayedContent = content,
+            bookTitle = chapter.book.value?.title ?: "",
+            chapterTitle = title,
+            coverUrl = chapter.book.value?.coverUrl,
+            startChapterPosition = visibleReadAloudChapterPosition
+                .takeIf { tts.ttsPlaying.value.not() && it >= 0 },
+            paragraphPositions = readAloudParagraphPositions,
+            onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
+        )
+    }
 
     fun ttsStop() { tts.ttsStop(); _showTtsPanel.value = false }
 

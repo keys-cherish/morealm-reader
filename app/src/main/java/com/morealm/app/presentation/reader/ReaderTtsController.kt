@@ -152,8 +152,18 @@ class ReaderTtsController(
         paragraphPositions: List<Int>? = null,
         @Suppress("UNUSED_PARAMETER") onChapterFinished: (() -> Unit)? = null,
     ) {
+        // TTS-DIAG #2 — controller received params. If we never reach the
+        // sendCommand log below, ensureTtsService() failed (foreground-start
+        // restriction, missing service, etc.) — see the catch in that fn.
+        AppLog.info(
+            "TTS",
+            "Controller.ttsPlay: contentLen=${displayedContent?.length ?: -1}, " +
+                "book='${bookTitle ?: ""}', chapter='${chapterTitle ?: ""}', " +
+                "startPos=$startChapterPosition, positions=${paragraphPositions?.size ?: -1}",
+        )
         ensureTtsService(bookTitle ?: "", chapterTitle ?: "", coverUrl)
         if (displayedContent != null) {
+            AppLog.info("TTS", "Controller → sendCommand(LoadAndPlay)")
             TtsEventBus.sendCommand(
                 TtsEventBus.Command.LoadAndPlay(
                     bookTitle = bookTitle ?: "",
@@ -165,6 +175,7 @@ class ReaderTtsController(
                 )
             )
         } else {
+            AppLog.info("TTS", "Controller → sendCommand(Play) [resume, no content]")
             TtsEventBus.sendCommand(TtsEventBus.Command.Play)
         }
     }
@@ -257,21 +268,36 @@ class ReaderTtsController(
     private fun ensureTtsService(bookTitle: String, chapterTitle: String, coverUrl: String? = null) {
         if (ttsServiceStarted) {
             // Just refresh metadata in case title/cover changed
+            AppLog.debug("TTS", "ensureTtsService: already started, sending UpdateMeta")
             TtsEventBus.sendCommand(TtsEventBus.Command.UpdateMeta(bookTitle, chapterTitle, coverUrl))
             return
         }
         try {
             val intent = Intent(context, TtsService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                AppLog.info("TTS", "ensureTtsService: startForegroundService TtsService (SDK>=26)")
                 context.startForegroundService(intent)
             } else {
+                AppLog.info("TTS", "ensureTtsService: startService TtsService (SDK<26)")
                 context.startService(intent)
             }
             ttsServiceStarted = true
             TtsEventBus.sendCommand(TtsEventBus.Command.UpdateMeta(bookTitle, chapterTitle, coverUrl))
-            AppLog.info("TTS", "TTS service started")
+            AppLog.info("TTS", "TTS service start kicked off; waiting for onCreate")
         } catch (e: Exception) {
-            AppLog.error("TTS", "Failed to start TTS service", e)
+            // Common failures here: ForegroundServiceStartNotAllowedException
+            // (Android 12+, app not in a foreground-allowed state),
+            // SecurityException (missing FOREGROUND_SERVICE permission),
+            // or a generic IllegalStateException from the framework.
+            // Surface to user via Toast — silent failure here was the #1
+            // reported "TTS does nothing" symptom before this branch.
+            AppLog.error("TTS", "ensureTtsService FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+            TtsEventBus.sendEvent(
+                TtsEventBus.Event.Error(
+                    "无法启动朗读服务：${e.message ?: e.javaClass.simpleName}",
+                    canOpenSettings = false,
+                )
+            )
         }
     }
 }

@@ -160,6 +160,12 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
     private fun listenForCommands() {
         serviceScope.launch {
             TtsEventBus.commands.collect { cmd ->
+                // TTS-DIAG #4 — service received a command from the bus.
+                // If you see #2/#3 (ViewModel/controller send) but never see
+                // this line, the service-side collector isn't wired (maybe
+                // service was killed before the SharedFlow buffered the cmd,
+                // or scope was cancelled). Each command logs its short form.
+                AppLog.info("TTS", "Service.cmd: ${cmd::class.simpleName}")
                 // Player metadata mirroring (notification needs these even for legacy commands).
                 when (cmd) {
                     is TtsEventBus.Command.UpdateMeta -> {
