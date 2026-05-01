@@ -95,6 +95,50 @@ object BackupManager {
         val httpTts: String = "",
     )
 
+    /**
+     * Per-category opt-in for [exportBackup]. Default = everything ON, matching
+     * the legacy "export everything" behaviour. The "导出选项" page in
+     * ProfileScreen flips individual flags off when the user unchecks a
+     * category. Categories that are off are written as empty strings in the
+     * BackupData json (the restore path already skips empty fields, so old
+     * backups stay forward-compatible).
+     */
+    data class BackupOptions(
+        val includeBooks: Boolean = true,
+        val includeBookmarks: Boolean = true,
+        val includeSources: Boolean = true,
+        val includeProgress: Boolean = true,
+        val includeGroups: Boolean = true,
+        val includeReplaceRules: Boolean = true,
+        val includeThemes: Boolean = true,
+        val includeReaderStyles: Boolean = true,
+    ) {
+        /** Quick "did the user disable anything?" probe used by the UI for the summary line. */
+        fun isFullExport(): Boolean = includeBooks && includeBookmarks && includeSources &&
+            includeProgress && includeGroups && includeReplaceRules &&
+            includeThemes && includeReaderStyles
+    }
+
+    /**
+     * Per-category preview row shown on the export-options page so the user
+     * can decide whether each section is worth exporting (e.g. "300 个书源
+     * = 200 KB" might be worth dropping if the user just wants their books).
+     *
+     * @param key stable identifier matching [BackupOptions] field, also used
+     *            as the toggle key in ProfileViewModel.backupSelections.
+     * @param label Chinese, user-facing label.
+     * @param itemCount how many rows the section currently has in the DB.
+     * @param estimatedBytes JSON-serialized size of the section's full payload —
+     *                       so the displayed size matches what actually goes
+     *                       into the .zip if the user keeps the default selection.
+     */
+    data class BackupSectionInfo(
+        val key: String,
+        val label: String,
+        val itemCount: Int,
+        val estimatedBytes: Int,
+    )
+
     // ── Public entry points ───────────────────────────────────────────────
 
     /**
@@ -110,26 +154,22 @@ object BackupManager {
         db: AppDatabase,
         outputUri: Uri,
         password: String = "",
+        options: BackupOptions = BackupOptions(),
     ): Boolean =
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 lastErrorMessage = null
                 runCatching {
-                    val plainZip = zipBackup(buildBackupData(db))
+                    val plainZip = zipBackup(buildBackupData(db, options))
                     val finalBytes = if (password.isNotEmpty()) {
                         BackupCrypto.encrypt(plainZip, password)
                     } else plainZip
                     context.contentResolver.openOutputStream(outputUri)?.use { it.write(finalBytes) }
                         ?: error("openOutputStream returned null for $outputUri")
-                    AppLog.info("Backup", "Export completed (${finalBytes.size} bytes, encrypted=${password.isNotEmpty()})")
+                    AppLog.info("Backup", "Export completed (${finalBytes.size} bytes, encrypted=${password.isNotEmpty()}, full=${options.isFullExport()})")
                     true
                 }.getOrElse {
                     recordError("Export failed", it)
-                    // SAF (CreateDocument) created a 0-byte placeholder when the user
-                    // confirmed the save dialog. If we leave it there on failure the
-                    // user is staring at a 0-byte "successful" file. Delete the
-                    // placeholder so failure is visible. Best-effort: ignore secondary
-                    // exceptions from delete itself.
                     runCatching {
                         context.contentResolver.delete(outputUri, null, null)
                     }.onFailure { delErr ->
@@ -245,8 +285,14 @@ object BackupManager {
      * persisted field set can never diverge between the two — the previous
      * `generateBackupBytes()` was missing themes / reader styles, causing
      * silent loss on multi-device WebDav restore.
+     *
+     * Categories disabled in [options] are written as empty strings; the
+     * restore path's `if (foo.isNotBlank()) ...` guards already skip those.
      */
-    private suspend fun buildBackupData(db: AppDatabase): BackupData {
+    private suspend fun buildBackupData(
+        db: AppDatabase,
+        options: BackupOptions = BackupOptions(),
+    ): BackupData {
         val bookDao = db.bookDao()
         val bookmarkDao = db.bookmarkDao()
         val sourceDao = db.bookSourceDao()
@@ -257,19 +303,63 @@ object BackupManager {
         val readerStyleDao = db.readerStyleDao()
 
         return BackupData(
-            books = json.encodeToString(bookDao.getAllBooksSync()),
-            bookmarks = json.encodeToString(bookmarkDao.getAllSync()),
-            sources = json.encodeToString(sourceDao.getEnabledSourcesList()),
-            progress = json.encodeToString(progressDao.getAllSync()),
-            groups = json.encodeToString(groupDao.getAllGroupsSync()),
-            replaceRules = json.encodeToString(replaceRuleDao.getAllSync()),
-            themes = json.encodeToString(themeDao.getAllSync()),
-            readerStyles = json.encodeToString(readerStyleDao.getAllSync()),
+            books = if (options.includeBooks) json.encodeToString(bookDao.getAllBooksSync()) else "",
+            bookmarks = if (options.includeBookmarks) json.encodeToString(bookmarkDao.getAllSync()) else "",
+            sources = if (options.includeSources) json.encodeToString(sourceDao.getEnabledSourcesList()) else "",
+            progress = if (options.includeProgress) json.encodeToString(progressDao.getAllSync()) else "",
+            groups = if (options.includeGroups) json.encodeToString(groupDao.getAllGroupsSync()) else "",
+            replaceRules = if (options.includeReplaceRules) json.encodeToString(replaceRuleDao.getAllSync()) else "",
+            themes = if (options.includeThemes) json.encodeToString(themeDao.getAllSync()) else "",
+            readerStyles = if (options.includeReaderStyles) json.encodeToString(readerStyleDao.getAllSync()) else "",
             // httpTts intentionally left empty here — restore handles missing
             // string transparently. P1 will widen the field set; this commit
             // only fixes the export-path divergence bug.
         )
     }
+
+    /**
+     * Compute per-category preview rows for the export-options page.
+     *
+     * Each section's `estimatedBytes` is the JSON-serialized size of that
+     * section's payload using the same [json] config that [buildBackupData]
+     * uses, so the displayed value matches what actually lands inside the
+     * .zip if the user keeps the default selection. Wrapping overhead
+     * (zip metadata, encryption header) is not included — this is the
+     * payload-only size, kept simple and easy to reason about.
+     *
+     * Reads each table once on Dispatchers.IO; all eight queries are sync
+     * Room calls already used by [buildBackupData], so cost mirrors a
+     * regular full export's read phase.
+     */
+    suspend fun previewBackupSections(db: AppDatabase): List<BackupSectionInfo> =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                runCatching {
+                    val books = db.bookDao().getAllBooksSync()
+                    val bookmarks = db.bookmarkDao().getAllSync()
+                    val sources = db.bookSourceDao().getEnabledSourcesList()
+                    val progress = db.readProgressDao().getAllSync()
+                    val groups = db.bookGroupDao().getAllGroupsSync()
+                    val replaceRules = db.replaceRuleDao().getAllSync()
+                    val themes = db.themeDao().getAllSync()
+                    val readerStyles = db.readerStyleDao().getAllSync()
+
+                    listOf(
+                        BackupSectionInfo("books", "书籍", books.size, json.encodeToString(books).toByteArray().size),
+                        BackupSectionInfo("bookmarks", "书签", bookmarks.size, json.encodeToString(bookmarks).toByteArray().size),
+                        BackupSectionInfo("sources", "书源", sources.size, json.encodeToString(sources).toByteArray().size),
+                        BackupSectionInfo("progress", "阅读进度", progress.size, json.encodeToString(progress).toByteArray().size),
+                        BackupSectionInfo("groups", "分组", groups.size, json.encodeToString(groups).toByteArray().size),
+                        BackupSectionInfo("replaceRules", "替换规则", replaceRules.size, json.encodeToString(replaceRules).toByteArray().size),
+                        BackupSectionInfo("themes", "主题", themes.size, json.encodeToString(themes).toByteArray().size),
+                        BackupSectionInfo("readerStyles", "阅读样式", readerStyles.size, json.encodeToString(readerStyles).toByteArray().size),
+                    )
+                }.getOrElse {
+                    recordError("Preview sections failed", it)
+                    emptyList()
+                }
+            }
+        }
 
     /**
      * Apply a [BackupData] payload to the database.

@@ -157,17 +157,88 @@ class ProfileViewModel @Inject constructor(
     fun exportBackup(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             _backupStatus.value = "导出中..."
-            val ok = backupRepo.exportBackup(uri, backupPassword.value)
+            // Map the BackupExportScreen's category toggles to BackupOptions.
+            // When backupSelections is empty (the user hasn't visited the
+            // options page this session), default to "everything" so the old
+            // direct-launch path keeps full-export semantics.
+            val sel = _backupSelections.value
+            val options = if (sel.isEmpty()) {
+                com.morealm.app.domain.sync.BackupManager.BackupOptions()
+            } else {
+                com.morealm.app.domain.sync.BackupManager.BackupOptions(
+                    includeBooks = "books" in sel,
+                    includeBookmarks = "bookmarks" in sel,
+                    includeSources = "sources" in sel,
+                    includeProgress = "progress" in sel,
+                    includeGroups = "groups" in sel,
+                    includeReplaceRules = "replaceRules" in sel,
+                    includeThemes = "themes" in sel,
+                    includeReaderStyles = "readerStyles" in sel,
+                )
+            }
+            val ok = backupRepo.exportBackup(uri, backupPassword.value, options)
             _backupStatus.value = if (ok) {
                 "导出成功"
             } else {
-                // BackupManager records the underlying exception message so we can
-                // tell the user *why* the export failed (e.g. "Unexpected NaN value
-                // at $.books[3].lastReadOffset") instead of a generic failure.
                 val reason = backupRepo.consumeLastBackupError()
                 if (reason.isNullOrBlank()) "导出失败" else "导出失败：$reason"
             }
         }
+    }
+
+    // ── Selective backup export (导出选项 page) ─────────────────────────
+
+    private val _backupSections =
+        MutableStateFlow<List<com.morealm.app.domain.sync.BackupManager.BackupSectionInfo>>(emptyList())
+    val backupSections: StateFlow<List<com.morealm.app.domain.sync.BackupManager.BackupSectionInfo>> =
+        _backupSections.asStateFlow()
+
+    /**
+     * Currently-checked category keys ("books", "bookmarks", ...). Defaults to
+     * empty (= "user hasn't opened the options page yet" → exportBackup falls
+     * back to full-export). After [loadBackupSections] runs, all 8 keys are
+     * preselected to mirror legacy "everything" behaviour.
+     */
+    private val _backupSelections = MutableStateFlow<Set<String>>(emptySet())
+    val backupSelections: StateFlow<Set<String>> = _backupSelections.asStateFlow()
+
+    private val _backupSectionsLoading = MutableStateFlow(false)
+    val backupSectionsLoading: StateFlow<Boolean> = _backupSectionsLoading.asStateFlow()
+
+    /**
+     * Refresh the per-category preview (count + json bytes) shown on the
+     * export-options page. Idempotent — UI calls it on screen entry. Reads
+     * eight tables once on Dispatchers.IO inside BackupManager's own mutex.
+     */
+    fun loadBackupSections() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _backupSectionsLoading.value = true
+            val sections = backupRepo.previewBackupSections()
+            _backupSections.value = sections
+            // Preselect everything on first load — matches the previous
+            // "export everything" behaviour. Only initialize if empty so a
+            // previously-customized selection survives a subsequent refresh.
+            if (_backupSelections.value.isEmpty() && sections.isNotEmpty()) {
+                _backupSelections.value = sections.map { it.key }.toSet()
+            }
+            _backupSectionsLoading.value = false
+        }
+    }
+
+    /** Toggle one category checkbox; UI rebinds via [backupSelections]. */
+    fun toggleBackupSection(key: String) {
+        val current = _backupSelections.value
+        _backupSelections.value = if (key in current) current - key else current + key
+    }
+
+    /** "全选" button. */
+    fun selectAllBackupSections() {
+        _backupSelections.value = _backupSections.value.map { it.key }.toSet()
+    }
+
+    /** "全不选" button. */
+    fun clearBackupSections() {
+        _backupSelections.value = emptySet()
     }
 
     fun importBackup(uri: Uri) {
