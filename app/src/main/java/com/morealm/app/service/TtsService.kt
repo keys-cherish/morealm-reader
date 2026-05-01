@@ -116,6 +116,10 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         engineHost = TtsEngineHost(applicationContext, prefs, serviceScope)
         engineHost.start()
         initMediaSession()
+        // 装配自定义通知 provider。Media3 在收到首个 active media item 后才会
+        // 调 createNotification。如果用户反映"通知栏永远是占位文案"，看 logcat
+        // 里 TtsNotif 标签是否出现：从不出现说明 Provider 没被 Media3 调用。
+        AppLog.info("TtsService", "setMediaNotificationProvider(TtsNotificationProvider)")
         setMediaNotificationProvider(TtsNotificationProvider(this))
         setupAudioFocus()
         initNoisyReceiver()
