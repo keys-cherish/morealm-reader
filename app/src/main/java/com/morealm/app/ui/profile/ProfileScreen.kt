@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -95,6 +96,19 @@ fun ProfileScreen(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let { profileViewModel.importBackup(it) }
+    }
+
+    // Surface backup result (export / import success or failure-with-reason) as a Toast
+    // so users get feedback at the moment the operation completes, regardless of where
+    // they are scrolled. The intermediate "导出中..."/"导入中..." statuses are skipped —
+    // those are written to backupStatus only as a step indicator and would be noisy as
+    // toasts. Final messages always end without "..." so the suffix check is reliable.
+    val backupStatus by profileViewModel.backupStatus.collectAsStateWithLifecycle()
+    val toastContext = LocalContext.current
+    LaunchedEffect(backupStatus) {
+        if (backupStatus.isNotBlank() && !backupStatus.endsWith("...")) {
+            Toast.makeText(toastContext, backupStatus, Toast.LENGTH_LONG).show()
+        }
     }
 
     val themeExportLauncher = rememberLauncherForActivityResult(
@@ -476,16 +490,10 @@ private fun AnnualReportDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    var highlightIndex by remember(report) { mutableStateOf(0) }
     val highlights = remember(report) { report?.annualHighlights().orEmpty() }
 
-    LaunchedEffect(highlights.size) {
-        if (highlights.size <= 1) return@LaunchedEffect
-        while (true) {
-            delay(2200)
-            highlightIndex = (highlightIndex + 1) % highlights.size
-        }
-    }
+    // 注：之前在 dialog 内做 Crossfade 滚动展示 highlight；现在 UI 走紧凑版，
+    // 直接在卡片底部一行小字显示首条 highlight（如有）。完整数据走"保存长图"。
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -511,11 +519,21 @@ private fun AnnualReportDialog(
                 AnnualReportCard(
                     report = report,
                     accentColor = accentColor,
-                    highlight = highlights.getOrNull(highlightIndex),
+                    teaser = highlights.firstOrNull { it.first != "读完/收藏的书" },
                     modifier = Modifier.fillMaxWidth(),
                 )
 
-                Spacer(Modifier.height(14.dp))
+                // 提示用户：长图保存了所有内容
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "保存到相册的长图含完整指标 / 标签 / 最投入书目",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                )
+
+                Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
                         Text("稍后再看")
@@ -529,7 +547,7 @@ private fun AnnualReportDialog(
                     ) {
                         Icon(Icons.Default.Download, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("保存卡片")
+                        Text("保存长图")
                     }
                 }
             }
@@ -537,70 +555,120 @@ private fun AnnualReportDialog(
     }
 }
 
+/**
+ * Compact annual report card for dialog display.
+ *
+ * Compared with the previous version this:
+ *  - Removes the Crossfade highlight rotation (saved 96dp + animation overhead).
+ *  - Drops the dedicated "favorite book" Surface block; merges its info into a
+ *    single bottom line.
+ *  - Drops the tag chip row from the in-dialog view (still rendered in the saved
+ *    long-image via [drawAnnualReportBitmap]).
+ *  - Tightens vertical paddings and the hero number font (42sp → 34sp).
+ *
+ * Net height: ~600dp → ~340dp. Saved long image is unchanged.
+ *
+ * @param teaser optional one-line highlight to spotlight under the hero number
+ *               (e.g. "沉浸阅读时长 → 128 小时"). Use null for the default
+ *               "陪你走过的书" subtitle.
+ */
 @Composable
 private fun AnnualReportCard(
     report: AnnualReport,
     accentColor: Color,
-    highlight: Pair<String, String>?,
+    teaser: Pair<String, String>?,
     modifier: Modifier = Modifier,
 ) {
     val secondary = accentColor.copy(alpha = 0.72f)
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(28.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(
                 Brush.verticalGradient(
                     listOf(accentColor.copy(alpha = 0.95f), secondary, Color(0xFF15131A))
                 )
             )
-            .padding(22.dp)
+            .padding(horizontal = 18.dp, vertical = 18.dp)
     ) {
+        // Decorative corner blob — kept but smaller
         Box(
-            Modifier.size(130.dp).offset(x = 210.dp, y = (-40).dp)
-                .clip(CircleShape).background(Color.White.copy(alpha = 0.12f))
+            Modifier.size(90.dp).offset(x = 230.dp, y = (-30).dp)
+                .clip(CircleShape).background(Color.White.copy(alpha = 0.10f))
         )
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-            Text("MOREALM READING", color = Color.White.copy(alpha = 0.68f), fontSize = 11.sp, letterSpacing = 2.sp)
-            Spacer(Modifier.height(8.dp))
-            Text("${report.year} 年度阅读报告", color = Color.White, fontWeight = FontWeight.Black, fontSize = 24.sp)
-            Spacer(Modifier.height(18.dp))
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                "MOREALM READING",
+                color = Color.White.copy(alpha = 0.62f),
+                fontSize = 10.sp,
+                letterSpacing = 2.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "${report.year} 年度阅读报告",
+                color = Color.White,
+                fontWeight = FontWeight.Black,
+                fontSize = 18.sp,
+            )
 
-            Crossfade(targetState = highlight, label = "annual-highlight") { item ->
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.height(96.dp)) {
-                    Text(item?.second ?: "${report.totalBooks} 本", color = Color.White, fontWeight = FontWeight.Black, fontSize = 42.sp)
-                    Text(item?.first ?: "陪你走过的书", color = Color.White.copy(alpha = 0.72f), fontSize = 13.sp)
-                }
-            }
+            Spacer(Modifier.height(14.dp))
 
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // 主数据：本数（最稳定的指标）
+            Text(
+                "${report.totalBooks} 本",
+                color = Color.White,
+                fontWeight = FontWeight.Black,
+                fontSize = 34.sp,
+            )
+            Text(
+                "陪你走过的书",
+                color = Color.White.copy(alpha = 0.72f),
+                fontSize = 12.sp,
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            // 3 个核心指标
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AnnualMetric("阅读", "${report.totalDurationHours.coerceAtLeast(0)}h", Modifier.weight(1f))
                 AnnualMetric("文字", "${report.totalWordsWan.coerceAtLeast(0)}万", Modifier.weight(1f))
                 AnnualMetric("活跃", "${report.activeDays}天", Modifier.weight(1f))
             }
-            Spacer(Modifier.height(14.dp))
 
-            Surface(shape = RoundedCornerShape(18.dp), color = Color.White.copy(alpha = 0.14f), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("你最投入的一本书", color = Color.White.copy(alpha = 0.62f), fontSize = 12.sp)
-                    Text(report.favoriteBook.ifBlank { "还在等待被记录" }, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 2, textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(8.dp))
-                    Text("最长单日 ${report.longestSessionMin} 分钟 · 常在 ${report.peakHour} 打开书页", color = Color.White.copy(alpha = 0.62f), fontSize = 11.sp, textAlign = TextAlign.Center)
-                }
+            Spacer(Modifier.height(12.dp))
+
+            // 最投入合并到一行（替代了原来的整张 Surface 卡片）
+            val fav = report.favoriteBook.ifBlank { "还在等待被记录" }
+            Text(
+                "最投入：$fav",
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "最长 ${report.longestSessionMin} 分钟 · 常在 ${report.peakHour} 翻书",
+                color = Color.White.copy(alpha = 0.55f),
+                fontSize = 10.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            // 可选的一条 teaser（按 highlight 中第二条挑）— 不要旋转动画，静态展示
+            if (teaser != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "${teaser.first}：${teaser.second}",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 10.sp,
+                )
             }
-
-            if (report.tags.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
-                    report.tags.take(3).forEach { tag ->
-                        Surface(shape = RoundedCornerShape(50), color = Color.White.copy(alpha = 0.16f), modifier = Modifier.padding(horizontal = 3.dp)) {
-                            Text("#$tag", color = Color.White, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp))
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(18.dp))
-            Text("墨境 MoRealm · 把阅读留在时间里", color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp)
         }
     }
 }

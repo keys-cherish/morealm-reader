@@ -87,6 +87,10 @@ object CacheBook {
                     putContent(sourceUrl, ch.url, content)
                     AppLog.debug("CacheBook", "Preloaded chapter $i: ${ch.title}")
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 用户离开阅读器或翻到下一窗口时正常 cancel — 不算错误，必须重抛
+                // 让上层协程感知到取消（CancellationException 不能被吞）。
+                throw e
             } catch (e: Exception) {
                 AppLog.warn("CacheBook", "Preload chapter $i failed: ${e.message}")
             }
