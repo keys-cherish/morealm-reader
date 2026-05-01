@@ -42,13 +42,20 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
      * or the engine doesn't support / lacks data for Chinese.
      */
     fun initialize(onResult: (InitResult) -> Unit = {}) {
+        com.morealm.app.core.log.AppLog.info("TTS", "SystemTtsEngine.initialize: creating TextToSpeech")
         tts = TextToSpeech(context) { status ->
+            com.morealm.app.core.log.AppLog.info(
+                "TTS",
+                "SystemTtsEngine.OnInitListener: status=$status (SUCCESS=${TextToSpeech.SUCCESS})",
+            )
             val result: InitResult = if (status == TextToSpeech.SUCCESS) {
                 val langStatus = try {
                     tts?.setLanguage(Locale.CHINESE) ?: TextToSpeech.LANG_NOT_SUPPORTED
                 } catch (e: Exception) {
+                    com.morealm.app.core.log.AppLog.warn("TTS", "setLanguage(CHINESE) threw: ${e.message}")
                     TextToSpeech.LANG_NOT_SUPPORTED
                 }
+                com.morealm.app.core.log.AppLog.info("TTS", "SystemTtsEngine.setLanguage → langStatus=$langStatus")
                 when (langStatus) {
                     TextToSpeech.LANG_MISSING_DATA ->
                         InitResult.Failed("中文语音数据缺失，请到系统「设置 → 语言与输入 → 文字转语音」安装语音包")
@@ -109,41 +116,82 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
             // silently completing and looping forever on the next paragraph.
             val reason = (initResult as? InitResult.Failed)?.reason
                 ?: "TTS 引擎不可用，请检查系统 TTS 设置"
+            com.morealm.app.core.log.AppLog.warn("TTS", "SystemTtsEngine.speak: engine==null, reason=$reason")
             close(IllegalStateException(reason))
             return@callbackFlow
         }
-        if (text.isBlank()) { close(); return@callbackFlow }
+        if (text.isBlank()) {
+            com.morealm.app.core.log.AppLog.debug("TTS", "SystemTtsEngine.speak: blank text → close")
+            close()
+            return@callbackFlow
+        }
 
         engine.setSpeechRate(speed)
 
+        // Voice health check — if the saved voice has been uninstalled (e.g.
+        // the user removed a language pack while the TTS engine kept the
+        // stale handle), `engine.voice.features` contains "notInstalled".
+        // Calling speak() against a not-installed voice on Android 9-12 can
+        // make tts.speak() return ERROR synchronously. Reset to default
+        // Chinese language to recover. Cheap: one property read per paragraph.
+        try {
+            val v = engine.voice
+            val notInstalled = v?.features?.contains(android.speech.tts.TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) == true
+            if (v == null || notInstalled) {
+                com.morealm.app.core.log.AppLog.warn(
+                    "TTS",
+                    "SystemTtsEngine.speak: voice unhealthy (null=${v == null}, notInstalled=$notInstalled), resetting to CHINESE",
+                )
+                engine.language = Locale.CHINESE
+            }
+        } catch (e: Exception) {
+            com.morealm.app.core.log.AppLog.warn("TTS", "voice health check threw: ${e.message}")
+        }
+
         val utteranceId = "morealm_tts_${System.nanoTime()}"
+        com.morealm.app.core.log.AppLog.info(
+            "TTS",
+            "SystemTtsEngine.speak: id=$utteranceId, len=${text.length}, rate=$speed",
+        )
 
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {
                 if (id == utteranceId) {
+                    com.morealm.app.core.log.AppLog.debug("TTS", "SystemTtsEngine.onStart id=$id")
                     trySend(AudioChunk(ByteArray(0), "started"))
                 }
             }
             override fun onDone(id: String?) {
                 if (id == utteranceId) {
+                    com.morealm.app.core.log.AppLog.debug("TTS", "SystemTtsEngine.onDone id=$id")
                     trySend(AudioChunk(ByteArray(0), "done"))
                     close()
                 }
             }
             override fun onError(id: String?, errorCode: Int) {
                 if (id == utteranceId) {
+                    com.morealm.app.core.log.AppLog.warn(
+                        "TTS",
+                        "SystemTtsEngine.onError id=$id errorCode=$errorCode",
+                    )
                     close(Exception("TTS error: $errorCode"))
                 }
             }
             @Deprecated("Deprecated in Java")
             override fun onError(id: String?) {
                 if (id == utteranceId) {
+                    com.morealm.app.core.log.AppLog.warn("TTS", "SystemTtsEngine.onError(legacy) id=$id")
                     close(Exception("TTS error"))
                 }
             }
         })
 
         val result = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        com.morealm.app.core.log.AppLog.info(
+            "TTS",
+            "SystemTtsEngine.speak: tts.speak() returned=$result " +
+                "(SUCCESS=${TextToSpeech.SUCCESS}, ERROR=${TextToSpeech.ERROR})",
+        )
         if (result == TextToSpeech.ERROR) {
             // speak() failed — onDone will never be called, close immediately
             close(Exception("TTS speak() returned ERROR"))
@@ -205,6 +253,34 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
     fun shutdown() {
         tts?.shutdown()
         tts = null
+    }
+
+    /**
+     * Tear down and re-create the underlying [TextToSpeech] instance.
+     *
+     * Why this exists: on some Android builds (and after a TTS engine
+     * upgrade / language pack uninstall while the app stayed alive), an
+     * already-bound [TextToSpeech] can degrade into a state where
+     * `speak()` returns [TextToSpeech.ERROR] synchronously even though
+     * the [OnInitListener] had reported `SUCCESS`. Re-binding clears
+     * the corrupted state — Legado does the same thing in its
+     * `TTSReadAloudService.clearTTS()` recovery path.
+     *
+     * Suspends until init resolves (success or failure). Caller is
+     * expected to retry the failing utterance after this returns.
+     */
+    suspend fun reInit() {
+        com.morealm.app.core.log.AppLog.warn("TTS", "SystemTtsEngine.reInit: tearing down and rebinding")
+        runCatching { tts?.stop() }
+        runCatching { tts?.shutdown() }
+        tts = null
+        isReady = false
+        initResult = null
+        // Note: pendingReadyCallbacks is intentionally NOT cleared — any
+        // coroutine currently parked in awaitReadyResult should be unblocked
+        // by the FRESH listener firing once initialize() completes.
+        initialize()
+        awaitReadyResult()
     }
 
     companion object {
