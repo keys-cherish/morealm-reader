@@ -67,6 +67,16 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     private var idleBitmap: Bitmap? = null
 
     fun setIdleBitmap(bitmap: Bitmap?) {
+        // Diagnostic for cross-chapter flicker (docs/issues/simulation-page-turn-flicker.md
+        // root cause #3). identityHashCode lets us tell two distinct bitmap
+        // instances apart in the log so we can confirm whether the wrong
+        // bitmap is being installed and then replaced one frame later.
+        AppLog.debug(
+            "PageTurnFlicker",
+            "[3b] setIdleBitmap RECV bitmapId=${bitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                " isMoved=$isMoved isRunning=$isRunning" +
+                " currentIdleId=${idleBitmap?.let { System.identityHashCode(it) } ?: "null"}",
+        )
         idleBitmap = bitmap
         if (!isMoved && !isRunning) postInvalidate()
     }

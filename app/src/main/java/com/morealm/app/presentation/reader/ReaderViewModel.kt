@@ -66,6 +66,7 @@ class ReaderViewModel @Inject constructor(
     private val prefs: AppPreferences,
     private val readStatsRepo: ReadStatsRepository,
     private val bookmarkRepo: BookmarkRepository,
+    private val highlightRepo: com.morealm.app.domain.repository.HighlightRepository,
     private val replaceRuleRepo: ReplaceRuleRepository,
     private val styleRepo: com.morealm.app.domain.repository.ReaderStyleRepository,
     private val sourceRepo: SourceRepository,
@@ -125,6 +126,13 @@ class ReaderViewModel @Inject constructor(
         progress = progress,
     )
 
+    val highlight = ReaderHighlightController(
+        bookId = bookId,
+        highlightRepo = highlightRepo,
+        scope = viewModelScope,
+        chapter = chapter,
+    )
+
     val contentEdit = ReaderContentEditController(
         context = context,
         scope = viewModelScope,
@@ -157,6 +165,7 @@ class ReaderViewModel @Inject constructor(
     val linkedBooks: StateFlow<List<Book>> = navigation.linkedBooks
     val nextBookPrompt: StateFlow<Book?> = navigation.nextBookPrompt
     val bookmarks: StateFlow<List<Bookmark>> = bookmark.bookmarks
+    val highlights: StateFlow<List<com.morealm.app.domain.entity.Highlight>> = highlight.forCurrentChapter
     val searchResults: StateFlow<List<ReaderSearchController.SearchResult>> = search.searchResults
     val pendingSearchSelection: StateFlow<ReaderSearchController.SearchSelection?> = search.pendingSearchSelection
     val searching: StateFlow<Boolean> = search.searching
