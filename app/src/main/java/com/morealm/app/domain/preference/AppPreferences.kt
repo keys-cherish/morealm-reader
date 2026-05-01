@@ -33,6 +33,17 @@ class AppPreferences @Inject constructor(
         val WEBDAV_USER = stringPreferencesKey("webdav_user")
         val WEBDAV_PASS = stringPreferencesKey("webdav_pass")
         val SHELF_VIEW_MODE = stringPreferencesKey("shelf_view_mode")
+        /**
+         * 书源管理页的列表分组方式。取值见 ui 层的 SourceGroupMode enum 序列化字符串：
+         *  - "none"       : 不分组，直接平铺（兼容旧行为，默认）
+         *  - "group_name" : 按 BookSource.bookSourceGroup 分组（多分组场景把整个字段当一组）
+         *  - "domain"     : 按 bookSourceUrl 提取的 host 分组
+         *  - "type"       : 按 bookSourceType 分组（0=文本/1=音频/2=图片/3=文件/其他）
+         *
+         * 用 String 而非 Int：枚举值今后扩张（比如增加"按可用性分组"）时不需要 DB 迁移，
+         * 异常值 fallback 到 "none"，比 enum ordinal 容错更好。
+         */
+        val SOURCE_GROUP_MODE = stringPreferencesKey("source_group_mode")
         val AUTO_NIGHT_MODE = booleanPreferencesKey("auto_night_mode")
         val SOURCE_FILTER_MIN_WORDS = intPreferencesKey("source_filter_min_words")
         val SOURCE_FILTER_MAX_WORDS = intPreferencesKey("source_filter_max_words")
@@ -43,6 +54,9 @@ class AppPreferences @Inject constructor(
         val PAGE_ANIM = stringPreferencesKey("page_anim") // cover/simulation/slide/vertical/fade/none
         val TAP_LEFT_ACTION = stringPreferencesKey("tap_left_action") // next/prev
         val VOLUME_KEY_PAGE = booleanPreferencesKey("volume_key_page")
+        val VOLUME_KEY_REVERSE = booleanPreferencesKey("volume_key_reverse")
+        val HEADSET_BUTTON_PAGE = booleanPreferencesKey("headset_button_page")
+        val VOLUME_KEY_LONG_PRESS = stringPreferencesKey("volume_key_long_press") // off|page|chapter
         val RESUME_LAST_READ = booleanPreferencesKey("resume_last_read")
         val LONG_PRESS_UNDERLINE = booleanPreferencesKey("long_press_underline")
         val SCREEN_TIMEOUT = intPreferencesKey("screen_timeout") // 0=system, -1=never, else seconds
@@ -77,6 +91,9 @@ class AppPreferences @Inject constructor(
         val FOOTER_LEFT = stringPreferencesKey("footer_left")
         val FOOTER_CENTER = stringPreferencesKey("footer_center")
         val FOOTER_RIGHT = stringPreferencesKey("footer_right")
+        /** Selection mini-menu customization (custom button list / order / main-row split).
+         *  Stored as JSON of [SelectionMenuConfig] —— null/blank → DEFAULT. */
+        val SELECTION_MENU_CONFIG = stringPreferencesKey("selection_menu_config")
         val AUTO_BACKUP = booleanPreferencesKey("auto_backup")
         val LAST_AUTO_BACKUP = longPreferencesKey("last_auto_backup")
         // ── WebDav P1 keys ─────────────────────────────────────────────
@@ -177,6 +194,13 @@ class AppPreferences @Inject constructor(
     val shelfViewMode: Flow<String> = context.dataStore.data
         .map { it[Keys.SHELF_VIEW_MODE] ?: "grid" }
 
+    /**
+     * 书源管理页的分组模式 Flow。默认 "none"（不分组）—— 旧用户升级到这版本后
+     * 行为完全不变，直到他主动点 chip 切换才会生效。
+     */
+    val sourceGroupMode: Flow<String> = context.dataStore.data
+        .map { it[Keys.SOURCE_GROUP_MODE] ?: "none" }
+
     val autoNightMode: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.AUTO_NIGHT_MODE] ?: true }
 
@@ -206,6 +230,34 @@ class AppPreferences @Inject constructor(
 
     val volumeKeyPage: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.VOLUME_KEY_PAGE] ?: true }
+
+    /**
+     * 音量键方向反转。默认 false：音量下=下一页、音量上=上一页（与系统/Legado 一致）。
+     * 部分用户偏好"音量上=下一页"，开启该项即翻转。仅影响音量键，不影响 MEDIA_*。
+     */
+    val volumeKeyReverse: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.VOLUME_KEY_REVERSE] ?: false }
+
+    /**
+     * 耳机/蓝牙翻页器按键翻页。默认 false 避免误触。开启后阅读器响应：
+     * - KEYCODE_MEDIA_NEXT / MEDIA_PREVIOUS （蓝牙翻页器常见映射）
+     * - KEYCODE_PAGE_UP / PAGE_DOWN
+     * - KEYCODE_DPAD_LEFT / DPAD_RIGHT
+     * - KEYCODE_HEADSETHOOK（耳机线控单击：TTS 播放时切上下段，否则下一页）
+     *
+     * 注意：锁屏/后台的耳机线控走 MediaSession，不受此开关影响。
+     */
+    val headsetButtonPage: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.HEADSET_BUTTON_PAGE] ?: false }
+
+    /**
+     * 音量键长按行为：
+     * - "off"     默认：长按只触发系统按键重复，等同多次单击翻页（OS 默认节奏）
+     * - "page"    显式连续翻页（同 off，但语义上是"主动开启"）
+     * - "chapter" 长按 ~1s 后跳到上/下一章
+     */
+    val volumeKeyLongPress: Flow<String> = context.dataStore.data
+        .map { it[Keys.VOLUME_KEY_LONG_PRESS] ?: "off" }
 
     val resumeLastRead: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.RESUME_LAST_READ] ?: false }
@@ -294,6 +346,19 @@ class AppPreferences @Inject constructor(
     val footerRight: Flow<String> = context.dataStore.data.map { it[Keys.FOOTER_RIGHT] ?: "page_progress" }
     suspend fun setHeaderFooter(key: Preferences.Key<String>, value: String) = update(key, value)
 
+    /**
+     * Selection-menu customization. Backed by a JSON string in DataStore so the
+     * full config (which item / which position / what order) round-trips with
+     * a single key. `decode` returns DEFAULT on parse failure or absence, so
+     * fresh installs and old DataStores both behave the same.
+     */
+    val selectionMenuConfig: Flow<com.morealm.app.domain.entity.SelectionMenuConfig> =
+        context.dataStore.data.map {
+            com.morealm.app.domain.entity.SelectionMenuConfig.decode(it[Keys.SELECTION_MENU_CONFIG])
+        }
+    suspend fun setSelectionMenuConfig(config: com.morealm.app.domain.entity.SelectionMenuConfig) =
+        update(Keys.SELECTION_MENU_CONFIG, com.morealm.app.domain.entity.SelectionMenuConfig.encode(config))
+
     val autoBackup: Flow<Boolean> = context.dataStore.data.map { it[Keys.AUTO_BACKUP] ?: false }
     suspend fun setAutoBackup(enabled: Boolean) = update(Keys.AUTO_BACKUP, enabled)
     val lastAutoBackup: Flow<Long> = context.dataStore.data.map { it[Keys.LAST_AUTO_BACKUP] ?: 0L }
@@ -350,6 +415,8 @@ class AppPreferences @Inject constructor(
     suspend fun setTtsEngine(engine: String) = update(Keys.TTS_ENGINE, engine)
     suspend fun setTtsSpeed(speed: Float) = update(Keys.TTS_SPEED, speed)
     suspend fun setShelfViewMode(mode: String) = update(Keys.SHELF_VIEW_MODE, mode)
+    /** 写入新的书源分组模式；调用方负责传入 [Keys.SOURCE_GROUP_MODE] 注释里列出的字符串。 */
+    suspend fun setSourceGroupMode(mode: String) = update(Keys.SOURCE_GROUP_MODE, mode)
     suspend fun setAutoNightMode(enabled: Boolean) {
         themePrefs.edit().putBoolean("auto_night_mode", enabled).apply()
         update(Keys.AUTO_NIGHT_MODE, enabled)
@@ -368,6 +435,9 @@ class AppPreferences @Inject constructor(
     suspend fun setPageAnim(anim: String) = update(Keys.PAGE_ANIM, anim)
     suspend fun setTapLeftAction(action: String) = update(Keys.TAP_LEFT_ACTION, action)
     suspend fun setVolumeKeyPage(enabled: Boolean) = update(Keys.VOLUME_KEY_PAGE, enabled)
+    suspend fun setVolumeKeyReverse(enabled: Boolean) = update(Keys.VOLUME_KEY_REVERSE, enabled)
+    suspend fun setHeadsetButtonPage(enabled: Boolean) = update(Keys.HEADSET_BUTTON_PAGE, enabled)
+    suspend fun setVolumeKeyLongPress(mode: String) = update(Keys.VOLUME_KEY_LONG_PRESS, mode)
     suspend fun setResumeLastRead(enabled: Boolean) = update(Keys.RESUME_LAST_READ, enabled)
     suspend fun setLongPressUnderline(enabled: Boolean) = update(Keys.LONG_PRESS_UNDERLINE, enabled)
     suspend fun setScreenTimeout(seconds: Int) = update(Keys.SCREEN_TIMEOUT, seconds)

@@ -59,9 +59,22 @@ import com.morealm.app.domain.entity.Bookmark
 import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.presentation.reader.ReaderSearchController
 import androidx.compose.ui.graphics.Color
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.ui.theme.MoRealmColors
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+
+/**
+ * 音量键长按"翻章"模式下，多少个 [android.view.KeyEvent.ACTION_DOWN] 重复事件后触发一次翻章。
+ *
+ * Android 默认按键重复频率约 12~15 Hz（首次重复延迟 ~500ms 后约每 50~80ms 一次），
+ * 取 10 ≈ 持续按住 1~1.2 秒，平衡"误触"与"等待感"。第 11 次及之后忽略，避免
+ * 一次长按连续翻多章。
+ */
+private const val LONG_PRESS_CHAPTER_THRESHOLD = 10
+
+/** ReaderScreen 物理按键日志 tag（已注册到 LogTagCatalog 为 "Reader/Key"）。 */
+private const val KEY_TAG = "ReaderKey"
 
 @Composable
 fun ReaderScreen(
@@ -100,6 +113,10 @@ fun ReaderScreen(
     val customFontUri by viewModel.settings.customFontUri.collectAsStateWithLifecycle()
     val customFontName by viewModel.settings.customFontName.collectAsStateWithLifecycle()
     val volumeKeyPage by viewModel.settings.volumeKeyPage.collectAsStateWithLifecycle()
+    val volumeKeyReverse by viewModel.settings.volumeKeyReverse.collectAsStateWithLifecycle()
+    val headsetButtonPage by viewModel.settings.headsetButtonPage.collectAsStateWithLifecycle()
+    val volumeKeyLongPress by viewModel.settings.volumeKeyLongPress.collectAsStateWithLifecycle()
+    val selectionMenuConfig by viewModel.settings.selectionMenuConfig.collectAsStateWithLifecycle()
     val screenTimeout by viewModel.settings.screenTimeout.collectAsStateWithLifecycle()
     val showChapterNameSetting by viewModel.settings.showChapterName.collectAsStateWithLifecycle()
     val showTimeBatterySetting by viewModel.settings.showTimeBattery.collectAsStateWithLifecycle()
@@ -304,20 +321,114 @@ fun ReaderScreen(
             .background(moColors.readerBackground)
             .semantics { contentDescription = "阅读器" }
             .onKeyEvent { event ->
-                if (!volumeKeyPage) return@onKeyEvent false
-                if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN) return@onKeyEvent false
+                // 物理按键翻页处理。两个开关分别管两组键：
+                //   - 音量键 (VOLUME_UP/DOWN)：受 volumeKeyPage 管
+                //   - 耳机/媒体/方向/翻页器键：受 headsetButtonPage 管
+                // 都关 → 直接放行给系统。
+                if (!volumeKeyPage && !headsetButtonPage) return@onKeyEvent false
+                val nativeEvent = event.nativeKeyEvent
+                val keyCode = nativeEvent.keyCode
+                val isVolumeKey = keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+                    keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+                val isHeadsetKey = keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
+                    keyCode == KeyEvent.KEYCODE_MEDIA_NEXT ||
+                    keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS ||
+                    keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
+                    keyCode == KeyEvent.KEYCODE_PAGE_UP ||
+                    keyCode == KeyEvent.KEYCODE_PAGE_DOWN ||
+                    keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                    keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                if (!isVolumeKey && !isHeadsetKey) return@onKeyEvent false
+                if (isVolumeKey && !volumeKeyPage) return@onKeyEvent false
+                if (isHeadsetKey && !headsetButtonPage) return@onKeyEvent false
+
+                // 阅读菜单/设置面板/TTS 面板等显示时，把音量键还给系统（让用户能调音量）。
+                // 媒体/方向键不让系统抢，因为蓝牙翻页器即便菜单弹出也希望继续翻。
+                val anyMenuOpen = showControls || showSettings || showTtsPanel ||
+                    showChapterList || showBookmarks || showFullSearch
+                if (anyMenuOpen && isVolumeKey) return@onKeyEvent false
+
+                if (nativeEvent.action != KeyEvent.ACTION_DOWN) return@onKeyEvent false
+                val repeatCount = nativeEvent.repeatCount
                 val isTtsActive = viewModel.tts.ttsPlaying.value
-                when (event.nativeKeyEvent.keyCode) {
-                    KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                        if (isTtsActive) viewModel.tts.ttsNextParagraph() else pageTurnCommand = ReaderPageDirection.NEXT
-                        true
+
+                // 解析"原始方向"：哪个方向是 NEXT，哪个是 PREV
+                // KEYCODE_HEADSETHOOK 在 TTS 时单击切换播放，这里走特殊路径。
+                if (keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
+                    keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                ) {
+                    if (repeatCount != 0) return@onKeyEvent true
+                    if (isTtsActive) {
+                        AppLog.debug(KEY_TAG, "headsetHook→ttsPlayPause (key=$keyCode)")
+                        viewModel.tts.ttsPlayPause()
+                    } else {
+                        AppLog.debug(KEY_TAG, "headsetHook→nextPage (key=$keyCode, no TTS)")
+                        pageTurnCommand = ReaderPageDirection.NEXT
                     }
-                    KeyEvent.KEYCODE_VOLUME_UP -> {
-                        if (isTtsActive) viewModel.tts.ttsPrevParagraph() else pageTurnCommand = ReaderPageDirection.PREV
-                        true
-                    }
-                    else -> false
+                    return@onKeyEvent true
                 }
+
+                val nextKeys = setOf(
+                    KeyEvent.KEYCODE_VOLUME_DOWN,
+                    KeyEvent.KEYCODE_MEDIA_NEXT,
+                    KeyEvent.KEYCODE_PAGE_DOWN,
+                    KeyEvent.KEYCODE_DPAD_RIGHT,
+                )
+                val rawDir = if (keyCode in nextKeys) {
+                    ReaderPageDirection.NEXT
+                } else {
+                    ReaderPageDirection.PREV
+                }
+                // 仅音量键参与方向反转（蓝牙翻页器自带左右标识，不该被反转）
+                val dir = if (isVolumeKey && volumeKeyReverse) {
+                    if (rawDir == ReaderPageDirection.NEXT) ReaderPageDirection.PREV
+                    else ReaderPageDirection.NEXT
+                } else rawDir
+
+                // 单击：常规翻页 / TTS 段切换
+                if (repeatCount == 0) {
+                    AppLog.debug(
+                        KEY_TAG,
+                        "single key=$keyCode src=${if (isVolumeKey) "volume" else "headset"} " +
+                            "raw=$rawDir dir=$dir reverse=$volumeKeyReverse tts=$isTtsActive",
+                    )
+                    if (isTtsActive) {
+                        if (dir == ReaderPageDirection.NEXT) viewModel.tts.ttsNextParagraph()
+                        else viewModel.tts.ttsPrevParagraph()
+                    } else {
+                        pageTurnCommand = dir
+                    }
+                    return@onKeyEvent true
+                }
+
+                // 长按：按 volumeKeyLongPress 模式分支（仅音量键参与"翻章"，避免媒体键长按误触）
+                if (isVolumeKey) {
+                    when (volumeKeyLongPress) {
+                        "page" -> {
+                            // 跟系统按键重复节奏连续翻页（每次 repeat 都翻 → 不打日志，避免刷屏）
+                            if (isTtsActive) {
+                                if (dir == ReaderPageDirection.NEXT) viewModel.tts.ttsNextParagraph()
+                                else viewModel.tts.ttsPrevParagraph()
+                            } else {
+                                pageTurnCommand = dir
+                            }
+                        }
+                        "chapter" -> {
+                            // 长按 ~1s（约 10 个 repeat）后翻一次章，期间忽略后续重复
+                            if (repeatCount == LONG_PRESS_CHAPTER_THRESHOLD) {
+                                AppLog.info(
+                                    KEY_TAG,
+                                    "long-press chapter trigger: dir=$dir " +
+                                        "(repeat=$repeatCount, threshold=$LONG_PRESS_CHAPTER_THRESHOLD)",
+                                )
+                                if (dir == ReaderPageDirection.NEXT) viewModel.nextChapter()
+                                else viewModel.prevChapter()
+                            }
+                        }
+                        else -> { /* off：长按不响应（吞键避免连续翻页） */ }
+                    }
+                }
+                true
             }
     ) {
         // WebView reader content — handles all touch events internally via JS
@@ -458,6 +569,7 @@ fun ReaderScreen(
                 footerLeft = ftrLeft,
                 footerCenter = ftrCenter,
                 footerRight = ftrRight,
+                selectionMenuConfig = selectionMenuConfig,
                 modifier = Modifier.fillMaxSize(),
             )
         }

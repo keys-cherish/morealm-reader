@@ -93,26 +93,67 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     private var idleBitmapPinned = false
 
     /**
-     * @param force `true` 用于内部 promote 路径（[onAnimStop]），跳过 pin 检查。
-     *              UI 调用永远走默认 `false`。
+     * 上次被接受写入 [idleBitmap] 的"内容签名"——通常是
+     * `(System.identityHashCode(page), w, h, bgColor, ...)` 多元组
+     * （由 caller 提供，View 这边只做相等比较）。
+     *
+     * 用途：去掉模式切换 (SCROLL↔SIMULATION) / 章节流式分页 阶段
+     * `AndroidView.update` lambda 反复触发的"同内容、不同 Bitmap"重复
+     * 写入。日志 19:06:52 时段的复发例：同一个 `pageHash=215777196` 在
+     * `pageCount` 从 1→10→19→150→212→313→378 增长过程中被渲染 6 次，
+     * 每次都是新 Bitmap + invalidate → 视觉闪烁。开启 dedupe 后第 2..6
+     * 次同 key 的调用直接 short-circuit，省掉冗余渲染与位图交换。
+     *
+     * 在以下时机清空（设为 `null`），保证后续合法更新不被误吞：
+     * - `ACTION_DOWN`：用户开始新交互，pin/dedupe 状态都应让位。
+     * - [onAnimStop] 的 promote 分支：刚把 prev/nextBitmap 升格为
+     *   idleBitmap，旧 key 已不再代表当前内容；下一次 update lambda
+     *   推进来的 key（哪怕和升格前相同）必须能写入。
      */
-    fun setIdleBitmap(bitmap: Bitmap?, force: Boolean = false) {
+    private var lastIdleKey: Any? = null
+
+    /**
+     * @param key 内容签名。非 `null` 且等于 [lastIdleKey] 时直接 short-circuit
+     *            （不调用 [producer]，不交换 bitmap，不 invalidate）——这是
+     *            模式切换闪烁修复的核心防御层。`null` 表示 caller 不参与
+     *            dedupe（所有调用都执行 producer）。
+     * @param force `true` 用于内部 promote 路径（[onAnimStop]），跳过 pin
+     *              和 dedupe 检查。UI 调用永远走默认 `false`。
+     * @param producer 真正生产 Bitmap 的 lambda。被 dedupe / pin 拒绝时**不会**
+     *                 调用——避免 caller 在 short-circuit 路径上还做无用渲染。
+     */
+    fun setIdleBitmap(
+        key: Any?,
+        force: Boolean = false,
+        producer: () -> Bitmap?,
+    ) {
         if (idleBitmapPinned && !force) {
             AppLog.debug(
                 "PageTurnFlicker",
                 "[3b] setIdleBitmap REJECTED (pinned)" +
-                    " incomingId=${bitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                    " currentIdleId=${idleBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                    " key=$key",
+            )
+            return
+        }
+        if (!force && key != null && key == lastIdleKey) {
+            // 同内容重复写入——producer 都不调用，直接丢弃。
+            AppLog.debug(
+                "PageTurnFlicker",
+                "[3b] setIdleBitmap DEDUPED key=$key" +
                     " currentIdleId=${idleBitmap?.let { System.identityHashCode(it) } ?: "null"}",
             )
             return
         }
+        val bitmap = producer()
         AppLog.debug(
             "PageTurnFlicker",
             "[3b] setIdleBitmap RECV bitmapId=${bitmap?.let { System.identityHashCode(it) } ?: "null"}" +
                 " isMoved=$isMoved isRunning=$isRunning" +
                 " currentIdleId=${idleBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
-                " force=$force",
+                " force=$force key=$key",
         )
+        lastIdleKey = key
         idleBitmap = bitmap
         if (!isMoved && !isRunning) postInvalidate()
     }
@@ -149,6 +190,10 @@ class SimulationReadView(context: Context) : android.view.View(context) {
                 // 位图已被消费，继续 pin 会让正常的主题切换 / 章节加载完成后
                 // 的 update lambda 写不进去。详见 [idleBitmapPinned] 的注释。
                 idleBitmapPinned = false
+                // 同步清掉 dedupe key——上次锁定的内容签名已经过期 (要么动画
+                // 转走了，要么用户跨章了)，下一次 setIdleBitmap 就算 key 巧合
+                // 相同也必须放行，否则 stale bitmap 会粘在屏幕上。
+                lastIdleKey = null
                 longPressHandled = false
                 startX = event.x
                 startY = event.y
@@ -415,6 +460,12 @@ class SimulationReadView(context: Context) : android.view.View(context) {
             if (settled != null && !settled.isRecycled) {
                 idleBitmap = settled
                 idleBitmapPinned = true
+                // 升格后旧的 dedupe key 已不再代表当前内容（idleBitmap 现在
+                // 来自 prev/nextBitmap，而非上一次 setIdleBitmap 写入的那张），
+                // 必须清空：否则 ACTION_DOWN 解 pin 后，下一次 update lambda
+                // 推进同 key 时会被 dedupe 误吞，导致页面停在升格的"对侧页"
+                // 而非真正的当前章节内容。
+                lastIdleKey = null
                 AppLog.debug(
                     "Simulation",
                     "onAnimStop promoted bitmapId=${System.identityHashCode(settled)} pinned",
