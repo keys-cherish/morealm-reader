@@ -1,5 +1,7 @@
 package com.morealm.app.ui.profile
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import com.morealm.app.presentation.settings.ReplaceRuleViewModel
 import androidx.compose.foundation.layout.*
@@ -39,6 +41,21 @@ fun ReplaceRuleScreen(
     /** Guard: autoEditId 触发只走一次，否则旋转屏 / recomposition 会反复弹窗。 */
     var autoEditConsumed by rememberSaveable { mutableStateOf(false) }
 
+    // 导入：兼容 MoRealm bundle / Legado 新格式 / Yuedu 老格式 / 单条 / 数组。
+    // 检测/解析逻辑都封在 ViewModel.parseRules 里，这里只管 SAF。
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { viewModel.importRulesFromUri(it) }
+    }
+    // 导出：单文件 JSON，扩展名走默认（.json）。文件名给个有意义的默认值，
+    // 用户可在 SAF picker 里再改。
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        uri?.let { viewModel.exportRules(it) }
+    }
+
     // 从 EffectiveReplacesDialog 跳来：等 rules 加载好后自动弹编辑框。
     LaunchedEffect(autoEditId, rules) {
         val target = autoEditId ?: return@LaunchedEffect
@@ -61,6 +78,23 @@ fun ReplaceRuleScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = {
+                        importLauncher.launch(
+                            arrayOf("application/json", "application/octet-stream", "text/plain")
+                        )
+                    }) {
+                        Icon(Icons.Default.Download, "导入规则",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                    }
+                    IconButton(onClick = {
+                        // 文件名带规则数让用户一眼看出导出范围。
+                        exportLauncher.launch("morealm-replace-${rules.size}.json")
+                    }, enabled = rules.isNotEmpty()) {
+                        Icon(Icons.Default.Upload, "导出规则",
+                            tint = if (rules.isNotEmpty())
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f))
+                    }
                     IconButton(onClick = { showAddDialog = true }) {
                         Icon(Icons.Default.Add, "添加规则", tint = MaterialTheme.colorScheme.primary)
                     }
