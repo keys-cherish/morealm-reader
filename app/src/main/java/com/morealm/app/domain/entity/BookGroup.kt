@@ -15,4 +15,15 @@ data class BookGroup(
     val emoji: String? = null,
     val autoKeywords: String = "",
     val createdAt: Long = System.currentTimeMillis(),
+    /**
+     * True iff this folder was auto-created by [AutoFolderManager] in response
+     * to crossing the genre threshold (e.g. user has 3+ books tagged 玄幻 and
+     * had no folder named 玄幻 yet, so we made one).
+     *
+     * User-created folders always have `auto = false` and are *never* renamed,
+     * deleted, or reshuffled by the auto-grouping engine. When the user
+     * deletes an auto-folder, its source genre tag id is recorded in
+     * [AppPreferences.autoFolderIgnored] so we don't recreate it next time.
+     */
+    val auto: Boolean = false,
 )

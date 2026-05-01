@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -80,6 +81,14 @@ class AppPreferences @Inject constructor(
         val LAST_AUTO_BACKUP = longPreferencesKey("last_auto_backup")
         val READER_ENGINE = stringPreferencesKey("reader_engine") // "canvas" or "webview"
         val RECORD_LOG = booleanPreferencesKey("record_log") // detailed file logging
+        // Auto-folder (since v18) — tag ids whose auto-created folder was deleted by user.
+        // The classifier honours this set so a deleted "玄幻" folder doesn't reappear next
+        // time a 3rd 玄幻 book is imported.
+        val AUTO_FOLDER_IGNORED = stringSetPreferencesKey("auto_folder_ignored")
+        // Threshold (= number of books carrying the same genre tag) before the
+        // classifier promotes that tag into a real folder. Lower = folders appear
+        // sooner with less curation; higher = only "real" interests get a folder.
+        val AUTO_FOLDER_THRESHOLD = intPreferencesKey("auto_folder_threshold")
     }
 
     /**
@@ -327,4 +336,39 @@ class AppPreferences @Inject constructor(
     suspend fun setTtsVoice(voice: String) = update(Keys.TTS_VOICE, voice)
     suspend fun setTtsSystemVoice(voice: String) = update(Keys.TTS_SYSTEM_VOICE, voice)
     suspend fun setTtsEdgeVoice(voice: String) = update(Keys.TTS_EDGE_VOICE, voice)
+
+    // ── Auto-folder ignored set ────────────────────────────────────────────
+
+    val autoFolderIgnored: Flow<Set<String>> = context.dataStore.data
+        .map { it[Keys.AUTO_FOLDER_IGNORED] ?: emptySet() }
+
+    /** Read the ignored set once (suspend) — used by the classifier on its hot path. */
+    suspend fun getAutoFolderIgnored(): Set<String> = autoFolderIgnored.first()
+
+    /** Mark a tag id as ignored — called when the user deletes its auto-folder. */
+    suspend fun addAutoFolderIgnored(tagId: String) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[Keys.AUTO_FOLDER_IGNORED] ?: emptySet()
+            prefs[Keys.AUTO_FOLDER_IGNORED] = current + tagId
+        }
+    }
+
+    /** Forget a previous ignore — exposed so a future "reset" UI can wire to it. */
+    suspend fun removeAutoFolderIgnored(tagId: String) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[Keys.AUTO_FOLDER_IGNORED] ?: emptySet()
+            prefs[Keys.AUTO_FOLDER_IGNORED] = current - tagId
+        }
+    }
+
+    val autoFolderThreshold: Flow<Int> = context.dataStore.data
+        .map { it[Keys.AUTO_FOLDER_THRESHOLD] ?: 3 }
+
+    suspend fun getAutoFolderThreshold(): Int = autoFolderThreshold.first()
+
+    suspend fun setAutoFolderThreshold(value: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.AUTO_FOLDER_THRESHOLD] = value.coerceIn(2, 10)
+        }
+    }
 }

@@ -68,6 +68,7 @@ fun ProfileScreen(
     onNavigateSourceManage: () -> Unit = {},
     onNavigateReadingSettings: () -> Unit = {},
     onNavigateReplaceRules: () -> Unit = {},
+    onNavigateAutoGroupRules: () -> Unit = {},
     onNavigateAppLog: () -> Unit = {},
     onNavigateCacheBook: () -> Unit = {},
     onNavigateThemeEditor: () -> Unit = {},
@@ -248,6 +249,8 @@ fun ProfileScreen(
             "翻页动画、音量键翻页、屏幕常亮、界面显示", onClick = onNavigateReadingSettings)
         SettingsCard(Icons.Default.FindReplace, "正文替换净化",
             "去广告、净化正文内容，支持正则替换", onClick = onNavigateReplaceRules)
+        SettingsCard(Icons.Default.AutoAwesomeMosaic, "自动分组规则",
+            "题材关键词、阈值与忽略列表，可导出分享", onClick = onNavigateAutoGroupRules)
         SettingsSection("备份与恢复") {
             SettingsItem(Icons.Default.Upload, "导出备份",
                 subtitle = "书架/进度/书源/书签导出为 ZIP",
@@ -297,11 +300,6 @@ fun ProfileScreen(
             }
         }
 
-        SettingsSection("高级") {
-            SettingsItem(Icons.Default.FindReplace, "净化替换规则",
-                subtitle = "去广告、净化正文内容",
-                onClick = onNavigateReplaceRules)
-        }
         SettingsSection("关于") {
             SettingsItem(Icons.Default.Info, "关于墨境", onClick = onNavigateAbout)
             SettingsItem(Icons.Default.BugReport, "应用日志",

@@ -67,6 +67,17 @@ data class BookSource(
     var ruleToc: TocRule? = null,
     var ruleContent: ContentRule? = null,
     var ruleReview: ReviewRule? = null,
+    /**
+     * Last error message from the most recent CheckSource pass. Null when the source
+     * passed the 4-step check (search/info/toc/content). UI surfaces this as a red
+     * underline + tooltip on the source list. Cleared when the user re-enables the
+     * source manually or it passes a subsequent check.
+     */
+    @ColumnInfo(defaultValue = "NULL")
+    var errorMsg: String? = null,
+    /** Wall-clock ms of the most recent CheckSource pass. 0 = never checked. */
+    @ColumnInfo(defaultValue = "0")
+    var lastCheckTime: Long = 0,
 ) {
     override fun hashCode(): Int = bookSourceUrl.hashCode()
 

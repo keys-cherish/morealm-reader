@@ -78,55 +78,27 @@ class ReaderTtsController(
         .stateIn(scope, SharingStarted.Eagerly, -1)
 
     // ── ViewModel callbacks (set via collectChapterEvents) ───────────────────
-    private var onPrevChapter: (() -> Unit)? = null
-    private var onNextChapter: (() -> Unit)? = null
-    private var onChapterFinished: (() -> Unit)? = null
+    // Removed: events are now consumed directly by ReaderViewModel. See `initialize`.
 
     private var ttsServiceStarted = false
 
     /**
      * Called once from `ReaderViewModel.init`.
-     * Starts the service if not running and wires up event listeners.
+     * Starts the service if not running. The service-side host owns the speak loop,
+     * engines, and all state; this controller is just a UI-side adapter.
+     *
+     * **Note on events**: All [TtsEventBus.Event]s are now consumed directly by
+     * `ReaderViewModel`, since most of them require chapter-loading capabilities the
+     * controller doesn't have. The controller no longer subscribes to events.
      *
      * @param getBookTitle / getChapterTitle reserved for future ad-hoc metadata refresh.
      */
     fun initialize(
-        getBookTitle: () -> String,
-        getChapterTitle: () -> String,
+        @Suppress("UNUSED_PARAMETER") getBookTitle: () -> String,
+        @Suppress("UNUSED_PARAMETER") getChapterTitle: () -> String,
     ) {
-        scope.launch {
-            TtsEventBus.events.collect { event ->
-                when (event) {
-                    is TtsEventBus.Event.PlayPause -> {
-                        // Notification toggled play/pause — flip current state.
-                        if (TtsEventBus.playbackState.value.isPlaying) {
-                            TtsEventBus.sendCommand(TtsEventBus.Command.Pause)
-                        } else {
-                            TtsEventBus.sendCommand(TtsEventBus.Command.Play)
-                        }
-                    }
-                    is TtsEventBus.Event.PrevChapter -> onPrevChapter?.invoke()
-                    is TtsEventBus.Event.NextChapter -> onNextChapter?.invoke()
-                    is TtsEventBus.Event.ChapterFinished -> onChapterFinished?.invoke()
-                    is TtsEventBus.Event.AudioFocusLoss,
-                    is TtsEventBus.Event.AudioFocusGain -> {
-                        // Service-side host already handled this; just let UI observe state.
-                    }
-                    is TtsEventBus.Event.AddTimer -> addTtsSleepTimer()
-                }
-            }
-        }
-    }
-
-    /** Wire the chapter navigation callbacks. Called from `ReaderViewModel.init`. */
-    fun collectChapterEvents(
-        onPrev: () -> Unit,
-        onNext: () -> Unit,
-        onChapterEnd: () -> Unit = onNext,
-    ) {
-        onPrevChapter = onPrev
-        onNextChapter = onNext
-        onChapterFinished = onChapterEnd
+        // No-op for now. Kept as the canonical entry point so future per-controller
+        // initialization (e.g. deferred prefs loading) has an obvious place to live.
     }
 
     /**
@@ -167,6 +139,9 @@ class ReaderTtsController(
      * - When [displayedContent] is non-null: load the chapter into the host and play from
      *   [startChapterPosition] (defaults to 0).
      * - When [displayedContent] is null: simply send Play (resume from current paragraph).
+     *
+     * @param onChapterFinished kept for API compatibility but ignored: chapter-end handling
+     *        now lives in `ReaderViewModel`'s direct TtsEventBus listener.
      */
     fun ttsPlay(
         displayedContent: String?,
@@ -175,12 +150,9 @@ class ReaderTtsController(
         coverUrl: String? = null,
         startChapterPosition: Int? = null,
         paragraphPositions: List<Int>? = null,
-        onChapterFinished: (() -> Unit)? = null,
+        @Suppress("UNUSED_PARAMETER") onChapterFinished: (() -> Unit)? = null,
     ) {
         ensureTtsService(bookTitle ?: "", chapterTitle ?: "", coverUrl)
-        if (onChapterFinished != null) {
-            this.onChapterFinished = onChapterFinished
-        }
         if (displayedContent != null) {
             TtsEventBus.sendCommand(
                 TtsEventBus.Command.LoadAndPlay(
@@ -278,9 +250,6 @@ class ReaderTtsController(
         // Intentionally NOT stopping the service: it owns the speak loop and should outlive
         // the ViewModel so the user can leave the reader screen without interrupting playback.
         // The user must explicitly stop via the notification, panel, or sleep timer.
-        onPrevChapter = null
-        onNextChapter = null
-        onChapterFinished = null
     }
 
     // ── Internal ─────────────────────────────────────────────────────────────

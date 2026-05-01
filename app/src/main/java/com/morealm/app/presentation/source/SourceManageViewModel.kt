@@ -194,6 +194,27 @@ class BookSourceManageViewModel @Inject constructor(
                 CheckSource.checkAll(allSources, concurrency = 4) { _, result ->
                     _checkProgress.value = completedCount.incrementAndGet()
                     _checkResults.value = _checkResults.value + (result.sourceUrl to result)
+                    // Persist outcome so the badge survives app restart and the
+                    // user sees consistent "失效原因" without re-running the check.
+                    // We look up the live source row each time because user edits
+                    // may have changed it between batch start and this callback.
+                    val live = allSources.firstOrNull { it.bookSourceUrl == result.sourceUrl }
+                    if (live != null) {
+                        live.errorMsg = if (result.isValid) null else result.error
+                        live.lastCheckTime = System.currentTimeMillis()
+                        // Persist async — onResult is called from the check coroutine
+                        // (non-suspending callback contract), so spawn a child job
+                        // off the IO dispatcher to do the DB write without blocking.
+                        viewModelScope.launch(Dispatchers.IO) {
+                            runCatching { sourceRepo.insert(live) }
+                                .onFailure {
+                                    com.morealm.app.core.log.AppLog.warn(
+                                        "CheckSource",
+                                        "persist failed: ${it.message?.take(120)}",
+                                    )
+                                }
+                        }
+                    }
                 }
                 val results = _checkResults.value
                 val valid = results.values.count { it.isValid }

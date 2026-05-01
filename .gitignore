@@ -16,3 +16,6 @@ local.properties
 .claude/
 .worktrees/
 /temp/
+
+# Kotlin compiler diagnostic dumps (auto-generated, machine-specific)
+.kotlin/

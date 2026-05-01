@@ -22,8 +22,9 @@ import com.morealm.app.domain.entity.*
         HttpTts::class,
         Cache::class,
         Cookie::class,
+        SearchBookCache::class,
     ],
-    version = 17,
+    version = 20,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -43,4 +44,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun httpTtsDao(): HttpTtsDao
     abstract fun cacheDao(): CacheDao
     abstract fun cookieDao(): CookieDao
+    abstract fun searchBookCacheDao(): SearchBookCacheDao
 }

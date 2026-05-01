@@ -10,16 +10,6 @@ import androidx.paging.PagingSource
 import com.morealm.app.domain.entity.*
 import kotlinx.coroutines.flow.Flow
 
-/**
- * Aggregate row returned by [BookDao.observeSourceGroups]. Backed by a
- * GROUP BY query — Room maps the SELECT'd column names to the field names
- * here so the SQL aliases must match exactly.
- */
-data class SourceGroupCount(
-    val sourceName: String,
-    val count: Int,
-)
-
 
 @Dao
 interface BookDao {
@@ -76,76 +66,6 @@ interface BookDao {
 
     @Query("SELECT * FROM books WHERE title LIKE :keyword OR author LIKE :keyword ORDER BY lastReadAt DESC")
     suspend fun searchBooks(keyword: String): List<Book>
-
-    // ── System / smart views (since v17) ─────────────────────────────────────
-    // All accept a `now` parameter so callers (and tests) can pin the clock.
-
-    /** "继续阅读" — recently-touched books, regardless of format. */
-    @Query("SELECT * FROM books WHERE lastReadAt > :since ORDER BY lastReadAt DESC")
-    fun observeContinueReading(since: Long): Flow<List<Book>>
-
-    @Query("SELECT COUNT(*) FROM books WHERE lastReadAt > :since")
-    fun countContinueReading(since: Long): Flow<Int>
-
-    /** "追更中" — WEB books with recent reads or new chapters. */
-    @Query("""
-        SELECT * FROM books
-        WHERE format = 'WEB'
-          AND (lastReadAt > :since OR latestChapterTime > :since)
-        ORDER BY latestChapterTime DESC, lastReadAt DESC
-    """)
-    fun observeFollowingUpdates(since: Long): Flow<List<Book>>
-
-    @Query("""
-        SELECT COUNT(*) FROM books
-        WHERE format = 'WEB' AND (lastReadAt > :since OR latestChapterTime > :since)
-    """)
-    fun countFollowingUpdates(since: Long): Flow<Int>
-
-    /** "本周新加" — recently added. */
-    @Query("SELECT * FROM books WHERE addedAt > :since ORDER BY addedAt DESC")
-    fun observeNewThisWeek(since: Long): Flow<List<Book>>
-
-    @Query("SELECT COUNT(*) FROM books WHERE addedAt > :since")
-    fun countNewThisWeek(since: Long): Flow<Int>
-
-    /**
-     * "搁置已久" — books not touched in [staleBefore] AND not effectively done.
-     * `lastReadAt > 0` excludes never-opened books (those are "未读" not "搁置").
-     */
-    @Query("""
-        SELECT * FROM books
-        WHERE lastReadAt > 0 AND lastReadAt < :staleBefore AND readProgress < :finishedThreshold
-        ORDER BY lastReadAt ASC
-    """)
-    fun observeStale(staleBefore: Long, finishedThreshold: Float): Flow<List<Book>>
-
-    @Query("""
-        SELECT COUNT(*) FROM books
-        WHERE lastReadAt > 0 AND lastReadAt < :staleBefore AND readProgress < :finishedThreshold
-    """)
-    fun countStale(staleBefore: Long, finishedThreshold: Float): Flow<Int>
-
-    @Query("SELECT * FROM books WHERE readProgress >= :threshold ORDER BY lastReadAt DESC")
-    fun observeFinished(threshold: Float): Flow<List<Book>>
-
-    @Query("SELECT COUNT(*) FROM books WHERE readProgress >= :threshold")
-    fun countFinished(threshold: Float): Flow<Int>
-
-    /** "离线书" — local file formats. */
-    @Query("SELECT * FROM books WHERE format IN (:formats) ORDER BY addedAt DESC")
-    fun observeLocalFiles(formats: List<String>): Flow<List<Book>>
-
-    @Query("SELECT COUNT(*) FROM books WHERE format IN (:formats)")
-    fun countLocalFiles(formats: List<String>): Flow<Int>
-
-    /** Per-source grouping for "按来源" view. */
-    @Query("""
-        SELECT originName AS sourceName, COUNT(*) AS count
-        FROM books WHERE format = 'WEB' AND originName != ''
-        GROUP BY originName ORDER BY count DESC
-    """)
-    fun observeSourceGroups(): Flow<List<SourceGroupCount>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(book: Book)
@@ -586,4 +506,34 @@ interface CookieDao {
 
     @Query("DELETE FROM cookies")
     suspend fun deleteAll()
+}
+
+/**
+ * 换源候选缓存（[SearchBookCache]）。
+ *
+ * 查询路径：
+ *  - `getByBook`：打开换源对话框时按 (bookName, author) 拉所有候选，按 originOrder/responseTime 排好序。
+ *  - `deleteByBook`：刷新前清空目标书旧记录，避免污染。
+ *  - `deleteOlderThan`：定期清理 7 天前缓存，避免无限增长。
+ *  - `deleteByOrigin`：用户禁用/删除某源时同步擦除该源所有缓存。
+ */
+@Dao
+interface SearchBookCacheDao {
+    @Query("SELECT * FROM search_book_cache WHERE bookName = :bookName AND author = :author ORDER BY originOrder, responseTime")
+    suspend fun getByBook(bookName: String, author: String): List<SearchBookCache>
+
+    @Query("DELETE FROM search_book_cache WHERE bookName = :bookName AND author = :author")
+    suspend fun deleteByBook(bookName: String, author: String)
+
+    @Query("DELETE FROM search_book_cache WHERE time < :before")
+    suspend fun deleteOlderThan(before: Long)
+
+    @Query("DELETE FROM search_book_cache WHERE origin = :origin")
+    suspend fun deleteByOrigin(origin: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(cache: SearchBookCache)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(caches: List<SearchBookCache>)
 }

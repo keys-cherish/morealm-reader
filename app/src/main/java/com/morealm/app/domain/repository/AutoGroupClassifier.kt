@@ -2,55 +2,58 @@ package com.morealm.app.domain.repository
 
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookGroup
+import com.morealm.app.domain.entity.TagAssignSource
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Legacy adapter that the rest of the codebase still calls during the v17
- * transition: returns a single `folderId` so the existing single-bucket
- * shelf queries keep working.
+ * Top-level entry point for "where should this book live on the shelf?".
  *
- * Internally it now defers to [TagResolver] (multi-tag, scored, word-aware)
- * and additionally writes the full tag set to `book_tags` so the new shelf
- * UI (chip filters, smart views) can read multi-tag data without each call
- * site having to know about it.
+ * The pipeline (v18 model):
+ *   1. [TagResolver] — score the book against all GENRE + USER tags using
+ *      keyword-aware matching, returning a small ranked list.
+ *   2. Persist those scores in `book_tags` so chip filters / per-tag views
+ *      reflect every signal we found.
+ *   3. [AutoFolderManager] — decide whether the top tag should *promote* into
+ *      a real auto-created folder, and return the folderId to assign.
  *
- * Migration plan (out of scope for this change): once all call sites talk
- * directly to [TagResolver] / [TagRepository], drop this adapter entirely.
+ * The classifier is the only thing call sites need to wire — the manager
+ * and resolver are implementation details. Manual placements (user dragged a
+ * book into a folder, or [Book.groupLocked] is set) are honoured throughout.
  */
 @Singleton
 class AutoGroupClassifier @Inject constructor(
     private val tagResolver: TagResolver,
     private val tagRepo: TagRepository,
+    private val autoFolders: AutoFolderManager,
 ) {
     /**
-     * Returns a folderId for the book. Side-effect: writes all resolved
-     * tags into `book_tags` as AUTO assignments. Manual assignments on the
-     * book are preserved.
-     *
-     * Honours [Book.groupLocked] — locked books are never reclassified.
+     * Returns the folderId for [book], possibly creating an auto-folder along
+     * the way. Always (re)writes AUTO tag assignments so chip filters reflect
+     * the latest metadata — that step is independent of folder placement.
      */
     suspend fun classify(book: Book): String? {
-        // groupLocked is the user's explicit "hands off" — never touch tags or folder.
+        // Locked books are user's explicit "hands off" — never touch anything.
         if (book.groupLocked) return book.folderId
 
-        // Always (re)compute scored tags so chip filters and smart views stay fresh
-        // when metadata gets backfilled (e.g. detail-page kind arrives after add-to-shelf).
+        // 1. Score & persist tags. We do this even for MANUAL-folder books so
+        // chip filters stay fresh — only folderId is sticky for them.
         val scored = tagResolver.resolve(book)
         if (scored.isNotEmpty()) {
             tagRepo.setAutoTags(book.id, scored.map { it.tagId to it.score })
         }
 
-        // For folderId, however, respect MANUAL placements — user moved it on
-        // purpose, don't second-guess them just because the auto-resolver
-        // would now pick differently.
-        if (book.folderId != null && book.tagsAssignedBy == "MANUAL") return book.folderId
+        // 2. Respect MANUAL folder placement — user moved this book on
+        // purpose, the resolver doesn't get to override.
+        if (book.folderId != null && book.tagsAssignedBy == TagAssignSource.MANUAL) {
+            return book.folderId
+        }
 
-        // Pick the primary "user-or-genre" tag for folderId. Source tags are
-        // useful as filters but make terrible folders ("起点" lumps fantasy +
-        // romance + sci-fi together), so we skip them here.
-        return scored.firstOrNull { !it.tagId.startsWith("source:") }?.tagId
-            ?: book.folderId // Don't clobber a previously-set folderId on a no-match run.
+        // 3. Try to promote the top tag into a folder (or reuse an existing one).
+        val resolvedFolder = autoFolders.resolveFolder(book, scored)
+        // If we got a folder id, use it. Otherwise keep whatever was there
+        // (don't clobber an AUTO-set folderId on a no-match re-run).
+        return resolvedFolder ?: book.folderId
     }
 
     /**
@@ -63,6 +66,9 @@ class AutoGroupClassifier @Inject constructor(
         val resolved = tagResolver.resolve(book, maxTags = 5, minScore = 0.5f)
             .firstOrNull { !it.tagId.startsWith("source:") }
             ?: return null
+        // Match either by direct id (USER tags map 1:1 to groups) or by
+        // tag-named auto-folder ("auto:builtin:玄幻" / name-equality).
         return groups.firstOrNull { it.id == resolved.tagId }
+            ?: groups.firstOrNull { it.id == "auto:${resolved.tagId}" }
     }
 }
