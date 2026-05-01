@@ -133,6 +133,33 @@ class SimulationParams(
 )
 
 /**
+ * `SimulationReadView.setIdleBitmap` 用的内容签名。
+ *
+ * 等价语义：两个 key `equals` 时，渲染出的 idle bitmap 像素一致——所以
+ * View 端可以安全跳过整个 producer。
+ *
+ * 字段选择理由：
+ * - [pageId] 用 `System.identityHashCode(page)` 而非 `page.hashCode()`：
+ *   TextPage 的 `hashCode` 实现可能基于内容相等而非身份，跨页/重排时
+ *   不同对象偶尔会撞 hash → 错误命中 dedupe。`identityHashCode` 严格
+ *   按对象身份比较。
+ * - [displayPage] 并入 key 是为了同一 TextPage 在不同 displayPage 位置
+ *   时（理论上不会发生，但防御性写法）不被 dedupe 误吞。
+ * - [w]/[h] 视图尺寸变化（系统栏切换、分屏等）必须重渲染。
+ * - [bgColor]/[bgBitmapId]/[overlayId] 主题切换 / 背景图切换时这些会变，
+ *   即使 page 对象不变也得重渲染。
+ */
+private data class SimulationIdleKey(
+    val pageId: Int,
+    val displayPage: Int,
+    val w: Int,
+    val h: Int,
+    val bgColor: Int,
+    val bgBitmapId: Int,
+    val overlayId: Int,
+)
+
+/**
  * Paged reader with configurable page-turn animation.
  */
 @Composable
@@ -368,23 +395,63 @@ private fun SimulationPager(
             // Render idle bitmap with correct theme background color
             val w = view.width
             val h = view.height
-            if (w > 0 && h > 0) {
+            // ─── 模式切换闪烁防御 ─────────────────────────────────────
+            // 在 prelayout 流式产页阶段（pages.size 还没追上 displayPage），
+            // params.pageForTurn(displayPage, 0) 会落入 PageFactory 的 fallback
+            // 路径，每次重组返回不同的"占位 TextPage"——日志 19:06:54 那段：
+            // pageCount 一直是 1，但 pageHash 却 186694352→97622661→
+            // 146198694→105840259→… 抖动了 5 次，每张都被画进 idleBitmap →
+            // 屏幕上看到"占位页内容连续闪烁"。
+            //
+            // 解法：只有当 displayPage 是 pages 列表里的合法索引时才更新
+            // idleBitmap；越界期间保留 View 现有 idleBitmap（新建 View 时为
+            // null，绘制为纯 bgColor 背景，比闪 5 张错页温和得多）。等
+            // pages 列表追上后下一次 update 会用正确内容补齐。
+            if (w > 0 && h > 0 && displayPage in pages.indices) {
                 val page = params.pageForTurn(displayPage, 0)
+                // 内容签名：相同的 (TextPage 身份, 视图尺寸, 背景颜色, 背景图,
+                // info 叠加层) → 渲染结果完全一样。SimulationReadView 拿到
+                // 同 key 会 short-circuit 整个渲染调用，避免 19:06:52 那段
+                // 同一 pageHash=215777196 在 pageCount 增长过程被反复渲染 6
+                // 次的浪费 + 闪烁。displayPage 也并入 key，跨页时不受
+                // dedupe 影响。
+                val contentKey: Any? = if (page != null) {
+                    SimulationIdleKey(
+                        pageId = System.identityHashCode(page),
+                        displayPage = displayPage,
+                        w = w,
+                        h = h,
+                        bgColor = params.bgColor,
+                        bgBitmapId = params.bgBitmap?.let(System::identityHashCode) ?: 0,
+                        overlayId = params.pageInfoOverlay?.let(System::identityHashCode) ?: 0,
+                    )
+                } else null
                 // Diagnostic — pairs with setIdleBitmap's RECV log so we can
                 // see which displayPage the wrong bitmap was rendered from.
                 AppLog.debug(
                     "PageTurnFlicker",
                     "[3a] setIdleBitmap CALLED displayPage=$displayPage" +
                         " pageHash=${page?.hashCode() ?: "null"}" +
-                        " pageCount=$pageCount viewWxH=${w}x$h",
+                        " pagesSize=${pages.size} pageCount=$pageCount viewWxH=${w}x$h" +
+                        " key=$contentKey",
                 )
-                view.setIdleBitmap(if (page != null) renderPageToBitmap(
-                    w, h, params.bgColor, page,
-                    params.titlePaint, params.contentPaint,
-                    chapterNumPaint = params.chapterNumPaint,
-                    reuseBitmap = null, bgBitmap = params.bgBitmap,
-                    pageInfoOverlay = params.pageInfoOverlay,
-                ) else null)
+                view.setIdleBitmap(key = contentKey) {
+                    if (page != null) renderPageToBitmap(
+                        w, h, params.bgColor, page,
+                        params.titlePaint, params.contentPaint,
+                        chapterNumPaint = params.chapterNumPaint,
+                        reuseBitmap = null, bgBitmap = params.bgBitmap,
+                        pageInfoOverlay = params.pageInfoOverlay,
+                    ) else null
+                }
+            } else if (w > 0 && h > 0) {
+                // 仅记日志，不动 idleBitmap——便于回看时确认"被故意跳过"
+                // 而不是某个分支静默丢失了。
+                AppLog.debug(
+                    "PageTurnFlicker",
+                    "[3a] setIdleBitmap SKIPPED out-of-range displayPage=$displayPage" +
+                        " pagesSize=${pages.size} pageCount=$pageCount viewWxH=${w}x$h",
+                )
             }
         },
         modifier = modifier.fillMaxSize(),

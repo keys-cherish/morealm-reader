@@ -6,9 +6,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -17,6 +19,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -99,6 +103,24 @@ fun BookSourceManageScreen(
             (it.bookSourceGroup ?: "").contains(searchQuery, ignoreCase = true)
         }
     }
+
+    // ── 分组模式（持久化字符串 → 强类型 enum） ─────────────────────────
+    // 字符串容错：未知值 fromKey 落到 NONE，旧版本写脏值或用户手改 DataStore 不会崩。
+    val groupModeStr by viewModel.groupMode.collectAsStateWithLifecycle()
+    val groupMode = SourceGroupMode.fromKey(groupModeStr)
+    // 分组结果只在源/搜索/模式变化时重算一次，避免每次重组遍历整个 source 列表。
+    val grouped = remember(filteredSources, groupMode) {
+        groupSources(filteredSources, groupMode)
+    }
+    // 折叠组的 key 集合：rememberSaveable 让旋转 / 进程死亡也能保留状态。
+    // 切换分组方式时 key 含义变了（比如从域名切到类型），旧 key 全部失效，主动清空。
+    val collapsedGroups = rememberSaveable(
+        saver = listSaver<MutableSet<String>, String>(
+            save = { it.toList() },
+            restore = { it.toMutableSet() },
+        ),
+    ) { mutableSetOf() }
+    LaunchedEffect(groupMode) { collapsedGroups.clear() }
 
     Scaffold(
         topBar = {
@@ -195,6 +217,13 @@ fun BookSourceManageScreen(
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
                     cursorColor = MaterialTheme.colorScheme.primary),
+            )
+
+            // 分组方式 chip 行 —— 与搜索框联动（先过滤后分组），4 选 1。
+            // 横向滚动避免在小屏 / 大字号设置下挤压。
+            GroupModeChips(
+                selected = groupMode,
+                onSelect = { viewModel.setGroupMode(it.key) },
             )
 
             // Stats bar
@@ -302,20 +331,67 @@ fun BookSourceManageScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    items(filteredSources, key = { it.bookSourceUrl }) { source ->
-                        val checkResult = checkResults[source.bookSourceUrl]
-                        // 不再 inline 跑 evalJS —— 直接查 ViewModel 预算的 map。
-                        val isLoggedIn = loginStatusMap[source.bookSourceUrl] == true
-                        SourceItem(
-                            source = source,
-                            checkResult = checkResult,
-                            isLoggedIn = isLoggedIn,
-                            onToggle = { viewModel.toggleSource(source) },
-                            onEdit = { editingSource = source },
-                            onDelete = { viewModel.deleteSource(source) },
-                            onLogin = { loginViewModel.showLoginDialog(source) },
-                            onLogout = { loginViewModel.logout(source) },
-                        )
+                    if (groupMode == SourceGroupMode.NONE) {
+                        // 不分组：保留旧行为，单层 items。
+                        items(filteredSources, key = { it.bookSourceUrl }) { source ->
+                            val checkResult = checkResults[source.bookSourceUrl]
+                            // 不再 inline 跑 evalJS —— 直接查 ViewModel 预算的 map。
+                            val isLoggedIn = loginStatusMap[source.bookSourceUrl] == true
+                            SourceItem(
+                                source = source,
+                                checkResult = checkResult,
+                                isLoggedIn = isLoggedIn,
+                                onToggle = { viewModel.toggleSource(source) },
+                                onEdit = { editingSource = source },
+                                onDelete = { viewModel.deleteSource(source) },
+                                onLogin = { loginViewModel.showLoginDialog(source) },
+                                onLogout = { loginViewModel.logout(source) },
+                            )
+                        }
+                    } else {
+                        // 分组：每组一个 GroupHeader item，下面跟（折叠时不渲染）该组的 items。
+                        // SourceItem 的 LazyColumn key 加 label 前缀避免 group_name 模式下
+                        // 「同一书源在多个分组重复出现」（实际单字段不会重复，但当作不变量
+                        // 维护，以后扩到多 tag 分组时也安全）。
+                        //
+                        // 解构变量起名 `groupItems`，故意不叫 `items` —— 否则会遮蔽
+                        // LazyListScope 上的 `items()` DSL 函数，编译期 unresolved。
+                        grouped.forEach { (label, groupItems) ->
+                            item(key = "header_$label") {
+                                GroupHeader(
+                                    label = label,
+                                    total = groupItems.size,
+                                    enabled = groupItems.count { it.enabled },
+                                    collapsed = label in collapsedGroups,
+                                    onToggleCollapsed = {
+                                        if (label in collapsedGroups) collapsedGroups.remove(label)
+                                        else collapsedGroups.add(label)
+                                    },
+                                    onEnableAll = {
+                                        viewModel.setEnabledForUrls(groupItems.map { it.bookSourceUrl }, true)
+                                    },
+                                    onDisableAll = {
+                                        viewModel.setEnabledForUrls(groupItems.map { it.bookSourceUrl }, false)
+                                    },
+                                )
+                            }
+                            if (label !in collapsedGroups) {
+                                items(groupItems, key = { "${label}::${it.bookSourceUrl}" }) { source ->
+                                    val checkResult = checkResults[source.bookSourceUrl]
+                                    val isLoggedIn = loginStatusMap[source.bookSourceUrl] == true
+                                    SourceItem(
+                                        source = source,
+                                        checkResult = checkResult,
+                                        isLoggedIn = isLoggedIn,
+                                        onToggle = { viewModel.toggleSource(source) },
+                                        onEdit = { editingSource = source },
+                                        onDelete = { viewModel.deleteSource(source) },
+                                        onLogin = { loginViewModel.showLoginDialog(source) },
+                                        onLogout = { loginViewModel.logout(source) },
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -570,6 +646,208 @@ private fun SourceItem(
                 Icon(Icons.Default.Delete, "删除",
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
                     modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}
+
+// ─── 分组功能 ────────────────────────────────────────────────────────────
+//
+// 这一段在文件尾部独立成块：
+//   1. SourceGroupMode 与 BookSourceManageScreen 强耦合（key 字符串和 AppPreferences
+//      约定一一对应），不值得抽到 domain 层；
+//   2. 与现有 SourceItem 一样属于"内部组件"，对外不暴露；
+//   3. 顺序上把 enum/helpers 放在 composable 之前，让阅读时先看到状态模型。
+
+/**
+ * 列表分组方式。`key` 字段用于 DataStore 持久化，[label] 用于 chip UI 显示。
+ *
+ * 为什么用 `String` 而不是 `enum.ordinal`？序列化稳定性：今后增删枚举值（比如加
+ * "按可用性"、"按响应时间"分组）时，旧用户的持久化值依旧能正确解析或安全 fallback；
+ * 用 ordinal 需要小心增减位置。
+ */
+private enum class SourceGroupMode(val key: String, val label: String) {
+    NONE("none", "不分组"),
+    GROUP_NAME("group_name", "按分组"),
+    DOMAIN("domain", "按域名"),
+    TYPE("type", "按类型"),
+    ;
+
+    companion object {
+        fun fromKey(k: String): SourceGroupMode =
+            entries.firstOrNull { it.key == k } ?: NONE
+    }
+}
+
+/**
+ * BookSource.bookSourceType → 中文 label。
+ *
+ * 当前 schema（见 BookSource.kt 注释）只定义了 0..3 四类；超出范围的值（旧版本写脏数据
+ * 或 Legado 备份带来非标准类型）一律落到「其他」组而不是丢失/崩溃。
+ */
+private fun typeLabel(t: Int): String = when (t) {
+    0 -> "文本"
+    1 -> "音频"
+    2 -> "图片"
+    3 -> "文件"
+    else -> "其他"
+}
+
+/**
+ * 从 `bookSourceUrl` 提取主机名。`java.net.URI` 解析失败（用户在 url 里写了协议外的
+ * 奇形怪状字符）时降级为整段 URL —— 比抛异常或留空都友好：用户至少能看到一个唯一的
+ * 分组，自己识别去补全。
+ */
+private fun extractDomain(url: String): String =
+    runCatching {
+        val uri = java.net.URI(url.trim())
+        uri.host?.takeIf { it.isNotBlank() } ?: url
+    }.getOrElse { url }
+
+/**
+ * 把一组书源按 [mode] 划分成 `(label, sources)` 列表。
+ *
+ * - NONE：返回空（caller 自己用 items 平铺）；
+ * - GROUP_NAME：以 `bookSourceGroup` trim 后的全字符串为 key；空字符串归到「未分组」；
+ *               不拆分逗号分隔（与 Legado 一致：多 tag 是同一个组）；
+ * - DOMAIN：以 [extractDomain] 结果为 key，按字典序输出；
+ * - TYPE：以 [typeLabel] 结果为 key，输出顺序固定为「文本→音频→图片→文件→其他」，
+ *         比字典序更符合用户期望（用户最常用的"文本"永远排第一）。
+ */
+private fun groupSources(
+    sources: List<BookSource>,
+    mode: SourceGroupMode,
+): List<Pair<String, List<BookSource>>> = when (mode) {
+    SourceGroupMode.NONE -> emptyList()
+    SourceGroupMode.GROUP_NAME -> sources
+        .groupBy { (it.bookSourceGroup ?: "").trim().ifBlank { "未分组" } }
+        .toSortedMap()
+        .map { (k, v) -> k to v }
+    SourceGroupMode.DOMAIN -> sources
+        .groupBy { extractDomain(it.bookSourceUrl) }
+        .toSortedMap()
+        .map { (k, v) -> k to v }
+    SourceGroupMode.TYPE -> {
+        val groups = sources.groupBy { typeLabel(it.bookSourceType) }
+        // 固定顺序：文本/音频/图片/文件/其他。空组不出现（mapNotNull）。
+        listOf("文本", "音频", "图片", "文件", "其他")
+            .mapNotNull { name -> groups[name]?.let { name to it } }
+    }
+}
+
+/**
+ * 分组方式 chip 行。横向滚动避免在小屏 / 大字号下挤压。
+ *
+ * 不用 `SegmentedButton` 是因为 SegmentedButton 不支持「不勾选任何项」的状态，
+ * 而 FilterChip 多选/单选语义都够用。这里用单选。
+ */
+@Composable
+private fun GroupModeChips(
+    selected: SourceGroupMode,
+    onSelect: (SourceGroupMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SourceGroupMode.entries.forEach { mode ->
+            FilterChip(
+                selected = selected == mode,
+                onClick = { onSelect(mode) },
+                label = { Text(mode.label, style = MaterialTheme.typography.labelMedium) },
+                shape = MaterialTheme.shapes.small,
+            )
+        }
+    }
+}
+
+/**
+ * 一个分组的标题行：折叠箭头 + 组名 + 「启用/总数」徽标 + 三点菜单（全启用/全停用）。
+ *
+ * 整行点击切折叠态；批量操作走右上角 DropdownMenu，避免误触。菜单项里把数量
+ * 直接写进文案（"全部启用 (12)"），让用户在确认前就看到影响范围。
+ */
+@Composable
+private fun GroupHeader(
+    label: String,
+    total: Int,
+    enabled: Int,
+    collapsed: Boolean,
+    onToggleCollapsed: () -> Unit,
+    onEnableAll: () -> Unit,
+    onDisableAll: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggleCollapsed)
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (collapsed) Icons.Default.KeyboardArrowRight else Icons.Default.KeyboardArrowDown,
+            null,
+            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "$enabled / $total",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+        )
+        Spacer(Modifier.weight(1f))
+        Box {
+            IconButton(
+                onClick = { menuExpanded = true },
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    "组操作",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                )
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text("全部启用 ($total)") },
+                    leadingIcon = {
+                        Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(18.dp))
+                    },
+                    onClick = {
+                        onEnableAll()
+                        menuExpanded = false
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("全部停用 ($total)") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Cancel, null, modifier = Modifier.size(18.dp))
+                    },
+                    onClick = {
+                        onDisableAll()
+                        menuExpanded = false
+                    },
+                )
             }
         }
     }

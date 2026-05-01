@@ -38,6 +38,15 @@ class ReaderSettingsController(
     val volumeKeyPage: StateFlow<Boolean> = prefs.volumeKeyPage
         .stateIn(scope, SharingStarted.Eagerly, true)
 
+    val volumeKeyReverse: StateFlow<Boolean> = prefs.volumeKeyReverse
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    val headsetButtonPage: StateFlow<Boolean> = prefs.headsetButtonPage
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    val volumeKeyLongPress: StateFlow<String> = prefs.volumeKeyLongPress
+        .stateIn(scope, SharingStarted.Eagerly, "off")
+
     val screenTimeout: StateFlow<Int> = prefs.screenTimeout
         .stateIn(scope, SharingStarted.Eagerly, -1)
 
@@ -75,6 +84,11 @@ class ReaderSettingsController(
     val footerLeft: StateFlow<String> = prefs.footerLeft.stateIn(scope, SharingStarted.Eagerly, "battery_time")
     val footerCenter: StateFlow<String> = prefs.footerCenter.stateIn(scope, SharingStarted.Eagerly, "none")
     val footerRight: StateFlow<String> = prefs.footerRight.stateIn(scope, SharingStarted.Eagerly, "page_progress")
+
+    /** 选区 mini-menu 显示 / 顺序 / 主行分配的用户自定义。reader 端只读，订阅 prefs 即时生效。 */
+    val selectionMenuConfig: StateFlow<com.morealm.app.domain.entity.SelectionMenuConfig> =
+        prefs.selectionMenuConfig
+            .stateIn(scope, SharingStarted.Eagerly, com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT)
 
     // ══════════════════════════════════════════════════════════════
     // Visual style (Room) — single source of truth: ReaderStyle

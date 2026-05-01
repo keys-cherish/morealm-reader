@@ -44,6 +44,7 @@ fun ListenScreen(
     val selectedSpeed by viewModel.selectedSpeed.collectAsStateWithLifecycle()
     val voices by viewModel.voices.collectAsStateWithLifecycle()
     val selectedVoice by viewModel.selectedVoice.collectAsStateWithLifecycle()
+    val voicesRefreshing by viewModel.voicesRefreshing.collectAsStateWithLifecycle()
 
     val isActive = playback.bookTitle.isNotBlank()
     val progress = if (playback.totalParagraphs > 0)
@@ -253,6 +254,10 @@ fun ListenScreen(
                 voices = voices,
                 selectedVoice = selectedVoice,
                 onVoiceChange = viewModel::selectVoice,
+                engineId = selectedEngine,
+                voicesCount = voices.size,
+                isRefreshing = voicesRefreshing,
+                onRefresh = viewModel::refreshVoiceListNow,
             )
 
             if (voices.isNotEmpty()) {
@@ -311,8 +316,12 @@ private fun TtsVoiceSelector(
     voices: List<TtsVoice>,
     selectedVoice: String,
     onVoiceChange: (String) -> Unit,
+    engineId: String,
+    voicesCount: Int,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
 ) {
-    if (voices.isEmpty()) return
+    if (voices.isEmpty() && !isRefreshing && engineId !in setOf("edge", "system")) return
 
     var showVoiceMenu by remember { mutableStateOf(false) }
     val displayName = if (selectedVoice.isBlank()) {
@@ -322,14 +331,47 @@ private fun TtsVoiceSelector(
             ?: selectedVoice.substringAfterLast("#").take(28)
     }
 
-    Text("语音", style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onBackground)
+    // 标题行：左"语音"，右刷新按钮（仅 edge / system 可刷，其它引擎刷新无意义）
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "语音",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f),
+        )
+        if (engineId == "edge" || engineId == "system") {
+            IconButton(
+                onClick = onRefresh,
+                enabled = !isRefreshing,
+                modifier = Modifier.size(28.dp),
+            ) {
+                if (isRefreshing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 1.5.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "刷新音色列表",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+    }
     Spacer(Modifier.height(8.dp))
     Box {
         OutlinedButton(
             onClick = { showVoiceMenu = true },
             modifier = Modifier.fillMaxWidth().height(40.dp),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            enabled = voices.isNotEmpty(),
         ) {
             Text(
                 displayName,
@@ -370,6 +412,20 @@ private fun TtsVoiceSelector(
                 )
             }
         }
+    }
+    // 数据来源 hint —— 让用户清楚音色列表是哪儿来的，刷新按钮才有"我能干预什么"的语义
+    Spacer(Modifier.height(4.dp))
+    val hint = when (engineId) {
+        "edge" -> "数据来源：Edge 远程列表（24h 文件缓存，共 $voicesCount 个）"
+        "system" -> "数据来源：本机已安装的 TTS 引擎（共 $voicesCount 个中文音色）"
+        else -> ""
+    }
+    if (hint.isNotEmpty()) {
+        Text(
+            hint,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+        )
     }
 }
 

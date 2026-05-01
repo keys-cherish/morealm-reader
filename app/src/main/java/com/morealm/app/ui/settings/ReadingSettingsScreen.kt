@@ -14,6 +14,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,6 +41,9 @@ fun ReadingSettingsScreen(
     val pageAnim by viewModel.pageAnim.collectAsStateWithLifecycle()
     val tapLeftAction by viewModel.tapLeftAction.collectAsStateWithLifecycle()
     val volumeKeyPage by viewModel.volumeKeyPage.collectAsStateWithLifecycle()
+    val volumeKeyReverse by viewModel.volumeKeyReverse.collectAsStateWithLifecycle()
+    val headsetButtonPage by viewModel.headsetButtonPage.collectAsStateWithLifecycle()
+    val volumeKeyLongPress by viewModel.volumeKeyLongPress.collectAsStateWithLifecycle()
     val resumeLastRead by viewModel.resumeLastRead.collectAsStateWithLifecycle()
     val longPressUnderline by viewModel.longPressUnderline.collectAsStateWithLifecycle()
     val screenTimeout by viewModel.screenTimeout.collectAsStateWithLifecycle()
@@ -51,6 +56,8 @@ fun ReadingSettingsScreen(
     var showAnimDialog by remember { mutableStateOf(false) }
     var showTapLeftDialog by remember { mutableStateOf(false) }
     var showTimeoutDialog by remember { mutableStateOf(false) }
+    var showLongPressDialog by remember { mutableStateOf(false) }
+    var showSelectionMenuDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -90,9 +97,44 @@ fun ReadingSettingsScreen(
             SettingsDivider()
             SettingsToggleRow("音量键翻页", volumeKeyPage) { viewModel.setVolumeKeyPage(it) }
             SettingsDivider()
+            // 仅在开启了"音量键翻页"时显示反转和长按选项，避免页面塞太多无意义条目
+            if (volumeKeyPage) {
+                SettingsToggleRow(
+                    title = "音量键方向反转",
+                    checked = volumeKeyReverse,
+                ) { viewModel.setVolumeKeyReverse(it) }
+                SettingsDivider()
+                SettingsClickRow(
+                    title = "音量键长按",
+                    value = volumeKeyLongPressLabel(volumeKeyLongPress),
+                    onClick = { showLongPressDialog = true },
+                )
+                SettingsDivider()
+            }
+            SettingsToggleRow(
+                title = "耳机/蓝牙翻页器",
+                checked = headsetButtonPage,
+            ) { viewModel.setHeadsetButtonPage(it) }
+            SettingsDivider()
             SettingsToggleRow("启动后继续上次阅读", resumeLastRead) { viewModel.setResumeLastRead(it) }
             SettingsDivider()
             SettingsToggleRow("长按文字划线", longPressUnderline) { viewModel.setLongPressUnderline(it) }
+            SettingsDivider()
+            // 选区 mini-menu 按钮自定义入口 —— 显示当前主行项数作 hint，
+            // 让用户不打开 dialog 也能瞄一眼当前配置。
+            run {
+                val cfg by viewModel.selectionMenuConfig.collectAsStateWithLifecycle()
+                SettingsClickRow(
+                    title = "选区菜单按钮",
+                    value = "主行 ${cfg.mainCount()}/3",
+                    onClick = {
+                        com.morealm.app.core.log.AppLog.debug(
+                            "SelectionMenu", "open config dialog (current: ${cfg.summary()})",
+                        )
+                        showSelectionMenuDialog = true
+                    },
+                )
+            }
 
             Spacer(Modifier.height(16.dp))
 
@@ -261,6 +303,21 @@ fun ReadingSettingsScreen(
             onDismiss = { showTimeoutDialog = false },
         )
     }
+    if (showLongPressDialog) {
+        VolumeKeyLongPressDialog(
+            current = volumeKeyLongPress,
+            onSelect = { viewModel.setVolumeKeyLongPress(it); showLongPressDialog = false },
+            onDismiss = { showLongPressDialog = false },
+        )
+    }
+    if (showSelectionMenuDialog) {
+        val cfg by viewModel.selectionMenuConfig.collectAsStateWithLifecycle()
+        SelectionMenuConfigDialog(
+            config = cfg,
+            onSave = { viewModel.setSelectionMenuConfig(it) },
+            onDismiss = { showSelectionMenuDialog = false },
+        )
+    }
 }
 
 // ── Helper composables ──
@@ -350,6 +407,27 @@ private fun screenTimeoutLabel(seconds: Int): String = when (seconds) {
     300 -> "5分钟"
     600 -> "10分钟"
     else -> "${seconds}秒"
+}
+
+private fun volumeKeyLongPressLabel(mode: String): String = when (mode) {
+    "off" -> "默认（系统按键重复）"
+    "page" -> "连续翻页"
+    "chapter" -> "翻章"
+    else -> "默认"
+}
+
+@Composable
+private fun VolumeKeyLongPressDialog(
+    current: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val options = listOf(
+        "off" to "默认（系统按键重复）",
+        "page" to "连续翻页",
+        "chapter" to "翻章（长按 ~1 秒）",
+    )
+    BottomSheetPicker("音量键长按", options, current, onSelect, onDismiss)
 }
 
 @Composable
@@ -511,4 +589,227 @@ private fun BottomSheetPicker(
         },
         confirmButton = {},
     )
+}
+
+// ── 选区菜单按钮自定义 ─────────────────────────────────────────────────
+//
+// 设计：用户在 6 个 SelectionMenuItem 之间分配位置（MAIN/EXPANDED/HIDDEN），
+// 通过上下箭头调整列表顺序。位置选择用三段 chip；项数硬约束 "MAIN ≤ 3"，
+// 超额时用 Toast 反馈而不是默默拒绝（用户体验上不让点击没反应）。列表顺序
+// 保存时一并落 DataStore；同位置桶内的相对顺序就是渲染顺序。
+//
+// 日志埋点（tag = SelectionMenu）：
+//   - 打开 dialog → DEBUG（在调用方）
+//   - MAIN 满 3 触发 Toast 拦截 → DEBUG（带尝试升级的 item 名，方便看用户点了什么）
+//   - 重置默认 → INFO（草稿层面，未必落盘）
+//   - 保存 → INFO（在 ViewModel 里打）
+//   - 取消（草稿改过但未保存）→ DEBUG，避免"打开就关"也刷一行
+@Composable
+private fun SelectionMenuConfigDialog(
+    config: com.morealm.app.domain.entity.SelectionMenuConfig,
+    onSave: (com.morealm.app.domain.entity.SelectionMenuConfig) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    // 本地草稿 —— 用户操作直接改它，按"保存"才回调 onSave；按"取消"丢弃。
+    // SnapshotStateList 让 swap/replace 自动触发重组。
+    val draft = remember(config) {
+        androidx.compose.runtime.mutableStateListOf<com.morealm.app.domain.entity.SelectionMenuConfig.SelectionMenuEntry>().apply {
+            addAll(config.items)
+        }
+    }
+    val mainCount = draft.count { it.position == com.morealm.app.domain.entity.SelectionMenuPosition.MAIN }
+
+    // 关闭时统一走 onDismiss，按需打 DEBUG（仅在草稿改动过才打）。
+    val handleDismiss = {
+        if (draft.toList() != config.items) {
+            com.morealm.app.core.log.AppLog.debug(
+                "SelectionMenu", "dismiss without save (draft differed from saved)",
+            )
+        }
+        onDismiss()
+    }
+
+    AlertDialog(
+        onDismissRequest = handleDismiss,
+        title = { Text("选区菜单按钮") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "主行最多 3 个，始终可见；折叠行点「更多」展开；隐藏不渲染。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+                Spacer(Modifier.height(12.dp))
+                draft.forEachIndexed { index, entry ->
+                    SelectionMenuItemRow(
+                        entry = entry,
+                        canMoveUp = index > 0,
+                        canMoveDown = index < draft.lastIndex,
+                        onPositionChange = { newPos ->
+                            // 想升级到 MAIN 但已满 3 个 → Toast 拦截，draft 不变；
+                            // 同时打 DEBUG 让排查"为什么我点了没反应"有据可查。
+                            if (newPos == com.morealm.app.domain.entity.SelectionMenuPosition.MAIN &&
+                                entry.position != com.morealm.app.domain.entity.SelectionMenuPosition.MAIN &&
+                                mainCount >= 3
+                            ) {
+                                com.morealm.app.core.log.AppLog.debug(
+                                    "SelectionMenu",
+                                    "block promote-to-MAIN: item=${entry.item.name} (mainCount already 3)",
+                                )
+                                android.widget.Toast.makeText(
+                                    context, "主行最多 3 个，先把其他按钮移出主行",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                                return@SelectionMenuItemRow
+                            }
+                            draft[index] = entry.copy(position = newPos)
+                        },
+                        onMoveUp = {
+                            if (index > 0) {
+                                val tmp = draft[index]
+                                draft[index] = draft[index - 1]
+                                draft[index - 1] = tmp
+                            }
+                        },
+                        onMoveDown = {
+                            if (index < draft.lastIndex) {
+                                val tmp = draft[index]
+                                draft[index] = draft[index + 1]
+                                draft[index + 1] = tmp
+                            }
+                        },
+                    )
+                    if (index < draft.lastIndex) {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                // ViewModel.setSelectionMenuConfig 内部会打 INFO 日志，这里不重复
+                onSave(
+                    com.morealm.app.domain.entity.SelectionMenuConfig(draft.toList()).normalize(),
+                )
+                onDismiss()
+            }) { Text("保存") }
+        },
+        dismissButton = {
+            // 重置 + 取消并排：重置只改 draft（INFO 记录意图），用户还能继续编辑或保存；
+            // 取消直接关闭丢弃。
+            Row {
+                TextButton(onClick = {
+                    com.morealm.app.core.log.AppLog.info(
+                        "SelectionMenu", "draft reset to DEFAULT (not yet persisted)",
+                    )
+                    draft.clear()
+                    draft.addAll(com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT.items)
+                }) { Text("重置") }
+                TextButton(onClick = handleDismiss) { Text("取消") }
+            }
+        },
+    )
+}
+
+/**
+ * 单行：item 名称 + 三段位置选择 + 上/下移动。
+ * 在 AlertDialog 里宽度有限，用紧凑 chip 比下拉菜单点击次数更少。
+ */
+@Composable
+private fun SelectionMenuItemRow(
+    entry: com.morealm.app.domain.entity.SelectionMenuConfig.SelectionMenuEntry,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onPositionChange: (com.morealm.app.domain.entity.SelectionMenuPosition) -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+) {
+    Column(modifier = Modifier.padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                entry.item.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = onMoveUp,
+                enabled = canMoveUp,
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    Icons.Default.KeyboardArrowUp,
+                    contentDescription = "上移",
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            IconButton(
+                onClick = onMoveDown,
+                enabled = canMoveDown,
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = "下移",
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            PositionChip(
+                label = "主行",
+                selected = entry.position == com.morealm.app.domain.entity.SelectionMenuPosition.MAIN,
+                onClick = { onPositionChange(com.morealm.app.domain.entity.SelectionMenuPosition.MAIN) },
+                modifier = Modifier.weight(1f),
+            )
+            PositionChip(
+                label = "折叠",
+                selected = entry.position == com.morealm.app.domain.entity.SelectionMenuPosition.EXPANDED,
+                onClick = { onPositionChange(com.morealm.app.domain.entity.SelectionMenuPosition.EXPANDED) },
+                modifier = Modifier.weight(1f),
+            )
+            PositionChip(
+                label = "隐藏",
+                selected = entry.position == com.morealm.app.domain.entity.SelectionMenuPosition.HIDDEN,
+                onClick = { onPositionChange(com.morealm.app.domain.entity.SelectionMenuPosition.HIDDEN) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/** 紧凑的位置标签 chip —— 选中态 primary，未选 surfaceVariant。 */
+@Composable
+private fun PositionChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val container = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceVariant
+    val content = if (selected) MaterialTheme.colorScheme.onPrimary
+        else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        onClick = onClick,
+        color = container,
+        contentColor = content,
+        shape = RoundedCornerShape(8.dp),
+        modifier = modifier,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+    }
 }
