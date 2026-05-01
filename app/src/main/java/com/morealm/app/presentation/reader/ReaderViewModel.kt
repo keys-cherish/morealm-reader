@@ -401,6 +401,16 @@ class ReaderViewModel @Inject constructor(
                         // Service-side host already handled the actual pause/resume;
                         // ViewModel doesn't need to respond — UI observes via playbackState.
                     }
+                    is TtsEventBus.Event.Error -> {
+                        // Minimal handler: log so the failure isn't silent. Surfacing
+                        // a user-visible toast / snackbar / "open TTS settings" CTA
+                        // belongs to a follow-up — leaving a TODO breadcrumb so the
+                        // sealed `when` stays exhaustive without hiding the gap.
+                        AppLog.warn(
+                            "Reader",
+                            "TTS error: ${event.message} (canOpenSettings=${event.canOpenSettings})",
+                        )
+                    }
                 }
             }
         }
