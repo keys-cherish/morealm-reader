@@ -19,6 +19,10 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.Calendar
 import javax.inject.Inject
 
@@ -181,23 +185,14 @@ class ThemeViewModel @Inject constructor(
         val theme = activeTheme.value ?: return
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val jsonStr = json.encodeToString(
-                    ThemeExportData.serializer(),
-                    ThemeExportData(
-                        name = theme.name,
-                        author = theme.author,
-                        isNightTheme = theme.isNightTheme,
-                        primaryColor = theme.primaryColor,
-                        accentColor = theme.accentColor,
-                        backgroundColor = theme.backgroundColor,
-                        surfaceColor = theme.surfaceColor,
-                        onBackgroundColor = theme.onBackgroundColor,
-                        bottomBackground = theme.bottomBackground,
-                        readerBackground = theme.readerBackground,
-                        readerTextColor = theme.readerTextColor,
-                        customCss = theme.customCss,
-                    )
+                // 用 bundle 信封包一层并打上 format/version 标识。这样以后 import 端
+                // 不必再用「字段名嗅探」（"themeName" → Legado / "name" → MoRealm）
+                // 这种脆弱的方式做识别，新增字段也不会触发误判。旧版无 format 字段
+                // 的导出仍然兼容（importThemeFromUri 走 fallback 分支）。
+                val bundle = MoRealmThemeBundle(
+                    themes = listOf(theme.toExportData())
                 )
+                val jsonStr = json.encodeToString(MoRealmThemeBundle.serializer(), bundle)
                 context.contentResolver.openOutputStream(outputUri)?.use { out ->
                     out.write(jsonStr.toByteArray(Charsets.UTF_8))
                 }
@@ -208,14 +203,74 @@ class ThemeViewModel @Inject constructor(
         }
     }
 
-    /** Import theme from a JSON URI */
+    /** Export every user-created / user-imported theme as a single bundle JSON.
+     *  Excludes the 6 built-in themes (those ship with the app and re-importing
+     *  them just creates noise). Bundle uses the same `morealm-theme` envelope
+     *  as single-theme export so import doesn't need a separate code path. */
+    fun exportAllCustomThemes(outputUri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val themes = themeRepo.getCustomThemesSnapshot()
+                if (themes.isEmpty()) {
+                    AppLog.info("Theme", "No custom themes to export")
+                    return@launch
+                }
+                val bundle = MoRealmThemeBundle(
+                    themes = themes.map { it.toExportData() }
+                )
+                val jsonStr = json.encodeToString(MoRealmThemeBundle.serializer(), bundle)
+                context.contentResolver.openOutputStream(outputUri)?.use { out ->
+                    out.write(jsonStr.toByteArray(Charsets.UTF_8))
+                }
+                AppLog.info("Theme", "Exported ${themes.size} custom theme(s)")
+            } catch (e: Exception) {
+                AppLog.error("Theme", "Export-all failed", e)
+            }
+        }
+    }
+
+    /** Import theme from a JSON URI.
+     *
+     *  Format detection priority:
+     *    1. JsonObject with `format == "morealm-theme"` → new MoRealm bundle
+     *    2. JsonObject with `themeName` field → Legado single
+     *    3. JsonArray whose first element has `themeName` → Legado array
+     *    4. Otherwise → legacy MoRealm single (raw `ThemeExportData`)
+     *
+     *  Step 1 is preferred because string-field sniffing (steps 2/3/4) breaks
+     *  the moment either side adds a colliding field name. The version field
+     *  is reserved for future schema migrations; v1 is the only version today. */
     fun importThemeFromUri(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val jsonText = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: return@launch
+                val jsonText = context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader()?.readText() ?: return@launch
                 val trimmed = jsonText.trim()
-                if (trimmed.startsWith("[") || trimmed.contains("\"themeName\"")) {
-                    val themes = if (trimmed.startsWith("[")) {
+                val parsed = runCatching { json.parseToJsonElement(trimmed) }.getOrNull()
+
+                // Path 1: new MoRealm bundle with explicit format marker.
+                if (parsed is JsonObject &&
+                    parsed["format"]?.jsonPrimitive?.contentOrNull == MoRealmThemeBundle.FORMAT
+                ) {
+                    val bundle = json.decodeFromString(
+                        MoRealmThemeBundle.serializer(), trimmed
+                    )
+                    val saved = bundle.themes.map { data ->
+                        val theme = data.toEntity()
+                        themeRepo.saveAndActivate(theme)
+                        theme
+                    }
+                    saved.firstOrNull()?.let { themeRepo.activateTheme(it.id) }
+                    AppLog.info("Theme", "Imported MoRealm bundle (${saved.size} theme(s))")
+                    return@launch
+                }
+
+                // Path 2/3: Legado format — array or single object with themeName.
+                val isLegadoArray = parsed is JsonArray &&
+                    (parsed.firstOrNull() as? JsonObject)?.containsKey("themeName") == true
+                val isLegadoSingle = parsed is JsonObject && parsed.containsKey("themeName")
+                if (isLegadoArray || isLegadoSingle) {
+                    val themes = if (isLegadoArray) {
                         themeRepo.importLegadoThemes(trimmed)
                     } else {
                         listOf(themeRepo.importLegadoTheme(trimmed))
@@ -224,30 +279,77 @@ class ThemeViewModel @Inject constructor(
                     AppLog.info("Theme", "Imported Legado themes: ${themes.size}")
                     return@launch
                 }
+
+                // Path 4: legacy raw ThemeExportData (pre-bundle exports). No format
+                // field, no themeName, just MoRealm fields directly. Kept for backward
+                // compatibility with files exported before the bundle envelope landed.
                 val data = json.decodeFromString(ThemeExportData.serializer(), trimmed)
-                val theme = ThemeEntity(
-                    id = "imported_${data.name.hashCode()}_${System.currentTimeMillis()}",
-                    name = data.name,
-                    author = data.author,
-                    isBuiltin = false,
-                    isNightTheme = data.isNightTheme,
-                    primaryColor = data.primaryColor,
-                    accentColor = data.accentColor,
-                    backgroundColor = data.backgroundColor,
-                    surfaceColor = data.surfaceColor,
-                    onBackgroundColor = data.onBackgroundColor,
-                    bottomBackground = data.bottomBackground,
-                    readerBackground = data.readerBackground,
-                    readerTextColor = data.readerTextColor,
-                    customCss = data.customCss,
-                )
+                val theme = data.toEntity()
                 themeRepo.saveAndActivate(theme)
-                AppLog.info("Theme", "Imported theme: ${data.name}")
+                AppLog.info("Theme", "Imported legacy theme: ${data.name}")
             } catch (e: Exception) {
                 AppLog.error("Theme", "Import failed", e)
             }
         }
     }
+}
+
+/** Stable id for re-imports — same source name produces the same id, so
+ *  re-importing an updated copy *upserts* instead of stacking duplicates.
+ *  Matches Legado's behavior (`addConfig` replaces by themeName). Earlier
+ *  versions appended `System.currentTimeMillis()` here, which let stale
+ *  copies pile up in the database — that's been removed. */
+private fun ThemeExportData.toEntity(): ThemeEntity = ThemeEntity(
+    id = "imported_${name.hashCode()}",
+    name = name,
+    author = author,
+    isBuiltin = false,
+    isNightTheme = isNightTheme,
+    primaryColor = primaryColor,
+    accentColor = accentColor,
+    backgroundColor = backgroundColor,
+    surfaceColor = surfaceColor,
+    onBackgroundColor = onBackgroundColor,
+    bottomBackground = bottomBackground,
+    readerBackground = readerBackground,
+    readerTextColor = readerTextColor,
+    transparentBars = transparentBars,
+    backgroundImageUri = backgroundImageUri,
+    customCss = customCss,
+)
+
+private fun ThemeEntity.toExportData(): ThemeExportData = ThemeExportData(
+    name = name,
+    author = author,
+    isNightTheme = isNightTheme,
+    primaryColor = primaryColor,
+    accentColor = accentColor,
+    backgroundColor = backgroundColor,
+    surfaceColor = surfaceColor,
+    onBackgroundColor = onBackgroundColor,
+    bottomBackground = bottomBackground,
+    readerBackground = readerBackground,
+    readerTextColor = readerTextColor,
+    transparentBars = transparentBars,
+    // Don't bake `texture:paper` and other built-in scheme URIs into exports —
+    // they only mean something inside MoRealm. Skip non-file/non-http URIs.
+    backgroundImageUri = backgroundImageUri?.takeIf {
+        it.startsWith("file://") || it.startsWith("http", true)
+    },
+    customCss = customCss,
+)
+
+/** Wrapper format MoRealm exports ever since multi-theme bundle export shipped.
+ *  `format` is the load-bearing discriminator for [importThemeFromUri]; do not
+ *  change its value without a corresponding migration. `version` exists to
+ *  signal future schema breaks; v1 is the only version. */
+@kotlinx.serialization.Serializable
+data class MoRealmThemeBundle(
+    val format: String = FORMAT,
+    val version: Int = 1,
+    val themes: List<ThemeExportData> = emptyList(),
+) {
+    companion object { const val FORMAT = "morealm-theme" }
 }
 
 @kotlinx.serialization.Serializable
@@ -263,5 +365,7 @@ data class ThemeExportData(
     val bottomBackground: String = "",
     val readerBackground: String = "",
     val readerTextColor: String = "",
+    val transparentBars: Boolean = false,
+    val backgroundImageUri: String? = null,
     val customCss: String = "",
 )

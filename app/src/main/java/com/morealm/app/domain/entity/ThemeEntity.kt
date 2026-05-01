@@ -48,6 +48,24 @@ data class ThemeEntity(
 
 /**
  * Legado ThemeConfig.Config compatible format for import/export.
+ *
+ * Mirrors `io.legado.app.help.config.ThemeConfig.Config` 1:1; field names
+ * must match Legado's GSON output. Optional fields (`transparentNavBar`,
+ * `backgroundImgPath`, `backgroundImgBlur`) are accepted but only the first
+ * two map onto MoRealm — `backgroundImgBlur` has no equivalent and is
+ * dropped on import. `customCss` is a MoRealm-only extension.
+ *
+ * Color derivation (`toThemeEntity`):
+ *  - `onBackgroundColor` is chosen by *background luminance*, not the
+ *    `isNightTheme` flag — Legado users sometimes mark a paper-tone theme
+ *    `isNightTheme=false` with a near-black background, or vice versa.
+ *  - `surfaceColor` shifts the background luminance ±4% so cards/sheets get
+ *    a faint elevation shadow (matches the layered look in BuiltinThemes).
+ *  - `transparentBars` mirrors Legado's `transparentNavBar`.
+ *  - `backgroundImageUri` is set to `backgroundImgPath` *only if it's an
+ *    http/https URL*. Local absolute paths from another device are useless
+ *    and are dropped. ThemeRepository later resolves http URLs to local
+ *    `file://` URIs.
  */
 @Serializable
 data class LegadoThemeConfig(
@@ -57,22 +75,75 @@ data class LegadoThemeConfig(
     val accentColor: String = "#ff000000",
     val backgroundColor: String = "#ffffffff",
     val bottomBackground: String = "#ffffffff",
+    val transparentNavBar: Boolean = false,
+    val backgroundImgPath: String? = null,
+    val backgroundImgBlur: Int = 0,
     val customCss: String = "",
 ) {
-    fun toThemeEntity(): ThemeEntity = ThemeEntity(
-        id = "legado_${themeName.hashCode()}",
-        name = themeName,
-        author = "Legado Import",
-        isBuiltin = false,
-        isNightTheme = isNightTheme,
-        primaryColor = primaryColor,
-        accentColor = accentColor,
-        backgroundColor = backgroundColor,
-        bottomBackground = bottomBackground,
-        surfaceColor = backgroundColor,
-        onBackgroundColor = if (isNightTheme) "#FFEDEDEF" else "#FF1A1A1A",
-        readerBackground = backgroundColor,
-        readerTextColor = if (isNightTheme) "#FFEDEDEF" else "#FF1A1A1A",
-        customCss = customCss,
-    )
+    fun toThemeEntity(): ThemeEntity {
+        val bgArgb = parseHexArgb(backgroundColor)
+        val isLightBg = bgArgb?.let(::isLightArgb) ?: !isNightTheme
+        val surface = bgArgb
+            ?.let { shiftArgbLuminance(it, if (isLightBg) -0.04f else 0.04f) }
+            ?.let(::argbToHex)
+            ?: backgroundColor
+        val onBg = if (isLightBg) "#FF1A1A1A" else "#FFEDEDEF"
+        val httpBgUrl = backgroundImgPath?.takeIf {
+            it.startsWith("http://", true) || it.startsWith("https://", true)
+        }
+        return ThemeEntity(
+            id = "legado_${themeName.hashCode()}",
+            name = themeName,
+            author = "Legado Import",
+            isBuiltin = false,
+            isNightTheme = isNightTheme,
+            primaryColor = primaryColor,
+            accentColor = accentColor,
+            backgroundColor = backgroundColor,
+            bottomBackground = bottomBackground,
+            surfaceColor = surface,
+            onBackgroundColor = onBg,
+            readerBackground = backgroundColor,
+            readerTextColor = onBg,
+            transparentBars = transparentNavBar,
+            backgroundImageUri = httpBgUrl,
+            customCss = customCss,
+        )
+    }
 }
+
+// region Color helpers — used by Legado import to derive surface/onBackground
+//        from a single backgroundColor instead of treating them as identical.
+//        Kept private to this file; if these prove useful elsewhere lift them
+//        into a dedicated ColorUtils. Do not export the hex parser without
+//        first widening test coverage on malformed inputs.
+
+private fun parseHexArgb(hex: String): Int? {
+    val s = hex.trim().removePrefix("#")
+    if (s.length != 6 && s.length != 8) return null
+    return runCatching {
+        val v = s.toLong(16)
+        if (s.length == 6) (0xFF000000L or v).toInt() else v.toInt()
+    }.getOrNull()
+}
+
+/** Perceived-luminance test (Rec. 601) — > 0.5 ⇒ "light" background. */
+private fun isLightArgb(argb: Int): Boolean {
+    val r = (argb shr 16) and 0xFF
+    val g = (argb shr 8) and 0xFF
+    val b = argb and 0xFF
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255.0 > 0.5
+}
+
+private fun shiftArgbLuminance(argb: Int, delta: Float): Int {
+    val a = (argb ushr 24) and 0xFF
+    val d = (delta * 255).toInt()
+    val r = (((argb shr 16) and 0xFF) + d).coerceIn(0, 255)
+    val g = (((argb shr 8) and 0xFF) + d).coerceIn(0, 255)
+    val b = ((argb and 0xFF) + d).coerceIn(0, 255)
+    return (a shl 24) or (r shl 16) or (g shl 8) or b
+}
+
+private fun argbToHex(argb: Int): String =
+    "#%08X".format(argb.toLong() and 0xFFFFFFFFL)
+// endregion
