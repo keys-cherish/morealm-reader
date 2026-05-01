@@ -491,6 +491,13 @@ interface CacheDao {
 
     @Query("DELETE FROM caches")
     suspend fun deleteAll()
+
+    /**
+     * 列出所有「章节内容」缓存的 key — 用于"清理无效缓存"功能扫描孤儿。
+     * 返回 key（无 value，省内存）。CacheRepository 在内存里按前缀比对 sourceUrl 过滤。
+     */
+    @Query("SELECT `key` FROM caches WHERE `key` LIKE 'chapter_content_%'")
+    suspend fun getAllChapterContentKeys(): List<String>
 }
 
 @Dao

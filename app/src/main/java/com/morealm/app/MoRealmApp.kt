@@ -8,6 +8,7 @@ import com.morealm.app.domain.db.TxtTocRuleDao
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.CookieStore
 import com.morealm.app.domain.parser.LocalBookParser
+import com.morealm.app.domain.sync.WebDavBackupRunner
 import com.morealm.app.domain.sync.WebDavBookProgressSync
 import com.morealm.app.domain.webbook.CacheBook
 import dagger.hilt.android.HiltAndroidApp
@@ -24,6 +25,7 @@ class MoRealmApp : Application() {
     @Inject lateinit var cookieDao: CookieDao
     @Inject lateinit var txtTocRuleDao: TxtTocRuleDao
     @Inject lateinit var progressSync: WebDavBookProgressSync
+    @Inject lateinit var backupRunner: WebDavBackupRunner
 
     /**
      * App-scoped supervisor for fire-and-forget background work that
@@ -48,6 +50,14 @@ class MoRealmApp : Application() {
         appScope.launch {
             runCatching { progressSync.downloadAll() }
                 .onFailure { AppLog.warn("App", "Initial progress sync failed: ${it.message}") }
+        }
+
+        // P1-E: opportunistic auto-backup. The runner enforces the 24h
+        // window itself; we just ask once per cold start. No-op when the
+        // user hasn't enabled `autoBackup`.
+        appScope.launch {
+            runCatching { backupRunner.runIfDue() }
+                .onFailure { AppLog.warn("App", "Auto-backup check failed: ${it.message}") }
         }
 
         AppLog.info("App", "MoRealm started")
