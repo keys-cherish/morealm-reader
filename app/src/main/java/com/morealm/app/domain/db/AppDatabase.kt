@@ -26,7 +26,7 @@ import com.morealm.app.domain.entity.*
         SearchBookCache::class,
         SearchKeyword::class,
     ],
-    version = 23,
+    version = 24,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {

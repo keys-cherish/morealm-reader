@@ -780,13 +780,26 @@ fun CanvasRenderer(
             onProgressRestored()
             return@LaunchedEffect
         }
+        // BookmarkDebug: 诊断书签跳转后是否回到正确页 — 打印三个原始输入源
+        // (startFromLastPage / initialChapterPosition / initialProgress) 和算出
+        // 来的 targetPage，配合 Chapter tag 的 loadChapter 日志交叉验证。
+        val pageFromCharIndex = if (initialChapterPosition > 0) {
+            chapter.getPageIndexByCharIndex(initialChapterPosition).coerceIn(0, pageCount - 1)
+        } else -1
         val currentTargetPage = when {
             startFromLastPage -> pageCount - 1
-            initialChapterPosition > 0 -> chapter.getPageIndexByCharIndex(initialChapterPosition)
-                .coerceIn(0, pageCount - 1)
+            initialChapterPosition > 0 -> pageFromCharIndex
             initialProgress > 0 -> ((initialProgress / 100f) * (pageCount - 1)).roundToInt().coerceIn(0, pageCount - 1)
             else -> 0
         }
+        AppLog.info(
+            "BookmarkDebug",
+            "restoreProgress chIdx=${chapter.chaptersSize.let { chapterIndex }}" +
+                " initChapPos=$initialChapterPosition initProg=$initialProgress" +
+                " startFromLast=$startFromLastPage pageFromCharIdx=$pageFromCharIndex" +
+                " computedTarget=$currentTargetPage pc=$pageCount renderPC=$renderPageCount" +
+                " pageAnim=$pageAnimType",
+        )
         AppLog.debug("CanvasRenderer", "restoreProgress: startFromLast=$startFromLastPage target=$currentTargetPage pc=$pageCount renderPC=$renderPageCount")
         val targetPage = pageFactory.displayIndexForCurrentPage(currentTargetPage).coerceIn(0, renderPageCount - 1)
         readerPageIndex = currentTargetPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
@@ -883,6 +896,11 @@ fun CanvasRenderer(
                     if (page.chapterIndex == chapterIndex) {
                         onProgress(if (pageCount > 1) (page.index * 100) / (pageCount - 1) else 100)
                     }
+                    // 仿真翻页：页面变化时清掉残留选区
+                    if (selectionState.isActive) {
+                        selectionState.clear()
+                    }
+                    highlightActionTarget = null
                 },
                 onFillPage = { displayIndex, direction ->
                     coordinator.commitPageTurn(displayIndex, direction) { readerPageIndex = it }
@@ -972,6 +990,11 @@ fun CanvasRenderer(
                                             coordinator.turnPageByDrag(if (totalDragY < 0f) ReaderPageDirection.NEXT else ReaderPageDirection.PREV) { readerPageIndex = it }
                                         }
                                     }
+                                } else {
+                                    // 翻页手势结束时如果选区还在，清掉——避免翻到新页后
+                                    // 旧页的 mini menu 还悬浮在屏幕上。
+                                    selectionState.clear()
+                                    highlightActionTarget = null
                                 }
                                 totalDragX = 0f
                                 totalDragY = 0f
@@ -1244,6 +1267,11 @@ fun CanvasRenderer(
                         return@AnimatedPageReader
                     }
                     coordinator.handlePagerSettled(settledPage) { readerPageIndex = it }
+                    // 翻页完成后清掉残留的选区和高亮 action menu
+                    if (selectionState.isActive) {
+                        selectionState.clear()
+                    }
+                    highlightActionTarget = null
                 },
             ) { pageIndex ->
                     PageContentBox(
