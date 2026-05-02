@@ -16,6 +16,12 @@ local.properties
 .claude/
 .worktrees/
 /temp/
+/openspec/
+
+# docs 只保留 user-guide.md 和 app-icon.png
+/docs/*
+!/docs/user-guide.md
+!/docs/app-icon.png
 
 # Kotlin compiler diagnostic dumps (auto-generated, machine-specific)
 .kotlin/
