@@ -184,7 +184,7 @@ fun ShelfScreen(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+        modifier = Modifier.fillMaxSize()
     ) {
         // Time-based greeting
         val greeting = remember {

@@ -97,6 +97,12 @@ class AppPreferences @Inject constructor(
         val CUSTOM_BG_IMAGE = stringPreferencesKey("custom_bg_image")
         val READER_BG_IMAGE_DAY = stringPreferencesKey("reader_bg_image_day")
         val READER_BG_IMAGE_NIGHT = stringPreferencesKey("reader_bg_image_night")
+        // ── 全局背景图（书架/发现/听书/我的 四 Tab 共用；阅读器自成一套不受此影响）──
+        val GLOBAL_BG_IMAGE = stringPreferencesKey("global_bg_image")
+        /** 0.3~1.0；默认 0.85。透传给各 Tab 内的 Card/Surface，实现"背景图+半透明卡片"叠层效果。 */
+        val GLOBAL_BG_CARD_ALPHA = floatPreferencesKey("global_bg_card_alpha")
+        /** 0~25dp；默认 0。Modifier.blur 需 API 31+，低版本忽略（UI 灰掉 Slider）。 */
+        val GLOBAL_BG_CARD_BLUR = floatPreferencesKey("global_bg_card_blur")
         val CUSTOM_TXT_CHAPTER_REGEX = stringPreferencesKey("custom_txt_chapter_regex")
         val TTS_SKIP_PATTERN = stringPreferencesKey("tts_skip_pattern")
         val TTS_VOICE = stringPreferencesKey("tts_voice")
@@ -352,6 +358,14 @@ class AppPreferences @Inject constructor(
     val readerBgImageNight: Flow<String> = context.dataStore.data
         .map { it[Keys.READER_BG_IMAGE_NIGHT] ?: "" }
 
+    // ── 全局背景图（四 Tab 共用）──
+    val globalBgImage: Flow<String> = context.dataStore.data
+        .map { it[Keys.GLOBAL_BG_IMAGE] ?: "" }
+    val globalBgCardAlpha: Flow<Float> = context.dataStore.data
+        .map { (it[Keys.GLOBAL_BG_CARD_ALPHA] ?: 0.85f).coerceIn(0.3f, 1.0f) }
+    val globalBgCardBlur: Flow<Float> = context.dataStore.data
+        .map { (it[Keys.GLOBAL_BG_CARD_BLUR] ?: 0f).coerceIn(0f, 25f) }
+
     val customTxtChapterRegex: Flow<String> = context.dataStore.data
         .map { it[Keys.CUSTOM_TXT_CHAPTER_REGEX] ?: "" }
 
@@ -546,6 +560,9 @@ class AppPreferences @Inject constructor(
     suspend fun setCustomBgImage(uri: String) = update(Keys.CUSTOM_BG_IMAGE, uri)
     suspend fun setReaderBgImageDay(uri: String) = update(Keys.READER_BG_IMAGE_DAY, uri)
     suspend fun setReaderBgImageNight(uri: String) = update(Keys.READER_BG_IMAGE_NIGHT, uri)
+    suspend fun setGlobalBgImage(uri: String) = update(Keys.GLOBAL_BG_IMAGE, uri)
+    suspend fun setGlobalBgCardAlpha(alpha: Float) = update(Keys.GLOBAL_BG_CARD_ALPHA, alpha.coerceIn(0.3f, 1.0f))
+    suspend fun setGlobalBgCardBlur(blur: Float) = update(Keys.GLOBAL_BG_CARD_BLUR, blur.coerceIn(0f, 25f))
     suspend fun setCustomTxtChapterRegex(regex: String) = update(Keys.CUSTOM_TXT_CHAPTER_REGEX, regex)
     suspend fun setTtsSkipPattern(pattern: String) = update(Keys.TTS_SKIP_PATTERN, pattern)
     suspend fun setTtsVoice(voice: String) = update(Keys.TTS_VOICE, voice)

@@ -61,7 +61,6 @@ fun SearchScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
     ) {
         // Compact top bar with back + title inline
         TopAppBar(
@@ -84,7 +83,7 @@ fun SearchScreen(
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.background,
+                containerColor = androidx.compose.ui.graphics.Color.Transparent,
             ),
         )
 
