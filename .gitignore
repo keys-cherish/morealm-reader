@@ -18,10 +18,11 @@ local.properties
 /temp/
 /openspec/
 
-# docs 只保留 user-guide.md 和 app-icon.png
+# docs 只保留 user-guide.md / app-icon.png / release-setup.md
 /docs/*
 !/docs/user-guide.md
 !/docs/app-icon.png
+!/docs/release-setup.md
 
 # Kotlin compiler diagnostic dumps (auto-generated, machine-specific)
 .kotlin/

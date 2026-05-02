@@ -27,6 +27,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,6 +39,7 @@ import com.morealm.app.domain.entity.BookGroup
 import com.morealm.app.presentation.shelf.FolderImportState
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.shelf.ShelfViewModel
+import com.morealm.app.ui.widget.ShelfGridSkeleton
 import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -198,6 +201,8 @@ fun ShelfScreen(
     // UX-1: Snackbar host 用于「批量删书」的撤销窗口（5s）。原 BatchDeleteDialog 二次确认已下线。
     val snackbarHost = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    // UX-8: 删除/进入批量模式 等关键交互配震动反馈
+    val haptic = LocalHapticFeedback.current
 
     Box(modifier = Modifier.fillMaxSize()) {
     Column(
@@ -254,6 +259,7 @@ fun ShelfScreen(
                             // snapshot 在 viewModel.batchDeleteSoft 之前抓，DB 只删 row 不删封面文件，
                             // 撤销 → restoreBooks 把整批 re-insert；不撤销 → commitCoverDeletion 收尾。
                             if (selectedIds.isEmpty()) return@IconButton
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)  // UX-8
                             val ids = selectedIds
                             val snapshot = allBooks.filter { it.id in ids }
                             batchMode = false
@@ -281,6 +287,11 @@ fun ShelfScreen(
                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
                     }
                 } else {
+                // ── 顶栏布局（学 Legado）──
+                // 外面只保留 4 个高频图标：日夜间 / 排序 / 导入 / 三点 overflow。
+                // 立即整理 / 视图切换 / 搜索 全部进 overflow，避免顶栏挤成 7 个图标。
+                // 刷新按钮整体移除——后台静默刷新由 ShelfViewModel.init 触发，状态栏
+                // 角标（BookGridItem 的 lastCheckCount badge）替代过去的"红点"提示。
                 IconButton(onClick = onToggleDayNight) {
                     Icon(
                         if (isNightTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
@@ -288,84 +299,8 @@ fun ShelfScreen(
                         tint = MaterialTheme.colorScheme.onBackground,
                     )
                 }
-                // 自动分组规则的配置入口走 Profile 页，顶栏不再放置田字格按钮。
-                // 仅在此处持有 isOrganizing 给"立即整理"按钮 + 更多菜单同款项使用。
                 val isOrganizing by viewModel.isOrganizing.collectAsStateWithLifecycle()
-                // 立即整理书架（魔棒）— 高频操作上提到顶栏。
-                // 整理过程中按钮位置不变，用 spinner 替换图标提供进度反馈。
-                // 起始 Toast 让用户立刻知道操作已生效，结束 Toast 由 organizeReport 订阅触发。
-                IconButton(
-                    onClick = {
-                        if (!isOrganizing) {
-                            Toast.makeText(context, "开始整理书架…", Toast.LENGTH_SHORT).show()
-                            viewModel.organizeShelf()
-                        }
-                    },
-                    enabled = !isOrganizing,
-                ) {
-                    if (isOrganizing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    } else {
-                        Icon(
-                            Icons.Default.AutoFixHigh,
-                            contentDescription = "立即整理书架",
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-                // 列表 / 网格视图切换 — 高频操作上提到顶栏。
-                IconButton(onClick = { isListView = !isListView }) {
-                    Icon(
-                        if (isListView) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
-                        contentDescription = if (isListView) "切换为网格视图" else "切换为列表视图",
-                        tint = MaterialTheme.colorScheme.onBackground,
-                    )
-                }
-                IconButton(onClick = { showSearch = true }) {
-                    Icon(Icons.Default.Search, "搜索", tint = MaterialTheme.colorScheme.onBackground)
-                }
-                // ── 后台刷新按钮（带红点）──
-                // 自动刷新已经在 ShelfViewModel.init 里跑了一次（性能优先策略），
-                // 这里给用户一个手动入口：1) 想立即拉一次 toc 时点；2) 任意书有
-                // lastCheckCount > 0 时按钮右上角小红点亮起作为"有更新"提示。
-                // 刷新中图标转圈，点击行为忽略，避免重复入队 — controller 自身有去重，
-                // 但 UI 反馈一致更让人安心。
-                BadgedBox(
-                    badge = {
-                        if (hasAnyUpdate && !isRefreshing) {
-                            Badge(
-                                containerColor = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(8.dp),
-                            )
-                        }
-                    },
-                ) {
-                    IconButton(
-                        onClick = { if (!isRefreshing) viewModel.refreshAllBooks() },
-                        enabled = !isRefreshing,
-                    ) {
-                        if (isRefreshing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        } else {
-                            Icon(
-                                Icons.Default.Refresh,
-                                contentDescription = "检查书架更新",
-                                tint = MaterialTheme.colorScheme.onBackground,
-                            )
-                        }
-                    }
-                }
                 // ── 排序按钮 ──
-                // 立即整理 / 列表视图切换已上提到顶栏；检查更新走后台自动刷新。
-                // 这里直接放排序按钮，点击展开 4 个排序选项，去掉一层中转的"更多"菜单。
                 var showSortMenu by remember { mutableStateOf(false) }
                 Box {
                     IconButton(onClick = { showSortMenu = true }) {
@@ -431,6 +366,73 @@ fun ShelfScreen(
                             text = { Text("新建分组") },
                             leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
                             onClick = { showImportMenu = false; showCreateGroupDialog = true },
+                        )
+                    }
+                }
+                // ── Overflow 三点菜单 ── 学 Legado：低频或可选项全部下沉到这里。
+                // 当前装：立即整理书架 / 切换视图 / 搜索。
+                var showOverflowMenu by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { showOverflowMenu = true }) {
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = "更多",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showOverflowMenu,
+                        onDismissRequest = { showOverflowMenu = false },
+                    ) {
+                        // 立即整理书架（魔棒）—— 用户笔记说这是高频操作，但顶栏拥挤
+                        // 时可以下沉。整理过程中文案改成"整理中…"并用进度色指示。
+                        DropdownMenuItem(
+                            text = { Text(if (isOrganizing) "整理中…" else "立即整理书架") },
+                            leadingIcon = {
+                                if (isOrganizing) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.AutoFixHigh,
+                                        null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            },
+                            enabled = !isOrganizing,
+                            onClick = {
+                                if (!isOrganizing) {
+                                    Toast.makeText(context, "开始整理书架…", Toast.LENGTH_SHORT).show()
+                                    viewModel.organizeShelf()
+                                }
+                                showOverflowMenu = false
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (isListView) "切换为网格视图" else "切换为列表视图") },
+                            leadingIcon = {
+                                Icon(
+                                    if (isListView) Icons.Default.GridView
+                                    else Icons.AutoMirrored.Filled.ViewList,
+                                    null,
+                                )
+                            },
+                            onClick = {
+                                isListView = !isListView
+                                showOverflowMenu = false
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("搜索书架") },
+                            leadingIcon = { Icon(Icons.Default.Search, null) },
+                            onClick = {
+                                showSearch = true
+                                showOverflowMenu = false
+                            },
                         )
                     }
                 }
@@ -501,12 +503,9 @@ fun ShelfScreen(
         // Grid/List content
         val hasContent = displayBooks.isNotEmpty() || (currentFolderId == null && folderIds.isNotEmpty())
         if (!booksLoaded) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(28.dp),
-                    strokeWidth = 2.dp,
-                )
-            }
+            // UX-9: 用 Shimmer 骨架替代 CircularProgressIndicator，让冷启动 / 大量书加载
+            // 时的等待感更柔和（先看到"卡片轮廓"再填真实内容，体感比转圈快）
+            ShelfGridSkeleton(modifier = Modifier.fillMaxSize())
         } else if (!hasContent) {
             EmptyShelf(
                 onImportFile = { filePickerLauncher.launch(arrayOf("text/plain", "application/epub+zip", "application/pdf", "application/octet-stream")) },
@@ -655,6 +654,8 @@ fun ShelfScreen(
                 bookActionTarget = null
             },
             onEnterBatchMode = {
+                // UX-8: 进入批量模式 = 长按确认，触觉反馈跟系统 long-press 一致
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 batchMode = true
                 selectedIds = setOf(targetBook.id)
                 bookActionTarget = null
@@ -1061,7 +1062,16 @@ private fun BookActionDialog(
                     Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.onSurface)
                     Spacer(Modifier.width(12.dp))
-                    Text("进入多选模式", style = MaterialTheme.typography.bodyLarge)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("进入多选模式", style = MaterialTheme.typography.bodyLarge)
+                        // UX-5 (可发现性): 用户进入多选模式后顶栏会变化, 但当前用户不知道
+                        // 多选能干什么 — 顺手补一行说明, 减少"进了多选才发现要的功能没有"的犹豫.
+                        Text(
+                            "可批量移动到分组 / 批量删除",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        )
+                    }
                 }
             }
         },

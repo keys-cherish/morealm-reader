@@ -280,7 +280,8 @@ fun BookGridItem(
             }
         }
 
-        Spacer(Modifier.height(6.dp))
+        // UX-6 (亲密性): cover 与 文字块视为两个语义区, 6dp 偏紧 → 8dp 让封面"独立成块"
+        Spacer(Modifier.height(8.dp))
 
         Text(
             text = book.title,
@@ -374,7 +375,9 @@ fun ContinueReadingCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.height(4.dp))
+                // UX-6 (亲密性): "继续阅读"+书名 是一组识别信息, 进度条是状态信息
+                // 4dp 显得识别和状态混作一谈; 8dp 让进度条形成独立的"状态行"
+                Spacer(Modifier.height(8.dp))
                 LinearProgressIndicator(
                     progress = { book.readProgress },
                     modifier = Modifier.fillMaxWidth(),
@@ -408,10 +411,19 @@ fun EmptyShelf(
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )
         Spacer(Modifier.height(8.dp))
+        // UX-4 (新用户引导): 副标题原本只提"本地书籍", 漏掉"网络书源"路径,
+        // 让纯网文用户以为这 App 不能用. 拆成两行: 主行说明本地导入, 辅行
+        // 指明书源入口在「我的」, 用户至少不会卡死在书架页面.
         Text(
-            "导入本地书籍开始阅读",
+            "选个本地文件, 或文件夹批量导入",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "想看网络书? 在「我的 → 书源管理」添加书源后搜索",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
         )
         Spacer(Modifier.height(24.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -869,6 +881,8 @@ fun BookListItem(
 
         // Right side: title + author + chapter info + last read time
         Column(modifier = Modifier.weight(1f)) {
+            // UX-6 (亲密性): 4 行原本同等 3dp 间距, 视觉上没有「身份块」与「状态块」之分.
+            // 重排为: title↘author·format (身份, 紧密 3dp) ⇣ 10dp ⇣ progress↘time (状态, 紧密 2dp).
             // Row 1: Book title
             Text(
                 book.title,
@@ -892,7 +906,8 @@ fun BookListItem(
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
                 )
             }
-            Spacer(Modifier.height(3.dp))
+            // 身份块 → 状态块 的语义分隔
+            Spacer(Modifier.height(10.dp))
 
             // Row 3: Reading progress (chapter position)
             val chapterInfo = when {
@@ -903,7 +918,8 @@ fun BookListItem(
                 else -> "未开始阅读"
             }
             Text(chapterInfo, style = subStyle, color = subColor, maxLines = 1)
-            Spacer(Modifier.height(3.dp))
+            // 进度与时间是「状态块」内部, 紧密
+            Spacer(Modifier.height(2.dp))
 
             // Row 4: Last read time
             val timeText = if (book.lastReadAt > 0) {

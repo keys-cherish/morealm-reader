@@ -8,6 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.db.*
 import com.morealm.app.domain.preference.AppPreferences
+import com.morealm.app.domain.update.UpdateChecker
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -615,4 +616,12 @@ object AppModule {
     @Singleton
     fun providePreferences(@ApplicationContext context: Context): AppPreferences =
         AppPreferences(context)
+
+    /**
+     * 「检查更新」用的 GitHub Releases 客户端。Singleton 复用 OkHttp 连接池，
+     * 不与书源 / WebDav 共享 client（短超时 + 独立 dispatcher，避免被长连接占满）。
+     */
+    @Provides
+    @Singleton
+    fun provideUpdateChecker(): UpdateChecker = UpdateChecker()
 }

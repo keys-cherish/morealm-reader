@@ -15,6 +15,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import com.morealm.app.presentation.profile.ProfileViewModel
 import com.morealm.app.presentation.profile.AnnualReport
 import com.morealm.app.presentation.appearance.GlobalBgViewModel
+import com.morealm.app.presentation.update.UpdateViewModel
+import com.morealm.app.BuildConfig
 import com.morealm.app.ui.common.LocalCardAlpha
 import com.morealm.app.ui.common.LocalCardBlur
 import com.morealm.app.ui.common.supportsBlur
@@ -71,6 +73,7 @@ import java.io.FileOutputStream
 fun ProfileScreen(
     themeViewModel: ThemeViewModel = hiltViewModel(),
     profileViewModel: ProfileViewModel = hiltViewModel(),
+    updateViewModel: UpdateViewModel = hiltViewModel(),
     onNavigateWebDav: () -> Unit = {},
     onNavigateAbout: () -> Unit = {},
     onNavigateSourceManage: () -> Unit = {},
@@ -160,12 +163,14 @@ fun ProfileScreen(
                     StatItem(value = formatDuration(totalReadMs), label = "总时长")
                     StatItem(value = "$recentDays", label = "连续天数")
                 }
-                Spacer(Modifier.height(12.dp))
+                // UX-6 (亲密性): 「主指标块 (标题+3 个数字)」与「辅助块 (今日+年度报告)」
+                // 原本三个 12dp 同等间距, 视觉上四件平铺. 主→辅 拉到 18dp, 辅内紧密 4dp.
+                Spacer(Modifier.height(18.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                     Text("今日已读 ${formatDuration(todayReadMs)}",
                         style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(4.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                     TextButton(onClick = {
                         profileViewModel.loadAnnualReport()
@@ -301,6 +306,9 @@ fun ProfileScreen(
 
         Spacer(Modifier.height(16.dp))
 
+        // UX-2 (分组直觉): 4 张外观/阅读类卡片之前加 SectionTitle, 给用户清晰的「这一组都管偏好」锚点.
+        SectionTitle("外观与阅读")
+
         @Suppress("DEPRECATION")
         SettingsCard(Icons.Default.Wallpaper, "外观",
             "全局背景图、透明度、模糊度", onClick = onNavigateAppearance)
@@ -321,6 +329,9 @@ fun ProfileScreen(
                 subtitle = "进度 / 书架 / 书源 / 主题 一键全同步",
                 onClick = onNavigateWebDav)
         }
+
+        // UX-2 (分组直觉): 书源 / 书签 / 缓存 / Legado 搬家 / 小组件 也加锚点.
+        SectionTitle("内容管理")
 
         SettingsCard(Icons.Default.Extension, "书源管理",
             "导入、启用、删除书源，支持 URL 订阅和 JSON 导入", onClick = onNavigateSourceManage)
@@ -402,6 +413,12 @@ fun ProfileScreen(
 
         SettingsSection("关于") {
             SettingsItem(Icons.Default.Info, "关于墨境", onClick = onNavigateAbout)
+            SettingsItem(
+                icon = Icons.Default.SystemUpdate,
+                title = "检查更新",
+                subtitle = "当前 v${BuildConfig.VERSION_NAME}",
+                onClick = { updateViewModel.checkUpdate(BuildConfig.VERSION_NAME) },
+            )
             SettingsItem(Icons.Default.BugReport, "应用日志",
                 subtitle = "查看运行日志和错误信息", onClick = onNavigateAppLog)
         }
@@ -429,6 +446,15 @@ fun ProfileScreen(
             onDismiss = { showAnnualReport = false },
         )
     }
+    // 检查更新对话框 / Snackbar 协调器：根据 UpdateViewModel.UiState 渲染。
+    // 共享主屏 snackbarHost，避免叠两个 host。
+    val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+    UpdateDialogHost(
+        state = updateState,
+        onDismiss = updateViewModel::dismiss,
+        snackbarHost = snackbarHost,
+    )
+
     SnackbarHost(snackbarHost, modifier = Modifier.align(Alignment.BottomCenter))
     }
 }

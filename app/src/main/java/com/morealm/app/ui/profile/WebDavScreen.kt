@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
+import com.morealm.app.ui.widget.swipeBackEdge
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -71,6 +72,8 @@ fun WebDavScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            // UX-10：左缘水平拖动 → 返回，覆盖三键导航 / 老 Android 没有系统侧滑的场景
+            .swipeBackEdge(onBack = onBack)
             .verticalScroll(rememberScrollState())
     ) {
         TopAppBar(
@@ -336,18 +339,46 @@ fun WebDavScreen(
 
         // Live status echo for the WebDav backup / restore action — this is
         // the single user-visible feedback path during long-running uploads.
+        //
+        // UX-3 (反馈/可见性): 仅文本时用户分不清「正在传 vs 已经卡住」, 进行中态前补
+        // 一个 14dp spinner. ViewModel 里使用「备份中... / 恢复中...」三个 ASCII 点,
+        // 和「正在...」前缀; 用 contains("...") 做主匹配, 再排除已结束态.
         if (webDavStatus.isNotEmpty()) {
-            Text(
-                webDavStatus,
-                style = MaterialTheme.typography.bodySmall,
-                color = when {
-                    webDavStatus.contains("成功") -> MaterialTheme.colorScheme.primary
-                    webDavStatus.contains("失败") || webDavStatus.contains("请先") ||
-                        webDavStatus.contains("未找到") -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                },
+            val isInProgress = remember(webDavStatus) {
+                val active = webDavStatus.contains("...") ||
+                    webDavStatus.startsWith("正在") ||
+                    webDavStatus.startsWith("备份中") ||
+                    webDavStatus.startsWith("恢复中") ||
+                    webDavStatus.startsWith("同步中")
+                val finished = webDavStatus.contains("成功") ||
+                    webDavStatus.contains("失败") ||
+                    webDavStatus.contains("未找到") ||
+                    webDavStatus.contains("请先")
+                active && !finished
+            }
+            Row(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-            )
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (isInProgress) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    webDavStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when {
+                        webDavStatus.contains("成功") -> MaterialTheme.colorScheme.primary
+                        webDavStatus.contains("失败") || webDavStatus.contains("请先") ||
+                            webDavStatus.contains("未找到") -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    },
+                )
+            }
         }
 
         // "Last backup" line — read-only echo of prefs.lastAutoBackup so
