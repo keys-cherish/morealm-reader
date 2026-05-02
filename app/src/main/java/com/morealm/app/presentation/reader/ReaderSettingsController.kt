@@ -165,8 +165,9 @@ class ReaderSettingsController(
     val readerBgImageNight: StateFlow<String> = prefs.readerBgImageNight
         .stateIn(scope, SharingStarted.Eagerly, "")
 
-    val pageAnim: StateFlow<String> = activeStyle
-        .map { it?.pageAnim ?: "slide" }
+    // pageAnim 是全局行为设置，不跟随样式预设切换。
+    // 修复：从 DataStore 读取，避免切样式时动画被重置。
+    val pageAnim: StateFlow<String> = prefs.pageAnim
         .stateIn(scope, SharingStarted.Eagerly, "slide")
 
     // ══════════════════════════════════════════════════════════════
@@ -280,7 +281,9 @@ class ReaderSettingsController(
 
     fun setCustomBgImage(uri: String) = updateStyle { it.copy(customBgImage = uri) }
 
-    fun setPageAnim(anim: String) = updateStyle { it.copy(pageAnim = anim) }
+    fun setPageAnim(anim: String) {
+        scope.launch { prefs.setPageAnim(anim) }
+    }
 
     // ── Style preset management ──
 
