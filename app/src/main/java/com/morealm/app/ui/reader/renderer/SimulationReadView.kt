@@ -113,6 +113,13 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     private var lastIdleKey: Any? = null
 
     /**
+     * 最近一次 [onDraw] 输出的状态签名——用于 [3d] 日志的去重节流。
+     * 不参与渲染逻辑；纯诊断用。`onDraw` 在动画期间会被调用得非常频繁
+     * (每帧一次)，无节流地写日志会冲掉真正的状态切换信号。
+     */
+    private var lastDrawSig: String? = null
+
+    /**
      * @param key 内容签名。非 `null` 且等于 [lastIdleKey] 时直接 short-circuit
      *            （不调用 [producer]，不交换 bitmap，不 invalidate）——这是
      *            模式切换闪烁修复的核心防御层。`null` 表示 caller 不参与
@@ -518,6 +525,13 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         val w = width
         val h = height
         if (w <= 0 || h <= 0) return
+        // Diagnostic [3s] — only fires from gesture/touch paths (onDown /
+        // tap-zone). 切换模式不应该触发，如果在没触摸的情况下出现了 [3s]，
+        // 就是一条非预期路径。
+        AppLog.debug(
+            "PageTurnFlicker",
+            "[3s] setBitmaps START isNext=$isNext viewWxH=${w}x$h",
+        )
         if (isNext) {
             curBitmap = provider(0, w, h)
             nextBitmap = provider(1, w, h)
@@ -525,11 +539,35 @@ class SimulationReadView(context: Context) : android.view.View(context) {
             curBitmap = provider(0, w, h)
             prevBitmap = provider(-1, w, h)
         }
+        AppLog.debug(
+            "PageTurnFlicker",
+            "[3s] setBitmaps END curId=${curBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                " prevId=${prevBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                " nextId=${nextBitmap?.let { System.identityHashCode(it) } ?: "null"}",
+        )
         drawHelper.bgMeanColor = bgMeanColor
     }
 
     // ── Draw — Legado SimulationPageDelegate.onDraw ──
     override fun onDraw(canvas: Canvas) {
+        // Diagnostic [3d] — 节流：只在状态变化或 idleBitmap 切换时记一次，
+        // 避免持续 invalidate 时刷屏。lastDrawSig 在每次走完 onDraw 末尾更新。
+        val sig = "${if (isMoved || isRunning) "anim:isNext=$isNext" else "idle"}" +
+            ":idleId=${idleBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+            ":curId=${curBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+            ":prevId=${prevBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+            ":nextId=${nextBitmap?.let { System.identityHashCode(it) } ?: "null"}"
+        if (sig != lastDrawSig) {
+            AppLog.debug(
+                "PageTurnFlicker",
+                "[3d] onDraw branch=${if (isMoved || isRunning) "ANIM" else "IDLE"}" +
+                    " idleId=${idleBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                    " curId=${curBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                    " prevId=${prevBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                    " nextId=${nextBitmap?.let { System.identityHashCode(it) } ?: "null"}",
+            )
+            lastDrawSig = sig
+        }
         if (isMoved || isRunning) {
             // During page turn animation: fill bg then draw bezier curl
             canvas.drawColor(bgMeanColor)

@@ -1,0 +1,65 @@
+@charset "utf-8";
+@import url("../Styles/fonts.css");
+
+/* 精简自 Legado main.css —— 只保留 cover.html / intro.html / chapter.html 用到的选择器，
+   去掉了多看弹注、版权页、版本说明页等本应用不会生成的样式。 */
+
+body {
+    padding: 0%;
+    margin: 0% 0.5%;
+    line-height: 130%;
+    text-align: justify;
+    font-family: "DK-SONGTI", "st", "宋体", "zw", sans-serif;
+}
+
+p {
+    text-align: justify;
+    text-indent: 2em;
+    line-height: 130%;
+    margin: 0 0.5%;
+    font-family: "DK-SONGTI", "st", "宋体", "zw", sans-serif;
+}
+
+div {
+    margin: 0;
+    padding: 0;
+    line-height: 120%;
+    text-align: justify;
+    font-family: "zw";
+}
+
+/* 章节标题（chapter.html 的 <h2 class="head">） */
+h2.head {
+    font-family: "小标宋", "DK-XIAOBIAOSONG";
+    text-align: left;
+    font-weight: bold;
+    font-size: 1.1em;
+    margin: 1em 2em 2em 0;
+    color: #3f83e8;
+    line-height: 140%;
+}
+
+/* 简介标题（intro.html 的 <h1 class="head">） */
+h1.head {
+    line-height: 130%;
+    font-size: 1.4em;
+    text-align: center;
+    color: #BA2213;
+    font-weight: bold;
+    margin: 2em 0 1em 0;
+    font-family: "方正小标宋_GBK", "DK-XIAOBIAOSONG";
+}
+
+/* 封面页作者署名（cover.html 的 .author） */
+.author {
+    font-family: "DK-FANGSONG", 仿宋, "fs", "fangsong", sans-serif;
+    text-align: center;
+    color: #000;
+    font-size: 90%;
+    line-height: 1.3;
+}
+
+a {
+    text-decoration: none;
+    color: #222;
+}

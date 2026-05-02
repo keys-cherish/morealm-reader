@@ -302,6 +302,8 @@ fun ReaderSettingsPanel(
     customFontName: String = "",
     onImportFont: (android.net.Uri, String) -> Unit = { _, _ -> },
     onClearCustomFont: () -> Unit = {},
+    /** 打开字体管理页（FontManagerScreen）。由 ReaderScreen 注入 navController.navigate。 */
+    onOpenFontManager: () -> Unit = {},
     allThemes: List<ThemeEntity> = emptyList(),
     activeThemeId: String = "",
     onThemeChange: (String) -> Unit = {},
@@ -465,17 +467,6 @@ fun ReaderSettingsPanel(
             Text("字体", style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
             Spacer(Modifier.height(6.dp))
-            val context = LocalContext.current
-            val fontPickerLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.OpenDocument()
-            ) { uri ->
-                uri?.let {
-                    val name = DocumentFile.fromSingleUri(context, it)?.name
-                        ?.substringBeforeLast('.') ?: "自定义字体"
-                    onImportFont(it, name)
-                    selectedFont = "custom"
-                }
-            }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
@@ -489,8 +480,13 @@ fun ReaderSettingsPanel(
                 )
                 builtinFonts.forEach { font ->
                     FilterChip(
-                        selected = selectedFont == font.key,
-                        onClick = { selectedFont = font.key; onFontChange(font.key) },
+                        selected = selectedFont == font.key && customFontName.isEmpty(),
+                        onClick = {
+                            // 选内置字体时清掉用户自定义路径，避免两者并存优先级不明
+                            if (customFontName.isNotEmpty()) onClearCustomFont()
+                            selectedFont = font.key
+                            onFontChange(font.key)
+                        },
                         label = { Text(font.label) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
@@ -504,8 +500,12 @@ fun ReaderSettingsPanel(
             ) {
                 listOf("crimson_pro" to "Crimson", "inter" to "Inter", "system" to "系统").forEach { (key, label) ->
                     FilterChip(
-                        selected = selectedFont == key,
-                        onClick = { selectedFont = key; onFontChange(key) },
+                        selected = selectedFont == key && customFontName.isEmpty(),
+                        onClick = {
+                            if (customFontName.isNotEmpty()) onClearCustomFont()
+                            selectedFont = key
+                            onFontChange(key)
+                        },
                         label = { Text(label) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
@@ -513,14 +513,16 @@ fun ReaderSettingsPanel(
                     )
                 }
             }
+            // 自定义字体 chip：仅在用户已挑选自定义字体时出现，显示当前字体名 + ×清除。
+            // 「字体管理…」按钮始终在第二行右侧，跳到 FontManagerScreen 处理批量导入与切换。
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (customFontName.isNotEmpty()) {
                     FilterChip(
-                        selected = selectedFont == "custom",
-                        onClick = { selectedFont = "custom"; onFontChange("custom") },
+                        selected = true,
+                        onClick = { /* 已选中，点击不切换 */ },
                         label = { Text(customFontName) },
                         trailingIcon = {
                             Icon(Icons.Default.Close, "清除",
@@ -534,8 +536,8 @@ fun ReaderSettingsPanel(
                 }
                 FilterChip(
                     selected = false,
-                    onClick = { fontPickerLauncher.launch(arrayOf("font/*", "application/octet-stream")) },
-                    label = { Text("导入字体") },
+                    onClick = onOpenFontManager,
+                    label = { Text("字体管理…") },
                     leadingIcon = { Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp)) },
                     colors = FilterChipDefaults.filterChipColors(
                         containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)),
@@ -692,14 +694,17 @@ fun ReaderSettingsPanel(
             Spacer(Modifier.height(16.dp))
 
             // ── Custom background image ──
+            // 之前的 `val context = LocalContext.current` 在字体区被删后，这里的
+            // `val ctx = context` 引用悬空 —— 在 Composable 顶部就近补一份，
+            // SAF 持久化权限必须用真 Context（lambda 内部不能直接 LocalContext.current）。
+            val bgCtx = LocalContext.current
             val bgImageLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.OpenDocument()
             ) { uri ->
                 uri?.let {
                     // Take persistable permission
                     try {
-                        val ctx = context
-                        ctx.contentResolver.takePersistableUriPermission(
+                        bgCtx.contentResolver.takePersistableUriPermission(
                             it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                         )
                     } catch (_: Exception) {}

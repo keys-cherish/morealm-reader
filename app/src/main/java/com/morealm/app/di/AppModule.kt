@@ -355,6 +355,44 @@ private val MIGRATION_20_21 = object : Migration(20, 21) {
     }
 }
 
+/**
+ * v21→v22: replace_rules.kind — 净化分类标记。
+ *
+ * 0 = GENERAL（替换；与现状语义完全一致），1 = PURIFY（净化）。所有现存 row
+ * 默认落 0，因此任何已配置的规则在升级后行为不变；新增的"净化"分类只在用户
+ * 主动创建/编辑时才会出现 1 值。NOT NULL DEFAULT 0 让旧 ROM 上 ALTER TABLE
+ * 直接成功，无需 reflow。
+ */
+private val MIGRATION_21_22 = object : Migration(21, 22) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE replace_rules ADD COLUMN `kind` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
+ * v22→v23: 搜索历史 search_keyword 表。
+ *
+ * 主键直接用 word（TEXT NOT NULL），upsert 时凭主键冲突累加 usage / 刷新 lastUseTime；
+ * 不带自增 id —— word 本身天然唯一。lastUseTime / usage 默认 0 防止 NULL，给冷启动
+ * 安全。索引未额外建，因为：
+ *   - 排序 ORDER BY usage DESC, lastUseTime DESC 时表很小（最多几百行），全表扫足够；
+ *   - 前缀联想 LIKE 'q%' 可走 PRIMARY KEY 索引，无需重复建 (word) 索引。
+ */
+private val MIGRATION_22_23 = object : Migration(22, 23) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `search_keyword` (
+                `word` TEXT NOT NULL,
+                `lastUseTime` INTEGER NOT NULL DEFAULT 0,
+                `usage` INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY(`word`)
+            )
+            """.trimIndent()
+        )
+    }
+}
+
 private val MIGRATION_9_10 = object : Migration(9, 10) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // book_sources 表结构完全重构，删除旧表并重建
@@ -470,6 +508,8 @@ object AppModule {
                 MIGRATION_18_19,
                 MIGRATION_19_20,
                 MIGRATION_20_21,
+                MIGRATION_21_22,
+                MIGRATION_22_23,
             )
             // On downgrade: try restore from backup, otherwise keep tables as-is
             .addCallback(object : RoomDatabase.Callback() {
@@ -498,6 +538,7 @@ object AppModule {
     @Provides fun provideCacheDao(db: AppDatabase): CacheDao = db.cacheDao()
     @Provides fun provideCookieDao(db: AppDatabase): CookieDao = db.cookieDao()
     @Provides fun provideSearchBookCacheDao(db: AppDatabase): SearchBookCacheDao = db.searchBookCacheDao()
+    @Provides fun provideSearchKeywordDao(db: AppDatabase): SearchKeywordDao = db.searchKeywordDao()
 
     @Provides
     @Singleton

@@ -651,11 +651,47 @@ fun CanvasRenderer(
         val sameChapter = effectLastChapterHolder[0] == chapterIndex
         effectLastChapterHolder[0] = chapterIndex
         if (sameChapter) {
-            // 仅模式切换（如 SCROLL→SIMULATION）：coordinator remember 块里已
-            // 经用 readerPageIndex 同步算出 initialPage 并写入 lastSettled，
-            // 这里再写一次 0 反而会把它覆盖掉 —— 这是用户实测后第二次"滚动
-            // →仿真跳首页"复发的真正元凶。pagerState 在模式切换时不重建，
-            // currentPage 也保留着原页位，所以 scrollToPage 也不需要。
+            // 仅模式切换（如 SCROLL→SIMULATION / SCROLL→SLIDE）：coordinator
+            // remember 块里已经用 readerPageIndex 同步算出 initialPage 并写入
+            // lastSettledDisplayPage，绝不能在这里写回 0 把它覆盖掉。
+            //
+            // ─── Layer 2: pagerState 同步 ─────────────────────────────────────
+            // pagerState 在模式切换时不会被重建（rememberPagerState 在整段函数
+            // 都是同一个），但 SCROLL 模式期间 HorizontalPager 没挂载、pagerState
+            // 仍停留在上次离开 HorizontalPager 时的 currentPage 值——很可能是 0。
+            // 切回 SLIDE/COVER/NONE 这些用 HorizontalPager 的模式时，新挂载的
+            // pager 会以 pagerState.currentPage=0 立刻发出 onPageSettled(0)
+            // phantom 信号。Layer 1 在 coordinator 端拒绝了这条 phantom，但
+            // pagerState 自身仍然停在 0；后续如果再有任何写入路径触达，仍可
+            // 能拖住进度。这里主动把 pagerState 拉到 coordinator 已经算好的
+            // 真值（= readerPageIndex 解析出的进度页），让两边状态在切换瞬间
+            // 一致，是「彻底不回归」的保险栓。
+            //
+            // 注意：必须用 lastSettledDisplayPage 而不是 readerPageIndex——前者
+            // 在 SIMULATION 等用 displayIndex 寻址的模式里是经过 pageFactory
+            // 转换的 display index，直接用 reader local index 会错位。
+            //
+            // ─── cap 必须用 safeDisplayMax 而非 (renderPageCount - 1) ───────
+            // 模式切换瞬间 renderPageCount 常常 reset 到 1（pageFactory 重建、
+            // pages 列表还在 layout streaming），用 (renderPageCount - 1) 当
+            // 上限会把 lastSettled=N(N>0) 直接夹成 0，触发的 scrollToPage(0)
+            // 会反过来把 pagerState 移到第 0 页 + 让 phantom settle(0) 命中
+            // ignoredPage 被消费，最终把 lastSettled 改成 0——绕过 Layer 1
+            // 防御。22:27 那次没踩雷只是因为 pagerState.currentPage 恰好也
+            // 是 0（SCROLL session 没人动它）。若操作序列里 pagerState 已经
+            // 被翻过页（如 SLIDE→SCROLL→SLIDE），就会暴雷。
+            //
+            // safeDisplayMax 的解析顺序 prelayoutCache.pageSize → renderPageCount(>1)
+            // → Int.MAX_VALUE 在 layout streaming 早期也能给出稳定上限。
+            val targetDisplay = coordinator.lastSettledDisplayPage
+                .coerceIn(0, safeDisplayMax)
+            if (pagerState.currentPage != targetDisplay) {
+                // 对齐时把这一次 settle 标记成"忽略"，避免 scrollToPage 完成后
+                // 紧跟着的 onPageSettled(targetDisplay) 仍触发 saveProgress 写回
+                // (虽然写回的是同一个值不会损坏，但日志会更干净)。
+                coordinator.ignoredSettledDisplayPage = targetDisplay
+                pagerState.scrollToPage(targetDisplay)
+            }
             return@LaunchedEffect
         }
         // 真章节切换：跟 remember 块的逻辑保持等价（startFromLastPage 才跳末页）。
@@ -1168,13 +1204,41 @@ fun CanvasRenderer(
                 hasBgImage = bgBitmap != null,
             )
         } else {
+            // Diagnostic — pairs with [2] coordinator REBUILD and [3p]
+            // SimulationPager COMPOSE so we can see the chain:
+            //   coordinator.lastSettledDisplayPage → coerceIn(0, safeMax) →
+            //   simulationDisplayPage → SimulationPager currentDisplayPage.
+            // 用于诊断「切到仿真先闪首页」：如果 simulationDisplayPage 在
+            // 第一次重组时是 0、第二次才变成 lastSettled——就解释了首页一帧。
+            val computedSimDisplayPage =
+                coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax)
+            AppLog.debug(
+                "PageTurnFlicker",
+                "[1] simulationDisplayPage=$computedSimDisplayPage" +
+                    " (lastSettled=${coordinator.lastSettledDisplayPage}" +
+                    " safeDisplayMax=$safeDisplayMax pageAnimType=$pageAnimType)",
+            )
             AnimatedPageReader(
                 pagerState = pagerState,
                 animType = pageAnimType,
                 modifier = Modifier.fillMaxSize(),
                 simulationParams = simulationParams,
-                simulationDisplayPage = coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax),
+                simulationDisplayPage = computedSimDisplayPage,
                 onPageSettled = { settledPage ->
+                    // Diagnostic [3o] — 验证假设：pagerState 在 SCROLL 时被
+                    // 同步到 0，切到 SIMULATION 时若 HorizontalPager (在 SLIDE/
+                    // COVER 等其它分支) 或 SimulationPager 内部某处把
+                    // pagerState.currentPage=0 当成已 settled 上报，会写回
+                    // readerPageIndex=0 → 下一帧 coordinator 重建 displayPage=0
+                    // → 渲染章节首页那一帧。
+                    AppLog.debug(
+                        "PageTurnFlicker",
+                        "[3o] onPageSettled RECV settledPage=$settledPage" +
+                            " progressRestored=$progressRestored" +
+                            " coordinatorLastSettled=${coordinator.lastSettledDisplayPage}" +
+                            " readerPageIndex=$readerPageIndex" +
+                            " pageAnimType=$pageAnimType",
+                    )
                     if (!progressRestored) {
                         coordinator.pendingSettledDirection = null
                         return@AnimatedPageReader
@@ -1231,6 +1295,18 @@ fun CanvasRenderer(
         }
 
         if (pages.isEmpty() && chapter?.isCompleted != true) {
+            // Diagnostic [3f] — 这个 fallback 在 Box 内、if/else 分支之后，
+            // 不论 pageAnimType 都会评估；激活时会在 SimulationReadView 之上
+            // 层叠渲染 TextPage(title = chapterTitle) = 大字居中章节标题，
+            // 这是「切换上下→仿真先闪 B 第一页」的最可能源头。
+            // 切换瞬间 coordinator 重建 → pages 短暂为 empty → 本分支激活
+            // 1 帧 → 下一帧 pages 填回 → 消失。日志里捕到这条就实锤。
+            AppLog.debug(
+                "PageTurnFlicker",
+                "[3f] FALLBACK PageContentBox(title=\"$chapterTitle\")" +
+                    " pages.isEmpty=true chapter.isCompleted=${chapter?.isCompleted}" +
+                    " pageAnimType=$pageAnimType",
+            )
             PageContentBox(
                 page = TextPage(title = chapterTitle),
                 pageIndex = 0,

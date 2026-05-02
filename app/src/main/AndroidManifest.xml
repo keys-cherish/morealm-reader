@@ -72,6 +72,11 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <service
+            android:name=".service.CheckSourceService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -83,5 +88,19 @@
         </provider>
 
     </application>
+
+    <!--
+      Android 11+ (API 30) 包可见性沙箱：要让 TextToSpeech 能绑到设备上安装的 TTS 引擎
+      进程（系统自带 Google TTS、multitts、讯飞 TTS 等），必须在这里显式声明 TTS_SERVICE
+      意图。否则 `TextToSpeech(ctx, listener)` 构造时找不到任何可绑服务，OnInitListener
+      立即收到 status=ERROR(-1)，引擎列表 `tts.engines` 也是空 —— 表现为 "系统未识别到
+      可用的 TTS 引擎"，无论用户装了什么 TTS APK 都看不见。
+      参考：Legado app/src/main/AndroidManifest.xml 同样的写法。
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
 
 </manifest>

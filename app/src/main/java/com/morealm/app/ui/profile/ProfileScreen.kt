@@ -75,6 +75,9 @@ fun ProfileScreen(
     onNavigateThemeEditor: () -> Unit = {},
     onNavigateDonate: () -> Unit = {},
     onNavigateBackupExport: () -> Unit = {},
+    onNavigateBackupImport: () -> Unit = {},
+    /** 跳到全局书签管理屏。 */
+    onNavigateBookmarks: () -> Unit = {},
 ) {
     val moColors = LocalMoRealmColors.current
     val activeTheme by themeViewModel.activeTheme.collectAsStateWithLifecycle()
@@ -90,6 +93,8 @@ fun ProfileScreen(
     val backupImportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
+        // 旧路径保留：导入备份按钮如果用户长按或某些 fallback 场景仍走全量恢复。
+        // 主交互已经迁到 BackupImportScreen — 见 onNavigateBackupImport。
         uri?.let { profileViewModel.importBackup(it) }
     }
 
@@ -278,8 +283,8 @@ fun ProfileScreen(
                 subtitle = "选择需要导出的数据并查看大小",
                 onClick = { onNavigateBackupExport() })
             SettingsItem(Icons.Default.Download, "导入备份",
-                subtitle = "从 ZIP 文件恢复数据",
-                onClick = { backupImportLauncher.launch(arrayOf("application/zip", "application/octet-stream")) })
+                subtitle = "选择 ZIP 文件并按类别恢复",
+                onClick = { onNavigateBackupImport() })
             SettingsItem(Icons.Default.Cloud, "WebDAV 同步",
                 subtitle = "进度 / 书架 / 书源 / 主题 一键全同步",
                 onClick = onNavigateWebDav)
@@ -287,6 +292,8 @@ fun ProfileScreen(
 
         SettingsCard(Icons.Default.Extension, "书源管理",
             "导入、启用、删除书源，支持 URL 订阅和 JSON 导入", onClick = onNavigateSourceManage)
+        SettingsCard(Icons.Default.Bookmark, "我的书签",
+            "跨书查看、按时间过滤、按书分组", onClick = onNavigateBookmarks)
         SettingsCard(Icons.Default.CloudDownload, "离线缓存",
             "批量下载章节，支持离线阅读", onClick = onNavigateCacheBook)
         SettingsCard(Icons.Default.ImportExport, "Legado 一键搬家",

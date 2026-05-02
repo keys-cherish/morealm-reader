@@ -66,6 +66,7 @@ class SearchViewModel @Inject constructor(
     private val prefs: AppPreferences,
     private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
     private val autoGroupClassifier: AutoGroupClassifier,
+    private val searchHistoryRepo: com.morealm.app.domain.repository.SearchKeywordRepository,
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
@@ -93,6 +94,25 @@ class SearchViewModel @Inject constructor(
     val disclaimerAccepted: StateFlow<Boolean> = prefs.disclaimerAccepted
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
+    /**
+     * 搜索历史 Flow —— 由 [com.morealm.app.domain.repository.SearchKeywordRepository] 暴露，
+     * UI 端在输入框聚焦且 query 为空时下拉显示。Lazily 启动让没人观察时不维持订阅，
+     * 减少冷启动 IO；首次 collect 时才会拉一次 DB。
+     */
+    val searchHistory: StateFlow<List<com.morealm.app.domain.entity.SearchKeyword>> =
+        searchHistoryRepo.observeAll()
+            .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    /** 删除单条历史；UI 长按 / 滑动删除调它。 */
+    fun deleteHistory(word: String) {
+        viewModelScope.launch(Dispatchers.IO) { searchHistoryRepo.delete(word) }
+    }
+
+    /** 清空所有历史；UI 二次确认后调用。 */
+    fun clearHistory() {
+        viewModelScope.launch(Dispatchers.IO) { searchHistoryRepo.clear() }
+    }
+
     init {
         viewModelScope.launch(Dispatchers.IO) {
             val count = searchRepo.getEnabledSources()
@@ -115,6 +135,9 @@ class SearchViewModel @Inject constructor(
 
     fun search(keyword: String) {
         if (keyword.isBlank()) return
+        // 历史记录入库 —— 与搜索流程并行，不阻塞用户操作；写库失败不会冒泡。
+        // 放在 generation/job 重置之前，避免一次连续搜索把同一关键词重复 record。
+        viewModelScope.launch(Dispatchers.IO) { searchHistoryRepo.record(keyword) }
         val searchId = searchGeneration.incrementAndGet()
         searchJob?.cancel()
         _query.value = keyword

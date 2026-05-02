@@ -27,6 +27,18 @@ class AppPreferences @Inject constructor(
         val PAGE_TURN_MODE = stringPreferencesKey("page_turn_mode")
         val FULLSCREEN_TAP = booleanPreferencesKey("fullscreen_tap")
         val TTS_ENGINE = stringPreferencesKey("tts_engine")
+        /**
+         * 当 [TTS_ENGINE] = "system" 时绑定的具体 Android TTS 引擎包名（如
+         * `com.google.android.tts`、`net.olekdia.multispeech`）。空字符串 = 跟随
+         * 系统默认引擎（即不带 engineName 的 `TextToSpeech(context)` 行为）。
+         *
+         * 加这个 key 的原因：用户装了 MultiTTS 但 Android 默认 / 主进程
+         * 没启动时，`TextToSpeech(context)` 不带 engineName 走系统默认引擎
+         * 路径，OnInitListener 直接 status=ERROR，应用就报"未识别到 TTS 引擎"。
+         * 让用户在「听书」页明确指定引擎包后，用 3 参构造 `TextToSpeech(context, listener, engineName)`
+         * 直接绑那个包，就能避开默认引擎缺失的死路。
+         */
+        val TTS_SYSTEM_ENGINE_PACKAGE = stringPreferencesKey("tts_system_engine_package")
         val TTS_SPEED = floatPreferencesKey("tts_speed")
         val TTS_PITCH = floatPreferencesKey("tts_pitch")
         val WEBDAV_URL = stringPreferencesKey("webdav_url")
@@ -47,8 +59,23 @@ class AppPreferences @Inject constructor(
         val AUTO_NIGHT_MODE = booleanPreferencesKey("auto_night_mode")
         val SOURCE_FILTER_MIN_WORDS = intPreferencesKey("source_filter_min_words")
         val SOURCE_FILTER_MAX_WORDS = intPreferencesKey("source_filter_max_words")
+        /**
+         * 书源排序键。合法取值集中在 [com.morealm.app.presentation.source.SourceSortKey]
+         * 的 `key` 字段；未知值 fallback 到 CUSTOM。用 String 让今后追加新维度（如「错误数」）
+         * 时无需 DB 迁移，与 SOURCE_GROUP_MODE 同思路。
+         */
+        val SOURCE_SORT_BY = stringPreferencesKey("source_sort_by")
+        /** 排序升降序。true = 升序（与 SourceSortKey.naturalAscending 配合得到默认方向）。 */
+        val SOURCE_SORT_ASC = booleanPreferencesKey("source_sort_asc")
         val CUSTOM_FONT_URI = stringPreferencesKey("custom_font_uri")
         val CUSTOM_FONT_NAME = stringPreferencesKey("custom_font_name")
+        /**
+         * 用户用 OpenDocumentTree 挂载的"外部字体文件夹"持久化 URI。
+         * 与 [CUSTOM_FONT_URI]（当前选中那一只字体）正交：
+         *   - 文件夹只是浏览源
+         *   - 选中的字体路径仍写到 [CUSTOM_FONT_URI]，可能来自 App 字库（file://）或外部（content://）
+         */
+        val FONT_FOLDER_URI = stringPreferencesKey("font_folder_uri")
         val DISCLAIMER_ACCEPTED = booleanPreferencesKey("disclaimer_accepted")
         // Reading settings
         val PAGE_ANIM = stringPreferencesKey("page_anim") // cover/simulation/slide/vertical/fade/none
@@ -126,6 +153,10 @@ class AppPreferences @Inject constructor(
         // The classifier honours this set so a deleted "玄幻" folder doesn't reappear next
         // time a 3rd 玄幻 book is imported.
         val AUTO_FOLDER_IGNORED = stringSetPreferencesKey("auto_folder_ignored")
+        /**
+         * 章节内搜索的最近历史。换行分隔，最多 20 条；UI chip 展示。
+         */
+        val READER_SEARCH_HISTORY = stringPreferencesKey("reader_search_history")
         // Threshold (= number of books carrying the same genre tag) before the
         // classifier promotes that tag into a real folder. Lower = folders appear
         // sooner with less curation; higher = only "real" interests get a folder.
@@ -188,6 +219,10 @@ class AppPreferences @Inject constructor(
     val ttsEngine: Flow<String> = context.dataStore.data
         .map { it[Keys.TTS_ENGINE] ?: "system" }
 
+    /** 系统 TTS 引擎包名；空 = 跟系统默认。详见 [Keys.TTS_SYSTEM_ENGINE_PACKAGE]。 */
+    val ttsSystemEnginePackage: Flow<String> = context.dataStore.data
+        .map { it[Keys.TTS_SYSTEM_ENGINE_PACKAGE] ?: "" }
+
     val ttsSpeed: Flow<Float> = context.dataStore.data
         .map { it[Keys.TTS_SPEED] ?: 1.0f }
 
@@ -200,6 +235,21 @@ class AppPreferences @Inject constructor(
      */
     val sourceGroupMode: Flow<String> = context.dataStore.data
         .map { it[Keys.SOURCE_GROUP_MODE] ?: "none" }
+
+    /**
+     * 书源排序键 Flow。默认 "custom"（按 customOrder 排，与导入顺序一致）；旧用户
+     * 没在 DataStore 里写过这两个键，所以升级后看到的列表顺序与升级前 100% 一致。
+     */
+    val sourceSortBy: Flow<String> = context.dataStore.data
+        .map { it[Keys.SOURCE_SORT_BY] ?: "custom" }
+
+    /**
+     * 排序方向 Flow。默认 true（升序）。注意：BookSourceManageScreen 在做最终排序时
+     * 会把这个 flag 与 [com.morealm.app.presentation.source.SourceSortKey.naturalAscending]
+     * 异或，让"按响应时间"在升序时显示"快→慢"（直觉自然），而不是字面 ASC。
+     */
+    val sourceSortAscending: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.SOURCE_SORT_ASC] ?: true }
 
     val autoNightMode: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.AUTO_NIGHT_MODE] ?: true }
@@ -218,6 +268,10 @@ class AppPreferences @Inject constructor(
 
     val customFontName: Flow<String> = context.dataStore.data
         .map { it[Keys.CUSTOM_FONT_NAME] ?: "" }
+
+    /** 外部字体文件夹（持久化 SAF Tree URI）。空 = 用户没挂外部目录，只用 App 字库。 */
+    val fontFolderUri: Flow<String> = context.dataStore.data
+        .map { it[Keys.FONT_FOLDER_URI] ?: "" }
 
     val disclaimerAccepted: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.DISCLAIMER_ACCEPTED] ?: false }
@@ -413,10 +467,17 @@ class AppPreferences @Inject constructor(
     suspend fun setPageTurnMode(mode: String) = update(Keys.PAGE_TURN_MODE, mode)
     suspend fun setFullscreenTap(enabled: Boolean) = update(Keys.FULLSCREEN_TAP, enabled)
     suspend fun setTtsEngine(engine: String) = update(Keys.TTS_ENGINE, engine)
+
+    /** 设置系统 TTS 引擎包；传空字符串恢复"跟系统默认"。 */
+    suspend fun setTtsSystemEnginePackage(pkg: String) = update(Keys.TTS_SYSTEM_ENGINE_PACKAGE, pkg)
     suspend fun setTtsSpeed(speed: Float) = update(Keys.TTS_SPEED, speed)
     suspend fun setShelfViewMode(mode: String) = update(Keys.SHELF_VIEW_MODE, mode)
     /** 写入新的书源分组模式；调用方负责传入 [Keys.SOURCE_GROUP_MODE] 注释里列出的字符串。 */
     suspend fun setSourceGroupMode(mode: String) = update(Keys.SOURCE_GROUP_MODE, mode)
+
+    /** 写入书源排序键。值的合法性由调用方（SourceSortKey.fromKey）保证；不合法值在读侧 fallback。 */
+    suspend fun setSourceSortBy(key: String) = update(Keys.SOURCE_SORT_BY, key)
+    suspend fun setSourceSortAscending(asc: Boolean) = update(Keys.SOURCE_SORT_ASC, asc)
     suspend fun setAutoNightMode(enabled: Boolean) {
         themePrefs.edit().putBoolean("auto_night_mode", enabled).apply()
         update(Keys.AUTO_NIGHT_MODE, enabled)
@@ -430,6 +491,40 @@ class AppPreferences @Inject constructor(
     suspend fun clearCustomFont() {
         update(Keys.CUSTOM_FONT_URI, "")
         update(Keys.CUSTOM_FONT_NAME, "")
+    }
+
+    /**
+     * 持久化外部字体文件夹的 Tree URI。**必须** 在 SAF 回调（OpenDocumentTree）里立刻调，
+     * 因为 [android.content.ContentResolver.takePersistableUriPermission] 只能在系统授权
+     * 当下的进程上下文里成功调用。
+     *
+     * Legado FontSelectDialog 没做这步，重启 App 后偶发文件夹失效；这里补上。
+     * 旧 URI 替换时会主动 release 防止权限表无限膨胀。
+     */
+    /**
+     * 持久化外部字体文件夹的 Tree URI。**必须** 在 SAF 回调（OpenDocumentTree）里立刻调，
+     * 因为 [android.content.ContentResolver.takePersistableUriPermission] 只能在系统授权
+     * 当下的进程上下文里成功调用。
+     *
+     * Legado FontSelectDialog 没做这步，重启 App 后偶发文件夹失效；这里补上。
+     * 旧 URI 替换时会主动 release 防止权限表无限膨胀。
+     */
+    suspend fun setFontFolderUri(uri: String) {
+        val flag = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+        // 释放旧的（如果有）
+        runCatching {
+            val old = context.dataStore.data.first()[Keys.FONT_FOLDER_URI].orEmpty()
+            if (old.isNotBlank() && old != uri) {
+                context.contentResolver.releasePersistableUriPermission(android.net.Uri.parse(old), flag)
+            }
+        }
+        // 授予新的
+        if (uri.isNotBlank()) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(android.net.Uri.parse(uri), flag)
+            }
+        }
+        update(Keys.FONT_FOLDER_URI, uri)
     }
     suspend fun setDisclaimerAccepted() = update(Keys.DISCLAIMER_ACCEPTED, true)
     suspend fun setPageAnim(anim: String) = update(Keys.PAGE_ANIM, anim)
@@ -501,5 +596,60 @@ class AppPreferences @Inject constructor(
         context.dataStore.edit { prefs ->
             prefs[Keys.ALLOW_SOURCE_FALLBACK] = value
         }
+    }
+
+    // ── 备份 / 恢复用：DataStore 全量 raw 读写 ────────────────────────────
+    //
+    // 这两个方法故意是 *raw* 接口（基于 key name 而非 typed Key）。出口只给
+    // [com.morealm.app.domain.preference.PreferenceSnapshot] 用 —— 它在恢复
+    // 备份时把 zip 里 prefs.json 的全量条目灌回 DataStore，写入路径不应耦合
+    // AppPreferences 的强类型 API（强类型 setter 太多、且要求按 key 分别调用，
+    // 全量恢复会写一坨 if-else）。
+    //
+    // 不要把这两个方法当 public API 在 ViewModel 用：恢复以外的所有写入都
+    // 应该走具体的 setXxx() 方法，那里有 coerceIn / 镜像到 themePrefs 等
+    // 业务规则（比如 setAutoNightMode 同时刷 themePrefs 让启动闪屏判断生效）。
+    // 走 raw 接口会绕过这些 — 仅在「整体快照恢复」这种单一场景安全。
+
+    /**
+     * 拍摄当前 DataStore 全量快照。返回 `key.name -> raw value`，类型是 DataStore 写入时的
+     * 原生 Kotlin 类型（Boolean / Int / Long / Float / Double / String / Set<String>）。
+     */
+    suspend fun snapshotAllRaw(): Map<String, Any> {
+        val prefs = context.dataStore.data.first()
+        return prefs.asMap().mapKeys { it.key.name }
+    }
+
+    /**
+     * 把 [updates] 全量灌回 DataStore；[ignored] 中的 key name 跳过（黑名单 — 通常
+     * 用于排除 WEBDAV_PASS、LAST_*_TIME 之类不应跨设备恢复的项）。
+     *
+     * 类型分发依据 `value` 实际 Kotlin 类型，不依赖 PreferenceSnapshot 的 type tag —
+     * 上层负责把 JSON 解回正确的类型。未识别类型的 entry 被静默跳过。
+     *
+     * @return 实际写入的条目数（不含 ignored 跳过的）。
+     */
+    suspend fun applySnapshotRaw(updates: Map<String, Any>, ignored: Set<String>): Int {
+        var written = 0
+        context.dataStore.edit { prefs ->
+            for ((name, value) in updates) {
+                if (name in ignored) continue
+                when (value) {
+                    is Boolean -> prefs[booleanPreferencesKey(name)] = value
+                    is Int -> prefs[intPreferencesKey(name)] = value
+                    is Long -> prefs[longPreferencesKey(name)] = value
+                    is Float -> prefs[floatPreferencesKey(name)] = value
+                    is Double -> prefs[doublePreferencesKey(name)] = value
+                    is String -> prefs[stringPreferencesKey(name)] = value
+                    is Set<*> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        prefs[stringSetPreferencesKey(name)] = value.filterIsInstance<String>().toSet()
+                    }
+                    else -> continue
+                }
+                written++
+            }
+        }
+        return written
     }
 }

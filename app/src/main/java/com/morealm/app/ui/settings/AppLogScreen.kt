@@ -24,9 +24,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -105,7 +103,34 @@ fun AppLogScreen(onBack: () -> Unit) {
 
     // 顶层提一份 clipboard / Toast 触发器：批量复制按钮（actions 区）和 LogListTab
     // 单条长按复制（item 区）都用这一份；避免每个调用点都各自去 LocalComposition 拿。
-    val clipboard = LocalClipboardManager.current
+    //
+    // 直接走 Android 原生 ClipboardManager + ClipData.newPlainText(String)，
+    // 不用 Compose 的 LocalClipboardManager。原因：
+    //   1. LocalClipboardManager.setText(AnnotatedString) 会把 SpanStyle/
+    //      ParagraphStyle 一起序列化进 Parcel，对纯文本而言是无谓开销，
+    //      且会显著放大 IPC payload。
+    //   2. 大体量日志（几千条）的拼接结果接近甚至超过 Binder 单次事务上
+    //      限，AnnotatedString 包装更容易把它推过限值；超限时 ClipboardService
+    //      静默丢包，调用看起来是成功的、Toast 也照弹，剪贴板里实则是空的。
+    //   3. 改用原生 String 路径后，Android 26+ ClipboardService 自带的
+    //      ashmem 机制会替超大 ClipData 走共享内存通道，几千条普通日志
+    //      不再有这个问题。catastrophic 失败时下面 try/catch 会兜底提示。
+    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+        as android.content.ClipboardManager
+
+    /**
+     * 写入剪贴板的统一入口；失败时把异常吞掉但写一条错误日志 + Toast 真实
+     * 反馈。绝对避免「Toast 假装成功，剪贴板空空」这种最难排查的形态。
+     */
+    fun copyToClipboard(text: String, successMsg: String) {
+        try {
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("MoRealm Logs", text))
+            Toast.makeText(context, successMsg, Toast.LENGTH_SHORT).show()
+        } catch (t: Throwable) {
+            AppLog.error("AppLog", "clipboard copy failed (size=${text.length})", t)
+            Toast.makeText(context, "复制失败：内容过大或系统拒绝", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // 多选模式：长按 item 进入；selectionMode = true 时点击 = toggle 选中。
     // selectedIds 用 LogRecord.id（AtomicLong 自增，进程内唯一）做 key —— 但
@@ -148,8 +173,10 @@ fun AppLogScreen(onBack: () -> Unit) {
                             filteredLogs = filteredLogs,
                             allSelected = selectedIds.size == filteredLogs.size && filteredLogs.isNotEmpty(),
                             onCopy = {
-                                clipboard.setText(AnnotatedString(joinRecordsText(selectedRecords)))
-                                Toast.makeText(context, "已复制 ${selectedRecords.size} 条", Toast.LENGTH_SHORT).show()
+                                copyToClipboard(
+                                    text = joinRecordsText(selectedRecords),
+                                    successMsg = "已复制 ${selectedRecords.size} 条",
+                                )
                                 selectionMode = false
                                 selectedIds = emptySet()
                             },
@@ -180,13 +207,11 @@ fun AppLogScreen(onBack: () -> Unit) {
                                 selectedIds = emptySet()
                             },
                             onCopyAll = {
-                                clipboard.setText(AnnotatedString(joinRecordsText(filteredLogs)))
                                 val label = if (tagFilter != null) "tag=$tagFilter" else "全部"
-                                Toast.makeText(
-                                    context,
-                                    "已复制 ${filteredLogs.size} 条（$label）",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
+                                copyToClipboard(
+                                    text = joinRecordsText(filteredLogs),
+                                    successMsg = "已复制 ${filteredLogs.size} 条（$label）",
+                                )
                             },
                             onShareZip = { shareLogZip(context) },
                             onClear = { AppLog.clear() },

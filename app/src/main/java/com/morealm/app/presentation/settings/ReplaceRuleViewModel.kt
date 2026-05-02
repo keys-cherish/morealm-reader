@@ -50,7 +50,13 @@ class ReplaceRuleViewModel @Inject constructor(
         replacement: String,
         isRegex: Boolean,
         scope: String,
+        kind: Int = ReplaceRule.KIND_GENERAL,
     ) {
+        // 编辑现有规则时，如果调用方没显式传 kind（默认 GENERAL），
+        // 不要静默把"净化"改成"替换" —— 找到旧 row 把它的 kind 透传过来。
+        val resolvedKind = if (existingId != null && kind == ReplaceRule.KIND_GENERAL) {
+            allRules.value.firstOrNull { it.id == existingId }?.kind ?: kind
+        } else kind
         val rule = ReplaceRule(
             id = existingId ?: UUID.randomUUID().toString(),
             name = name,
@@ -59,6 +65,7 @@ class ReplaceRuleViewModel @Inject constructor(
             isRegex = isRegex,
             scope = scope,
             sortOrder = allRules.value.size,
+            kind = resolvedKind,
         )
         viewModelScope.launch(Dispatchers.IO) {
             replaceRuleRepo.insert(rule)
@@ -304,6 +311,8 @@ data class ReplaceRuleExportData(
     val enabled: Boolean = true,
     val sortOrder: Int = 0,
     val timeoutMs: Int = 3000,
+    /** kind 默认 0 (GENERAL)，让旧版本导出的 bundle 在新版本导入时仍能解析。 */
+    val kind: Int = ReplaceRule.KIND_GENERAL,
 )
 
 private fun ReplaceRule.toExportData(): ReplaceRuleExportData = ReplaceRuleExportData(
@@ -319,6 +328,7 @@ private fun ReplaceRule.toExportData(): ReplaceRuleExportData = ReplaceRuleExpor
     enabled = enabled,
     sortOrder = sortOrder,
     timeoutMs = timeoutMs,
+    kind = kind,
 )
 
 private fun ReplaceRuleExportData.toEntity(): ReplaceRule = ReplaceRule(
@@ -334,5 +344,6 @@ private fun ReplaceRuleExportData.toEntity(): ReplaceRule = ReplaceRule(
     enabled = enabled,
     sortOrder = sortOrder,
     timeoutMs = timeoutMs,
+    kind = kind,
 )
 // endregion

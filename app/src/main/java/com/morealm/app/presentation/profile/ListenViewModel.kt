@@ -51,6 +51,22 @@ class ListenViewModel @Inject constructor(
     val selectedEngine: StateFlow<String> = prefs.ttsEngine
         .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
 
+    /**
+     * 当前用户绑定的系统 TTS 引擎包名。空字符串 = 跟随系统默认。
+     * 仅在 [selectedEngine] = "system" 时 UI 才显示对应 picker；切到 edge / 其他
+     * 引擎时这个值仍保留，便于切回 system 时恢复用户偏好。
+     */
+    val selectedSystemEnginePackage: StateFlow<String> = prefs.ttsSystemEnginePackage
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    /**
+     * 系统已安装的所有 Android TTS 引擎清单（懒加载，UI 打开 picker 时调
+     * [refreshSystemEngineList] 主动拉一次；不放进 init 因为 systemTtsEngine
+     * 还没 init 完时清单可能为空）。
+     */
+    private val _systemEngines = MutableStateFlow<List<SystemTtsEngine.EngineInfo>>(emptyList())
+    val systemEngines: StateFlow<List<SystemTtsEngine.EngineInfo>> = _systemEngines.asStateFlow()
+
     val selectedSpeed: StateFlow<Float> = prefs.ttsSpeed
         .stateIn(viewModelScope, SharingStarted.Eagerly, 1.0f)
 
@@ -73,6 +89,31 @@ class ListenViewModel @Inject constructor(
             selectedEngine.collectLatest { engine ->
                 refreshVoices(engine)
             }
+        }
+    }
+
+    /**
+     * 拉一次 `TextToSpeech.getEngines()` 列表，UI 打开"系统 TTS 引擎包"
+     * picker 时调一次，结果写到 [systemEngines]。
+     */
+    fun refreshSystemEngineList() {
+        viewModelScope.launch {
+            _systemEngines.value = systemTtsEngine.getInstalledEngines()
+        }
+    }
+
+    /**
+     * 设置系统 TTS 引擎包名。传空字符串 = 恢复 "跟系统默认"。设置后会 toast
+     * 提示用户重启阅读器生效——因为 TtsEngineHost 的 systemTtsEngine 是 lazy
+     * 在首次用到时初始化的，已经初始化的实例不会自动换包。
+     */
+    fun selectSystemEnginePackage(pkg: String) {
+        viewModelScope.launch {
+            prefs.setTtsSystemEnginePackage(pkg)
+            com.morealm.app.core.log.AppLog.info(
+                "TTS",
+                "user picked system TTS package: ${pkg.ifBlank { "<system-default>" }}",
+            )
         }
     }
 

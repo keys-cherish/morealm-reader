@@ -39,6 +39,49 @@ class CacheBookViewModel @Inject constructor(
     /** Held bookId between SAF "create document" launch and result. */
     var pendingExportBookId: String? = null
 
+    /**
+     * Stage A 范围导出：顶部菜单触发的「按范围导出 TXT」需要在 SAF 拉起前知道
+     * 起止 index。由 RangeExportDialog 选定后写入；exportLauncher 回调读取并
+     * 一并传给 [exportTxt]。0-based; endIndex = -1 → 到末章。
+     */
+    var pendingExportStartIndex: Int = 0
+    var pendingExportEndIndex: Int = -1
+
+    /**
+     * Stage C：EPUB 多卷导出在「用户选完文件夹」之前要把范围 + 每卷大小记下来。
+     * 之所以单独开一个 holder 而不是复用 pendingExportBookId 三件套：多卷走的是
+     * 文件夹 SAF（OpenDocumentTree），不会经过 epubLauncher 的 single-document
+     * 回调路径，混着用容易在「用户既触发了单卷 EPUB 又触发了多卷」时撞到。
+     */
+    data class PendingMultiVolume(
+        val bookId: String,
+        /** 0-based, inclusive. */
+        val startIndex: Int,
+        /** 0-based, inclusive. */
+        val endIndex: Int,
+        /** 每卷章数；调用方保证 >= 1（== 0 走单文件 EPUB 路径）。 */
+        val volumeSize: Int,
+    )
+
+    /** 由 UI 在 RangeExportDialog 确认 EPUB 多卷后写入；epubFolderLauncher 回调消费。 */
+    var pendingMultiVolume: PendingMultiVolume? = null
+
+    /**
+     * 范围导出对话框需要的章节预览（仅非卷标 + 有 URL 的章节，跟 exportTxt 看到
+     * 的列表保持一致），key=bookId。按需加载，不主动初始化避免内存浪费。
+     */
+    private val _chaptersForRange = MutableStateFlow<Map<String, List<com.morealm.app.domain.entity.BookChapter>>>(emptyMap())
+    val chaptersForRange: StateFlow<Map<String, List<com.morealm.app.domain.entity.BookChapter>>> =
+        _chaptersForRange.asStateFlow()
+
+    fun loadChaptersForRange(bookId: String) {
+        if (_chaptersForRange.value.containsKey(bookId)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val chapters = cacheRepo.listExportableChapters(bookId)
+            _chaptersForRange.update { it + (bookId to chapters) }
+        }
+    }
+
     data class CacheStat(val totalChapters: Int, val cachedChapters: Int)
 
     /**
@@ -185,24 +228,137 @@ class CacheBookViewModel @Inject constructor(
      * Updates [exportState] with running progress and a final summary message.
      * Caller is responsible for first calling [pendingExportBookId] = book.id and launching
      * the SAF CreateDocument contract — the result URI is then handed back to this method.
+     *
+     * **Range mode** (Stage A): pass [startIndex] / [endIndex] to export only a sub-range
+     * (0-based; endIndex=-1 → 末章). Default = whole book, identical to legacy behaviour.
      */
-    fun exportTxt(book: Book, uri: Uri) {
+    fun exportTxt(book: Book, uri: Uri, startIndex: Int = 0, endIndex: Int = -1) {
         viewModelScope.launch(Dispatchers.IO) {
             updateExport(book.id) { it.copy(running = true, done = 0, total = 0, message = "") }
             try {
-                val written = cacheRepo.exportTxt(book, uri) { current, total ->
+                val written = cacheRepo.exportTxt(
+                    book = book,
+                    outputUri = uri,
+                    startIndex = startIndex,
+                    endIndex = endIndex,
+                ) { current, total ->
                     updateExport(book.id) { it.copy(running = true, done = current, total = total) }
                 }
                 val total = _exportState.value[book.id]?.total ?: 0
+                val isRange = startIndex > 0 || endIndex >= 0
                 val msg = when {
-                    written == 0 -> "导出失败：没有已缓存的章节"
+                    written == 0 -> "导出失败：所选范围内没有已缓存的章节"
                     written < total -> "已导出 $written/$total 章（其余未缓存已跳过）"
+                    isRange -> "已导出范围内 $written 章"
                     else -> "已导出 $written 章"
                 }
                 updateExport(book.id) { it.copy(running = false, written = written, message = msg) }
             } catch (e: Exception) {
                 updateExport(book.id) {
                     it.copy(running = false, message = "导出失败：${e.message?.take(80) ?: "未知错误"}")
+                }
+            }
+        }
+    }
+
+    /**
+     * Stage B/C: EPUB 导出。复用 [exportTxt] 的 pendingExportBookId/Start/End 三件套，
+     * 但走单独的 SAF MIME 类型 (`application/epub+zip`)，所以 UI 那边要 launcher
+     * 二选一。封面字节由调用方提供；目前 UI 还没接图片下载，先传 null（无封面），
+     * 与 Legado 在缓存目录里没有封面时的行为一致。
+     */
+    fun exportEpub(book: Book, uri: Uri, startIndex: Int = 0, endIndex: Int = -1, coverBytes: ByteArray? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            updateExport(book.id) { it.copy(running = true, done = 0, total = 0, message = "") }
+            try {
+                val written = cacheRepo.exportEpub(
+                    book = book,
+                    outputUri = uri,
+                    startIndex = startIndex,
+                    endIndex = endIndex,
+                    coverBytes = coverBytes,
+                ) { current, total ->
+                    updateExport(book.id) { it.copy(running = true, done = current, total = total) }
+                }
+                val total = _exportState.value[book.id]?.total ?: 0
+                val isRange = startIndex > 0 || endIndex >= 0
+                val msg = when {
+                    written == 0 && total == 0 -> "导出失败：未获取到章节"
+                    written == 0 -> "导出失败：所选范围内没有已缓存的章节"
+                    written < total -> "已导出 $written/$total 章 EPUB（其余未缓存已占位）"
+                    isRange -> "已导出范围内 $written 章 EPUB"
+                    else -> "已导出 $written 章 EPUB"
+                }
+                updateExport(book.id) { it.copy(running = false, written = written, message = msg) }
+            } catch (e: Exception) {
+                updateExport(book.id) {
+                    it.copy(running = false, message = "EPUB 导出失败：${e.message?.take(80) ?: "未知错误"}")
+                }
+            }
+        }
+    }
+
+    /**
+     * Stage C：EPUB 多卷导出。
+     *
+     * 由 RangeExportDialog 选定 (book, range, epubSize > 0) 后，UI 把数据写入
+     * [pendingMultiVolume] 并启动 SAF `OpenDocumentTree`；用户选完文件夹后回调
+     * 把 [treeUri] 交给本方法。本方法读 pending 状态、清空，然后调
+     * [CacheRepository.exportEpubMultiVolume] 在该文件夹下逐卷写。
+     *
+     * 进度合并到 [exportState] 上：`done` 累加跨卷的章数，`total` 是总范围章数 ——
+     * UI 只显示一条总览进度条，避免"卷条 + 章条"两层抖动。
+     */
+    fun exportEpubMultiVolume(treeUri: Uri) {
+        val pending = pendingMultiVolume ?: return
+        pendingMultiVolume = null
+        val book = webBooks.value.firstOrNull { it.id == pending.bookId } ?: return
+        val totalChapters = (pending.endIndex - pending.startIndex + 1).coerceAtLeast(0)
+        if (totalChapters == 0) {
+            _oneShotToast.value = "导出范围为空"
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            updateExport(book.id) {
+                it.copy(running = true, done = 0, total = totalChapters, message = "")
+            }
+            try {
+                val (volumes, written) = cacheRepo.exportEpubMultiVolume(
+                    book = book,
+                    treeUri = treeUri,
+                    startIndex = pending.startIndex,
+                    endIndex = pending.endIndex,
+                    volumeSize = pending.volumeSize,
+                ) { volIdx, _, cur, _ ->
+                    // "已完结卷的全部章数 + 当前卷已完成 cur 章"作为汇总 done。最后一
+                    // 卷不足 size 时这里会略偏（baseDone 用 volumeSize 估算），但 done
+                    // 单调递增、结束会被强制设为 totalChapters，UI 上看不出抖动。
+                    val baseDone = (volIdx - 1) * pending.volumeSize
+                    val combined = (baseDone + cur).coerceAtMost(totalChapters)
+                    updateExport(book.id) {
+                        it.copy(running = true, done = combined, total = totalChapters)
+                    }
+                }
+                val msg = when {
+                    volumes == 0 -> "EPUB 多卷导出失败：未能在所选文件夹下创建任何卷文件"
+                    written == 0 -> "已生成 $volumes 个空卷 — 所选范围内没有已缓存章节"
+                    else -> "已导出 $volumes 卷 EPUB（共 $written 章）"
+                }
+                updateExport(book.id) {
+                    it.copy(
+                        running = false,
+                        done = totalChapters,
+                        total = totalChapters,
+                        written = written,
+                        message = msg,
+                    )
+                }
+            } catch (e: Exception) {
+                updateExport(book.id) {
+                    it.copy(
+                        running = false,
+                        message = "EPUB 多卷导出失败：${e.message?.take(80) ?: "未知错误"}",
+                    )
                 }
             }
         }

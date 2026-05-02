@@ -41,7 +41,13 @@ class TtsEngineHost(
 ) {
     // ── Engines ──────────────────────────────────────────────────────────────
     private val systemTtsEngine by lazy {
-        SystemTtsEngine(context).also { it.initialize() }
+        // 读用户配置的系统 TTS 引擎包（如果有）；空 = 跟系统默认。lazy 在首次
+        // 用到时同步读 first()；用户改了引擎后 host 这边引擎实例已 init 完成，
+        // 必须重启 reader（或用 RebindSystemEngine 路径）才能换包，权衡是简单。
+        val pkg = runCatching {
+            kotlinx.coroutines.runBlocking { prefs.ttsSystemEnginePackage.first() }
+        }.getOrDefault("")
+        SystemTtsEngine(context).also { it.initialize(enginePackage = pkg) }
     }
     private val edgeTtsEngine by lazy { EdgeTtsEngine(context) }
 
@@ -78,6 +84,8 @@ class TtsEngineHost(
     private var speakJob: Job? = null
     private var sleepTimerJob: Job? = null
     private var oneShotJob: Job? = null
+    /** [setSpeed] 的去抖重启 job，每次速度变化重设；[release] 时取消。 */
+    private var pendingSpeedRestartJob: Job? = null
 
     // Serialize all (cancel + start) operations so rapid commands don't race.
     private val controlMutex = Mutex()
@@ -108,6 +116,7 @@ class TtsEngineHost(
         speakJob?.cancel()
         sleepTimerJob?.cancel()
         oneShotJob?.cancel()
+        pendingSpeedRestartJob?.cancel()
         runCatching { systemTtsEngine.stop(); systemTtsEngine.shutdown() }
         runCatching { edgeTtsEngine.stop() }
     }
@@ -633,10 +642,21 @@ class TtsEngineHost(
     }
 
     /**
-     * EdgeTts / 其他流式引擎走的老 callbackFlow 串行路径。
-     * 保留旧实现是因为这些引擎一次返回一段音频流，没有 TTS 引擎层面的"队列"概念。
+     * 流式引擎的入口：
+     *
+     * - **Edge 引擎**：走 [runEdgeChapterPlayback]——把当前段及之后所有非空段拼成
+     *   一份大 SSML（段间用 `<break time="600ms"/>`）一次性 WSS 合成，超长自动分批。
+     *   这是 plan C：解决"段间没停顿、段中乱停顿"的同时，重听整章可以缓存命中。
+     *   段进度通过时长估算驱动 `onParagraphStart` 回调（避开 Edge `audio.metadata`
+     *   的 JSON 解析）。
+     * - **其他流式引擎**（HttpTts 等）：保留旧的逐段 [engine.speak] callbackFlow
+     *   串行路径——这些引擎一段一次 HTTP/合成，没有"整章 SSML"概念。
      */
     private suspend fun runStreamingPlayback(engine: TtsEngine) {
+        if (engine is EdgeTtsEngine) {
+            runEdgeChapterPlayback(engine)
+            return
+        }
         var consecutiveErrors = 0
         try {
             for (idx in paragraphIndex until paragraphs.size) {
@@ -725,13 +745,176 @@ class TtsEngineHost(
         }
     }
 
+    /**
+     * Plan C — Edge 整章合成路径。
+     *
+     * 把 [paragraphIndex, paragraphs.size) 中所有非空、非 skipRegex 的段拼成一份
+     * SSML（段间 `<break time="${EDGE_CHAPTER_BREAK_MS}ms"/>`），调
+     * [EdgeTtsEngine.speakChapter] 整章一次性合成（超长由 engine 内部分批 WSS）。
+     *
+     * 段进度跟随：engine 通过 [onParagraphStart] 回调按时长估算驱动，参数是
+     * "本次合成内非空段的相对索引"——映射回 host 真实 paragraphIndex 用 [origIndices]。
+     *
+     * 失败时（连错 ≥ 2）回退到老的逐段 streaming 路径。Edge 故障多见于鉴权时钟漂移
+     * 已被 EdgeTtsEngine 内部处理；这里只兜底彻底崩溃的情况。
+     */
+    private suspend fun runEdgeChapterPlayback(engine: EdgeTtsEngine) {
+        try {
+            // 收集要朗读的段：保留 (originalIdx, text)，blank 和 skipRegex 直接跳过。
+            // 与 paragraphsFromPositions "保留空段以推进高亮" 的策略不冲突：
+            // 这里只是不送给引擎合成，paragraphIndex 仍然能从 onParagraphStart 推进
+            // 到下一个非空段，过程中跳过的空段会被 publishState 一次性带过。
+            data class ToRead(val origIdx: Int, val text: String)
+            val toRead = ArrayList<ToRead>()
+            for (i in paragraphIndex until paragraphs.size) {
+                val p = paragraphs[i]
+                if (p.isBlank() || skipRegex?.containsMatchIn(p) == true) continue
+                toRead.add(ToRead(i, p))
+            }
+            if (toRead.isEmpty()) {
+                AppLog.warn("TtsHost", "runEdgeChapterPlayback: nothing to read")
+                publishState(playing = false)
+                waitingForNextChapter = true
+                TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
+                return
+            }
+
+            AppLog.info(
+                "TTS",
+                "Host.runEdgeChapterPlayback: nonEmpty=${toRead.size}, " +
+                    "startPara=$paragraphIndex, totalChars=${toRead.sumOf { it.text.length }}",
+            )
+
+            val texts = toRead.map { it.text }
+            val origIndices = toRead.map { it.origIdx }
+
+            try {
+                engine.speakChapter(
+                    paragraphs = texts,
+                    speed = speed,
+                    breakMs = EDGE_CHAPTER_BREAK_MS,
+                    onParagraphStart = { localIdx ->
+                        // localIdx 是非空段相对索引（0..toRead.size-1）
+                        if (!TtsEventBus.playbackState.value.isPlaying) return@speakChapter
+                        val origIdx = origIndices.getOrNull(localIdx) ?: return@speakChapter
+                        if (paragraphIndex != origIdx) {
+                            AppLog.debug(
+                                "TtsHost",
+                                "edge para advance: $paragraphIndex → $origIdx (local=$localIdx)",
+                            )
+                            paragraphIndex = origIdx
+                            paragraphStartPos = 0
+                            publishState(playing = true)
+                        }
+                    },
+                ).collect { /* drain */ }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.warn("TtsHost", "Edge speakChapter failed, falling back to per-para streaming", e)
+                TtsEventBus.sendEvent(
+                    TtsEventBus.Event.Error(
+                        "Edge 整章合成失败，已切回逐段模式：${e.message ?: "未知错误"}",
+                        canOpenSettings = false,
+                    )
+                )
+                // 直接复用旧的逐段路径——把 engine 当通用 TtsEngine 走 streaming
+                runPerParagraphStreaming(engine)
+                return
+            }
+
+            // chapter end
+            waitingForNextChapter = true
+            TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
+            val gotNext = withTimeoutOrNull(WAIT_NEXT_CHAPTER_MS) {
+                while (waitingForNextChapter) delay(50)
+                true
+            }
+            if (gotNext != true) publishState(playing = false)
+        } catch (_: CancellationException) {
+            // normal cancel
+        } catch (e: Exception) {
+            AppLog.error("TtsHost", "runEdgeChapterPlayback crashed", e)
+            publishState(playing = false)
+        }
+    }
+
+    /**
+     * 旧的逐段流式路径，从 [runStreamingPlayback] 抽出来供 [runEdgeChapterPlayback]
+     * 失败时回退使用。其他流式引擎（HttpTts）的正常路径也走这个实现。
+     */
+    private suspend fun runPerParagraphStreaming(engine: TtsEngine) {
+        var consecutiveErrors = 0
+        try {
+            for (idx in paragraphIndex until paragraphs.size) {
+                if (!TtsEventBus.playbackState.value.isPlaying) return
+                paragraphIndex = idx
+                paragraphStartPos = 0
+                publishState(playing = true)
+
+                val paragraphText = paragraphs[idx]
+                if (paragraphText.isBlank() ||
+                    skipRegex?.containsMatchIn(paragraphText) == true) continue
+
+                try {
+                    engine.speak(paragraphText, speed).collect { /* drain */ }
+                    consecutiveErrors = 0
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (e: Exception) {
+                    consecutiveErrors++
+                    AppLog.warn("TtsHost", "per-para fallback error idx=$idx (consec=$consecutiveErrors)", e)
+                    if (consecutiveErrors >= 3) {
+                        publishState(playing = false)
+                        return
+                    }
+                    delay(200)
+                }
+            }
+            waitingForNextChapter = true
+            TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
+            val gotNext = withTimeoutOrNull(WAIT_NEXT_CHAPTER_MS) {
+                while (waitingForNextChapter) delay(50)
+                true
+            }
+            if (gotNext != true) publishState(playing = false)
+        } catch (_: CancellationException) {
+            // normal cancel
+        }
+    }
+
     // ── Configuration setters ────────────────────────────────────────────────
 
     private fun setSpeed(newSpeed: Float) {
-        speed = newSpeed.coerceIn(0.3f, 4.0f)
+        val coerced = newSpeed.coerceIn(0.3f, 4.0f)
+        if (coerced == speed) return
+        speed = coerced
         scope.launch { prefs.setTtsSpeed(speed) }
         TtsEventBus.updatePlayback { copy(speed = speed) }
-        // Speed change takes effect on the next paragraph; no need to restart.
+        // 必须重启播放循环才能让新速度生效：
+        // - Edge plan C：rate 写死在整章 SSML 的 <prosody> 里，已发出去的合成请求
+        //   不会改速度，必须取消重发当前位置往后的内容。
+        // - System TTS 批量：tts.setSpeechRate 只影响**未来 enqueue**，已入队的
+        //   utterance 仍按旧速读完。
+        // - Edge 老逐段：要等到下一段才生效，体感上"按了没用"。
+        //
+        // Debounce 250ms 防 Slider 拖动时狂打断（TtsPanel 用 Slider，每个 tick 都
+        // 会调 setSpeed；ListenScreen 用 5 档按钮也复用这条路径无碍）。最后一次
+        // tick 后 250ms 才真正重启，整个滑动过程不会反复打断音频。
+        if (TtsEventBus.playbackState.value.isPlaying && paragraphs.isNotEmpty()) {
+            pendingSpeedRestartJob?.cancel()
+            pendingSpeedRestartJob = scope.launch {
+                delay(SPEED_RESTART_DEBOUNCE_MS)
+                controlMutex.withLock {
+                    // 二次确认：debounce 等待期间用户可能按了暂停 / 停止
+                    if (!TtsEventBus.playbackState.value.isPlaying) return@withLock
+                    speakJob?.cancelAndJoin()
+                    runCatching { currentEngine().stop() }
+                    publishState(playing = true)
+                    speakJob = scope.launch { speakLoop() }
+                }
+            }
+        }
     }
 
     private fun setEngine(newEngine: String) {
@@ -957,12 +1140,13 @@ class TtsEngineHost(
     private fun paragraphsFromPositions(content: String, positions: List<Int>): List<String> {
         if (positions.isEmpty()) return emptyList()
         val out = ArrayList<String>(positions.size)
+        var orphanFragments = 0
         for (i in positions.indices) {
             val rawStart = positions[i]
             val rawEnd = positions.getOrNull(i + 1) ?: content.length
             val start = rawStart.coerceIn(0, content.length)
             val end = rawEnd.coerceIn(start, content.length)
-            val cleaned = content.substring(start, end)
+            var cleaned = content.substring(start, end)
                 .replace(AppPattern.htmlImgRegex, "")
                 .replace(AppPattern.htmlSvgRegex, "")
                 .replace(AppPattern.htmlDivCloseRegex, "\n")
@@ -971,7 +1155,27 @@ class TtsEngineHost(
                 .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
                 .replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'")
                 .trim()
+            // 防御性兜底：positions 来自渲染层 stringBuilder（裸 `<img>` 在那边
+            // 占 5 字节文本），但 content 是渲染前的原始 HTML —— 两个坐标系
+            // 微小漂移会让切片落在 `<img...>` 标签中间，留下 `<img` 这种没有
+            // 闭合 `>` 的碎片，所有 htmlImgRegex / htmlTagRegex 都无法匹配，
+            // 最后被当成纯文本读出来（即"img src..."这种引擎合成结果）。
+            // 见：ReaderViewModel.cleanContentForTts 也做了一道。
+            // 检测到 `<` 残留就把它到 slice 末尾全部裁掉 —— 宁可少读半句，
+            // 不要让用户听见标签字面读音。
+            val orphan = cleaned.indexOf('<')
+            if (orphan >= 0) {
+                orphanFragments++
+                cleaned = cleaned.substring(0, orphan).trimEnd()
+            }
             out.add(cleaned)
+        }
+        if (orphanFragments > 0) {
+            AppLog.debug(
+                "TtsHost",
+                "paragraphsFromPositions: stripped $orphanFragments orphan-tag fragment(s) " +
+                    "(positions/content coordinate-space drift)",
+            )
         }
         return out
     }
@@ -1004,6 +1208,18 @@ class TtsEngineHost(
 
         /** 长段二次切句阈值（字符数）。<= 80 不切，避免短段被切碎。 */
         private const val LONG_PARA_THRESHOLD = 80
+
+        /**
+         * Plan C：Edge 整章合成时段间 `<break>` 标签的毫秒数。
+         * 600ms 是经验值：明显长于 Edge 服务端句末 prosody（~250-350ms），低于让人
+         * 错觉"已经停下来了"的 800ms。
+         */
+        private const val EDGE_CHAPTER_BREAK_MS = 600L
+
+        /**
+         * [setSpeed] 去抖窗口。Slider 拖动时每个 tick 触发，250ms 内只算最后一次值。
+         */
+        private const val SPEED_RESTART_DEBOUNCE_MS = 250L
 
         /** 切句分隔符：中文标点 + 换行（结合 splitIntoSubSentences 使用）。 */
         private val SENTENCE_SEPARATORS = setOf('。', '！', '？', '；', '\n')

@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -175,12 +176,30 @@ fun SearchScreen(
 
         // Results
         if (results.isEmpty() && localResults.isEmpty() && !isSearching) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    if (sourceProgress.isEmpty()) "输入关键词搜索" else "暂无结果",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+            // 空态优先级：
+            //  - 还有正在进行 / 已结束搜索（sourceProgress 非空）→ 显示"暂无结果"
+            //  - 用户当前 query 是空 + 没搜过 → 显示历史区（若历史也空，回退到 placeholder 文案）
+            //  - 用户输入了 query 但没回车 → 不动（让他继续输）
+            val history by viewModel.searchHistory.collectAsStateWithLifecycle()
+            val showHistory = sourceProgress.isEmpty() && query.isEmpty() && history.isNotEmpty()
+            if (showHistory) {
+                SearchHistorySection(
+                    history = history,
+                    onSelect = { word ->
+                        query = word
+                        viewModel.search(word)
+                    },
+                    onDelete = { viewModel.deleteHistory(it) },
+                    onClear = { viewModel.clearHistory() },
                 )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        if (sourceProgress.isEmpty()) "输入关键词搜索" else "暂无结果",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                    )
+                }
             }
         } else {
             LazyColumn(
@@ -467,7 +486,22 @@ private fun MoreSourceTag(count: Int) {
     }
 }
 
-/** Online search result with cover image — matches HTML se-ri */
+/**
+ * 在线书源搜索结果卡片 —— 规范化布局，5 槽位固定。
+ *
+ * 设计目的：解决不同书源 SearchBook 字段填得不一致导致每张卡显得"乱"的问题。
+ * 即使某些槽（最新章节 / 字数 / 简介）为空，也保留位置不重排，让列表所有卡片
+ * 高度一致 / 视线对齐。
+ *
+ * 布局：90×128dp 全高封面 ┃ 信息列：
+ *   1. 标题（titleSmall）
+ *   2. 作者 · 分类（labelMedium，灰色）
+ *   3. 最新章节（labelSmall，primary 色，前缀"最新："；为空时显示 "—"）
+ *   4. 简介（bodySmall × 2 行；为空时显示 "暂无简介"）
+ *   5. 底栏：来源（labelSmall primary）· 字数（labelSmall 灰）· 下载按钮
+ *
+ * 非文本源（音频/图片等）：禁用点击，底栏显示红色"非文本源"标记。
+ */
 @Composable
 private fun OnlineResultItem(
     result: SearchResult,
@@ -485,104 +519,133 @@ private fun OnlineResultItem(
     ) {
         Row(
             Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
         ) {
-            // Cover
-            if (!result.coverUrl.isNullOrBlank()) {
-                AsyncImage(
-                    model = result.coverUrl,
-                    contentDescription = result.title,
-                    modifier = Modifier
-                        .size(46.dp, 64.dp)
-                        .clip(MaterialTheme.shapes.small),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(46.dp, 64.dp)
-                        .clip(MaterialTheme.shapes.small)
-                        .background(
-                            Brush.linearGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+            // 全高封面 90×128dp（与右侧信息列同高）
+            Box(
+                modifier = Modifier
+                    .size(width = 90.dp, height = 128.dp)
+                    .clip(MaterialTheme.shapes.small),
+            ) {
+                if (!result.coverUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = result.coverUrl,
+                        contentDescription = result.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                    )
                                 )
-                            )
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("📖", fontSize = 20.sp)
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("📖", fontSize = 28.sp)
+                    }
                 }
             }
 
             Spacer(Modifier.width(12.dp))
 
-            // Info
-            Column(Modifier.weight(1f)) {
+            // 信息列：5 个固定槽位
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(128.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                // 1. 标题
                 Text(
                     result.title,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (result.author.isNotBlank()) {
-                    Text(
-                        result.author,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                }
-                // Legado-parity meta row: 最新章节 / 字数 / 分类
-                // Pulled from result.searchBook (already populated by source rules) so no extra fetch.
-                val meta = remember(result) {
-                    buildList {
-                        result.searchBook?.latestChapterTitle?.takeIf { it.isNotBlank() }
-                            ?.let { add("最新: ${it.take(20)}") }
-                        result.searchBook?.wordCount?.takeIf { it.isNotBlank() }
-                            ?.let { add(it) }
-                        result.searchBook?.kind?.takeIf { it.isNotBlank() }
-                            ?.let { add(it.replace(",", " ").replace("，", " ").take(24)) }
-                    }.joinToString(" · ")
-                }
-                if (meta.isNotEmpty()) {
-                    Text(
-                        meta,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.85f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                }
-                if (result.intro.isNotBlank()) {
-                    Text(
-                        result.intro,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
+
+                // 2. 作者 · 分类
+                val authorAndKind = remember(result) {
+                    val parts = mutableListOf<String>()
+                    if (result.author.isNotBlank()) parts.add(result.author)
+                    result.searchBook?.kind?.takeIf { it.isNotBlank() }?.let {
+                        parts.add(it.replace(",", " ").replace("，", " ").take(20))
+                    }
+                    parts.joinToString(" · ").ifBlank { "—" }
                 }
                 Text(
-                    "来源：${result.sourceName}" + if (isTextSource) "" else " · ${sourceTypeLabel(result.sourceType)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isTextSource) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 3.dp),
+                    authorAndKind,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            }
 
-            // Download button — default 48dp touch target
-            IconButton(onClick = onDownload, enabled = isTextSource) {
-                Icon(
-                    Icons.Default.CloudDownload,
-                    contentDescription = "缓存下载",
-                    tint = MaterialTheme.colorScheme.primary.copy(alpha = if (isTextSource) 0.5f else 0.18f),
-                    modifier = Modifier.size(20.dp),
+                // 3. 最新章节
+                val latestText = result.searchBook?.latestChapterTitle?.takeIf { it.isNotBlank() }
+                    ?.let { "最新: ${it.take(24)}" }
+                    ?: "最新: —"
+                Text(
+                    latestText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+
+                // 4. 简介（2 行）
+                Text(
+                    result.intro.ifBlank { "暂无简介" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                // 5. 底栏：来源 · 字数 · 下载
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val sourceLabel = if (isTextSource) result.sourceName
+                                      else "${result.sourceName} · ${sourceTypeLabel(result.sourceType)}"
+                    Text(
+                        sourceLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isTextSource) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    val wordCount = result.searchBook?.wordCount?.takeIf { it.isNotBlank() }
+                    if (wordCount != null) {
+                        Text(
+                            wordCount,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                            modifier = Modifier.padding(start = 6.dp),
+                        )
+                    }
+                    IconButton(
+                        onClick = onDownload,
+                        enabled = isTextSource,
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.CloudDownload,
+                            contentDescription = "缓存下载",
+                            tint = MaterialTheme.colorScheme.primary.copy(
+                                alpha = if (isTextSource) 0.7f else 0.18f
+                            ),
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
             }
         }
     }
@@ -629,5 +692,109 @@ private fun LocalBookItem(book: Book, onClick: () -> Unit = {}) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
             )
         }
+    }
+}
+
+/**
+ * 搜索历史区。两段式布局：
+ *
+ *   - 顶部一行: 标题 "搜索历史" + 右侧"清空"文字按钮（点击二次确认）
+ *   - 下方 FlowRow: 每个历史词一个 [SuggestionChip]，点 = 填入并触发搜索；
+ *     右上 X 小按钮 = 删除单条。SuggestionChip 比 AssistChip 更贴"列表项"语义。
+ *
+ * 滚动用 [verticalScroll] 而非 LazyColumn，因为：
+ *   - 历史已 trim 到 200 行以内，整渲染开销可忽略；
+ *   - 嵌入到 Column 父布局里，LazyColumn 套 Column 会触发 nested scroll 灾难。
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun SearchHistorySection(
+    history: List<com.morealm.app.domain.entity.SearchKeyword>,
+    onSelect: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onClear: () -> Unit,
+) {
+    var confirmClear by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        ) {
+            Text(
+                "搜索历史",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { confirmClear = true }) {
+                Text(
+                    "清空",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                )
+            }
+        }
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            history.forEach { kw ->
+                AssistChip(
+                    onClick = { onSelect(kw.word) },
+                    label = {
+                        Text(
+                            kw.word,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 200.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    },
+                    trailingIcon = {
+                        // 单条删除：用 close 图标做 trailingIcon，让 chip 既可点搜也可删；
+                        // 不引入长按手势是因为 chip 本身没 onLongClick 接口，且 trailing X
+                        // 在密集列表里更易点中。
+                        androidx.compose.foundation.layout.Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clickable { onDelete(kw.word) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                "删除",
+                                modifier = Modifier.size(12.dp),
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            )
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("清空搜索历史") },
+            text = { Text("将删除全部 ${history.size} 条历史记录，此操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onClear()
+                    confirmClear = false
+                }) {
+                    Text("清空", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) { Text("取消") }
+            },
+        )
     }
 }

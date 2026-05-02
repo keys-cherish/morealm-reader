@@ -1,5 +1,6 @@
 package com.morealm.app.presentation.source
 
+import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,8 +10,10 @@ import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.domain.source.BookSourceImporter
 import com.morealm.app.domain.webbook.CheckSource
 import com.morealm.app.domain.webbook.SourceDebug
+import com.morealm.app.service.CheckSourceService
 import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -22,6 +25,7 @@ import javax.inject.Inject
 class BookSourceManageViewModel @Inject constructor(
     private val sourceRepo: SourceRepository,
     private val prefs: AppPreferences,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     data class ImportProgress(
@@ -50,6 +54,35 @@ class BookSourceManageViewModel @Inject constructor(
             // 写之前打日志（而不是写之后）即便 DataStore 抛异常也能看到用户意图。
             AppLog.info("SourceManage", "groupMode set -> '$mode'")
             prefs.setSourceGroupMode(mode)
+        }
+    }
+
+    /**
+     * 列表排序键 + 升降序，分别持久化在两个 DataStore key 中。Eagerly 启动让
+     * UI 顶栏的菜单当前选项随时可读，无需等首次 collect。
+     *
+     * 默认值由 [AppPreferences.sourceSortBy] / [AppPreferences.sourceSortAscending] 决定，
+     * 与 prefs 自身的 fallback 一致；StateFlow 的 initial value 给同一组默认，
+     * 防止 UI 在 cold flow 还没 emit 第一个值时显示"空"。
+     */
+    val sortBy: StateFlow<String> = prefs.sourceSortBy
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "custom")
+    val sortAscending: StateFlow<Boolean> = prefs.sourceSortAscending
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    /** 写入新排序键（合法值见 [SourceSortKey.key]）。失败由 DataStore 重试兜底。 */
+    fun setSortBy(key: String) {
+        viewModelScope.launch {
+            AppLog.info("SourceManage", "sortBy set -> '$key'")
+            prefs.setSourceSortBy(key)
+        }
+    }
+
+    /** 切换升降序——典型调用：用户点"反向"菜单项，或重复点同一排序维度时翻转。 */
+    fun setSortAscending(asc: Boolean) {
+        viewModelScope.launch {
+            AppLog.info("SourceManage", "sortAsc set -> $asc")
+            prefs.setSourceSortAscending(asc)
         }
     }
 
@@ -230,6 +263,14 @@ class BookSourceManageViewModel @Inject constructor(
     }
 
     // ── CheckSource 批量校验 ──
+    //
+    // 2026-05 重构：跑批从 viewModelScope 搬到 [CheckSourceService] (前台服务)，
+    // 解决"App 切后台被杀就停"的痼疾。这里保留原有 4 个 StateFlow 接口签名不变，
+    // 让 UI 完全无感 —— init 块订阅 Service 全局 StateFlow 后映射到本地。
+    //
+    // DB 持久化（errorMsg / lastCheckTime）已下沉到 Service，本类不再写 DB；
+    // dialog 触发逻辑（_invalidCheckResults / _showInvalidResultsDialog）保留在
+    // 这里，因为 dialog 是 UI 的事，Service 不该懂 UI。
 
     private val _isChecking = MutableStateFlow(false)
     val isChecking: StateFlow<Boolean> = _isChecking.asStateFlow()
@@ -243,69 +284,66 @@ class BookSourceManageViewModel @Inject constructor(
     private val _checkResults = MutableStateFlow<Map<String, CheckSource.CheckResult>>(emptyMap())
     val checkResults: StateFlow<Map<String, CheckSource.CheckResult>> = _checkResults.asStateFlow()
 
-    private var checkJob: kotlinx.coroutines.Job? = null
+    init {
+        // Service.results 直接镜像到 _checkResults — Service 跑批前会清空，不需要本地清。
+        viewModelScope.launch {
+            CheckSourceService.results.collect { _checkResults.value = it }
+        }
+        // Service.state 投影到三个进度 flow + 触发 dialog（仅 Done 时）
+        viewModelScope.launch {
+            CheckSourceService.state.collect { s ->
+                when (s) {
+                    is CheckSourceService.Companion.State.Idle -> {
+                        _isChecking.value = false
+                    }
+                    is CheckSourceService.Companion.State.Running -> {
+                        _isChecking.value = true
+                        _checkProgress.value = s.done
+                        _checkTotal.value = s.total
+                    }
+                    is CheckSourceService.Companion.State.Done -> {
+                        _isChecking.value = false
+                        _checkProgress.value = s.total
+                        _checkTotal.value = s.total
+                        if (s.invalidCount < 0) {
+                            // Service 返回 -1 表示跑批本身崩了（异常 / IO 错误等）
+                            _importResult.value = "校验失败"
+                        } else {
+                            val valid = s.total - s.invalidCount
+                            _importResult.value = "校验完成: $valid/${s.total} 可用"
+                            val invalid = _checkResults.value.values.filter { !it.isValid }
+                            if (invalid.isNotEmpty()) {
+                                _invalidCheckResults.value = invalid
+                                _showInvalidResultsDialog.value = true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
+    /**
+     * 启动批量校验。空启用列表会通过 [importResult] 做 toast 提示，不调 service。
+     * 已经在校验中（Service.state == Running）则忽略，避免重复启动同一个 service。
+     */
     fun startCheckSources() {
         if (_isChecking.value) return
-        checkJob?.cancel()
         val allSources = sources.value.filter { it.enabled }
         if (allSources.isEmpty()) {
             _importResult.value = "没有启用的书源"
             return
         }
-        _isChecking.value = true
-        _checkProgress.value = 0
-        _checkTotal.value = allSources.size
-        _checkResults.value = emptyMap()
-
-        val completedCount = AtomicInteger(0)
-        checkJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                CheckSource.checkAll(allSources, concurrency = 4) { _, result ->
-                    _checkProgress.value = completedCount.incrementAndGet()
-                    _checkResults.value = _checkResults.value + (result.sourceUrl to result)
-                    // Persist outcome so the badge survives app restart and the
-                    // user sees consistent "失效原因" without re-running the check.
-                    // We look up the live source row each time because user edits
-                    // may have changed it between batch start and this callback.
-                    val live = allSources.firstOrNull { it.bookSourceUrl == result.sourceUrl }
-                    if (live != null) {
-                        live.errorMsg = if (result.isValid) null else result.error
-                        live.lastCheckTime = System.currentTimeMillis()
-                        // Persist async — onResult is called from the check coroutine
-                        // (non-suspending callback contract), so spawn a child job
-                        // off the IO dispatcher to do the DB write without blocking.
-                        viewModelScope.launch(Dispatchers.IO) {
-                            runCatching { sourceRepo.insert(live) }
-                                .onFailure {
-                                    com.morealm.app.core.log.AppLog.warn(
-                                        "CheckSource",
-                                        "persist failed: ${it.message?.take(120)}",
-                                    )
-                                }
-                        }
-                    }
-                }
-                val results = _checkResults.value
-                val valid = results.values.count { it.isValid }
-                _importResult.value = "校验完成: $valid/${allSources.size} 可用"
-                // 仅当有失效本时弹出删除询问对话框（与"全部有效→只 toast"区分开）。
-                val invalid = results.values.filter { !it.isValid }
-                if (invalid.isNotEmpty()) {
-                    _invalidCheckResults.value = invalid
-                    _showInvalidResultsDialog.value = true
-                }
-            } catch (e: Exception) {
-                _importResult.value = "校验失败: ${e.message}"
-            } finally {
-                _isChecking.value = false
-            }
-        }
+        AppLog.info("CheckSource", "Start check via service, ${allSources.size} sources")
+        CheckSourceService.start(context, allSources.map { it.bookSourceUrl })
     }
 
+    /**
+     * 取消校验。直接通知 Service 停。Service 会 cancel 跑批 + stopSelf；
+     * 本类的 _isChecking 由 init 的 collect 块自动同步到 false。
+     */
     fun cancelCheckSources() {
-        checkJob?.cancel()
-        _isChecking.value = false
+        CheckSourceService.stop(context)
     }
 
     // ── CheckSource 完成弹窗 ──

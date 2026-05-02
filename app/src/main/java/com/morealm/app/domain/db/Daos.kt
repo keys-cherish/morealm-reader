@@ -377,6 +377,10 @@ interface BookmarkDao {
 
     @Query("SELECT * FROM bookmarks ORDER BY createdAt DESC")
     suspend fun getAllSync(): List<Bookmark>
+
+    /** 全局书签 Flow，用于 BookmarksScreen 实时显示 + 删除即刷新。 */
+    @Query("SELECT * FROM bookmarks ORDER BY createdAt DESC")
+    fun getAll(): Flow<List<Bookmark>>
 }
 
 /**
@@ -577,4 +581,41 @@ interface SearchBookCacheDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(caches: List<SearchBookCache>)
+}
+
+/**
+ * 搜索历史 ([SearchKeyword]) DAO。读侧策略：
+ *
+ *   - `topAll` → 默认下拉里看到的"最近 / 最常用"列表，usage DESC + lastUseTime DESC
+ *     双键排序让"经常搜的"和"刚搜过的"自然冒上来；
+ *   - `searchPrefix` → 用户开始输入时做联想前缀匹配。LIKE 'q%' 不带 %prefix% 是为了
+ *     可走 PRIMARY KEY 索引（word 是主键，前缀 LIKE 可用 B-tree），高频 IME 输入
+ *     时不会卡顿；
+ *   - `clear` 一键清空整个历史，与"删除单条"分开，UI 二次确认；
+ *   - `delete` 单条删除供长按弹"删除该词"。
+ *
+ * 写侧用 upsert + 计数累加：详见 [com.morealm.app.domain.repository.SearchKeywordRepository.record]。
+ */
+@Dao
+interface SearchKeywordDao {
+    @Query("SELECT * FROM search_keyword ORDER BY usage DESC, lastUseTime DESC LIMIT :limit")
+    fun topAll(limit: Int = 50): Flow<List<SearchKeyword>>
+
+    @Query("SELECT * FROM search_keyword ORDER BY usage DESC, lastUseTime DESC LIMIT :limit")
+    suspend fun topAllSync(limit: Int = 50): List<SearchKeyword>
+
+    @Query("SELECT * FROM search_keyword WHERE word LIKE :prefix || '%' ORDER BY usage DESC, lastUseTime DESC LIMIT :limit")
+    suspend fun searchPrefix(prefix: String, limit: Int = 10): List<SearchKeyword>
+
+    @Query("SELECT * FROM search_keyword WHERE word = :word")
+    suspend fun get(word: String): SearchKeyword?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(keyword: SearchKeyword)
+
+    @Query("DELETE FROM search_keyword WHERE word = :word")
+    suspend fun deleteByWord(word: String)
+
+    @Query("DELETE FROM search_keyword")
+    suspend fun clear()
 }

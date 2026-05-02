@@ -12,6 +12,9 @@ class BookmarkRepository @Inject constructor(
 ) {
     fun getBookmarks(bookId: String): Flow<List<Bookmark>> = dao.getBookmarks(bookId)
 
+    /** 全局所有书签的 Flow。BookmarksScreen 订阅；删除/添加自动刷新。 */
+    fun getAll(): Flow<List<Bookmark>> = dao.getAll()
+
     suspend fun insert(bookmark: Bookmark) = dao.insert(bookmark)
 
     suspend fun deleteById(id: String) = dao.deleteById(id)

@@ -32,6 +32,7 @@ import com.morealm.app.ui.detail.BookDetailScreen
 import com.morealm.app.ui.listen.ListenScreen
 import com.morealm.app.ui.profile.AboutScreen
 import com.morealm.app.ui.profile.BackupExportScreen
+import com.morealm.app.ui.profile.BackupImportScreen
 import com.morealm.app.ui.profile.ChangelogScreen
 import com.morealm.app.ui.profile.DonateScreen
 import com.morealm.app.ui.profile.ProfileScreen
@@ -76,7 +77,7 @@ fun MoRealmNavHost(
     }
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route.startsWith("theme_editor")
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -144,6 +145,8 @@ fun MoRealmNavHost(
                 val onNavThemeEditor = remember { { navController.safeNavigate("theme_editor") } }
                 val onNavDonate = remember { { navController.safeNavigate("donate") } }
                 val onNavBackupExport = remember { { navController.safeNavigate("backup_export") } }
+                val onNavBackupImport = remember { { navController.safeNavigate("backup_import") } }
+                val onNavBookmarks = remember { { navController.safeNavigate("bookmarks") } }
                 val onSearchBack = remember(switchTab) { { switchTab(0) } }
 
                 var dragAmount by remember { mutableFloatStateOf(0f) }
@@ -256,6 +259,8 @@ fun MoRealmNavHost(
                             onNavigateThemeEditor = onNavThemeEditor,
                             onNavigateDonate = onNavDonate,
                             onNavigateBackupExport = onNavBackupExport,
+                            onNavigateBackupImport = onNavBackupImport,
+                            onNavigateBookmarks = onNavBookmarks,
                         )
                                 }
                             }
@@ -294,12 +299,34 @@ fun MoRealmNavHost(
                 BackupExportScreen(onBack = { navController.safePopBackStack() })
             }
 
+            composable("backup_import") {
+                BackupImportScreen(onBack = { navController.safePopBackStack() })
+            }
+
             composable("source_manage") {
-                BookSourceManageScreen(onBack = { navController.safePopBackStack() })
+                BookSourceManageScreen(
+                    onBack = { navController.safePopBackStack() },
+                    onNavigateToLog = { navController.safeNavigate("app_log") },
+                )
             }
 
             composable("reading_settings") {
                 ReadingSettingsScreen(onBack = { navController.safePopBackStack() })
+            }
+
+            composable("font_manager") {
+                com.morealm.app.ui.settings.FontManagerScreen(
+                    onBack = { navController.safePopBackStack() }
+                )
+            }
+
+            composable("bookmarks") {
+                com.morealm.app.ui.profile.BookmarksScreen(
+                    onBack = { navController.safePopBackStack() },
+                    onOpenBook = { bookId, _ ->
+                        navController.safeNavigate("reader/$bookId")
+                    },
+                )
             }
 
             composable(
@@ -360,6 +387,9 @@ fun MoRealmNavHost(
                     },
                     onNavigateToReplaceRule = { ruleId ->
                         navController.safeNavigate("replace_rules?editId=$ruleId")
+                    },
+                    onNavigateToFontManager = {
+                        navController.safeNavigate("font_manager")
                     },
                     themeViewModel = themeViewModel,
                 )

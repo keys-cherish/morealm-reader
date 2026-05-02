@@ -14,6 +14,15 @@ class ContentProcessor(
 
     private var titleReplaceRules: List<ReplaceRule> = emptyList()
     private var contentReplaceRules: List<ReplaceRule> = emptyList()
+    /**
+     * 缓存按 kind 拆分后的列表，避免每次 process() 都遍历 contentReplaceRules
+     * 重新分组。规则数量改动经过 [upReplaceRules] 时同步刷新。
+     *
+     * 顺序约定：先 PURIFY 后 GENERAL —— 净化只删不改，先把广告 / 版权声明清掉
+     * 能避免 GENERAL 的语义替换误中广告里出现的关键字。
+     */
+    private var purifyContentRules: List<ReplaceRule> = emptyList()
+    private var generalContentRules: List<ReplaceRule> = emptyList()
 
     init {
         upReplaceRules()
@@ -25,6 +34,8 @@ class ContentProcessor(
                 .filter { it.scopeTitle }
             contentReplaceRules = dao.getEnabledByScope(bookName, bookOrigin)
                 .filter { it.scopeContent }
+            purifyContentRules = contentReplaceRules.filter { it.kind == ReplaceRule.KIND_PURIFY }
+            generalContentRules = contentReplaceRules.filter { it.kind != ReplaceRule.KIND_PURIFY }
         }
     }
 
@@ -66,9 +77,21 @@ class ContentProcessor(
         } catch (_: Exception) {}
 
         // 替换净化（按行 trim 后再做规则替换）
+        // 顺序：先 PURIFY 后 GENERAL —— 净化只删不改，先清广告 / 版权声明，
+        // 再做语义替换；倒过来会让 GENERAL 误中广告里出现的关键字。
         if (useReplace) {
             mContent = mContent.lines().joinToString("\n") { it.trim() }
-            for (rule in contentReplaceRules) {
+            for (rule in purifyContentRules) {
+                if (rule.pattern.isEmpty()) continue
+                try {
+                    mContent = if (rule.isRegex) {
+                        mContent.replace(rule.pattern.toRegex(), rule.replacement)
+                    } else {
+                        mContent.replace(rule.pattern, rule.replacement)
+                    }
+                } catch (_: Exception) {}
+            }
+            for (rule in generalContentRules) {
                 if (rule.pattern.isEmpty()) continue
                 try {
                     mContent = if (rule.isRegex) {
