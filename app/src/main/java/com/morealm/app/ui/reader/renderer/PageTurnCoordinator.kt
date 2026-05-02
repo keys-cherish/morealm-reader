@@ -258,6 +258,23 @@ internal class PageTurnCoordinator(
         val turnStartDisplayPage = pendingTurnStartDisplayPage.coerceIn(0, renderPageCount - 1)
         pendingSettledDirection = null
         if (direction == null) {
+            // ─── HorizontalPager 切换模式时的 phantom-settle 防御 ─────────
+            // 当 coordinator 刚刚 rebuild 时 [ignoredSettledDisplayPage] 被设为
+            // 期望的 initial page（在 CanvasRenderer remember 块里 = readerPageIndex
+            // 解析出的进度页索引）。能走到这里说明 settledPage 既不匹配
+            // ignoredPage 也不匹配 lastSettled——这种情形几乎只发生在「上一个
+            // 模式 (SCROLL) 期间 pagerState.currentPage 被同步到了 0，新挂载
+            // 的 HorizontalPager (SLIDE/COVER/NONE) 立刻把残留的 0 当作 settled
+            // 上报」。如果这里照旧 lastSettledDisplayPage = settledPage，会把
+            // 进度直接回滚到 0、下一帧渲染章节首页大字标题——实测 21:16:53
+            // 那一段就是这条路径。
+            //
+            // 修复：消费掉「等待初始 settle」的槽位但不写回，让 LaunchedEffect
+            // 后续的 pagerState.scrollToPage(initial) 把状态拉到正确位置。
+            if (ignoredSettledDisplayPage != null) {
+                ignoredSettledDisplayPage = null
+                return
+            }
             lastSettledDisplayPage = settledPage
             lastReaderContent = createPageState(settledPage).upContent()
             reportProgress(lastReaderContent)

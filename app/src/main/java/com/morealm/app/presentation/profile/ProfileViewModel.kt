@@ -265,6 +265,179 @@ class ProfileViewModel @Inject constructor(
         }
     }
 
+    // ── Selective restore (导入选项 page = BackupImportScreen) ──────────────
+    //
+    // The flow:
+    //   1. screen opens → sections empty, no preview yet
+    //   2. user picks zip via SAF → loadRestoreSections(uri) → preview rows + default
+    //      selections (everything checked) populate; failure surfaces in
+    //      [restorePreviewError] for the screen to display
+    //   3. user toggles checkboxes → toggleRestoreSection / selectAll / clear
+    //   4. user taps「开始恢复」 → runImportWithSelections() — applies the chosen
+    //      RestoreOptions, BackupStatusBus emits a toast on completion.
+
+    private val _restoreSections =
+        MutableStateFlow<List<com.morealm.app.domain.sync.BackupManager.RestoreSectionInfo>>(emptyList())
+    val restoreSections: StateFlow<List<com.morealm.app.domain.sync.BackupManager.RestoreSectionInfo>> =
+        _restoreSections.asStateFlow()
+
+    /** Currently-checked section keys (mirrors [BackupManager.RestoreOptions] field set). */
+    private val _restoreSelections = MutableStateFlow<Set<String>>(emptySet())
+    val restoreSelections: StateFlow<Set<String>> = _restoreSelections.asStateFlow()
+
+    /**
+     * Holds the SAF Uri the user picked. Cleared after a successful restore so
+     * a stale uri can't accidentally trigger a second restore on screen
+     * recomposition. Re-set every time [loadRestoreSections] runs.
+     */
+    private val _restorePendingUri = MutableStateFlow<Uri?>(null)
+    val restorePendingUri: StateFlow<Uri?> = _restorePendingUri.asStateFlow()
+
+    private val _restoreSectionsLoading = MutableStateFlow(false)
+    val restoreSectionsLoading: StateFlow<Boolean> = _restoreSectionsLoading.asStateFlow()
+
+    /**
+     * Last preview-side failure message; null when preview succeeded or hasn't
+     * been attempted. Cleared on a fresh [loadRestoreSections] call. Separate
+     * from [backupStatus] (which is for the global Toast bus) so the screen
+     * can render an inline empty-state when the file doesn't parse.
+     */
+    private val _restorePreviewError = MutableStateFlow<String?>(null)
+    val restorePreviewError: StateFlow<String?> = _restorePreviewError.asStateFlow()
+
+    /**
+     * Per-restore password override. Empty = fall back to the prefs-stored
+     * [backupPassword] (which the user typically sets once for both encrypt
+     * and decrypt). Non-empty wins for this restore session only — never
+     * persisted back to DataStore, so a one-off password used to recover a
+     * differently-encrypted backup doesn't replace the user's daily password.
+     *
+     * Why this knob exists: previewRestoreSections / importBackup pull from
+     * a single shared [effectiveRestorePassword]; without an override field
+     * the user with no prefs password could never restore an encrypted zip
+     * (no UI to type one in). Using a temporary `MutableStateFlow` keeps
+     * the password in process memory only — survives Activity recreation
+     * but dies with the process, matching what users expect from password
+     * inputs that aren't explicitly "remember".
+     */
+    private val _restorePasswordOverride = MutableStateFlow("")
+    val restorePasswordOverride: StateFlow<String> = _restorePasswordOverride.asStateFlow()
+
+    fun setRestorePasswordOverride(value: String) {
+        _restorePasswordOverride.value = value
+    }
+
+    /**
+     * Combine the override with the prefs-stored password. The override wins
+     * when set so a "wrong daily password" can be temporarily replaced for
+     * one restore. When both empty, returns "" which signals plain-zip mode
+     * to BackupManager (it falls through to no decryption).
+     */
+    private fun effectiveRestorePassword(): String =
+        _restorePasswordOverride.value.ifEmpty { backupPassword.value }
+
+    /**
+     * Read the picked zip, decrypt with the saved [backupPassword], and emit
+     * per-section preview rows. Failure modes surface in [restorePreviewError]
+     * — the screen renders a friendly message + "重新选择" button instead of
+     * a blank list.
+     */
+    fun loadRestoreSections(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _restoreSectionsLoading.value = true
+            _restorePreviewError.value = null
+            _restorePendingUri.value = uri
+            try {
+                val sections = backupRepo.previewRestoreSections(uri, effectiveRestorePassword())
+                _restoreSections.value = sections
+                if (sections.isNotEmpty()) {
+                    // Default = restore everything that's actually in the backup.
+                    _restoreSelections.value = sections.map { it.key }.toSet()
+                } else {
+                    _restoreSelections.value = emptySet()
+                    val reason = backupRepo.consumeLastBackupError()
+                    _restorePreviewError.value = reason
+                        ?: "无法读取备份内容（密码错误？文件损坏？）"
+                }
+            } catch (e: Throwable) {
+                _restoreSections.value = emptyList()
+                _restoreSelections.value = emptySet()
+                _restorePreviewError.value = "读取备份失败：${e.message ?: e.javaClass.simpleName}"
+            } finally {
+                _restoreSectionsLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Re-run [loadRestoreSections] against the *current* pending uri. Intended
+     * for the "应用密码" button in the import screen — user typed a different
+     * password and wants the preview to refresh without re-picking the file.
+     * No-op when no file is queued (button disabled in that case).
+     */
+    fun reloadRestorePreview() {
+        val uri = _restorePendingUri.value ?: return
+        loadRestoreSections(uri)
+    }
+
+    /** Toggle one section's checkbox. */
+    fun toggleRestoreSection(key: String) {
+        val current = _restoreSelections.value
+        _restoreSelections.value = if (key in current) current - key else current + key
+    }
+
+    fun selectAllRestoreSections() {
+        _restoreSelections.value = _restoreSections.value.map { it.key }.toSet()
+    }
+
+    fun clearRestoreSelections() {
+        _restoreSelections.value = emptySet()
+    }
+
+    /**
+     * Run the actual restore using the user's current [restoreSelections].
+     * No-op when no zip is queued (defensive — UI disables the button in that
+     * case but a recomposition race could theoretically fire the click).
+     *
+     * Pending uri is cleared regardless of success so a stale recomposition
+     * cannot retry the restore unattended.
+     */
+    fun runImportWithSelections() {
+        val uri = _restorePendingUri.value ?: return
+        val selectedKeys = _restoreSelections.value
+        viewModelScope.launch(Dispatchers.IO) {
+            _backupStatus.value = "导入中..."
+            val opts = com.morealm.app.domain.sync.BackupManager.RestoreOptions(
+                includeBooks = "books" in selectedKeys,
+                includeBookmarks = "bookmarks" in selectedKeys,
+                includeSources = "sources" in selectedKeys,
+                includeProgress = "progress" in selectedKeys,
+                includeGroups = "groups" in selectedKeys,
+                includeReplaceRules = "replaceRules" in selectedKeys,
+                includeThemes = "themes" in selectedKeys,
+                includeReaderStyles = "readerStyles" in selectedKeys,
+                includePreferences = "preferences" in selectedKeys,
+            )
+            val ok = backupRepo.importBackup(uri, effectiveRestorePassword(), opts)
+            _restorePendingUri.value = null
+            // Restore session ended — clear the per-session password override
+            // so the next zip import starts fresh with the prefs default.
+            _restorePasswordOverride.value = ""
+            val finalMsg = if (ok) {
+                val n = selectedKeys.size
+                "导入成功（$n 项已恢复）"
+            } else {
+                val reason = backupRepo.consumeLastBackupError()
+                when {
+                    !reason.isNullOrBlank() -> "导入失败：$reason"
+                    else -> "导入失败（密码错误或文件损坏？）"
+                }
+            }
+            _backupStatus.value = finalMsg
+            com.morealm.app.domain.sync.BackupStatusBus.emit(finalMsg)
+        }
+    }
+
     // ── WebDAV Backup/Restore ──
 
     private val _webDavStatus = MutableStateFlow("")

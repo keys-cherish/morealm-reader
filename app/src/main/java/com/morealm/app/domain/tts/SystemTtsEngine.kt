@@ -159,13 +159,24 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
      * Kick off async init. The callback receives the final [InitResult].
      * Failure cases include: no TTS engine installed, init returned ERROR,
      * or the engine doesn't support / lacks data for Chinese.
+     *
+     * @param enginePackage 显式绑定的引擎包名（如 "com.google.android.tts"、
+     *  "net.olekdia.multispeech"）。null 或空 = 用系统默认引擎（不带 engineName
+     *  的旧路径）。指定包名时使用 3 参 `TextToSpeech(ctx, listener, engineName)`
+     *  构造，能在系统默认引擎不可用 / 没启动时直接绑用户选定的包，绕过
+     *  "未识别到 TTS 引擎" 的兜底失败。
      */
-    fun initialize(onResult: (InitResult) -> Unit = {}) {
-        com.morealm.app.core.log.AppLog.info("TTS", "SystemTtsEngine.initialize: creating TextToSpeech")
-        tts = TextToSpeech(context) { status ->
+    fun initialize(enginePackage: String? = null, onResult: (InitResult) -> Unit = {}) {
+        val pkg = enginePackage?.takeIf { it.isNotBlank() }
+        com.morealm.app.core.log.AppLog.info(
+            "TTS",
+            "SystemTtsEngine.initialize: creating TextToSpeech (pkg=${pkg ?: "<system-default>"})",
+        )
+        val listener = TextToSpeech.OnInitListener { status ->
             com.morealm.app.core.log.AppLog.info(
                 "TTS",
-                "SystemTtsEngine.OnInitListener: status=$status (SUCCESS=${TextToSpeech.SUCCESS})",
+                "SystemTtsEngine.OnInitListener: status=$status (SUCCESS=${TextToSpeech.SUCCESS}) " +
+                    "pkg=${pkg ?: "<system-default>"}",
             )
             val result: InitResult = if (status == TextToSpeech.SUCCESS) {
                 val langStatus = try {
@@ -186,7 +197,10 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
                     }
                 }
             } else {
-                InitResult.Failed("系统未识别到可用的 TTS 引擎，请到系统设置启用或安装一个引擎")
+                // 包名带了但还是失败——附在文案里给用户看，方便定位是不是
+                // 包名打错 / 该引擎进程没起来 / 系统列表没识别到。
+                val pkgHint = pkg?.let { "（已绑定包名 $it）" }.orEmpty()
+                InitResult.Failed("系统未识别到可用的 TTS 引擎$pkgHint，请到系统设置启用或安装一个引擎")
             }
             initResult = result
             onResult(result)
@@ -196,7 +210,40 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
             pendingReadyCallbacks.clear()
             snapshot.forEach { it(result) }
         }
+        tts = if (pkg != null) {
+            TextToSpeech(context, listener, pkg)
+        } else {
+            TextToSpeech(context, listener)
+        }
     }
+
+    /**
+     * 列出系统已安装的所有 TTS 引擎，供"听书"页 UI 让用户选指定包。
+     * 不需要 init 完成 —— `getEngines` 在 binder 没建好时也能查 PackageManager。
+     * 返回空列表表示真没装任何 TTS 引擎（这种情况下 picker UI 应该提示用户去
+     * 系统设置安装）。
+     */
+    fun getInstalledEngines(): List<EngineInfo> {
+        return runCatching {
+            val engine = tts ?: TextToSpeech(context) {}.also { tts = it }
+            engine.engines.orEmpty().map {
+                EngineInfo(name = it.name.orEmpty(), label = it.label.orEmpty())
+            }
+        }.getOrElse {
+            com.morealm.app.core.log.AppLog.warn(
+                "TTS", "getInstalledEngines threw: ${it.message}",
+            )
+            emptyList()
+        }
+    }
+
+    /** 单个系统 TTS 引擎条目。 */
+    data class EngineInfo(
+        /** 包名，例如 "com.google.android.tts"。直接喂给 [initialize] 的 enginePackage。 */
+        val name: String,
+        /** 用户可读 label。空时 UI 自己回退显示包名。 */
+        val label: String,
+    )
 
     /**
      * Suspend until init resolves, with a hard timeout so a never-firing OnInitListener

@@ -1,8 +1,10 @@
 package com.morealm.app.presentation.reader
 
 import android.content.Context
+import android.graphics.Typeface
 import android.net.Uri
 import com.morealm.app.domain.entity.ReaderStyle
+import com.morealm.app.domain.font.FontRepository
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.ReaderStyleRepository
 import com.morealm.app.core.log.AppLog
@@ -20,6 +22,7 @@ class ReaderSettingsController(
     private val scope: CoroutineScope,
     private val context: Context,
     private val styleRepo: ReaderStyleRepository,
+    private val fontRepo: FontRepository,
 ) {
     // ══════════════════════════════════════════════════════════════
     // Behavioral settings (DataStore) — NOT part of visual style
@@ -119,6 +122,19 @@ class ReaderSettingsController(
         .map { it?.fontFamily ?: "noto_serif_sc" }
         .stateIn(scope, SharingStarted.Eagerly, "noto_serif_sc")
 
+    /**
+     * 阅读器当前应用的 [Typeface]。组合 [fontFamily]（内置字体键）和 [customFontUri]
+     * （用户自定义字体路径，优先级更高）实时计算。
+     *
+     * 加载逻辑全权委托 [FontRepository.resolveTypeface]，与字体管理页 / 其它调用点一致。
+     * 自定义路径加载失败时由 repo 内部 fallback 到系统字体；这里**不**自动清空 prefs，
+     * 避免在用户瞬时拔 SD 卡 / 切换 SAF 权限时把"已配置"状态吞掉。需要清理由 UI 主动触发。
+     */
+    val currentTypeface: StateFlow<Typeface> =
+        combine(fontFamily, customFontUri) { fam, uri -> fam to uri }
+            .map { (fam, uri) -> fontRepo.resolveTypeface(fam, uri) }
+            .stateIn(scope, SharingStarted.Eagerly, Typeface.DEFAULT)
+
     val paragraphSpacing: StateFlow<Float> = activeStyle
         .map { it?.paragraphSpacing?.toFloat() ?: 8f }
         .stateIn(scope, SharingStarted.Eagerly, 8f)
@@ -174,6 +190,11 @@ class ReaderSettingsController(
         scope.launch { prefs.setPageTurnMode(mode.key) }
     }
 
+    /**
+     * 旧入口：直接复制 SAF URI 作为自定义字体（保留单文件兼容路径，但**不再首选**）。
+     * 新流程是用 FontManagerScreen + FontRepository.importFromUri 复制到 App 字库。
+     * 这里仅在外部模块直接复用 ReaderSettingsController 时兜底使用。
+     */
     fun importCustomFont(uri: Uri, name: String) {
         scope.launch(Dispatchers.IO) {
             try {
@@ -181,8 +202,7 @@ class ReaderSettingsController(
                     uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
                 prefs.setCustomFont(uri.toString(), name)
-                prefs.setReaderFontFamily("custom")
-                AppLog.info("Settings", "Imported custom font: $name")
+                AppLog.info("Settings", "Imported custom font (legacy SAF path): $name")
             } catch (e: Exception) {
                 AppLog.error("Settings", "Failed to import font", e)
             }
@@ -192,7 +212,6 @@ class ReaderSettingsController(
     fun clearCustomFont() {
         scope.launch {
             prefs.clearCustomFont()
-            prefs.setReaderFontFamily("noto_serif_sc")
         }
     }
 

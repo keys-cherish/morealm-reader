@@ -186,6 +186,18 @@ fun AnimatedPageReader(
                     pageContent = pageContent,
                 )
             } else {
+                // Diagnostic [3w] — simulationParams==null fallback. simulationParams
+                // 来自 CanvasRenderer:822 `if (pageAnimType==SIMULATION && pages.isNotEmpty())`，
+                // 也就是说激活到这条 fallback 当且仅当「SIMULATION 模式 + pages 暂空」。
+                // SlidePager 内部用 HorizontalPager 渲染 pageContent(pagerState.currentPage)，
+                // pagerState.currentPage=0 时就会画 pages[0] = 章节首页大字标题。
+                // 这正是「切到仿真先闪 B 第一页」+「首页进书从头显示」两个症状的元凶。
+                AppLog.debug(
+                    "PageTurnFlicker",
+                    "[3w] SIMULATION FALLBACK SlidePager (simulationParams=null)" +
+                        " pagerCurrentPage=${pagerState.currentPage}" +
+                        " simulationDisplayPage=$simulationDisplayPage",
+                )
                 // Fallback if no params provided
                 SlidePager(pagerState, modifier, onPageSettled, pageContent)
             }
@@ -348,11 +360,36 @@ private fun SimulationPager(
     val cap = (pageCount - 1).coerceAtLeast(currentDisplayPage)
     val displayPage = currentDisplayPage.coerceIn(0, cap)
 
+    // Diagnostic [3p] — emitted on every recomposition of SimulationPager.
+    // Triangulates between [1] (CanvasRenderer 上游算的 simulationDisplayPage)
+    // 和 [3a]/[3b]/[3c]/[3d]/[3v] (View 端实际行为)。关注点：
+    //  · pagerCurrentPage 在某一次重组里 ≠ displayPage 就说明 HorizontalPager
+    //    没及时 scrollToPage——SIMULATION 分支虽然不绘制 pageContent，但
+    //    pagerState 共享给其它分支，可能侧漏出"首页"那一帧。
+    //  · cap / pages.size / displayPage 三者之间的越界期 dance
+    AppLog.debug(
+        "PageTurnFlicker",
+        "[3p] SimulationPager COMPOSE pagerCurrentPage=${pagerState.currentPage}" +
+            " currentDisplayPage=$currentDisplayPage pages.size=${pages.size}" +
+            " cap=$cap displayPage=$displayPage",
+    )
+
     // Single-layer: SimulationReadView handles both idle display and animation.
     // Idle state draws idleBitmap (rendered with correct theme bgColor).
     // No Compose/View layering — avoids transparency and z-order issues.
     androidx.compose.ui.viewinterop.AndroidView(
         factory = { context ->
+            // Diagnostic [3v] — fires once per fresh SimulationReadView. Pairs
+            // with [3p] COMPOSE: factory only runs when the AndroidView slot is
+            // (re)mounted (mode swap from 非-SIMULATION → SIMULATION). 第一帧
+            // idleBitmap=null 时 onDraw else 分支只画 bgMeanColor，所以这里也
+            // 带上 bgColor 方便核对屏幕颜色是否对应。
+            AppLog.debug(
+                "PageTurnFlicker",
+                "[3v] factory CREATE bgColor=${params.bgColor}" +
+                    " currentDisplayPage=$currentDisplayPage displayPage=$displayPage" +
+                    " pages.size=${pages.size}",
+            )
             SimulationReadView(context).apply {
                 setBackgroundColor(params.bgColor)
                 bgMeanColor = params.bgMeanColor
@@ -365,6 +402,18 @@ private fun SimulationPager(
             view.canTurnPrev = { params.canTurn(displayPage, ReaderPageDirection.PREV) }
             view.bitmapProvider = { relativePos, w, h ->
                 val page = params.pageForTurn(displayPage, relativePos)
+                // Diagnostic [3c] — fires when SimulationReadView 的 setBitmaps()
+                // (触摸开始) 调用 provider(relPos)。关注点：切换瞬间如果触发了
+                // setBitmaps（不应该，因为切换不带触摸），看这条日志的
+                // displayPage / relativePos 即可定位渲染了哪一页。
+                // displayPage=1 + relativePos=-1 = page index 0 = 首页。
+                AppLog.debug(
+                    "PageTurnFlicker",
+                    "[3c] bitmapProvider INVOKED relativePos=$relativePos" +
+                        " displayPage=$displayPage targetIdx=${displayPage + relativePos}" +
+                        " pageId=${page?.let { System.identityHashCode(it) } ?: "null"}" +
+                        " viewWxH=${w}x$h",
+                )
                 if (page != null && w > 0 && h > 0) {
                     try {
                         renderPageToBitmap(
@@ -428,10 +477,28 @@ private fun SimulationPager(
                 } else null
                 // Diagnostic — pairs with setIdleBitmap's RECV log so we can
                 // see which displayPage the wrong bitmap was rendered from.
+                // 关键字段 isCompleted / lines.size / textPrefix 验证
+                // 「TextPage 对象 mutable，prelayout 流式重写其 lines/text，
+                //  identityHashCode 不变但视觉内容会变」假设：如果第一次
+                // 渲染的 page.isCompleted=false 且后续 true，假设成立；
+                // textPrefix 的首 30 字符让我们直接看到内容是否在变。
+                val isCompleted = page?.isCompleted
+                val linesSize = page?.lines?.size
+                val textPrefix = page?.text?.take(30)?.replace("\n", "\\n")
+                // 验证「pages[1] 在粗略分页阶段含 isChapterNum 大标题行」假设
+                val firstLineText = page?.lines?.firstOrNull()?.text?.take(20)
+                val firstLineIsChapterNum = page?.lines?.firstOrNull()?.isChapterNum
+                val firstLineIsTitle = page?.lines?.firstOrNull()?.isTitle
+                val titleLineCount = page?.lines?.count { it.isTitle || it.isChapterNum }
                 AppLog.debug(
                     "PageTurnFlicker",
                     "[3a] setIdleBitmap CALLED displayPage=$displayPage" +
                         " pageHash=${page?.hashCode() ?: "null"}" +
+                        " isCompleted=$isCompleted linesSize=$linesSize" +
+                        " textPrefix=\"$textPrefix\"" +
+                        " firstLine=\"$firstLineText\"" +
+                        " firstLineIsChapterNum=$firstLineIsChapterNum firstLineIsTitle=$firstLineIsTitle" +
+                        " titleLineCount=$titleLineCount" +
                         " pagesSize=${pages.size} pageCount=$pageCount viewWxH=${w}x$h" +
                         " key=$contentKey",
                 )
