@@ -325,11 +325,16 @@ fun ReaderSettingsPanel(
     paragraphSpacing: Float = 1.4f,
     onParagraphSpacingChange: (Float) -> Unit = {},
     marginHorizontal: Int = 24,
-    onMarginHorizontalChange: (Int) -> Unit = {},
+    /** 拖动中：实时反馈给渲染器但**不持久化**。每帧都触发，由 ReaderScreen 维护 preview state。 */
+    onMarginHorizontalPreview: (Int) -> Unit = {},
+    /** 松手：把最终值写入 Room 并清空 preview。仅 onValueChangeFinished 触发，频率极低。 */
+    onMarginHorizontalCommit: (Int) -> Unit = {},
     marginTop: Int = 24,
-    onMarginTopChange: (Int) -> Unit = {},
+    onMarginTopPreview: (Int) -> Unit = {},
+    onMarginTopCommit: (Int) -> Unit = {},
     marginBottom: Int = 24,
-    onMarginBottomChange: (Int) -> Unit = {},
+    onMarginBottomPreview: (Int) -> Unit = {},
+    onMarginBottomCommit: (Int) -> Unit = {},
     customCss: String = "",
     onCustomCssChange: (String) -> Unit = {},
     customBgImage: String = "",
@@ -659,9 +664,11 @@ fun ReaderSettingsPanel(
             Spacer(Modifier.height(12.dp))
 
             // ── Margins ──
-            var mH by remember { mutableIntStateOf(marginHorizontal) }
-            var mT by remember { mutableIntStateOf(marginTop) }
-            var mB by remember { mutableIntStateOf(marginBottom) }
+            // 加 key=外部值：commit 后外部 StateFlow 回流时 thumb 会同步；
+            // 同时切样式预设带来的边距变化也能立刻反映到滑块视觉位置。
+            var mH by remember(marginHorizontal) { mutableIntStateOf(marginHorizontal) }
+            var mT by remember(marginTop) { mutableIntStateOf(marginTop) }
+            var mB by remember(marginBottom) { mutableIntStateOf(marginBottom) }
             Text("页边距", style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -669,7 +676,9 @@ fun ReaderSettingsPanel(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier.width(32.dp))
                 Slider(
-                    value = mH.toFloat(), onValueChange = { mH = it.toInt(); onMarginHorizontalChange(it.toInt()) },
+                    value = mH.toFloat(),
+                    onValueChange = { mH = it.toInt(); onMarginHorizontalPreview(mH) },
+                    onValueChangeFinished = { onMarginHorizontalCommit(mH) },
                     valueRange = 8f..64f, steps = 0,
                     modifier = Modifier.weight(1f),
                     colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
@@ -683,7 +692,9 @@ fun ReaderSettingsPanel(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier.width(32.dp))
                 Slider(
-                    value = mT.toFloat(), onValueChange = { mT = it.toInt(); onMarginTopChange(it.toInt()) },
+                    value = mT.toFloat(),
+                    onValueChange = { mT = it.toInt(); onMarginTopPreview(mT) },
+                    onValueChangeFinished = { onMarginTopCommit(mT) },
                     valueRange = 8f..64f, steps = 0,
                     modifier = Modifier.weight(1f),
                     colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
@@ -697,7 +708,9 @@ fun ReaderSettingsPanel(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier.width(32.dp))
                 Slider(
-                    value = mB.toFloat(), onValueChange = { mB = it.toInt(); onMarginBottomChange(it.toInt()) },
+                    value = mB.toFloat(),
+                    onValueChange = { mB = it.toInt(); onMarginBottomPreview(mB) },
+                    onValueChangeFinished = { onMarginBottomCommit(mB) },
                     valueRange = 8f..64f, steps = 0,
                     modifier = Modifier.weight(1f),
                     colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),

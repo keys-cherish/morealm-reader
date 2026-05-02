@@ -50,6 +50,7 @@ fun ReadingSettingsScreen(
     val showStatusBar by viewModel.showStatusBar.collectAsStateWithLifecycle()
     val showChapterName by viewModel.showChapterName.collectAsStateWithLifecycle()
     val showTimeBattery by viewModel.showTimeBattery.collectAsStateWithLifecycle()
+    val titleAlign by viewModel.titleAlign.collectAsStateWithLifecycle()
     val customTxtChapterRegex by viewModel.customTxtChapterRegex.collectAsStateWithLifecycle()
 
     // Dialog states
@@ -58,6 +59,8 @@ fun ReadingSettingsScreen(
     var showTimeoutDialog by remember { mutableStateOf(false) }
     var showLongPressDialog by remember { mutableStateOf(false) }
     var showSelectionMenuDialog by remember { mutableStateOf(false) }
+    // 章节标题对齐方式选择弹窗（左/中/右）。
+    var showTitleAlignDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -152,6 +155,14 @@ fun ReadingSettingsScreen(
             SettingsToggleRow("显示章节名", showChapterName) { viewModel.setShowChapterName(it) }
             SettingsDivider()
             SettingsToggleRow("显示时间电量", showTimeBattery) { viewModel.setShowTimeBattery(it) }
+            SettingsDivider()
+            // 章节标题对齐 — 排版引擎在画第 X 章标题时按这个值决定 startXOffset。
+            // 枚举: 0=左 / 1=中 / 2=右；在阅读器内立即重新排版生效。
+            SettingsClickRow(
+                title = "章节标题对齐",
+                value = titleAlignLabel(titleAlign),
+                onClick = { showTitleAlignDialog = true },
+            )
 
             Spacer(Modifier.height(16.dp))
 
@@ -277,6 +288,39 @@ fun ReadingSettingsScreen(
                 }
             }
 
+            // ── 锁屏保活 CPU ──
+            // 默认关；遇到锁屏后断声的国产 ROM 用户可手动开启换稳定性。详见
+            // [AppPreferences.ttsKeepCpuAwake] 的偏好头注释。
+            Spacer(Modifier.height(8.dp))
+            val ttsKeepCpuAwake by viewModel.ttsKeepCpuAwake.collectAsStateWithLifecycle()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { viewModel.setTtsKeepCpuAwake(!ttsKeepCpuAwake) }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text("锁屏保活 CPU", style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "开启后耗电略高；仅当锁屏偶发断声时建议开启",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                }
+                Switch(
+                    checked = ttsKeepCpuAwake,
+                    onCheckedChange = { viewModel.setTtsKeepCpuAwake(it) },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = MaterialTheme.colorScheme.primary,
+                        checkedThumbColor = MaterialTheme.colorScheme.surface,
+                    ),
+                )
+            }
+
             Spacer(Modifier.height(32.dp))
         }
     }
@@ -316,6 +360,13 @@ fun ReadingSettingsScreen(
             config = cfg,
             onSave = { viewModel.setSelectionMenuConfig(it) },
             onDismiss = { showSelectionMenuDialog = false },
+        )
+    }
+    if (showTitleAlignDialog) {
+        TitleAlignDialog(
+            current = titleAlign,
+            onSelect = { viewModel.setTitleAlign(it); showTitleAlignDialog = false },
+            onDismiss = { showTitleAlignDialog = false },
         )
     }
 }
@@ -414,6 +465,59 @@ private fun volumeKeyLongPressLabel(mode: String): String = when (mode) {
     "page" -> "连续翻页"
     "chapter" -> "翻章"
     else -> "默认"
+}
+
+/** 章节标题对齐方式标签：0=左 / 1=中 / 2=右；其他值兜底为「左对齐」。 */
+private fun titleAlignLabel(mode: Int): String = when (mode) {
+    1 -> "居中"
+    2 -> "右对齐"
+    else -> "左对齐"
+}
+
+/**
+ * 章节标题对齐弹窗 —— 三选一（左/中/右），选完立即落 DataStore。
+ *
+ * 用 AlertDialog + RadioButton（与 [ScreenTimeoutDialog] 保持一致），
+ * 不用 BottomSheetPicker 是因为它是 String-key，这里用 Int 更直接。
+ */
+@Composable
+private fun TitleAlignDialog(
+    current: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val options = listOf(
+        0 to "左对齐",
+        1 to "居中",
+        2 to "右对齐",
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("章节标题对齐") },
+        text = {
+            Column {
+                options.forEach { (value, label) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(value) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = current == value,
+                            onClick = { onSelect(value) },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(label)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }
 
 @Composable

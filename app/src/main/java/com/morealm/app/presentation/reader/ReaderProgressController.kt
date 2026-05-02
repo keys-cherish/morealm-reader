@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,6 +50,24 @@ class ReaderProgressController(
     private var lastQueuedVisibleReadProgress = ""
     private var lastQueuedChapterPosition = -1
 
+    /**
+     * Serializes saveProgress() execution.
+     *
+     * Without this lock, two coroutines launched from queueProgressSave / saveProgressNow
+     * could enter saveProgress() concurrently. They each snapshot _visiblePage.value at a
+     * different instant — one reads chapterPosition=191 while another reads 0 — and both
+     * call bookRepo.saveProgress(...). The DB ends up with whichever finished last, and
+     * which one finishes last is non-deterministic (Dispatchers.IO scheduling).
+     *
+     * Real-world symptom from log.txt: at the same millisecond two D/Progress lines were
+     * emitted with different positions (lines 247/248, 431/432, 449/450, 473/474), causing
+     * the persisted "lastReadPosition" to drift on app restart.
+     *
+     * With the lock the second coroutine waits for the first to finish, then re-reads the
+     * latest _visiblePage.value, so both end up writing the same final state.
+     */
+    private val saveMutex = Mutex()
+
     // Reading time tracking
     var readingStartTime: Long = System.currentTimeMillis()
     var lastStatsSaveTime: Long = readingStartTime
@@ -56,6 +76,11 @@ class ReaderProgressController(
     internal lateinit var chapterController: ReaderChapterController
 
     // ── Progress Tracking ──
+
+    // Tracks the previous direction of scroll% movement so we can detect direction
+    // flips (e.g. 0→7→0→7…). +1 = increasing, -1 = decreasing, 0 = unknown.
+    // Used only by the diagnostic log inside updateScrollProgress.
+    private var lastScrollProgressDirection: Int = 0
 
     fun updateScrollProgress(pct: Int) {
         val old = _scrollProgress.value
@@ -66,6 +91,32 @@ class ReaderProgressController(
             return
         }
         if (next != old) {
+            // Diagnostic for the "scroll% bounces between 0 and 7 repeatedly"
+            // symptom seen in log.txt around 19:05:13~19:05:20. We log only when
+            // the change is large (≥5%) or the direction flips, so normal
+            // 1%-per-frame progress doesn't add noise. Includes chapterPosition
+            // because it was observed to toggle 0↔191 in lockstep with the
+            // oscillation, which suggests a renderer/state feedback loop rather
+            // than user input.
+            val delta = next - old
+            val direction = when {
+                delta > 0 -> 1
+                delta < 0 -> -1
+                else -> 0
+            }
+            val flipped = lastScrollProgressDirection != 0 &&
+                direction != 0 &&
+                direction != lastScrollProgressDirection
+            if (kotlin.math.abs(delta) >= 5 || flipped) {
+                AppLog.debug(
+                    "ProgressTrace",
+                    "updateScrollProgress jump | $old%→$next% (Δ=$delta)" +
+                        " | flip=$flipped" +
+                        " | chapterPosition=${_visiblePage.value.chapterPosition}" +
+                        " | chapterIndex=${_visiblePage.value.chapterIndex}",
+                )
+            }
+            lastScrollProgressDirection = direction
             queueProgressSave()
         }
     }
@@ -91,6 +142,13 @@ class ReaderProgressController(
     }
 
     suspend fun saveProgress() {
+        // saveMutex serializes concurrent callers — see field doc on `saveMutex`.
+        saveMutex.withLock {
+            saveProgressLocked()
+        }
+    }
+
+    private suspend fun saveProgressLocked() {
         try {
             val book = chapterController.book.value ?: return
             val chapterCount = chapterController.chapters.value.size

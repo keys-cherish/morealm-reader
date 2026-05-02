@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -495,8 +496,39 @@ class EdgeTtsEngine(
         currentWebSocket.set(ws)
 
         try {
-            // 等 WSS 拿完所有音频
-            wsCompletion.await()
+            // 等 WSS 拿完所有音频。
+            //
+            // 加 idle 超时防半开连接：如果 15s 内既没有 turn.end 也没有新音频字节，
+            // 认为 WSS half-open（TCP 层活着但服务端不再推数据），主动放弃。
+            // 正常章节最长的单次 WSS 合成约 90s 音频（MAX_CHAPTER_CHUNK_CHARS ~2000 字），
+            // 但 chunk 间隔通常 ≤1s；15s 无数据 = 死连接。
+            //
+            // 超时后抛 exception，外层 runWebSocketPlayback 会 retry 或由 host 回退。
+            val wsStartedAt = System.currentTimeMillis()
+            while (!wsCompletion.isCompleted) {
+                val waitResult = withTimeoutOrNull(IDLE_TIMEOUT_MS) { wsCompletion.await() }
+                if (waitResult != null || wsCompletion.isCompleted) break
+                // wsCompletion 没完成 → 检查最近有没有收到音频
+                val lastActivity = firstByteAt.get().let { fb ->
+                    if (fb > 0) maxOf(fb, wsStartedAt) else wsStartedAt
+                }
+                val idleMs = System.currentTimeMillis() - lastActivity
+                if (idleMs >= IDLE_TIMEOUT_MS) {
+                    AppLog.error(
+                        TAG,
+                        "WSS idle timeout: no data for ${idleMs / 1000}s, aborting " +
+                            "(attempt $attempt, reqId=$requestId)",
+                    )
+                    throw java.io.IOException(
+                        "Edge TTS WSS idle timeout (${idleMs / 1000}s no data)"
+                    )
+                }
+                // 有数据但 wsCompletion 还没完成 → 继续等下一轮
+                AppLog.debug(
+                    TAG,
+                    "WSS wait loop: idle=${idleMs}ms, continue (attempt $attempt)",
+                )
+            }
             // 等 decoder 把 channel 里剩余 chunk + EOS 处理完，再 release track
             decoderJob.join()
             // 写缓存（即使是空的也不写）
@@ -918,6 +950,13 @@ class EdgeTtsEngine(
         private const val TAG = "EdgeTTS"
         private const val AUDIO_SAMPLE_RATE = 24000
         private const val MAX_ATTEMPTS = 2
+
+        /**
+         * WSS idle 超时：wsCompletion 等待期间如果超过这么久没有新的音频 chunk
+         * 到达，就认为 WSS half-open 并中断。15s 远大于正常 chunk 间隔（~200-500ms），
+         * 同时短于用户体感"卡住了"的阈值。
+         */
+        private const val IDLE_TIMEOUT_MS = 15_000L
 
         /**
          * Plan C 单批 SSML 段内字符上限。Edge TTS 的 SSML 体积有上限（约 5-10 分钟

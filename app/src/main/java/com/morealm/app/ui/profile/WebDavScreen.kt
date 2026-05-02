@@ -15,6 +15,8 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -114,13 +116,25 @@ fun WebDavScreen(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // UX-3: 仅在首次配置（URL 为空）时自动聚焦 + 弹键盘；已有凭据时不打扰用户
+                val urlFocus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { if (url.isBlank()) urlFocus.requestFocus() }
+                // UX-4: 内联校验 — URL 必须 https://（WebDav 走 HTTPS 是事实标准；http 也算合法但提示）
+                val urlError = url.isNotBlank() && !url.startsWith("https://", true) && !url.startsWith("http://", true)
+                val urlInsecure = url.startsWith("http://", true)
                 OutlinedTextField(
                     value = url, onValueChange = { url = it },
                     label = { Text("服务器地址") },
                     placeholder = { Text("https://dav.jianguoyun.com/dav/") },
                     singleLine = true,
                     leadingIcon = { Icon(Icons.Default.Link, null, modifier = Modifier.size(20.dp)) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().focusRequester(urlFocus),
+                    isError = urlError,
+                    supportingText = when {
+                        urlError -> { { Text("地址需以 https:// 或 http:// 开头", color = MaterialTheme.colorScheme.error) } }
+                        urlInsecure -> { { Text("使用 HTTP 明文传输，建议改用 HTTPS", color = MaterialTheme.colorScheme.tertiary) } }
+                        else -> null
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
                         cursorColor = MaterialTheme.colorScheme.primary,

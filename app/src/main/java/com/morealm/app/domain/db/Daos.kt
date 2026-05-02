@@ -503,6 +503,9 @@ interface HttpTtsDao {
     @Query("SELECT * FROM http_tts WHERE enabled = 1 ORDER BY name")
     suspend fun getEnabled(): List<HttpTts>
 
+    @Query("SELECT * FROM http_tts WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): HttpTts?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(tts: HttpTts)
 

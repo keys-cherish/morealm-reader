@@ -128,6 +128,19 @@ fun ReaderScreen(
     val marginHorizontal by viewModel.settings.marginHorizontal.collectAsStateWithLifecycle()
     val marginTopVal by viewModel.settings.marginTop.collectAsStateWithLifecycle()
     val marginBottomVal by viewModel.settings.marginBottom.collectAsStateWithLifecycle()
+    /**
+     * 页边距 preview state — 拖动滑块期间的临时值，仅在 Compose state 内流转，
+     * 不写 Room、不触 StateFlow。`null` 表示该方向"未在拖动中"，回退到上面的 StateFlow 值。
+     *
+     * 拖动 onValueChange   → 写 preview，触发 CanvasRenderer 重组与重新分页
+     * 拖动 onValueChangeFinished → 写 Room（持久化）+ 清空 preview（让单一来源回到 StateFlow）
+     */
+    var marginPreviewH by remember { mutableStateOf<Int?>(null) }
+    var marginPreviewT by remember { mutableStateOf<Int?>(null) }
+    var marginPreviewB by remember { mutableStateOf<Int?>(null) }
+    val effectiveMarginH = marginPreviewH ?: marginHorizontal
+    val effectiveMarginT = marginPreviewT ?: marginTopVal
+    val effectiveMarginB = marginPreviewB ?: marginBottomVal
     val autoPageInterval by viewModel.autoPageInterval.collectAsStateWithLifecycle()
     val ttsChapterPosition by viewModel.tts.ttsChapterPosition.collectAsStateWithLifecycle()
     val pendingSearchSelection by viewModel.pendingSearchSelection.collectAsStateWithLifecycle()
@@ -139,6 +152,8 @@ fun ReaderScreen(
     val viewingImageSrc by viewModel.viewingImageSrc.collectAsStateWithLifecycle()
     val ttsScrollProgress by viewModel.tts.ttsScrollProgress.collectAsStateWithLifecycle()
     val pageAnim by viewModel.settings.pageAnim.collectAsStateWithLifecycle()
+    // 章节标题对齐：透传给 CanvasRenderer，change 触发重新排版（layoutInputs.remember）。
+    val titleAlign by viewModel.settings.titleAlign.collectAsStateWithLifecycle()
     val tapTL by viewModel.settings.tapActionTopLeft.collectAsStateWithLifecycle()
     val tapTR by viewModel.settings.tapActionTopRight.collectAsStateWithLifecycle()
     val tapBL by viewModel.settings.tapActionBottomLeft.collectAsStateWithLifecycle()
@@ -489,12 +504,15 @@ fun ReaderScreen(
                 fontSize = readerFontSize,
                 lineHeight = readerLineHeight,
                 typeface = readerTypeface,
-                paddingHorizontal = marginHorizontal,
-                paddingVertical = marginTopVal,
+                paddingHorizontal = effectiveMarginH,
+                paddingVertical = effectiveMarginT, // legacy fallback；下面 paddingTop/Bottom 优先
+                paddingTop = effectiveMarginT,
+                paddingBottom = effectiveMarginB,
                 bgImageUri = readerBgImage,
                 startFromLastPage = navigateDirection < 0,
                 initialProgress = renderedChapter.initialProgress,
                 initialChapterPosition = renderedChapter.initialChapterPosition,
+                restoreToken = renderedChapter.restoreToken,
                 onProgressRestored = { viewModel.clearNavigateDirection() },
                 pageAnimType = pageAnim.toPageAnimType(),
                 onTapCenter = { viewModel.toggleControls() },
@@ -526,6 +544,28 @@ fun ReaderScreen(
                     )
                 },
                 onDeleteHighlight = { id -> viewModel.highlight.delete(id) },
+                // 橡皮：删除所有与当前选区有交集的高亮（覆盖删除语义）。
+                // chapterIndex 用 renderedChapter.index 而不是 currentIndex —
+                // 用户选区一定在已渲染的章节里，避免下载中切章导致错章删除。
+                onEraseHighlight = { start, end ->
+                    viewModel.highlight.eraseInRange(
+                        chapterIndex = renderedChapter.index,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                    )
+                },
+                // 字体强调色：选区菜单 TEXT_COLOR 调色板某色 → 落库 kind=1。
+                // chapterIndex 与背景高亮一致取 renderedChapter.index，避免切章错位。
+                onAddTextColor = { start, end, content, argb ->
+                    viewModel.highlight.add(
+                        chapterIndex = renderedChapter.index,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                        kind = com.morealm.app.domain.entity.Highlight.KIND_TEXT_COLOR,
+                    )
+                },
                 onShareHighlight = { highlight ->
                     val ok = com.morealm.app.ui.reader.share.HighlightShareCard
                         .shareAsImage(context, highlight)
@@ -565,6 +605,7 @@ fun ReaderScreen(
                 tapActionBottomRight = tapBR,
                 readerStyle = effectiveReaderStyle,
                 chaptersSize = chapters.size,
+                titleAlign = titleAlign,
                 showChapterName = showChapterNameSetting,
                 showTimeBattery = showTimeBatterySetting,
                 headerLeft = hdrLeft,
@@ -732,12 +773,24 @@ fun ReaderScreen(
                 onBrightnessChange = viewModel::setReaderBrightness,
                 paragraphSpacing = paragraphSpacing,
                 onParagraphSpacingChange = viewModel.settings::setParagraphSpacing,
-                marginHorizontal = marginHorizontal,
-                onMarginHorizontalChange = viewModel.settings::setMarginHorizontal,
-                marginTop = marginTopVal,
-                onMarginTopChange = viewModel.settings::setMarginTop,
-                marginBottom = marginBottomVal,
-                onMarginBottomChange = viewModel.settings::setMarginBottom,
+                marginHorizontal = effectiveMarginH,
+                onMarginHorizontalPreview = { marginPreviewH = it },
+                onMarginHorizontalCommit = { v ->
+                    viewModel.settings.setMarginHorizontal(v)
+                    marginPreviewH = null
+                },
+                marginTop = effectiveMarginT,
+                onMarginTopPreview = { marginPreviewT = it },
+                onMarginTopCommit = { v ->
+                    viewModel.settings.setMarginTop(v)
+                    marginPreviewT = null
+                },
+                marginBottom = effectiveMarginB,
+                onMarginBottomPreview = { marginPreviewB = it },
+                onMarginBottomCommit = { v ->
+                    viewModel.settings.setMarginBottom(v)
+                    marginPreviewB = null
+                },
                 customCss = customCss,
                 onCustomCssChange = viewModel.settings::setCustomCss,
                 customBgImage = customBgImage,

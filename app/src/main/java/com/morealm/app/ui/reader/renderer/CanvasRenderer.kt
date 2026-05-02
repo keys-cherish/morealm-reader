@@ -92,10 +92,25 @@ fun CanvasRenderer(
     typeface: Typeface = Typeface.SERIF,
     paddingHorizontal: Int = 24,
     paddingVertical: Int = 24,
+    /**
+     * 顶部边距（dp，独立于 [paddingVertical]）。null 时回落到 [paddingVertical]，向后兼容。
+     * 由 ReaderScreen 维护的 preview 层驱动：拖动滑块期间只走 Compose state，不写 Room。
+     */
+    paddingTop: Int? = null,
+    /**
+     * 底部边距（dp，独立于 [paddingVertical]）。null 时回落到 [paddingVertical]，向后兼容。
+     */
+    paddingBottom: Int? = null,
     bgImageUri: String = "",
     startFromLastPage: Boolean = false,
     initialProgress: Int = 0,
     initialChapterPosition: Int = 0,
+    /**
+     * 每次 loadChapter 生成唯一 token（nanoTime）。restoreProgress LaunchedEffect
+     * 以此为唯一 key：token 变 = 新恢复命令，不变 = 不恢复。
+     * 对齐 Legado 精神：恢复是命令，不是状态订阅。
+     */
+    restoreToken: Long = 0L,
     onProgressRestored: () -> Unit = {},
     pageAnimType: PageAnimType = PageAnimType.SLIDE,
     onTapCenter: () -> Unit = {},
@@ -158,6 +173,24 @@ fun CanvasRenderer(
      */
     selectionMenuConfig: com.morealm.app.domain.entity.SelectionMenuConfig =
         com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
+    /**
+     * 章节标题对齐方式。0=左 / 1=中 / 2=右。来自 [com.morealm.app.domain.preference.AppPreferences.titleAlign]
+     * 全局偏好，由 ReaderScreen 透传。变更会触发 LayoutInputs remember key 失效，
+     * 重新排版整章。
+     */
+    titleAlign: Int = 0,
+    /**
+     * 用户在 mini-menu 选橡皮按钮 → 删除所有与当前选区有交集的高亮。
+     * 回调收到本次选区的章节字符 offset 范围；持久化由调用方负责（一般转发到
+     * [com.morealm.app.presentation.reader.ReaderHighlightController.eraseInRange]）。
+     */
+    onEraseHighlight: ((start: Int, end: Int) -> Unit)? = null,
+    /**
+     * 用户在选区菜单点 TEXT_COLOR 调色板上某色 → 保存"字体强调色"高亮（kind=1）。
+     * 与 [onAddHighlight] 同入参，但持久化时 [com.morealm.app.domain.entity.Highlight.kind]
+     * 落 1，渲染层据此替换该范围内字符的 paint.color 而不是画背景色块。
+     */
+    onAddTextColor: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -199,17 +232,21 @@ fun CanvasRenderer(
     val cutoutBottom = with(density) { cutoutPadding.calculateBottomPadding().toPx().toInt() }
 
     val padHPx = with(density) { paddingHorizontal.dp.toPx().toInt() }
-    val padVPx = with(density) { paddingVertical.dp.toPx().toInt() }
+    // 顶/底独立计算；caller 不传时回落到 paddingVertical（向后兼容老调用方）。
+    val padTopPx = with(density) { (paddingTop ?: paddingVertical).dp.toPx().toInt() }
+    val padBotPx = with(density) { (paddingBottom ?: paddingVertical).dp.toPx().toInt() }
     val infoBarHeightPx = with(density) { 64.dp.toPx().toInt() }
     // Ensure content padding is at least as large as the cutout insets
     val effectivePadLeft = maxOf(padHPx, cutoutLeft)
     val effectivePadRight = maxOf(padHPx, cutoutRight)
-    val effectivePadTop = maxOf(padVPx, cutoutTop) + infoBarHeightPx
-    val effectivePadBottom = maxOf(padVPx, cutoutBottom) + infoBarHeightPx
+    val effectivePadTop = maxOf(padTopPx, cutoutTop) + infoBarHeightPx
+    val effectivePadBottom = maxOf(padBotPx, cutoutBottom) + infoBarHeightPx
     val fontSizePx = with(density) { fontSize.sp.toPx() }
 
-    // ── Battery level (ported from Legado ReadBookActivity battery receiver) ──
-    var batteryLevel by rememberBatteryLevel(context)
+    // ── Battery level + charging (ported from Legado ReadBookActivity battery receiver) ──
+    val batteryStatus by rememberBatteryStatus(context)
+    val batteryLevel = batteryStatus.level
+    val batteryCharging = batteryStatus.charging
 
     // ── Time (update every 30s) ──
     var currentTime by remember { mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())) }
@@ -269,7 +306,7 @@ fun CanvasRenderer(
         val titlePaint: TextPaint,
     )
 
-    val layoutInputs = remember(screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle, contentPaint, titlePaint, textMeasure, density) {
+    val layoutInputs = remember(screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle, contentPaint, titlePaint, textMeasure, density, titleAlign) {
         val style = readerStyle
         val cssOverrides = CssParser.parse(style?.customCss ?: "")
         val effectiveContentPaint = if (cssOverrides.fontSize != null) {
@@ -300,6 +337,7 @@ fun CanvasRenderer(
                 textFullJustify = cssOverrides.textAlign?.let { it == "justify" } ?: (style?.isJustify() ?: true),
                 titleMode = style?.titleMode ?: 0,
                 isMiddleTitle = style?.titleMode == 1,
+                titleAlign = titleAlign,
                 paragraphSpacing = cssOverrides.paragraphSpacing ?: style?.paragraphSpacing ?: 8,
                 titleTopSpacing = style?.titleTopSpacing ?: 0,
                 titleBottomSpacing = style?.titleBottomSpacing ?: 0,
@@ -310,7 +348,7 @@ fun CanvasRenderer(
         )
     }
 
-    fun chapterCacheKey(index: Int, title: String, body: String): String = "$index|$title|${body.hashCode()}|$screenWidthPx|$screenHeightPx|$fontSizePx|$lineHeight|$effectivePadLeft|$effectivePadRight|$effectivePadTop|$effectivePadBottom|${readerStyle?.hashCode()}"
+    fun chapterCacheKey(index: Int, title: String, body: String): String = "$index|$title|${body.hashCode()}|$screenWidthPx|$screenHeightPx|$fontSizePx|$lineHeight|$effectivePadLeft|$effectivePadRight|$effectivePadTop|$effectivePadBottom|${readerStyle?.hashCode()}|$titleAlign"
 
     val currentChapterKey: String = remember(
         chapterIndex,
@@ -325,6 +363,7 @@ fun CanvasRenderer(
         effectivePadBottom,
         lineHeight,
         readerStyle,
+        titleAlign,
     ) {
         chapterCacheKey(chapterIndex, chapterTitle, content)
     }
@@ -352,21 +391,28 @@ fun CanvasRenderer(
     fun placeholderChapter(message: String = chapterTitle.ifBlank { "加载中..." }): TextChapter =
         placeholderChapterFor(chapterIndex, chapterTitle, message)
 
-    // Layout pages — use prelayout cache to avoid placeholder flash
+    // Layout pages — 预排版 LRU 缓存（容量 8）。
+    // 装：当前章 + 上下章 + ~5 个历史 padding/字号配置。
+    // 与原版关键差异：
+    //   1) 不再在 padding 变化时 clear() —— 旧条目自然 LRU 淘汰，反复在几个 padding 值
+    //      之间切换时仍能命中（拖动结束、下次再调到相同值秒回）。
+    //   2) textChapter / pageCount 不再 keyed 到 currentChapterKey —— 拖动 padding 时
+    //      currentChapterKey 高频变化，老实现会把 textChapter 立刻重置为 placeholder
+    //      导致每帧闪屏。新实现保留旧布局，等 layoutChapterAsync 出新结果后无缝切。
     val prelayoutCache = remember { mutableStateMapOf<String, TextChapter>() }
-    var textChapter by remember(currentChapterKey) {
-        val cached = prelayoutCache[currentChapterKey]
-        mutableStateOf<TextChapter?>(cached ?: placeholderChapter())
+    val prelayoutOrder = remember { ArrayDeque<String>() }
+    fun prelayoutPut(key: String, value: TextChapter) {
+        if (prelayoutCache.containsKey(key)) prelayoutOrder.remove(key)
+        prelayoutCache[key] = value
+        prelayoutOrder.addLast(key)
+        while (prelayoutOrder.size > 8) {
+            val evict = prelayoutOrder.removeFirst()
+            prelayoutCache.remove(evict)
+        }
     }
-    var pageCount by remember(currentChapterKey) {
-        val cached = prelayoutCache[currentChapterKey]
-        mutableIntStateOf(cached?.pageSize?.coerceAtLeast(1) ?: 1)
-    }
+    var textChapter by remember { mutableStateOf<TextChapter?>(null) }
+    var pageCount by remember { mutableIntStateOf(1) }
     val scope = rememberCoroutineScope()
-
-    LaunchedEffect(screenWidthPx, screenHeightPx, fontSizePx, effectivePadLeft, effectivePadRight, effectivePadTop, effectivePadBottom, lineHeight, readerStyle) {
-        prelayoutCache.clear()
-    }
 
     LaunchedEffect(nextChapterContent, nextChapterTitle, prevChapterContent, prevChapterTitle, layoutInputs) {
         val targets = listOf(
@@ -385,22 +431,29 @@ fun CanvasRenderer(
                     )
                     chapter
                 }
-                prelayoutCache[key] = chapter
+                prelayoutPut(key, chapter)
             }
         }
     }
 
     LaunchedEffect(currentChapterKey, layoutInputs) {
-        // Check prelayout cache first — if we already have a fully laid-out chapter,
-        // use it immediately without flashing a placeholder.
+        // Cache hit: 立即显示完整布局（如来自 next/prev 预排版，或之前的 padding 配置）。
         val cachedChapter = prelayoutCache[currentChapterKey]
         if (cachedChapter != null) {
             textChapter = cachedChapter
             pageCount = cachedChapter.pageSize.coerceAtLeast(1)
             return@LaunchedEffect
         }
-        textChapter = placeholderChapter()
-        pageCount = 1
+        // Cache miss: 节流一帧（16ms）。拖动 padding 滑块时 key 高频变化，
+        // LaunchedEffect 在新 key 到来时会取消旧 coroutine（含此 delay），
+        // 保证只有"用户手指停下/即将停下"那一刻的 key 真正进入分页流水线。
+        kotlinx.coroutines.delay(16L)
+        // 仅在还没有任何可显示布局时才退到 placeholder（首次进入），
+        // 否则保留旧 textChapter 直到 layoutChapterAsync 出第一页 —— 消除拖动闪屏。
+        if (textChapter == null || textChapter?.pages.isNullOrEmpty()) {
+            textChapter = placeholderChapter()
+            pageCount = 1
+        }
         if (content.isBlank()) {
             val chapter = placeholderChapter(chapterTitle.ifBlank { "当前章节暂无正文" }).apply {
                 isCompleted = true
@@ -424,13 +477,17 @@ fun CanvasRenderer(
                 onCompleted = {
                     textChapter = handle?.textChapter
                     pageCount = handle?.textChapter?.pageSize?.coerceAtLeast(1) ?: 1
+                    // 把当前章节最终布局也存入 LRU：来回拖到相同 padding 值时秒回。
+                    handle?.textChapter?.let { prelayoutPut(currentChapterKey, it) }
                 },
             )
         }
     }
 
     val chapter = textChapter
-    var lastRenderablePages by remember(currentChapterKey) { mutableStateOf<List<TextPage>>(emptyList()) }
+    // 不再 keyed 到 currentChapterKey：拖动 padding 时旧 pages 作 fallback，
+    // layoutChapterAsync 出新结果再无缝切；避免拖动期间渲染层瞬间丢页面。
+    var lastRenderablePages by remember { mutableStateOf<List<TextPage>>(emptyList()) }
     if (!chapter?.pages.isNullOrEmpty()) {
         lastRenderablePages = chapter?.pages ?: emptyList()
     }
@@ -493,14 +550,36 @@ fun CanvasRenderer(
      * Flow.collectAsState producing a new list will trigger fresh mapping.
      */
     val highlightSpans = remember(chapterHighlights) {
-        chapterHighlights.map { h ->
-            HighlightSpan(
-                id = h.id,
-                startChapterPos = h.startChapterPos,
-                endChapterPos = h.endChapterPos,
-                colorArgb = h.colorArgb,
-            )
-        }
+        // 只取 KIND_BACKGROUND（kind==0）走传统的"画 bgFill 矩形"路径。
+        chapterHighlights
+            .filter { it.kind == Highlight.KIND_BACKGROUND }
+            .map { h ->
+                HighlightSpan(
+                    id = h.id,
+                    startChapterPos = h.startChapterPos,
+                    endChapterPos = h.endChapterPos,
+                    colorArgb = h.colorArgb,
+                )
+            }
+    }
+    /**
+     * 字体色高亮（kind == [Highlight.KIND_TEXT_COLOR]）。
+     *
+     * 与 [highlightSpans] 同结构 [HighlightSpan]，但语义不同：渲染层不画 bg，
+     * 而是在 [com.morealm.app.ui.reader.renderer.PageContentDrawer.PageCanvas]
+     * 内、画字符时按 char 的 chapterPosition 命中范围替换 paint.color。
+     */
+    val textColorSpans = remember(chapterHighlights) {
+        chapterHighlights
+            .filter { it.kind == Highlight.KIND_TEXT_COLOR }
+            .map { h ->
+                HighlightSpan(
+                    id = h.id,
+                    startChapterPos = h.startChapterPos,
+                    endChapterPos = h.endChapterPos,
+                    colorArgb = h.colorArgb,
+                )
+            }
     }
     val renderPageCount = pageFactory.pageCount
 
@@ -521,11 +600,18 @@ fun CanvasRenderer(
         onReadAloudParagraphPositions(positions)
     }
 
-    // Track whether we've already restored the saved position for this content
+    // Track whether we've already restored the saved position for this content.
     var progressRestored by remember { mutableStateOf(false) }
-    // Reset restore flag when content changes
-    LaunchedEffect(content, chapterTitle) {
-        progressRestored = false
+    // restoreToken 是唯一判据：只有 loadChapter 生成新 token 时才清 progressRestored。
+    // 用户翻页 / renderPageCount 变化 / 前后台切换不会改 token → 不会触发幽灵恢复。
+    //
+    // 之前的 bug：key 里包含 initialChapterPosition / initialProgress，这些值
+    // 来自 RenderedReaderChapter StateFlow，Compose 重组时一直存活 → 用户翻页后
+    // 若其他 LaunchedEffect 重发射，把 progressRestored 清掉 → 幽灵恢复弹回去。
+    LaunchedEffect(restoreToken) {
+        if (restoreToken != 0L) {
+            progressRestored = false
+        }
     }
 
     // Selection state
@@ -771,18 +857,34 @@ fun CanvasRenderer(
         coordinator.turnPageByTap(direction) { readerPageIndex = it }
     }
 
-    // Restore saved progress after layout is complete
-    LaunchedEffect(renderPageCount, pageCount, chapter?.isCompleted, progressRestored, pageAnimType) {
+    // Restore saved progress after layout is complete.
+    //
+    // 进度恢复 LaunchedEffect — restoreToken 作为唯一"命令 key"。
+    // 其余 key（renderPageCount / pageCount / chapter.isCompleted）仅用于
+    // "等渲染完成后执行"的守卫条件，不会独立触发新恢复。
+    //
+    // 与之前的区别：去掉了 initialChapterPosition / initialProgress / startFromLastPage
+    // 作为 key。这些值由 restoreToken 代表（token 变 → 值必定已更新），不再独立触发。
+    LaunchedEffect(
+        restoreToken, renderPageCount, pageCount, chapter?.isCompleted, progressRestored, pageAnimType,
+    ) {
         if (progressRestored) return@LaunchedEffect
+        if (restoreToken == 0L) return@LaunchedEffect
         if (chapter?.isCompleted != true) return@LaunchedEffect
-        if (renderPageCount <= 1) {
+        // renderPageCount <= 1 且不需要跳特定位置 → 只有 1 页，直接标记完成。
+        // 但如果 startFromLastPage / initialChapterPosition / initialProgress 有值，
+        // 说明需要跳到非首页 → 必须等 renderPageCount 增长到真实值才能定位。
+        val needsNonZeroPage = startFromLastPage || initialChapterPosition > 0 || initialProgress > 0
+        if (renderPageCount <= 1 && !needsNonZeroPage) {
             progressRestored = true
             onProgressRestored()
             return@LaunchedEffect
         }
-        // BookmarkDebug: 诊断书签跳转后是否回到正确页 — 打印三个原始输入源
-        // (startFromLastPage / initialChapterPosition / initialProgress) 和算出
-        // 来的 targetPage，配合 Chapter tag 的 loadChapter 日志交叉验证。
+        if (renderPageCount <= 1) {
+            // 需要非首页但布局还没好 → 等下一轮 renderPageCount 变化再重进
+            return@LaunchedEffect
+        }
+        // BookmarkDebug: 诊断书签跳转后是否回到正确页
         val pageFromCharIndex = if (initialChapterPosition > 0) {
             chapter.getPageIndexByCharIndex(initialChapterPosition).coerceIn(0, pageCount - 1)
         } else -1
@@ -798,18 +900,67 @@ fun CanvasRenderer(
                 " initChapPos=$initialChapterPosition initProg=$initialProgress" +
                 " startFromLast=$startFromLastPage pageFromCharIdx=$pageFromCharIndex" +
                 " computedTarget=$currentTargetPage pc=$pageCount renderPC=$renderPageCount" +
-                " pageAnim=$pageAnimType",
+                " pageAnim=$pageAnimType restoreToken=$restoreToken",
         )
-        AppLog.debug("CanvasRenderer", "restoreProgress: startFromLast=$startFromLastPage target=$currentTargetPage pc=$pageCount renderPC=$renderPageCount")
+        // Surface the case where we asked for a real position but couldn't resolve it.
+        // initChapPos>0 means the saved cursor expected a non-leading char, yet
+        // pageFromCharIndex=-1 means pageFactory failed to map it — we then silently
+        // fall back to page 0 / proportional, which can mask layout/loader bugs.
+        if (initialChapterPosition > 0 && pageFromCharIndex == -1) {
+            AppLog.warn(
+                "BookmarkDebug",
+                "restoreProgress UNRESOLVED charIndex" +
+                    " | chIdx=$chapterIndex initChapPos=$initialChapterPosition" +
+                    " | pc=$pageCount renderPC=$renderPageCount" +
+                    " | falling back to computedTarget=$currentTargetPage",
+            )
+        }
+        AppLog.debug("CanvasRenderer", "restoreProgress: startFromLast=$startFromLastPage target=$currentTargetPage pc=$pageCount renderPC=$renderPageCount token=$restoreToken")
         val targetPage = pageFactory.displayIndexForCurrentPage(currentTargetPage).coerceIn(0, renderPageCount - 1)
         readerPageIndex = currentTargetPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
-        if (targetPage != pagerState.currentPage) {
-            coordinator.ignoredSettledDisplayPage = targetPage
-            pagerState.scrollToPage(targetPage)
-        }
+        AppLog.info(
+            "BookmarkDebug",
+            "restoreProgress JUMP targetDisplayPage=$targetPage pagerCurrent=${pagerState.currentPage}" +
+                " readerPageIndex=$readerPageIndex pageAnim=$pageAnimType",
+        )
+
+        // ─── 关键：先写 coordinator 状态，再 scrollToPage ─────────────────
+        // 仿真模式下 pagerState.currentPage 永远是 0（SimulationView 自管渲染，
+        // pagerState 在 SimulationPager 里只是个摆设），真正决定显示的是
+        // coordinator.lastSettledDisplayPage。如果先 scrollToPage 再写 lastSettled，
+        // scrollToPage 触发的 onPageSettled 回调进 coordinator 时把 ignoredPage 吞掉
+        // 但没更新 lastSettled —— 用户后续翻页基于 lastSettled 旧值（=0）继续算，
+        // 视觉上就停在原地。
+        //
+        // 修复：先把 lastSettled / lastReaderContent 写好，再决定要不要 scrollToPage。
+        // - 仿真模式：完全跳过 scrollToPage（pagerState 是摆设，scroll 反而触发幽灵 onPageSettled）
+        // - 其他模式（SLIDE/COVER/NONE）：scrollToPage 仍然是必须的，pagerState 决定视觉
         coordinator.lastSettledDisplayPage = targetPage
         coordinator.lastReaderContent = coordinator.createPageState(targetPage).upContent()
         coordinator.reportProgress(coordinator.lastReaderContent)
+
+        if (pageAnimType != PageAnimType.SIMULATION) {
+            coordinator.ignoredSettledDisplayPage = targetPage
+            val beforeScroll = pagerState.currentPage
+            try {
+                pagerState.scrollToPage(targetPage)
+                val afterScroll = pagerState.currentPage
+                AppLog.info(
+                    "BookmarkDebug",
+                    "restoreProgress JUMP DONE (non-SIM) before=$beforeScroll after=$afterScroll" +
+                        " coord.lastSettled=${coordinator.lastSettledDisplayPage}" +
+                        " scrollEffective=${afterScroll == targetPage}",
+                )
+            } catch (e: Throwable) {
+                AppLog.error("BookmarkDebug", "scrollToPage threw: ${e.message}", e)
+            }
+        } else {
+            AppLog.info(
+                "BookmarkDebug",
+                "restoreProgress JUMP DONE (SIM, skip scrollToPage)" +
+                    " coord.lastSettled=${coordinator.lastSettledDisplayPage}",
+            )
+        }
         progressRestored = true
         onProgressRestored()
     }
@@ -838,6 +989,7 @@ fun CanvasRenderer(
         chapterIndex = chapterIndex,
         chaptersSize = chaptersSize,
         batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
         currentTime = currentTime,
         textColorArgb = textColor.toArgb(),
         backgroundColorArgb = bgArgb,
@@ -928,6 +1080,16 @@ fun CanvasRenderer(
                         selectedTextPage = page
                         selectionState.setSelection(wordRange.first, wordRange.second)
                         toolbarOffset = offset
+                        // Diagnostic: SIMULATION-only long-press path. Note this uses the
+                        // SimulationView-supplied `page` directly (not pagerState.currentPage),
+                        // so the page mismatch we'd otherwise see in NORMAL longPress is
+                        // avoided here. Useful to compare with NORMAL/SCROLL traces.
+                        AppLog.info(
+                            "CursorHandleTrace",
+                            "SIM longPress setSelection" +
+                                " | tap=$pos -> word(${wordRange.first}..${wordRange.second})" +
+                                " | page.lines.size=${page.lines.size} chPos=${page.chapterPosition}",
+                        )
                     }
                 },
             )
@@ -1129,6 +1291,16 @@ fun CanvasRenderer(
                                     selectedTextPage = page
                                     selectionState.setSelection(wordRange.first, wordRange.second)
                                     toolbarOffset = offset
+                                    // Diagnostic: confirm the non-SCROLL long-press path
+                                    // (SLIDE/COVER/NONE; SIMULATION uses pagerState.currentPage=0
+                                    // here which may pick the wrong page — see earlier analysis).
+                                    AppLog.info(
+                                        "CursorHandleTrace",
+                                        "NORMAL longPress setSelection" +
+                                            " | pageAnim=$pageAnimType pagerCurrent=${pagerState.currentPage}" +
+                                            " | tap=$pos -> word(${wordRange.first}..${wordRange.second})" +
+                                            " | page.lines.size=${page.lines.size} chPos=${page.chapterPosition}",
+                                    )
                                 }
                             },
                         )
@@ -1174,6 +1346,15 @@ fun CanvasRenderer(
                     scrollRelativePages = scrollRelativePages + (textPos.relativePagePos to page)
                     selectionState.setSelection(wordRange.first, wordRange.second)
                     toolbarOffset = offset
+                    // Diagnostic: confirm the SCROLL-mode long-press path actually
+                    // fires setSelection, and capture the word range's TextPos so we
+                    // can correlate with CursorHandleTrace's selStart/selEnd values.
+                    AppLog.info(
+                        "CursorHandleTrace",
+                        "SCROLL longPress setSelection" +
+                            " | tap=$textPos -> word(${wordRange.first}..${wordRange.second})" +
+                            " | page.lines.size=${page.lines.size} chPos=${page.chapterPosition}",
+                    )
                 },
                 onReadAloudVisiblePosition = { page, line ->
                     onVisibleReadAloudPosition(page.chapterIndex, line.chapterPosition)
@@ -1192,6 +1373,7 @@ fun CanvasRenderer(
                     scrollRelativePages = relativePages
                 },
                 resetKey = chapterIndex,
+                restoreToken = restoreToken,
                 startFromLastPage = startFromLastPage,
                 initialProgress = initialProgress,
                 initialChapterPosition = initialChapterPosition,
@@ -1213,6 +1395,7 @@ fun CanvasRenderer(
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
                 batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
                 currentTime = currentTime,
                 textColor = textColor,
                 paddingHorizontal = paddingHorizontal,
@@ -1293,6 +1476,7 @@ fun CanvasRenderer(
                     chapterIndex = chapterIndex,
                     chaptersSize = chaptersSize,
                     batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
                     currentTime = currentTime,
                     textColor = textColor,
                     paddingHorizontal = paddingHorizontal,
@@ -1309,6 +1493,7 @@ fun CanvasRenderer(
                     autoPageAccentColor = accentColor,
                     readAloudChapterPosition = readAloudChapterPosition,
                     chapterHighlights = highlightSpans,
+                    chapterTextColorSpans = textColorSpans,
                     onCurrentPageChanged = {},
                     onSelectionStartMove = { textPos ->
                         selectedTextPage = coordinator.getPageAt(pageIndex)
@@ -1350,6 +1535,7 @@ fun CanvasRenderer(
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
                 batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
                 currentTime = currentTime,
                 textColor = textColor,
                 paddingHorizontal = paddingHorizontal,
@@ -1398,6 +1584,12 @@ fun CanvasRenderer(
             onLookupWord = onLookupWord,
             onShareQuote = { text -> shareQuoteText = text },
             onAddHighlight = { start, end, text, argb -> onAddHighlight(start, end, text, argb) },
+            // 橡皮：仅当外层 CanvasRenderer 注入了 onEraseHighlight 才透传，
+            // 否则保持 null —— SelectionToolbar 会自动隐藏橡皮按钮。
+            onEraseHighlight = onEraseHighlight,
+            // 字体色：和 onAddHighlight 同样的传递逻辑；wrapper 内部把 selection
+            // 转成 chapter-pos 范围再回调。
+            onAddTextColor = onAddTextColor,
             menuConfig = selectionMenuConfig,
         )
 
@@ -1464,6 +1656,8 @@ private fun ReaderInfoBar(
     chapterIndex: Int,
     chaptersSize: Int,
     batteryLevel: Int,
+    /** 是否正在充电；为 true 时 [BatteryIcon] 上叠加一道闪电小象形。默认 false。 */
+    batteryCharging: Boolean = false,
     currentTime: String,
     textColor: Color,
     modifier: Modifier = Modifier,
@@ -1489,6 +1683,7 @@ private fun ReaderInfoBar(
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
                 batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
                 currentTime = currentTime,
                 tipColor = tipColor,
                 tipStyle = tipStyle,
@@ -1509,6 +1704,7 @@ private fun ReaderInfoBar(
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
                 batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
                 currentTime = currentTime,
                 tipColor = tipColor,
                 tipStyle = tipStyle,
@@ -1528,6 +1724,7 @@ private fun ReaderInfoBar(
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
                 batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
                 currentTime = currentTime,
                 tipColor = tipColor,
                 tipStyle = tipStyle,
@@ -1546,6 +1743,8 @@ private fun PageReaderInfoOverlay(
     chapterIndex: Int,
     chaptersSize: Int,
     batteryLevel: Int,
+    /** 是否正在充电；为 true 时 [BatteryIcon] 上叠加一道闪电小象形。默认 false。 */
+    batteryCharging: Boolean = false,
     currentTime: String,
     textColor: Color,
     backgroundColor: Color,
@@ -1581,6 +1780,7 @@ private fun PageReaderInfoOverlay(
             chapterIndex = actualChapterIndex,
             chaptersSize = chaptersSize,
             batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
             currentTime = currentTime,
             textColor = textColor,
             modifier = Modifier
@@ -1610,6 +1810,7 @@ private fun PageReaderInfoOverlay(
             chapterIndex = actualChapterIndex,
             chaptersSize = chaptersSize,
             batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
             currentTime = currentTime,
             textColor = textColor,
             modifier = Modifier
@@ -1641,6 +1842,8 @@ private fun InfoSlotContent(
     chapterIndex: Int,
     chaptersSize: Int,
     batteryLevel: Int,
+    /** 是否正在充电；为 true 时 [BatteryIcon] 上叠加一道闪电小象形。默认 false。 */
+    batteryCharging: Boolean = false,
     currentTime: String,
     tipColor: Color,
     tipStyle: TextStyle,
@@ -1655,7 +1858,7 @@ private fun InfoSlotContent(
             modifier = modifier,
         )
         "time" -> Text(currentTime, style = tipStyle, modifier = modifier)
-        "battery" -> BatteryIcon(batteryLevel, tipColor, modifier)
+        "battery" -> BatteryIcon(batteryLevel, tipColor, charging = batteryCharging, modifier = modifier)
         "battery_pct" -> Text("$batteryLevel%", style = tipStyle, modifier = modifier)
         "page" -> Text("${pageIndex + 1}/$pageCount", style = tipStyle, modifier = modifier)
         "progress" -> {
@@ -1678,10 +1881,10 @@ private fun InfoSlotContent(
         "time_battery" -> Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
             Text(currentTime, style = tipStyle)
             Spacer(Modifier.width(6.dp))
-            BatteryIcon(batteryLevel, tipColor)
+            BatteryIcon(batteryLevel, tipColor, charging = batteryCharging)
         }
         "battery_time" -> Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
-            BatteryIcon(batteryLevel, tipColor)
+            BatteryIcon(batteryLevel, tipColor, charging = batteryCharging)
             Spacer(Modifier.width(6.dp))
             Text(currentTime, style = tipStyle)
         }
@@ -1701,11 +1904,19 @@ private fun InfoSlotContent(
 /**
  * Battery icon drawn with Compose Canvas (ported from Legado BatteryView).
  * Draws a small battery outline with fill level.
+ *
+ * 充电态 ([charging]==true) 时在电池本体上叠加一道小闪电（实心填充），
+ * 用反差色 —— "电池本体外壳同色"在浅色 fill 上看不清，所以闪电的描边用
+ * [color]，内填用半透明白色让黑色 fill 区域里也能看见拐角。
+ *
+ * 路径手画了一个标准闪电 7 顶点：左上 → 右上 → 中央右 → 右下 → 左下 → 中央左 → 闭合。
+ * 比例参考材料 1.5 充电图标，按 bodyW × bodyH 的 60% 居中放置。
  */
 @Composable
 private fun BatteryIcon(
     level: Int,
     color: Color,
+    charging: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val w = 22.dp
@@ -1744,6 +1955,38 @@ private fun BatteryIcon(
                 size = androidx.compose.ui.geometry.Size(fillW, bodyH - fillInset * 2),
             )
         }
+
+        if (charging) {
+            // 闪电小象形：放在电池本体居中位置；尺寸取本体的 0.6×0.7。
+            val boltW = (bodyW - strokeW * 2) * 0.45f
+            val boltH = (bodyH - strokeW * 2) * 0.85f
+            val cx = (bodyW - strokeW) / 2f
+            val cy = bodyH / 2f
+            val left = cx - boltW / 2f
+            val top = cy - boltH / 2f
+            val path = androidx.compose.ui.graphics.Path().apply {
+                // (x, y) using fractions of boltW / boltH
+                moveTo(left + boltW * 0.55f, top)                          // 顶部尖
+                lineTo(left + boltW * 0.00f, top + boltH * 0.55f)          // 左中下
+                lineTo(left + boltW * 0.45f, top + boltH * 0.55f)          // 中央左
+                lineTo(left + boltW * 0.30f, top + boltH * 1.00f)          // 底部尖
+                lineTo(left + boltW * 1.00f, top + boltH * 0.40f)          // 右中
+                lineTo(left + boltW * 0.55f, top + boltH * 0.40f)          // 中央右
+                close()
+            }
+            // 反差色填充：用 surface（白/黑随主题），透明度 0.95；这样落在 fill 区
+            // 里也清晰，落在空电区里也能看见。
+            drawPath(
+                path = path,
+                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.95f),
+            )
+            // 描一道与电池本体同色的细边，帮在浅色背景下勾出形状。
+            drawPath(
+                path = path,
+                color = color,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 0.6.dp.toPx()),
+            )
+        }
     }
 }
 
@@ -1752,8 +1995,53 @@ private fun BatteryIcon(
 // ══════════════════════════════════════════════════════════════
 
 /**
+ * Reader 底部信息栏的电量状态快照。
+ *
+ * - [level] 0..100；从 [BatteryManager.EXTRA_LEVEL] / [BatteryManager.EXTRA_SCALE] 算出。
+ * - [charging] 是否正在充电；用 [BatteryManager.EXTRA_STATUS] == CHARGING/FULL 判断
+ *   （等价 EXTRA_PLUGGED!=0，但 STATUS 更精准：插上但未在充电的极少数情况会被
+ *   过滤）。
+ *
+ * 在 [BatteryIcon] 上画的小闪电就由这个 charging 决定显示。
+ */
+private data class BatteryStatus(val level: Int, val charging: Boolean)
+
+/**
+ * Observes battery level + charging state via a sticky broadcast receiver.
+ * Returns a [MutableState] that updates whenever the system reports a new level.
+ */
+@Composable
+private fun rememberBatteryStatus(context: Context): MutableState<BatteryStatus> {
+    val state = remember { mutableStateOf(BatteryStatus(level = 100, charging = false)) }
+    DisposableEffect(context) {
+        fun parse(intent: Intent): BatteryStatus? {
+            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+            if (level < 0) return null
+            val statusInt = intent.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+            val charging = statusInt == BatteryManager.BATTERY_STATUS_CHARGING ||
+                statusInt == BatteryManager.BATTERY_STATUS_FULL
+            return BatteryStatus(level = (level * 100) / scale.coerceAtLeast(1), charging = charging)
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                parse(intent)?.let { state.value = it }
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        val sticky = context.registerReceiver(receiver, filter)
+        // Read initial value from sticky intent
+        if (sticky != null) parse(sticky)?.let { state.value = it }
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+    return state
+}
+
+/**
  * Observes battery level via a sticky broadcast receiver.
  * Returns a [MutableState] that updates whenever the system reports a new level.
+ *
+ * 兼容入口 — 老代码只关心数字百分比，新代码请用 [rememberBatteryStatus]。
  */
 @Composable
 private fun rememberBatteryLevel(context: Context): MutableState<Int> {
@@ -1798,6 +2086,8 @@ private fun PageContentBox(
     chapterIndex: Int,
     chaptersSize: Int,
     batteryLevel: Int,
+    /** 是否正在充电；为 true 时 [BatteryIcon] 上叠加一道闪电小象形。默认 false。 */
+    batteryCharging: Boolean = false,
     currentTime: String,
     textColor: Color,
     paddingHorizontal: Int,
@@ -1820,6 +2110,11 @@ private fun PageContentBox(
      * 有交集的那批，避免每页都遍历整章。
      */
     chapterHighlights: List<HighlightSpan> = emptyList(),
+    /**
+     * 当前章节的字体强调色 spans（kind=1）。语义同 [chapterHighlights]，每页只取
+     * 有交集的子集传给 [PageCanvas]。
+     */
+    chapterTextColorSpans: List<HighlightSpan> = emptyList(),
     onCurrentPageChanged: (TextPage) -> Unit = {},
     onSelectionStartMove: (TextPos) -> Unit = {},
     onSelectionEndMove: (TextPos) -> Unit = {},
@@ -1839,6 +2134,23 @@ private fun PageContentBox(
         return Offset(x, line.lineBottom + page.paddingTop)
     }
 
+    /**
+     * Diagnostic-only sibling — surfaces which short-circuit branch hid the
+     * cursor handle so CursorHandleTrace can report the failing step without
+     * adding logging to the hot recompose path inside cursorOffsetFor itself.
+     *
+     * Possible values: null-input / filtered-relPos<N> / no-line-at-<i>(lines=N)
+     * / empty-columns / ok
+     */
+    fun cursorReasonFor(textPos: TextPos?): String {
+        if (textPos == null) return "null-input"
+        if (textPos.relativePagePos != 0) return "filtered-relPos${textPos.relativePagePos}"
+        val line = page.lines.getOrNull(textPos.lineIndex)
+            ?: return "no-line-at-${textPos.lineIndex}(lines=${page.lines.size})"
+        if (line.columns.isEmpty()) return "empty-columns"
+        return "ok"
+    }
+
     val isCurrentDisplayPage = pageIndex == currentPage
     // Filter chapter-wide highlight set down to those overlapping THIS page's
     // character range. Cheap (O(highlights × 1)); avoids re-scanning unrelated
@@ -1847,7 +2159,32 @@ private fun PageContentBox(
     val pageEnd = pageStart + page.lines.sumOf { it.charSize }
     val pageHighlights = if (chapterHighlights.isEmpty()) emptyList() else
         chapterHighlights.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
+    val pageTextColorSpans = if (chapterTextColorSpans.isEmpty()) emptyList() else
+        chapterTextColorSpans.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
     Box(modifier = Modifier.fillMaxSize().background(backgroundColor)) {
+        // Diagnostic: trace selection cursor handle visibility for non-SCROLL modes.
+        // Logged once per state digest change (LaunchedEffect). Tells us:
+        //   • whether a selection actually exists (selStart/selEnd present)
+        //   • whether THIS PageContentBox is the displayed page (isCurrentDisplayPage)
+        //   • why cursorOffsetFor would return null (cursorReasonFor result)
+        //   • the resolved screen offsets of both handles (null = won't render)
+        // Note: pageIndex/currentPage tells us if a wrong-page mismatch is in play
+        // (the SIMULATION-mode `pagerState.currentPage=0` problem analyzed earlier).
+        val pcStartReason = cursorReasonFor(selectionState.startPos)
+        val pcEndReason = cursorReasonFor(selectionState.endPos)
+        val pcStartOff = cursorOffsetFor(selectionState.startPos, startHandle = true)
+        val pcEndOff = cursorOffsetFor(selectionState.endPos, startHandle = false)
+        val pcDigest = "pageIdx=$pageIndex currentPage=$currentPage" +
+            " isCurDisp=$isCurrentDisplayPage" +
+            " selStart=${selectionState.startPos} selEnd=${selectionState.endPos}" +
+            " startReason=$pcStartReason endReason=$pcEndReason" +
+            " startOff=$pcStartOff endOff=$pcEndOff" +
+            " page.lines.size=${page.lines.size} page.chPos=${page.chapterPosition}"
+        LaunchedEffect(pcDigest) {
+            if (selectionState.startPos != null || selectionState.endPos != null) {
+                AppLog.debug("CursorHandleTrace", "PageContentBox cursor | $pcDigest")
+            }
+        }
         PageCanvas(
             page = page,
             titlePaint = titlePaint,
@@ -1866,6 +2203,7 @@ private fun PageContentBox(
             bookmarkColor = MaterialTheme.colorScheme.error,
             readAloudChapterPosition = readAloudChapterPosition,
             highlights = pageHighlights,
+            textColorSpans = pageTextColorSpans,
             modifier = Modifier.fillMaxSize(),
         )
         if (isCurrentDisplayPage) {
@@ -1928,6 +2266,7 @@ private fun PageContentBox(
             chapterIndex = chapterIndex,
             chaptersSize = chaptersSize,
             batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
             currentTime = currentTime,
             textColor = textColor,
             paddingHorizontal = paddingHorizontal,
@@ -1964,6 +2303,18 @@ private fun ReaderSelectionToolbar(
      * 范围与原文，由 ReaderViewModel 落到 DB；toolbar 调用后会自动 clear()。
      */
     onAddHighlight: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
+    /**
+     * 橡皮擦回调（可选）。非 null 时调色板左侧露出橡皮按钮；点击后本 wrapper
+     * 把选区的 chapter-pos 范围抽出来转给上层（→ ReaderViewModel.highlight.eraseInRange）。
+     * 选区在调用后会自动 clear。
+     */
+    onEraseHighlight: ((start: Int, end: Int) -> Unit)? = null,
+    /**
+     * 字体强调色回调，参考 [onAddHighlight]，wrapper 把 selectionState 转 chapter-pos
+     * 范围转给上层（→ ReaderHighlightController.add(..., kind=1)）。选区在调用后
+     * 自动 clear。
+     */
+    onAddTextColor: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
     /** 用户自定义按钮配置。透传给底层 [SelectionToolbar]。 */
     menuConfig: com.morealm.app.domain.entity.SelectionMenuConfig =
         com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
@@ -2028,6 +2379,31 @@ private fun ReaderSelectionToolbar(
         onShare = { onShareQuote(selectedText()); selectionState.clear() },
         onLookup = { onLookupWord(selectedText()); selectionState.clear() },
         onHighlight = onAddHighlight?.let { cb ->
+            { argb ->
+                val text = selectedText()
+                val sStart = selectedStartChapterPosition()
+                val sEnd = selectedEndChapterPosition()
+                if (sEnd > sStart && text.isNotBlank()) {
+                    cb(sStart, sEnd, text, argb)
+                }
+                selectionState.clear()
+            }
+        },
+        // 橡皮：抽出当前选区的 chapter-pos 范围转给上层；范围非空才触发，
+        // 选区在调用后立即 clear（和 onHighlight 行为一致）。
+        onEraseHighlight = onEraseHighlight?.let { cb ->
+            {
+                val sStart = selectedStartChapterPosition()
+                val sEnd = selectedEndChapterPosition()
+                if (sEnd > sStart) {
+                    cb(sStart, sEnd)
+                }
+                selectionState.clear()
+            }
+        },
+        // 字体色：选完色后回调把 chapter-pos 范围 + 文本 + ARGB 转给上层落库
+        // （kind=1）。选区也立即 clear，体验和点 highlight 调色板一致。
+        onTextColor = onAddTextColor?.let { cb ->
             { argb ->
                 val text = selectedText()
                 val sStart = selectedStartChapterPosition()

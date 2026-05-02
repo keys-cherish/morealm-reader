@@ -85,6 +85,12 @@ fun ScrollRenderer(
     onSelectionEndMove: (page: TextPage, textPos: TextPos) -> Unit = { _, _ -> },
     onRelativePagesChanged: (Map<Int, TextPage>) -> Unit = {},
     resetKey: Int = 0,
+    /**
+     * 恢复命令 token：每次 loadChapter 赋一个新的 System.nanoTime()；
+     * 同章书签跳转时 resetKey (chapterIndex) 不变，但 restoreToken 变 →
+     * 重新触发 pendingRestore。
+     */
+    restoreToken: Long = 0L,
     startFromLastPage: Boolean = false,
     initialProgress: Int = 0,
     initialChapterPosition: Int = 0,
@@ -124,11 +130,29 @@ fun ScrollRenderer(
     }
 
     // Current page index (the page whose top edge is at or above the viewport top)
-    var currentPageIndex by remember { mutableIntStateOf(0) }
+    //
+    // ── 跨章闪烁修复（A）── currentPageIndex 改为 remember(resetKey, restoreToken) {
+    // 同步算 initialPage }，避免出生 = 0 然后 LaunchedEffect 异步设到 95 之间
+    // 那一帧渲染章首页的视觉闪烁。
+    //
+    // 不依赖 pages 列表稳定 —— pages 在 prelayout 期间是流式增长的，但 initialPageIndex
+    // 是 caller (CanvasRenderer) 提前算好的稳定值，可以直接用。后续真有需要修正
+    // (比如 chapterPosition 解析出更精确的 index) 还有 LaunchedEffect 那条兜底。
+    var currentPageIndex by remember(resetKey, restoreToken) {
+        mutableIntStateOf(
+            when {
+                initialPageIndex >= 0 -> initialPageIndex
+                startFromLastPage -> Int.MAX_VALUE  // 暂用 MAX，等 LaunchedEffect 在 pageCount 已知时夹回
+                else -> 0
+            }
+        )
+    }
     var lastNearBottomRequestPageCount by remember { mutableIntStateOf(0) }
     var lastNearBottomPageCount by remember { mutableIntStateOf(0) }
-    var pendingRestore by remember(resetKey) { mutableStateOf(true) }
-    var hasUserScrolled by remember(resetKey) { mutableStateOf(false) }
+    // pendingRestore 以 restoreToken 为 key —— 同章书签跳转时 resetKey
+    // (chapterIndex) 不变但 restoreToken 变 → 重置 pendingRestore 重新跑恢复。
+    var pendingRestore by remember(resetKey, restoreToken) { mutableStateOf(true) }
+    var hasUserScrolled by remember(resetKey, restoreToken) { mutableStateOf(false) }
     var pendingBoundaryTurn by remember(resetKey) { mutableStateOf<ReaderPageDirection?>(null) }
 
     // Pixel offset of the current page relative to viewport top.
@@ -197,7 +221,7 @@ fun ScrollRenderer(
         }
     }
 
-    LaunchedEffect(resetKey, layoutCompleted) {
+    LaunchedEffect(resetKey, restoreToken, layoutCompleted) {
         if (!pendingRestore || !layoutCompleted || pageCount <= 0) return@LaunchedEffect
         currentPageIndex = when {
             initialChapterPosition > 0 -> pageIndexForChapterPosition(initialChapterPosition)
@@ -212,6 +236,12 @@ fun ScrollRenderer(
         lastNearBottomRequestPageCount = 0
         lastNearBottomPageCount = 0
         pendingRestore = false
+        AppLog.info(
+            "BookmarkDebug",
+            "ScrollRenderer RESTORE currentPageIndex=$currentPageIndex" +
+                " pageOffset=$pageOffset initChapPos=$initialChapterPosition" +
+                " initPageIdx=$initialPageIndex pageCount=$pageCount restoreToken=$restoreToken",
+        )
     }
 
     LaunchedEffect(pageCount) {
@@ -316,7 +346,14 @@ fun ScrollRenderer(
     }
 
     fun submitBoundaryTurn(direction: ReaderPageDirection, reason: String): Boolean {
-        if (pendingBoundaryTurn != null) return true
+        // 跨章过渡风暴防御：pendingBoundaryTurn 已提出 → 期间任何新请求直接吞掉，
+        // 不再打日志、不再往 ViewModel 发（之前日志里同一秒内几十条 rejected 的根因
+        // 就是这里丢了 "已在 pending" 的 guard 后没提前返回）。
+        // 注意：之前这里有一行 AppLog.debug 与上面的注释直接矛盾，导致每帧 SKIPPED
+        // 都打一条 log，单次手势刷出 100+ 行，已删除。
+        if (pendingBoundaryTurn != null) {
+            return true
+        }
         AppLog.debug(
             "Scroll",
             "Scroll boundary turn request direction=$direction reason=$reason " +
@@ -470,9 +507,14 @@ fun ScrollRenderer(
             val lastPageBottom = pageOffset + pageHeight(currentPageIndex)
             if (lastPageBottom < viewHeight * 0.3f) {
                 val scrollInto = -(pageOffset + pageHeight(currentPageIndex))
+                // Diagnostic: include pendingBoundaryTurn + hasUserScrolled so we can
+                // see when a NEXT commit fires while a PREV submit is still pending —
+                // i.e. the two state machines are out of sync. See log.txt symptom
+                // where 100+ "pending=PREV" SKIPPED lines preceded a commit NEXT.
                 AppLog.debug(
                     "Scroll",
-                    "Scroll cross-chapter commit NEXT | page=$currentPageIndex/$pageCount | scrollInto=$scrollInto",
+                    "Scroll cross-chapter commit NEXT | page=$currentPageIndex/$pageCount | scrollInto=$scrollInto" +
+                        " | pendingBoundaryTurn=$pendingBoundaryTurn | hasUserScrolled=$hasUserScrolled",
                 )
                 onChapterCommit(ReaderPageDirection.NEXT, scrollInto.coerceAtLeast(0f))
             }
@@ -485,7 +527,8 @@ fun ScrollRenderer(
                 val offsetInPrev = totalPrevHeight - scrollIntoPrev
                 AppLog.debug(
                     "Scroll",
-                    "Scroll cross-chapter commit PREV | page=$currentPageIndex/$pageCount | offsetInPrev=$offsetInPrev",
+                    "Scroll cross-chapter commit PREV | page=$currentPageIndex/$pageCount | offsetInPrev=$offsetInPrev" +
+                        " | pendingBoundaryTurn=$pendingBoundaryTurn | hasUserScrolled=$hasUserScrolled",
                 )
                 onChapterCommit(ReaderPageDirection.PREV, -offsetInPrev)
             }
@@ -605,6 +648,22 @@ fun ScrollRenderer(
         return Offset(x, y)
     }
 
+    /**
+     * Diagnostic-only variant of cursorOffsetFor that returns the same Offset?
+     * but ALSO surfaces which short-circuit branch was taken. Pure data, no
+     * logging — caller decides when/how to log so we don't spam every recompose.
+     * Used by the CursorHandleTrace LaunchedEffect inside the Box body.
+     */
+    fun cursorReasonFor(textPos: TextPos?, startHandle: Boolean): String {
+        val pos = textPos ?: return "null-input"
+        val page = relativePage(pos.relativePagePos)
+            ?: return "no-page-at-relPos${pos.relativePagePos}(pages=${pages.size},curIdx=$currentPageIndex)"
+        val line = page.lines.getOrNull(pos.lineIndex)
+            ?: return "no-line-at-${pos.lineIndex}(lines=${page.lines.size})"
+        if (line.columns.isEmpty()) return "empty-columns"
+        return "ok"
+    }
+
     LaunchedEffect(pageTurnCommand, pendingRestore, layoutCompleted, viewHeight) {
         val direction = pageTurnCommand ?: return@LaunchedEffect
         if (pendingRestore || !layoutCompleted || viewHeight <= 0) return@LaunchedEffect
@@ -628,44 +687,25 @@ fun ScrollRenderer(
     Box(
         modifier = modifier
             .fillMaxSize()
-            // Tap gesture: center tap opens menu, top/bottom tap scrolls
+            // 滚动模式 tap 策略 —— 只区分两类：
+            //  1) 点中可交互 column（图片 / 链接）→ 走 column click
+            //  2) 其余区域（含原本的顶/底"翻一页"区）→ 切换 reader 菜单
+            //
+            // 历史上这里有顶/底 1/3 → 翻一页的 9-zone 行为，但用户在滚动模式下：
+            //  · 没有"固定页"概念，calcPrevPageOffset/calcNextPageOffset 实际是
+            //    按视高估算的偏移，跨段落剪掉一行就闪一下，体验割裂；
+            //  · 长内容滚动天然就用拖动 / 自动滚动 / 音量键，再加顶底点翻页和
+            //    fling 抢手势，触发率高且容易误触；
+            //  · 横向翻页 / 仿真 / 覆盖那几种"每页内容固定"的模式仍走原 9-zone
+            //    （CanvasRenderer.kt 内 SCROLL/SIMULATION 之外那条分支），不受影响。
+            // 所以滚动模式直接砍掉顶/底翻页，统一回退到"点哪都切菜单"。
             .pointerInput(pageCount) {
                 detectTapGestures(
                     onTap = { offset ->
-                        val thirdH = size.height / 3f
-                        val thirdW = size.width / 3f
-                        if (offset.x > thirdW && offset.x < thirdW * 2 &&
-                            offset.y > thirdH && offset.y < thirdH * 2
-                        ) {
-                            onTapCenter()
-                            return@detectTapGestures
-                        }
-                        when {
-                            // Top region — scroll up one "page" (keep one line visible)
-                            offset.y < thirdH -> {
-                                scope.launch {
-                                    flingAnim.stop()
-                                    scrollDelegateState.abortAnim()
-                                    applyScroll(calcPrevPageOffset())
-                                    scrollDelegateState.stopScroll()
-                                }
-                            }
-                            // Bottom region — scroll down one "page"
-                            offset.y > thirdH * 2 -> {
-                                scope.launch {
-                                    flingAnim.stop()
-                                    scrollDelegateState.abortAnim()
-                                    applyScroll(calcNextPageOffset())
-                                    scrollDelegateState.stopScroll()
-                                }
-                            }
-                            else -> {
-                                val touched = touchRelativePage(offset.x, offset.y)
-                                if (!handleColumnClick(touched?.third)) {
-                                    onTapCenter()
-                                }
-                            }
-                        }
+                        val touched = touchRelativePage(offset.x, offset.y)
+                        // column click 优先于菜单切换 —— 链接 / 图片要能正常打开。
+                        if (handleColumnClick(touched?.third)) return@detectTapGestures
+                        onTapCenter()
                     },
                     onLongPress = { offset ->
                         val touched = touchRelativePage(offset.x, offset.y) ?: return@detectTapGestures
@@ -910,6 +950,22 @@ fun ScrollRenderer(
     ) {
         val startHandleOffset = cursorOffsetFor(selectionStart, startHandle = true)
         val endHandleOffset = cursorOffsetFor(selectionEnd, startHandle = false)
+        // Diagnostic: trace why selection cursor handles aren't appearing in SCROLL mode.
+        // The cursor only renders when cursorOffsetFor() returns non-null. Coupled with
+        // cursorReasonFor() we get the exact short-circuit step (no-page / no-line /
+        // empty-columns / ok). One log line per state change (LaunchedEffect on digest).
+        val startReason = cursorReasonFor(selectionStart, startHandle = true)
+        val endReason = cursorReasonFor(selectionEnd, startHandle = false)
+        val cursorTraceDigest = "selStart=$selectionStart selEnd=$selectionEnd" +
+            " startReason=$startReason endReason=$endReason" +
+            " startOff=$startHandleOffset endOff=$endHandleOffset" +
+            " curIdx=$currentPageIndex pagesSize=${pages.size}" +
+            " viewH=$viewHeight pageOffset=$pageOffset"
+        LaunchedEffect(cursorTraceDigest) {
+            if (selectionStart != null || selectionEnd != null) {
+                AppLog.debug("CursorHandleTrace", "Scroll cursor | $cursorTraceDigest")
+            }
+        }
         if (startHandleOffset != null) {
             CursorHandle(position = startHandleOffset, onDrag = { offset ->
                 touchRelativePageRough(offset.x, offset.y)?.let { touched ->

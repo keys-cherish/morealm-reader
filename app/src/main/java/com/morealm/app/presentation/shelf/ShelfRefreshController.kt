@@ -161,7 +161,14 @@ class ShelfRefreshController @Inject constructor(
             val current = bookDao.getById(book.id)
             val oldTotal = current?.totalChapters ?: book.totalChapters
             val newTotal = toc.size
-            val newCount = (newTotal - oldTotal).coerceAtLeast(0)
+            // First-fetch guard: when oldTotal == 0 we're populating TOC for a
+            // book that was just added to the shelf (search → addToShelfAndRead
+            // does not fetch the toc inline). Treat the entire initial chapter
+            // list as "already known" — otherwise every new book would surface
+            // a misleading "N 新" badge equal to its full chapter count.
+            val isInitialFetch = oldTotal == 0
+            val newCount = if (isInitialFetch) 0
+                           else (newTotal - oldTotal).coerceAtLeast(0)
             bookDao.updateLastCheck(
                 id = book.id,
                 total = newTotal,
@@ -170,7 +177,12 @@ class ShelfRefreshController @Inject constructor(
             )
             AppLog.debug(
                 TAG,
-                "refreshed ${book.title}: $oldTotal → $newTotal ${if (newCount > 0) "(+$newCount new)" else ""}"
+                "refreshed ${book.title}: $oldTotal → $newTotal " +
+                    when {
+                        isInitialFetch -> "(initial fetch)"
+                        newCount > 0 -> "(+$newCount new)"
+                        else -> ""
+                    }
             )
         } catch (e: Exception) {
             _errorCount.value += 1

@@ -2,6 +2,8 @@ package com.morealm.app.domain.analyzeRule
 
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.entity.HttpTts
+import com.morealm.app.domain.entity.parseHeaderMap
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.ConcurrentRateLimiter
 import com.morealm.app.domain.http.CookieStore
@@ -51,6 +53,30 @@ class AnalyzeUrl(
     private val ruleData: RuleDataInterface? = null,
     private var coroutineContext: CoroutineContext = EmptyCoroutineContext,
     headerMapF: Map<String, String>? = null,
+    /**
+     * HttpTts 朗读路径下的待合成文本。当 != null 时：
+     *   - URL 模板里的 `{{speakText}}` / `{{encode}}` 被替换为 URL 编码后的值；
+     *   - JS 上下文里 `speakText` / `speakSpeed` / `encode` 三个变量可读，方便
+     *     源作者写 `<js>encodeURIComponent(speakText)</js>` 之类的逻辑；
+     *   - 如果调用方没传 [headerMapF] 且没传 [source]，但传了 [httpTts]，会把
+     *     httpTts.header（JSON）解析进 headerMap。
+     * BookSource 路径下保持 null，行为完全不变。
+     */
+    private val speakText: String? = null,
+    /**
+     * 朗读速度。MoRealm 内部用 0.3-4.0 浮点；为了和 Legado/网络 TTS 服务的整数语速
+     * 对齐，调用方在传入前自行换算（例如 `((speed - 1f) * 10).roundToInt()` 之类，
+     * 具体 mapping 视目标服务而定）。当 != null 时通过 `{{speakSpeed}}` 注入。
+     */
+    private val speakSpeed: Int? = null,
+    /**
+     * HttpTts 朗读源配置。仅当 [source] 为 null、且本次调用是为 TTS 朗读发起时使用。
+     * 用于：
+     *   - 当 [headerMapF] 未传时，把 httpTts.header（JSON 字符串）解析为 headerMap；
+     *   - 限速 ([concurrentRate]) 与 cookie jar 走 BookSource 那条路径，HttpTts 暂不
+     *     接入（Legado 同款行为：HttpTTS 不参与 ConcurrentRateLimiter）。
+     */
+    private val httpTts: HttpTts? = null,
 ) {
     var ruleUrl = ""
         private set
@@ -79,7 +105,11 @@ class AnalyzeUrl(
         val urlMatcher = paramPattern.matcher(baseUrl)
         if (urlMatcher.find()) baseUrl = baseUrl.substring(0, urlMatcher.start())
         // 解析 source header（支持 @js: 和 <js> 动态header）
-        (headerMapF ?: source?.getHeaderMap())?.let {
+        // 优先级：调用方显式传入的 headerMapF > BookSource.header > HttpTts.header
+        val resolvedHeaders = headerMapF
+            ?: source?.getHeaderMap()
+            ?: httpTts?.parseHeaderMap()
+        resolvedHeaders?.let {
             headerMap.putAll(it)
         }
         if (!headerMap.containsKey("User-Agent")) {
@@ -151,6 +181,11 @@ class AnalyzeUrl(
             bindings["result"] = result
             bindings["cookie"] = CookieStore
             bindings["cache"] = CacheManager
+            // HttpTts 朗读路径：把待合成文本与速度也丢进 JS 上下文。BookSource 路径
+            // 下两个值都是 null，对老书源完全无影响。
+            bindings["speakText"] = speakText ?: ""
+            bindings["speakSpeed"] = speakSpeed ?: 0
+            bindings["httpTts"] = httpTts
         } finally {
             org.mozilla.javascript.Context.exit()
         }
@@ -312,6 +347,17 @@ class AnalyzeUrl(
      * 替换关键字,页数,JS
      */
     private fun replaceKeyPageJs() {
+        // HttpTts 朗读路径：先把 {{speakText}} / {{speakSpeed}} / {{encode}} 三个
+        // 静态占位替换掉，再走原有的 {{...}} JS evalJS 流程。简单字符串替换让源
+        // 作者既能写 `?text={{speakText}}` 这种最朴素的用法，也能写 `<js>...</js>`
+        // 复杂逻辑（JS 上下文里同样可读 speakText / speakSpeed）。
+        if (speakText != null) {
+            val encoded = URLEncoder.encode(speakText, "UTF-8")
+            ruleUrl = ruleUrl
+                .replace("{{speakText}}", encoded)
+                .replace("{{encode}}", encoded)
+            speakSpeed?.let { ruleUrl = ruleUrl.replace("{{speakSpeed}}", it.toString()) }
+        }
         if (ruleUrl.contains("{{") && ruleUrl.contains("}}")) {
             val analyze = RuleAnalyzer(ruleUrl)
             val url = analyze.innerRule("{{", "}}") { expression ->

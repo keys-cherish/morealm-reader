@@ -19,6 +19,11 @@ data class Book(
     val title: String,
     val author: String = "",
     val coverUrl: String? = null,
+    /**
+     * 用户自定义封面（走 CoverStorage，存为 WebP 在 filesDir/covers/BOOK/{id}.webp）。
+     * 非 null 时显示优先级高于 coverUrl；null 时退回 coverUrl。
+     */
+    val customCoverUrl: String? = null,
     val localPath: String? = null,
     val sourceId: String? = null,
     val sourceUrl: String? = null,

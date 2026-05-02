@@ -129,6 +129,18 @@ class ThemeRepository @Inject constructor(
         themeDao.deleteCustomTheme(themeId)
     }
 
+    /**
+     * 撤销删除：把 [theme] 整条原样写回。配合 UI Snackbar 撤销用 — UI 删除前先拿到
+     * 完整 entity，撤销时调本方法。不强制 activate，调用方按需自己 [activateTheme]：
+     * 例如撤销时如果之前 active 已切到默认，是否要切回看产品偏好。
+     *
+     * 内置主题不允许通过这条路径恢复（理论上也不会被删，[deleteCustomTheme] 已挡）。
+     */
+    suspend fun restoreCustomTheme(theme: ThemeEntity) {
+        if (theme.isBuiltin) return
+        themeDao.insert(theme.copy(isActive = false))
+    }
+
     suspend fun ensureBuiltinThemes() {
         val builtins = BuiltinThemes.all()
         val activeId = themeDao.getAllSync().firstOrNull { it.isActive }?.id

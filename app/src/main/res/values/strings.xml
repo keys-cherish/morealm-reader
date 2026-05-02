@@ -20,4 +20,14 @@
     <string name="privacy_notice">墨境是一款本地阅读工具。App 不提供任何内容，用户对自行导入的文件和配置负责。</string>
     <string name="shortcut_continue">继续阅读</string>
     <string name="shortcut_continue_long">继续阅读上次的书</string>
+
+    <!-- 桌面小组件相关 -->
+    <string name="widget_continue_reading_label">墨境·继续阅读</string>
+    <string name="widget_continue_reading_title">📖 继续阅读</string>
+    <string name="widget_continue_reading_desc">显示上次阅读的书与今日已读时长，点击直达</string>
+    <string name="widget_preview_book_title">点击直达上次阅读位置</string>
+    <string name="widget_loading">载入中…</string>
+    <string name="widget_empty_title">还没有开始阅读</string>
+    <string name="widget_empty_subtitle">点此打开墨境，挑一本书开始</string>
+    <string name="widget_today_read_format">今日已读 %1$s</string>
 </resources>

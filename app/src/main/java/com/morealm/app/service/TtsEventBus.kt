@@ -17,6 +17,19 @@ data class TtsPlaybackState(
     val totalParagraphs: Int = 0,
     /** Character offset in chapter for the current paragraph; -1 = inactive. */
     val chapterPosition: Int = -1,
+    /**
+     * 当前正在朗读段落的 **章内字符区间** `[start, end)`。null = 未在朗读 / 未提供。
+     *
+     * 用于：
+     *  - 阅读器段落高亮（`PageContentDrawer` 在画文字行时若行字符区间与此 range 相交，
+     *    叠半透明强调色）
+     *  - "回到朗读位置" FAB 判定（当前页是否包含 [paragraphRange.first]）
+     *  - "朗读自动跟随翻页"（[chapterPosition] 不在当前页时根据用户偏好自动 gotoPage）
+     *
+     * 由 [TtsEngineHost] 在 paragraph 切换时根据 `paragraphPositions[i]` +
+     * `paragraphLengths[i]` 计算后写入；切换章节 / 暂停 / 停止时置 null。
+     */
+    val paragraphRange: IntRange? = null,
     /** Linear progress 0..1 across paragraphs in current chapter; -1 = inactive. */
     val scrollProgress: Float = -1f,
     val speed: Float = 1.0f,
@@ -82,6 +95,10 @@ object TtsEventBus {
          * Load a chapter's content into the host and start playback.
          * Sent on initial play, after chapter switch, or when resuming from a specific position.
          *
+         * @param bookId 当前章节所属的书籍 id；非空时 host 会缓存它，[Event.ChapterFinished]
+         *               后超时未收到 ViewModel 推送的新 LoadAndPlay 时，host 用这个 id 自己
+         *               从 BookRepository 加载下一章续播——这是"用户离开 Reader 后续章
+         *               不断声"的核心数据。空时 host 退回旧行为（依赖 ViewModel 推章）。
          * @param paragraphPositions optional pre-computed character offsets for each paragraph;
          *                           when null, host computes them sequentially from paragraph lengths.
          * @param startChapterPosition character offset to begin reading from (0 = chapter start).
@@ -93,6 +110,8 @@ object TtsEventBus {
             val content: String,
             val paragraphPositions: List<Int>?,
             val startChapterPosition: Int,
+            val bookId: String? = null,
+            val chapterIndex: Int? = null,
         ) : Command()
 
         /** Resume playback from current paragraph (no content reload). */
@@ -122,6 +141,18 @@ object TtsEventBus {
 
         /** One-shot speech (selected text); does not affect main playback loop. */
         data class SpeakOneShot(val text: String) : Command()
+
+        /**
+         * 重新绑定 SystemTtsEngine 到指定包名（如 "net.olekdia.multispeech"、
+         * "com.google.android.tts"），不需要重启阅读器。pkg 为空 = 跟随系统默认。
+         *
+         * Host 收到后：cancelAndJoin 当前 speakJob → shutdown 旧 systemTtsEngine →
+         * 用新包名 initialize → 若之前在朗读，自动恢复播放（系统引擎走 batch 路径）。
+         *
+         * 加这条命令的原因：systemTtsEngine 字段是 lazy + 一次性 init，之前用户切换
+         * multitts 后必须重启阅读器才能生效，体验差。
+         */
+        data class RebindSystemEngine(val pkg: String) : Command()
     }
 
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 8)

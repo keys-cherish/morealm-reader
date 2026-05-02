@@ -48,18 +48,42 @@ class TtsNotificationProvider(private val service: TtsService) : MediaNotificati
         val isPlaying = player?.isPlaying == true
         val sleepMinutes = player?.sleepMinutes ?: 0
 
-        // 诊断"通知栏永远显示『朗读中』"问题：
-        // - 如果 createNotification 被调用 → 说明 Provider 已生效，问题在 metadata
-        //   传递（bookTitle/chapterTitle 一直空）；
-        // - 如果从不被调用 → Media3 的 setMediaNotificationProvider 没生效，
-        //   服务还在用 onCreate() 里的 earlyNotification 占位。
+        @Suppress("DEPRECATION")
+        val compatToken = mediaSession.sessionCompatToken
+
         AppLog.debug(
             "TtsNotif",
-            "createNotification: book='$bookTitle', chapter='$chapterTitle', " +
-                "isPlaying=$isPlaying, sleepMin=$sleepMinutes, " +
-                "playerType=${player?.javaClass?.simpleName}",
+            "createNotification(via Media3): book='$bookTitle', chapter='$chapterTitle', " +
+                "isPlaying=$isPlaying, sleepMin=$sleepMinutes",
         )
 
+        val notification = buildNotification(
+            bookTitle = bookTitle,
+            chapterTitle = chapterTitle,
+            cover = cover,
+            isPlaying = isPlaying,
+            sleepMinutes = sleepMinutes,
+            compatToken = compatToken,
+        )
+        return MediaNotification(TtsService.NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * 构造完整的 TTS 通知 —— 抽出来给 [TtsService] 直接走 [NotificationManagerCompat.notify]
+     * 兜底刷新用，绕过 Media3 在某些 OEM ROM（MIUI 14、Android 13 部分机型）上
+     * `invalidateState()` 之后不一定回调 [createNotification] 的不可靠链路。
+     *
+     * 调用方负责节流（仅在 isPlaying / sleepMinutes / 标题 / 封面 变化时刷），
+     * 否则段落级的 paragraphIndex 心跳会刷爆通知栏。
+     */
+    fun buildNotification(
+        bookTitle: String,
+        chapterTitle: String,
+        cover: android.graphics.Bitmap?,
+        isPlaying: Boolean,
+        sleepMinutes: Int,
+        compatToken: android.support.v4.media.session.MediaSessionCompat.Token?,
+    ): android.app.Notification {
         // Legado-style title template
         val statePrefix = when {
             !isPlaying -> "朗读暂停"
@@ -126,15 +150,13 @@ class TtsNotificationProvider(private val service: TtsService) : MediaNotificati
         )
 
         // MediaStyle: collapsed view shows prev / play-pause / next
-        @Suppress("DEPRECATION")
-        val compatToken = mediaSession.sessionCompatToken
         builder.setStyle(
             androidx.media.app.NotificationCompat.MediaStyle()
                 .setShowActionsInCompactView(0, 1, 2)
                 .setMediaSession(compatToken),
         )
 
-        return MediaNotification(TtsService.NOTIFICATION_ID, builder.build())
+        return builder.build()
     }
 
     override fun handleCustomCommand(

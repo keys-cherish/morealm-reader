@@ -2,6 +2,9 @@ package com.morealm.app.ui.settings
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -12,10 +15,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -33,9 +40,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.core.log.CleanupReport
 import com.morealm.app.core.log.LogLevel
 import com.morealm.app.core.log.LogRecord
 import com.morealm.app.core.log.LogTagCatalog
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -152,6 +161,17 @@ fun AppLogScreen(onBack: () -> Unit) {
         filteredLogs.filter { it.id in selectedIds }
     }
 
+    // 「日志清理」折叠面板状态。展开时显示 4 个 slider + 立即清理按钮。
+    // 折叠时只是一行可点击的标题条（避免占空间影响日志列表）。
+    var cleanupExpanded by remember { mutableStateOf(false) }
+    // 当前限额从 AppLog 读取一次作为初始值；用户调整 slider 时本地 state
+    // 立即更新（驱动 UI），松手或点保存时才回写 AppLog（避免 prefs.apply
+    // 在每个 slider tick 上拍写）。这里直接 collect 一份，因为面板第一次
+    // 展开时才 mount，不会引起初始化期开销。
+    var limits by remember { mutableStateOf(AppLog.getLogLimits()) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -219,7 +239,8 @@ fun AppLogScreen(onBack: () -> Unit) {
                     }
                 },
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             // Tab row: 运行日志 | 崩溃记录
@@ -262,6 +283,35 @@ fun AppLogScreen(onBack: () -> Unit) {
                         AppLog.setRecordLog(it)
                     },
                     modifier = Modifier.height(32.dp),
+                )
+            }
+
+            // ── 日志清理面板 ──
+            // 折叠的标题条 + 展开后的 4 个 slider + 立即清理按钮。
+            // 仅在「运行日志」tab 下显示——崩溃 tab 上没必要露这个 UI，
+            // 用户在那里只关心崩溃文件本身。
+            if (selectedTab == 0) {
+                LogCleanupPanel(
+                    expanded = cleanupExpanded,
+                    onToggleExpanded = { cleanupExpanded = !cleanupExpanded },
+                    limits = limits,
+                    onLimitsChanged = { newLimits ->
+                        // 每次拖动结束 / 输入变化都立即写回 prefs。setLogLimits
+                        // 内部已 clamp + persist + 应用到 live sinks。
+                        // 写回后再读一次（拿到 clamped 值）防止 UI 显示
+                        // 用户输入的非法值（比如 0 条内存）。
+                        AppLog.setLogLimits(newLimits)
+                        limits = AppLog.getLogLimits()
+                    },
+                    onCleanupNow = {
+                        val report = AppLog.cleanupNow()
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                cleanupReportMessage(report),
+                                withDismissAction = true,
+                            )
+                        }
+                    },
                 )
             }
 
@@ -781,4 +831,239 @@ private fun shareLogZip(context: android.content.Context) {
     } catch (e: Exception) {
         AppLog.error("LogExport", "Failed to export logs", e)
     }
+}
+
+// ── 日志清理面板 ────────────────────────────────────────
+
+/**
+ * 折叠的「日志清理」面板：
+ *   - 标题条（点击 toggle 展开）
+ *   - 4 个 slider：内存条数 / 单文件 MB / 目录总 MB / 保留天数
+ *   - 「立即清理」按钮 → 触发 [onCleanupNow]，调用方负责弹 SnackBar
+ *
+ * Slider 参数边界（与 AppLog.setLogLimits 内的 clamp 一致）：
+ *   memoryEntries:    50…5000
+ *   maxFileSizeBytes: 1…32 MB
+ *   maxTotalDirBytes: 0 (off) | 10…2000 MB
+ *   maxAgeDays:       1…30
+ *
+ * 设计选择：
+ *   - 用普通 Slider 而不是 RangeSlider —— 单值输入更直观。
+ *   - 不内置「保存」按钮：onValueChangeFinished 即写回 prefs，避免用户调
+ *     完忘记保存。每次 finish 都触发一次 prefs.apply()，但 4 个 slider 的
+ *     拍写频率人手最多每秒几次，远低于 SharedPreferences 的写阈值。
+ *   - 目录总大小 0 表示「不限」——slider 最左端用 ∞ 字样提示，避免
+ *     用户误以为 0 = 立刻删光。
+ */
+@Composable
+private fun LogCleanupPanel(
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    limits: AppLog.LogLimits,
+    onLimitsChanged: (AppLog.LogLimits) -> Unit,
+    onCleanupNow: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        // 标题条 —— 整行可点击；右侧角标显示 expand 箭头方向。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggleExpanded)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.CleaningServices,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "日志清理",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                modifier = Modifier.weight(1f),
+            )
+            // 收起态额外显示一行简要状态；展开时省掉避免冗余。
+            if (!expanded) {
+                Text(
+                    summarizeLimits(limits),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
+        }
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(),
+            exit = shrinkVertically(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                // 1) 内存最大条数 —— ring buffer 大小，影响日志查看器滚动长度。
+                LimitSlider(
+                    label = "内存最大条数",
+                    valueText = "${limits.memoryEntries} 条",
+                    value = limits.memoryEntries.toFloat(),
+                    valueRange = 50f..5000f,
+                    steps = 0,
+                    onValueChange = {
+                        onLimitsChanged(limits.copy(memoryEntries = it.toInt()))
+                    },
+                )
+
+                // 2) 单文件大小 (MB) —— 触发 rotate 的阈值。
+                val fileSizeMb = (limits.maxFileSizeBytes / 1024.0 / 1024.0).toFloat()
+                LimitSlider(
+                    label = "单个滚动文件大小",
+                    valueText = "%.1f MB".format(fileSizeMb),
+                    value = fileSizeMb,
+                    valueRange = 1f..32f,
+                    steps = 0,
+                    onValueChange = { mb ->
+                        val bytes = (mb * 1024 * 1024).toLong()
+                        onLimitsChanged(limits.copy(maxFileSizeBytes = bytes))
+                    },
+                )
+
+                // 3) 目录总大小上限 (MB) —— 0 = 不限。最左端 0 显示「∞」。
+                val totalMb = (limits.maxTotalDirBytes / 1024.0 / 1024.0).toFloat()
+                LimitSlider(
+                    label = "日志目录总大小上限",
+                    valueText = if (totalMb < 1f) "不限制" else "%.0f MB".format(totalMb),
+                    // 用 0..2000 的范围；UI 在 <1MB 时显示「不限」，
+                    // 实际写入时也走「<5MB → 0」的归零逻辑（见下）。
+                    value = totalMb.coerceIn(0f, 2000f),
+                    valueRange = 0f..2000f,
+                    steps = 0,
+                    onValueChange = { mb ->
+                        // <5MB 视为「不限」——避免用户拖到 1~2MB 这种过于
+                        // 激进的值导致每次写入都触发删除风暴。AppLog 内
+                        // 的 clamp 也会兜底。
+                        val bytes = if (mb < 5f) 0L else (mb * 1024 * 1024).toLong()
+                        onLimitsChanged(limits.copy(maxTotalDirBytes = bytes))
+                    },
+                )
+
+                // 4) 保留天数。
+                LimitSlider(
+                    label = "保留天数",
+                    valueText = "${limits.maxAgeDays} 天",
+                    value = limits.maxAgeDays.toFloat(),
+                    valueRange = 1f..30f,
+                    steps = 28,  // 离散刻度——天数没有 0.5 天
+                    onValueChange = {
+                        onLimitsChanged(limits.copy(maxAgeDays = it.toInt()))
+                    },
+                )
+
+                Spacer(Modifier.height(4.dp))
+
+                // 「立即清理」按钮——按当前限额跑一次同步 enforce。
+                FilledTonalButton(
+                    onClick = onCleanupNow,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                ) {
+                    Icon(
+                        Icons.Default.AutoFixHigh,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("按当前限额立即清理")
+                }
+
+                // 副文：解释自动清理的触发条件，帮用户建立心智模型。
+                Text(
+                    "自动清理：每写入 200 条日志或每 30 分钟触发一次（在日志写入线程里执行，闲时不耗资源）。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                    modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
+                )
+            }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+    }
+}
+
+/**
+ * 单个限额 slider 行 —— 标题 + 当前值 + slider。封一层是为了让
+ * [LogCleanupPanel] 主体保持「四块业务」结构，每块只调一次本组件。
+ */
+@Composable
+private fun LimitSlider(
+    label: String,
+    valueText: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onValueChange: (Float) -> Unit,
+) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                valueText,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            steps = steps,
+            modifier = Modifier.height(28.dp),
+        )
+    }
+}
+
+/** 折叠态摘要："500 条 · 4MB · 7d"。压缩成一行让用户一眼看到当前配置。 */
+private fun summarizeLimits(limits: AppLog.LogLimits): String {
+    val mb = limits.maxFileSizeBytes / 1024 / 1024
+    val totalMb = limits.maxTotalDirBytes / 1024 / 1024
+    val totalText = if (totalMb <= 0) "" else " · 总 ${totalMb}MB"
+    return "${limits.memoryEntries} 条 · ${mb}MB$totalText · ${limits.maxAgeDays}d"
+}
+
+/** 把 [CleanupReport] 翻译成给用户看的中文 SnackBar 文案。零删除时
+ *  也明确告知，避免用户怀疑按钮没生效。 */
+private fun cleanupReportMessage(report: CleanupReport): String {
+    if (report.totalDeleted == 0) return "已是当前限额，无需清理"
+    val parts = buildList {
+        if (report.deletedLogFiles > 0) add("${report.deletedLogFiles} 个日志文件")
+        if (report.deletedCrashFiles > 0) add("${report.deletedCrashFiles} 个崩溃文件")
+    }
+    val freed = if (report.freedBytes >= 1024 * 1024)
+        "%.1f MB".format(report.freedMb)
+    else
+        "${report.freedBytes / 1024} KB"
+    return "已删 ${parts.joinToString("、")}，回收 $freed"
 }

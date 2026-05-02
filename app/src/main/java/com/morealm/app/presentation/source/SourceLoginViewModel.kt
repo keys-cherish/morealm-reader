@@ -2,6 +2,7 @@ package com.morealm.app.presentation.source
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.morealm.app.core.error.ErrorMessages
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookSource
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -126,7 +127,7 @@ class SourceLoginViewModel @Inject constructor(
                 _uiState.value = LoginUiState.ShowDialog(source, rows)
             } catch (e: Exception) {
                 AppLog.error("SourceLogin", "解析登录UI失败", e)
-                _uiState.value = LoginUiState.Error("登录配置解析失败: ${e.message}")
+                _uiState.value = LoginUiState.Error(ErrorMessages.forUser("登录配置解析", e))
             }
         }
     }
@@ -150,7 +151,7 @@ class SourceLoginViewModel @Inject constructor(
             } catch (e: Exception) {
                 AppLog.error("SourceLogin", "登录失败", e)
                 withContext(Dispatchers.Main) {
-                    _uiState.value = LoginUiState.Error("登录失败: ${e.message}")
+                    _uiState.value = LoginUiState.Error(ErrorMessages.forUser("登录", e))
                 }
             }
         }

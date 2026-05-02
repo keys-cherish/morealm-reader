@@ -4,14 +4,18 @@ import android.content.Context
 import android.speech.tts.TextToSpeech
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.core.text.AppPattern
+import com.morealm.app.domain.db.HttpTtsDao
+import com.morealm.app.domain.entity.HttpTts
 import com.morealm.app.domain.entity.TtsVoice
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.tts.EdgeTtsEngine
+import com.morealm.app.domain.tts.HttpTtsEngine
 import com.morealm.app.domain.tts.SystemTtsEngine
 import com.morealm.app.domain.tts.TtsEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -38,18 +42,81 @@ class TtsEngineHost(
     private val context: Context,
     private val prefs: AppPreferences,
     private val scope: CoroutineScope,
+    private val httpTtsDao: HttpTtsDao,
+    /**
+     * 用于 host 自动续章兜底——[Event.ChapterFinished] 后超时 [WAIT_NEXT_CHAPTER_MS]
+     * 未收到 ViewModel 推送的新 LoadAndPlay 时，host 自己用这个 loader 直接拉下一章
+     * 续播。这是 Phase D 的核心：在 ReaderViewModel 销毁后 TTS 不断声。
+     */
+    private val chapterContentLoader: com.morealm.app.domain.reader.ChapterContentLoader,
 ) {
     // ── Engines ──────────────────────────────────────────────────────────────
-    private val systemTtsEngine by lazy {
-        // 读用户配置的系统 TTS 引擎包（如果有）；空 = 跟系统默认。lazy 在首次
-        // 用到时同步读 first()；用户改了引擎后 host 这边引擎实例已 init 完成，
-        // 必须重启 reader（或用 RebindSystemEngine 路径）才能换包，权衡是简单。
+    /**
+     * 系统 TTS 引擎实例。
+     *
+     * 不再是 `by lazy` —— 之前 lazy 一次性 init 后没法换包，用户切 multitts/讯飞
+     * 必须重启阅读器才生效。改成可变字段后，[handleCommand] 处理
+     * [TtsEventBus.Command.RebindSystemEngine] 时调用 [rebindSystemEngine] 重建。
+     *
+     * 第一次访问 [currentEngine] 时如果是 null 才走首启路径（读 prefs 拿包名）。
+     */
+    @Volatile private var systemTtsEngine: SystemTtsEngine? = null
+
+    /**
+     * 同步获取或懒初始化 systemTtsEngine。第一次调用读 prefs 拿包名；后续调用
+     * 直接返回已绑定实例。`runBlocking` 风险可控——只在 host scope 内（service 进
+     * 程主线程）调用，且 prefs.first() 是同进程 DataStore 读取，毫秒级。
+     */
+    private fun ensureSystemTtsEngine(): SystemTtsEngine {
+        systemTtsEngine?.let { return it }
         val pkg = runCatching {
             kotlinx.coroutines.runBlocking { prefs.ttsSystemEnginePackage.first() }
         }.getOrDefault("")
-        SystemTtsEngine(context).also { it.initialize(enginePackage = pkg) }
+        AppLog.info("TtsHost", "ensureSystemTtsEngine: first init pkg='${pkg.ifBlank { "<system-default>" }}'")
+        return SystemTtsEngine(context).also {
+            it.initialize(enginePackage = pkg)
+            systemTtsEngine = it
+        }
     }
+
     private val edgeTtsEngine by lazy { EdgeTtsEngine(context) }
+
+    /**
+     * HttpTts 引擎缓存：key = HttpTts.id（不带 "http_" 前缀）。
+     * 每个用户配置的源懒构造一份；切换或删除时由 [evictHttpTtsEngine] 释放。
+     *
+     * 不在 lazy 初始化时一次性预创建——TtsEngineHost.start 阶段还没有 dao 数据，
+     * 也没必要把所有源都拉起 ExoPlayer；按需即可。
+     */
+    private val httpTtsEngineCache = mutableMapOf<Long, HttpTtsEngine>()
+
+    /**
+     * 解析 `engineId = "http_<long>"` → HttpTts.id。非法格式返回 null（host 会
+     * 报 Error 并 fallback system）。
+     */
+    private fun parseHttpEngineId(engineId: String): Long? =
+        engineId.removePrefix("http_").toLongOrNull()
+
+    /**
+     * 同步获取或懒构造对应 id 的 HttpTtsEngine。DAO 查不到（被用户删了但 prefs
+     * 还指着）时返回 null，调用方统一回退 system。
+     */
+    private fun ensureHttpTtsEngine(engineId: String): HttpTtsEngine? {
+        val id = parseHttpEngineId(engineId) ?: return null
+        httpTtsEngineCache[id]?.let { return it }
+        val cfg = runCatching {
+            kotlinx.coroutines.runBlocking { httpTtsDao.getById(id) }
+        }.getOrNull() ?: return null
+        AppLog.info("TtsHost", "ensureHttpTtsEngine: id=$id name='${cfg.name}'")
+        val engine = HttpTtsEngine(context, cfg)
+        httpTtsEngineCache[id] = engine
+        return engine
+    }
+
+    /** 释放并从缓存移除一个 HttpTtsEngine（更换/删除源时调用）。 */
+    private fun evictHttpTtsEngine(id: Long) {
+        httpTtsEngineCache.remove(id)?.release()
+    }
 
     // ── Mutable state (host is single source of truth) ───────────────────────
     private var paragraphs: List<String> = emptyList()
@@ -72,6 +139,13 @@ class TtsEngineHost(
 
     private var speed: Float = 1.0f
     private var engineId: String = "system"
+    /**
+     * 当前激活的 TTS 引擎 id 的只读视图，供 [TtsService] 决策资源申请
+     * （例如仅在线引擎才抢 WiFiLock）。
+     *
+     * 这里不暴露可变引用——`engineId` 的写入仍只在 host 内部协程里串行化。
+     */
+    val currentEngineId: String get() = engineId
     private var voiceName: String = ""
     private var skipRegex: Regex? = null
 
@@ -80,18 +154,164 @@ class TtsEngineHost(
     /** True between "last paragraph finished" and "next chapter loaded" — keeps service alive briefly. */
     private var waitingForNextChapter: Boolean = false
 
+    // ── 自动续章兜底（Phase D）──────────────────────────────────────────────
+    //
+    // [LoadAndPlay] 时 reader 透传过来的 bookId / chapterIndex / totalChapters。
+    // host 缓存这些信息后，[Event.ChapterFinished] 等待 [WAIT_NEXT_CHAPTER_MS]
+    // 未收到 reader 推送的下一章 LoadAndPlay 时，[tryAutoAdvanceChapter] 用
+    // [chapterContentLoader] 直接加载下一章并自发 LoadAndPlay 续播。
+    //
+    // 没有 bookId（旧调用方 / oneShot / Listen 页等）时自动续章不启用，行为
+    // 退回旧逻辑（超时即停止）——保持向后兼容。
+    @Volatile private var currentBookId: String? = null
+    @Volatile private var currentChapterIndex: Int = -1
+    @Volatile private var totalChapters: Int = 0
+
     // ── Jobs ─────────────────────────────────────────────────────────────────
     private var speakJob: Job? = null
     private var sleepTimerJob: Job? = null
     private var oneShotJob: Job? = null
     /** [setSpeed] 的去抖重启 job，每次速度变化重设；[release] 时取消。 */
     private var pendingSpeedRestartJob: Job? = null
+    /** 心跳 watchdog job——isPlaying=true 期间每 [HEARTBEAT_INTERVAL_MS] 打一行摘要日志。 */
+    private var heartbeatJob: Job? = null
+    /**
+     * HttpTts 章节预下载 job。在 [runHttpChapterPlayback] 进入章末时启动，把下一章
+     * 前 N 段提前拉到磁盘缓存，让翻章时段间停顿尽量短。每章只跑一次；切章/切引擎/
+     * stop 时由 [release] 或 setEngine 显式 cancel。
+     */
+    private var preloadNextChapterJob: Job? = null
+
+    // ── Heartbeat watchdog ──────────────────────────────────────────────────
+    //
+    // 解决"没声音 + 没日志"的诊断盲区。以前引擎回调走丢时 logcat 一片空白，
+    // 和"程序没运行"看起来一样——无法区分是 host 没启动还是引擎吞了回调。
+    //
+    // 现在只要 isPlaying=true，每 5s 强制打一行心跳，包含完整的 host 内部状态
+    // 快照。下次用户复现"没声音"后截 logcat，看到这行就能立刻判断：
+    //   - 有心跳但 lastCbAge 持续增大 → 引擎吞回调（batch watchdog 会兜底）
+    //   - 有心跳但 speakJobActive=false → speakJob 被意外 cancel，loop 退出
+    //   - 没心跳 → host 根本没进入 playing 状态（问题在 loadAndPlay/service 启动）
+    //   - 心跳里 enginePkg 是空 → systemTtsEngine 没绑到任何引擎
+
+    /** 最后一次收到引擎回调（onStart/onDone/onRangeStart/chunk）的时间戳。 */
+    @Volatile private var lastCallbackAtMs: Long = 0L
+    /** 最后一次收到的回调类型，用于心跳日志。 */
+    @Volatile private var lastCallbackType: String = "none"
+
+    /** 由引擎回调路径调用：记录"最后一次引擎有动静的时刻"。 */
+    private fun markCallback(type: String) {
+        lastCallbackAtMs = System.currentTimeMillis()
+        lastCallbackType = type
+    }
+
+    // ── 引擎 fatal 短路 ─────────────────────────────────────────────────────
+    //
+    // 历史 ANR 现场：[runBatchPlayback] 第 0 条 enqueue 就 ERROR（引擎已经异常），
+    // host 报 Error 后 publishState(false) 退出；但 ChapterFinished 监听 / 用户
+    // 重试 / 自动续章流程很快又触发新的 [loadAndPlay] / [resume]，再次进入
+    // [runBatchPlayback] → 再次调 [applyVoiceToEngine] → `getVoices` 同步 binder
+    // 在已经无响应的 TTS 进程上一路阻塞 8s+ → ANR Watchdog 报警一次。每 8s 一次，
+    // 就是 err.txt 里 9 条堆栈完全相同的 ANR 复读。
+    //
+    // 防御策略：第一次确认引擎 fatal（i=0 enqueue ERROR / runBatchPlayback 抛
+    // 出非 cancellation 异常）后通过 [engineFatalCooldown] 进入冷却；后续
+    // [ENGINE_FATAL_COOLDOWN_MS] 内任何 [loadAndPlay] / [resume] / [speakOneShot]
+    // 入口直接发 Error 事件并 return，不再进入播放循环，给引擎进程留出恢复
+    // 空间或让用户切引擎。
+    //
+    // [reInit] 成功后或用户主动切引擎 / 切包名时通过 [EngineFatalCooldown.clear]
+    // 主动解除冷却。
+    private val engineFatalCooldown = EngineFatalCooldown(ENGINE_FATAL_COOLDOWN_MS)
+
+    /** 标记引擎 fatal，进入 [ENGINE_FATAL_COOLDOWN_MS] 冷却期。 */
+    private fun markEngineFatal(reason: String) {
+        engineFatalCooldown.markFatal()
+        AppLog.warn(
+            "TtsHost",
+            "markEngineFatal: $reason — entering ${ENGINE_FATAL_COOLDOWN_MS / 1000}s cooldown",
+        )
+    }
+
+    /** 解除 fatal 标记（reInit 成功 / 切引擎 / 切包名后调用）。 */
+    private fun clearEngineFatal() {
+        if (engineFatalCooldown.isInCooldown()) {
+            AppLog.info("TtsHost", "clearEngineFatal: cooldown cleared")
+        }
+        engineFatalCooldown.clear()
+    }
+
+    /**
+     * 在 [loadAndPlay] / [resume] / [speakOneShot] 入口调用：若处于冷却期则
+     * 发送 Error 事件并 return，避免反复触发同样的 ANR 路径。
+     *
+     * @return true 表示已被冷却拦截（调用方应 return），false 表示可继续。
+     */
+    private fun shortCircuitIfEngineFatal(): Boolean {
+        if (!engineFatalCooldown.isInCooldown()) return false
+        val remaining = engineFatalCooldown.remainingSeconds()
+        AppLog.warn("TtsHost", "shortCircuitIfEngineFatal: still in cooldown, ${remaining}s left")
+        TtsEventBus.sendEvent(
+            TtsEventBus.Event.Error(
+                "TTS 引擎刚刚出错（${remaining}s 内重试将再次失败），请稍后或更换引擎",
+                canOpenSettings = true,
+            )
+        )
+        publishState(playing = false)
+        return true
+    }
+
+    private fun startHeartbeat() {
+        // 已有活动心跳 job 时不重启；调用方应在 publishState(playing=true) 转换到
+        // 播放态时调一次（参见 [publishState]）。
+        if (heartbeatJob?.isActive == true) return
+        heartbeatJob = scope.launch {
+            while (true) {
+                delay(HEARTBEAT_INTERVAL_MS)
+                val state = TtsEventBus.playbackState.value
+                if (!state.isPlaying) {
+                    // 不在播放就退出 job，节省 wakeup（之前是 continue 不退出，
+                    // 即使 isPlaying=false 也每隔间隔醒来一次）。下次进入播放
+                    // 态时由 [publishState] 重新启动。
+                    AppLog.debug("TtsHB", "heartbeat exit: not playing")
+                    break
+                }
+                val cbAge = if (lastCallbackAtMs > 0) {
+                    "${(System.currentTimeMillis() - lastCallbackAtMs) / 1000}s"
+                } else "never"
+                val sysPkg = runCatching {
+                    systemTtsEngine?.let { e ->
+                        // TextToSpeech.defaultEngine 返回当前绑定的包名
+                        val field = android.speech.tts.TextToSpeech::class.java
+                            .getDeclaredField("mCurrentEngine")
+                        field.isAccessible = true
+                        field.get(
+                            // systemTtsEngine 包裹了 TextToSpeech 实例；需要反射拿
+                            e.javaClass.getDeclaredField("tts").apply { isAccessible = true }.get(e)
+                        ) as? String
+                    }
+                }.getOrNull() ?: "?"
+                AppLog.info(
+                    "TtsHB",
+                    "para=${state.paragraphIndex}/${state.totalParagraphs} " +
+                        "startPos=$paragraphStartPos " +
+                        "lastCb=$lastCallbackType+$cbAge " +
+                        "speakJob=${speakJob?.isActive == true} " +
+                        "engine=$engineId pkg=$sysPkg " +
+                        "voice='$voiceName' speed=$speed " +
+                        "sleepMin=${state.sleepMinutes}",
+                )
+            }
+        }
+    }
 
     // Serialize all (cancel + start) operations so rapid commands don't race.
     private val controlMutex = Mutex()
 
     /** Initialize host: load saved prefs, push initial playback state. */
     fun start() {
+        // 心跳不再在 start() 时启动——它只在播放态下有意义。改由 [publishState]
+        // 在 playing=true 转换处按需启动；播放结束时心跳自然退出循环。
         scope.launch {
             speed = prefs.ttsSpeed.first()
             skipRegex = prefs.ttsSkipPattern.first().let { p ->
@@ -116,9 +336,14 @@ class TtsEngineHost(
         speakJob?.cancel()
         sleepTimerJob?.cancel()
         oneShotJob?.cancel()
+        preloadNextChapterJob?.cancel()
         pendingSpeedRestartJob?.cancel()
-        runCatching { systemTtsEngine.stop(); systemTtsEngine.shutdown() }
+        heartbeatJob?.cancel()
+        runCatching { systemTtsEngine?.stop(); systemTtsEngine?.shutdown() }
         runCatching { edgeTtsEngine.stop() }
+        // HttpTts 引擎缓存：每个 entry 持有 ExoPlayer，必须显式 release 防泄漏
+        httpTtsEngineCache.values.forEach { runCatching { it.release() } }
+        httpTtsEngineCache.clear()
     }
 
     /** Entry point for all [TtsEventBus.Command]s; called by [TtsService.listenForCommands]. */
@@ -154,6 +379,7 @@ class TtsEngineHost(
             is TtsEventBus.Command.SetSkipPattern -> setSkipPattern(cmd.pattern)
             is TtsEventBus.Command.SetSleepMinutes -> setSleepMinutes(cmd.minutes)
             is TtsEventBus.Command.SpeakOneShot -> speakOneShot(cmd.text)
+            is TtsEventBus.Command.RebindSystemEngine -> rebindSystemEngine(cmd.pkg)
             is TtsEventBus.Command.StopService -> {
                 // Service.onDestroy will call release(); just stop playback now.
                 stopPlayback()
@@ -184,6 +410,7 @@ class TtsEngineHost(
     // ── Core playback control ────────────────────────────────────────────────
 
     private fun loadAndPlay(cmd: TtsEventBus.Command.LoadAndPlay) {
+        if (shortCircuitIfEngineFatal()) return
         scope.launch {
             controlMutex.withLock {
                 speakJob?.cancelAndJoin()
@@ -214,6 +441,16 @@ class TtsEngineHost(
                 paragraphIndex = paragraphIndexForPosition(cmd.startChapterPosition)
                 paragraphStartPos = 0 // 新章节加载，句中位置归零
                 waitingForNextChapter = false
+                // Phase D：缓存 bookId / chapterIndex 以便章末自动续章。null 时
+                // 退回旧行为（不自动续章，依赖 reader 推章），与 oneShot / Listen
+                // 页这类没有书上下文的调用方兼容。
+                cmd.bookId?.let { currentBookId = it }
+                cmd.chapterIndex?.let { currentChapterIndex = it }
+                if (cmd.bookId != null && cmd.chapterIndex != null) {
+                    // totalChapters 仅在调用方未提供时延迟到首次自动续章再读 DB；
+                    // 见 [tryAutoAdvanceChapter]。
+                    totalChapters = 0
+                }
 
                 // TTS-DIAG #5 — what the host actually loaded. Sample the first
                 // 60 chars of the first non-blank paragraph so we can spot
@@ -236,7 +473,7 @@ class TtsEngineHost(
                     )
                     return@withLock
                 }
-                speakJob = scope.launch { speakLoop() }
+                speakJob = scope.launch(Dispatchers.IO) { speakLoop() }
             }
         }
     }
@@ -247,6 +484,7 @@ class TtsEngineHost(
             "resume() called: paragraphIndex=$paragraphIndex paragraphStartPos=$paragraphStartPos " +
                 "isPlaying=${TtsEventBus.playbackState.value.isPlaying} jobActive=${speakJob?.isActive == true}",
         )
+        if (shortCircuitIfEngineFatal()) return
         if (paragraphs.isEmpty()) {
             AppLog.warn("TtsHost", "resume: paragraphs empty, ignored")
             return
@@ -259,7 +497,7 @@ class TtsEngineHost(
             controlMutex.withLock {
                 speakJob?.cancelAndJoin()
                 publishState(playing = true)
-                speakJob = scope.launch { speakLoop() }
+                speakJob = scope.launch(Dispatchers.IO) { speakLoop() }
             }
         }
     }
@@ -287,10 +525,15 @@ class TtsEngineHost(
         scope.launch {
             controlMutex.withLock {
                 speakJob?.cancelAndJoin()
+                preloadNextChapterJob?.cancel()
                 runCatching { currentEngine().stop() }
                 paragraphIndex = 0
                 paragraphStartPos = 0
                 waitingForNextChapter = false
+                // 用户主动停止，清自动续章上下文——避免下次再播时延续旧 bookId
+                currentBookId = null
+                currentChapterIndex = -1
+                totalChapters = 0
                 TtsEventBus.updatePlayback {
                     copy(
                         isPlaying = false,
@@ -322,7 +565,7 @@ class TtsEngineHost(
                 controlMutex.withLock {
                     speakJob?.cancelAndJoin()
                     publishState(playing = true)
-                    speakJob = scope.launch { speakLoop() }
+                    speakJob = scope.launch(Dispatchers.IO) { speakLoop() }
                 }
             }
         } else {
@@ -348,7 +591,7 @@ class TtsEngineHost(
                 controlMutex.withLock {
                     speakJob?.cancelAndJoin()
                     publishState(playing = true)
-                    speakJob = scope.launch { speakLoop() }
+                    speakJob = scope.launch(Dispatchers.IO) { speakLoop() }
                 }
             }
         } else {
@@ -374,12 +617,13 @@ class TtsEngineHost(
             "TTS",
             "Host.speakLoop: ENTER engine=${engine.javaClass.simpleName}, " +
                 "paragraphs=${paragraphs.size}, startIdx=$paragraphIndex, " +
-                "paragraphStartPos=$paragraphStartPos",
+                "paragraphStartPos=$paragraphStartPos, " +
+                "thread=${Thread.currentThread().name}",
         )
-        if (engine is SystemTtsEngine) {
-            runBatchPlayback(engine)
-        } else {
-            runStreamingPlayback(engine)
+        when (engine) {
+            is SystemTtsEngine -> runBatchPlayback(engine)
+            is HttpTtsEngine -> runHttpChapterPlayback(engine)
+            else -> runStreamingPlayback(engine)
         }
     }
 
@@ -445,10 +689,9 @@ class TtsEngineHost(
 
         if (plan.isEmpty()) {
             AppLog.warn("TtsHost", "runBatchPlayback: nothing to read in this chapter")
-            publishState(playing = false)
-            // 整章空（全是空段/标点段）→ 等同于读完，触发翻章
-            waitingForNextChapter = true
-            TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
+            // 整章空（全是空段/标点段）→ 等同于读完，触发翻章。统一走自动续章
+            // 兜底——避免直接 publishState(false) 导致 UI 闪一帧停止。
+            waitForNextChapterOrAutoAdvance()
             return
         }
 
@@ -457,6 +700,7 @@ class TtsEngineHost(
 
         val cb = object : SystemTtsEngine.BatchCallback {
             override fun onUtteranceStart(utteranceId: String) {
+                markCallback("onStart")
                 val parsed = parseUtteranceId(utteranceId)
                 if (parsed == null) {
                     AppLog.warn("TtsHost", "cb.onStart: parse failed id=$utteranceId")
@@ -488,6 +732,7 @@ class TtsEngineHost(
             }
 
             override fun onUtteranceDone(utteranceId: String) {
+                markCallback("onDone")
                 val parsed = parseUtteranceId(utteranceId)
                 if (parsed == null) {
                     AppLog.warn("TtsHost", "cb.onDone: parse failed id=$utteranceId")
@@ -506,6 +751,7 @@ class TtsEngineHost(
             }
 
             override fun onUtteranceError(utteranceId: String, errorCode: Int) {
+                markCallback("onError")
                 AppLog.warn("TtsHost", "batch utterance error id=$utteranceId code=$errorCode")
                 // 单段失败：把它当作完成跳过；如果是最后一段也要 fulfill finished
                 val parsed = parseUtteranceId(utteranceId)
@@ -524,6 +770,7 @@ class TtsEngineHost(
             }
 
             override fun onRangeStart(utteranceId: String, start: Int, end: Int) {
+                markCallback("onRange")
                 val parsed = parseUtteranceId(utteranceId) ?: return
                 val (paraIdx, subIdx) = parsed
                 if (paraIdx == paragraphIndex) {
@@ -572,6 +819,10 @@ class TtsEngineHost(
             if (result == TextToSpeech.ERROR) {
                 AppLog.error("TtsHost", "batch enqueue ERROR at i=$i id=$id, aborting")
                 engine.setBatchCallback(null)
+                // 第 0 条 enqueue 就 ERROR —— 引擎进程基本已经异常（参见
+                // markEngineFatal 头注释）。记 fatal，下个 30s 内的 loadAndPlay /
+                // resume / speakOneShot 都会被短路，避免反复触发同样的 ANR。
+                if (i == 0) markEngineFatal("first enqueue returned ERROR (id=$id)")
                 TtsEventBus.sendEvent(
                     TtsEventBus.Event.Error("TTS 入队失败，请重试", canOpenSettings = true)
                 )
@@ -581,9 +832,82 @@ class TtsEngineHost(
         }
         AppLog.info("TtsHost", "enqueue done: all ${plan.size} utterances accepted by engine")
 
-        // 等整章读完或被取消
+        // ── 批量播放 watchdog ──
+        //
+        // 之前 finished.await() 没有超时：引擎吞掉所有回调时 host 永久挂起，
+        // isPlaying=true 但完全静默，logcat 空白——"没声音没日志"的元凶。
+        //
+        // 现在记一个时间戳基准（enqueue 刚完成 = "引擎应该开始读了"），然后
+        // 用 withTimeoutOrNull 包裹 finished.await()，每 [BATCH_WATCHDOG_TIMEOUT_MS]
+        // 醒来检查最后一次回调的时间。如果自从 enqueue 完成后一直没收到任何回调，
+        // 则认定引擎静默——尝试 reInit 并重新 enqueue 整章。
+        //
+        // 不用担心 withTimeoutOrNull 超时时 finished 已经 complete 的 race：
+        // CompletableDeferred.await() 在 complete 后立刻返回，不会被超时中断。
+        val enqueueDoneAtMs = System.currentTimeMillis()
+        markCallback("enqueued") // 基准：enqueue 完成时刻
+
         try {
-            finished.await()
+            var watchdogTriggered = false
+            val result = withTimeoutOrNull(BATCH_WATCHDOG_TIMEOUT_MS) { finished.await() }
+            if (result == null && !finished.isCompleted) {
+                // 超时 + finished 没 complete → 检查回调是否有动静
+                val silentMs = System.currentTimeMillis() - lastCallbackAtMs
+                if (silentMs >= BATCH_WATCHDOG_TIMEOUT_MS) {
+                    watchdogTriggered = true
+                    AppLog.error(
+                        "TtsHost",
+                        "WATCHDOG: no engine callbacks for ${silentMs / 1000}s after enqueue! " +
+                            "engine=$engineId, plan=${plan.size} utts, " +
+                            "lastCb=$lastCallbackType — attempting reInit + replay",
+                    )
+                    engine.setBatchCallback(null)
+
+                    // 尝试 reInit 恢复
+                    try {
+                        engine.reInit()
+                        val reInitResult = engine.awaitReadyResult()
+                        if (reInitResult is SystemTtsEngine.InitResult.Failed) {
+                            AppLog.error("TtsHost", "WATCHDOG reInit failed: ${reInitResult.reason}")
+                            TtsEventBus.sendEvent(
+                                TtsEventBus.Event.Error(
+                                    "TTS 引擎无响应且重启失败：${reInitResult.reason}",
+                                    canOpenSettings = true,
+                                )
+                            )
+                            publishState(playing = false)
+                            return
+                        }
+                        AppLog.info("TtsHost", "WATCHDOG: reInit OK, replaying from para=$paragraphIndex")
+                        // reInit 成功 —— 引擎已经恢复，解除冷却让续播重新可用。
+                        clearEngineFatal()
+                        engine.setSpeechRate(speed)
+                        applyVoiceToEngine()
+                        // 重新进入 runBatchPlayback —— 这次 paragraphIndex 保持不变，
+                        // 从卡住的那一段重新规划 utterance 列表
+                        runBatchPlayback(engine)
+                        return
+                    } catch (e: Exception) {
+                        AppLog.error("TtsHost", "WATCHDOG reInit threw", e)
+                        TtsEventBus.sendEvent(
+                            TtsEventBus.Event.Error(
+                                "TTS 引擎无响应且重启异常",
+                                canOpenSettings = true,
+                            )
+                        )
+                        publishState(playing = false)
+                        return
+                    }
+                } else {
+                    // 超时但有回调（只是读得慢 / 章节很长），继续等
+                    AppLog.debug(
+                        "TtsHost",
+                        "batch watchdog timeout but callbacks alive (age=${silentMs}ms), keep waiting",
+                    )
+                    finished.await() // 无超时兜底——回调在活着就正常等
+                }
+            }
+            // 到这里 finished 已 complete（正常读完）
         } catch (_: CancellationException) {
             // pause/stop/切段被外层 cancel：此时 engine.stop() 已被调用（pause/stop/setEngine 都会调）
             AppLog.debug("TtsHost", "runBatchPlayback: cancelled mid-flight")
@@ -594,16 +918,7 @@ class TtsEngineHost(
 
         // 章节读完
         AppLog.info("TtsHost", "runBatchPlayback: chapter finished")
-        waitingForNextChapter = true
-        TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
-        val gotNext = withTimeoutOrNull(WAIT_NEXT_CHAPTER_MS) {
-            while (waitingForNextChapter) delay(50)
-            true
-        }
-        if (gotNext != true) {
-            AppLog.info("TtsHost", "runBatchPlayback: no next chapter within ${WAIT_NEXT_CHAPTER_MS}ms, stopping")
-            publishState(playing = false)
-        }
+        waitForNextChapterOrAutoAdvance()
     }
 
     /** 仅供 [onRangeStart] 把切片局部偏移还原成段内坐标用。 */
@@ -617,6 +932,80 @@ class TtsEngineHost(
         val p = parts[0].toIntOrNull() ?: return null
         val s = parts[1].toIntOrNull() ?: return null
         return p to s
+    }
+
+    // ── 章末等待 + 自动续章兜底 ──────────────────────────────────────────────
+    //
+    // 把 6 个 speakLoop 分支末尾的"sendEvent(ChapterFinished) → 等 ViewModel 推章
+    // → 超时停止"重复块统一到 [waitForNextChapterOrAutoAdvance]。
+    //
+    // 新行为相比之前多一步：超时后若 host 缓存了 bookId/chapterIndex（reader 在
+    // LoadAndPlay 时透传），用 [chapterContentLoader] 直接加载下一章并自发
+    // LoadAndPlay 续播——这是 Phase D 的"用户离开 Reader 后续章不断声"。
+
+    /**
+     * 章节读完后调一次：先发 ChapterFinished 事件给 reader 一个推章窗口，超时后
+     * 自动续章兜底；都失败时 publishState(false) 停止。
+     */
+    private suspend fun waitForNextChapterOrAutoAdvance() {
+        waitingForNextChapter = true
+        TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
+        val gotNext = withTimeoutOrNull(WAIT_NEXT_CHAPTER_MS) {
+            while (waitingForNextChapter) delay(50)
+            true
+        }
+        if (gotNext == true) {
+            // ViewModel 在窗口内推送了新 LoadAndPlay（旧路径），续章成功
+            return
+        }
+        AppLog.info(
+            "TtsHost",
+            "ChapterFinished: viewModel didn't push within ${WAIT_NEXT_CHAPTER_MS}ms, " +
+                "trying host autoAdvance",
+        )
+        if (tryAutoAdvanceChapter()) return
+        AppLog.info("TtsHost", "ChapterFinished: autoAdvance unavailable, stopping playback")
+        publishState(playing = false)
+    }
+
+    /**
+     * 尝试用 [chapterContentLoader] 加载下一章并自发 LoadAndPlay 续播。
+     *
+     * @return true 表示已成功提交下一章 LoadAndPlay 命令；false 表示无 bookId 上下文
+     *         / 已是最后一章 / 加载失败 / 内容为空，调用方应停止播放。
+     */
+    private suspend fun tryAutoAdvanceChapter(): Boolean {
+        val bookId = currentBookId ?: return false
+        val curIdx = currentChapterIndex
+        if (curIdx < 0) return false
+        val nextIdx = curIdx + 1
+        AppLog.info("TtsHost", "autoAdvance: bookId=$bookId nextIdx=$nextIdx (host 接管续章)")
+        val loaded = chapterContentLoader.loadForTts(bookId, nextIdx)
+        if (loaded == null) {
+            AppLog.warn(
+                "TtsHost",
+                "autoAdvance: loader returned null (book/章节不存在或已到末章)",
+            )
+            return false
+        }
+        if (loaded.content.isBlank()) {
+            AppLog.warn("TtsHost", "autoAdvance: content blank, treating as end-of-book")
+            return false
+        }
+        // 通过 EventBus 把命令送回自己——走和 reader 完全相同的入口，保持单一路径
+        TtsEventBus.sendCommand(
+            TtsEventBus.Command.LoadAndPlay(
+                bookTitle = loaded.bookTitle,
+                chapterTitle = loaded.chapterTitle,
+                coverUrl = loaded.coverUrl,
+                content = loaded.content,
+                paragraphPositions = null,
+                startChapterPosition = 0,
+                bookId = bookId,
+                chapterIndex = nextIdx,
+            )
+        )
+        return true
     }
 
     /**
@@ -730,13 +1119,7 @@ class TtsEngineHost(
                 }
             }
             // chapter end
-            waitingForNextChapter = true
-            TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
-            val gotNext = withTimeoutOrNull(WAIT_NEXT_CHAPTER_MS) {
-                while (waitingForNextChapter) delay(50)
-                true
-            }
-            if (gotNext != true) publishState(playing = false)
+            waitForNextChapterOrAutoAdvance()
         } catch (_: CancellationException) {
             // normal cancel
         } catch (e: Exception) {
@@ -773,9 +1156,8 @@ class TtsEngineHost(
             }
             if (toRead.isEmpty()) {
                 AppLog.warn("TtsHost", "runEdgeChapterPlayback: nothing to read")
-                publishState(playing = false)
-                waitingForNextChapter = true
-                TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
+                // 整章空 → 等同于读完，走自动续章兜底
+                waitForNextChapterOrAutoAdvance()
                 return
             }
 
@@ -796,6 +1178,7 @@ class TtsEngineHost(
                     onParagraphStart = { localIdx ->
                         // localIdx 是非空段相对索引（0..toRead.size-1）
                         if (!TtsEventBus.playbackState.value.isPlaying) return@speakChapter
+                        markCallback("edgePara")
                         val origIdx = origIndices.getOrNull(localIdx) ?: return@speakChapter
                         if (paragraphIndex != origIdx) {
                             AppLog.debug(
@@ -807,7 +1190,9 @@ class TtsEngineHost(
                             publishState(playing = true)
                         }
                     },
-                ).collect { /* drain */ }
+                ).collect {
+                    markCallback("edgeChunk")
+                }
             } catch (ce: CancellationException) {
                 throw ce
             } catch (e: Exception) {
@@ -824,13 +1209,7 @@ class TtsEngineHost(
             }
 
             // chapter end
-            waitingForNextChapter = true
-            TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
-            val gotNext = withTimeoutOrNull(WAIT_NEXT_CHAPTER_MS) {
-                while (waitingForNextChapter) delay(50)
-                true
-            }
-            if (gotNext != true) publishState(playing = false)
+            waitForNextChapterOrAutoAdvance()
         } catch (_: CancellationException) {
             // normal cancel
         } catch (e: Exception) {
@@ -840,8 +1219,125 @@ class TtsEngineHost(
     }
 
     /**
+     * Plan C-equivalent for HttpTts —— 整章批量朗读路径，对齐 Legado
+     * [io.legado.app.service.HttpReadAloudService.downloadAndPlayAudios]。
+     *
+     * 流程：
+     * 1. 收集 [paragraphIndex, paragraphs.size) 中所有非空、非 skipRegex 的段。
+     * 2. 调 [HttpTtsEngine.speakChapter]：第一段同步下载入队 ExoPlayer，后续段
+     *    边下边入队；onParagraphStart(localIdx) 把段进度回调上来 → 转换为
+     *    paragraphIndex 真实坐标 → publishState 让阅读器高亮跟随。
+     * 3. 全章一旦进入"正在播最后一段"阶段，启动 [preloadNextChapterJob] 后台
+     *    把下一章前 [HTTP_PRELOAD_NEXT_PARAGRAPHS] 段拉到磁盘缓存（与 Legado
+     *    HttpReadAloudService.kt:193-216 的 preDownloadAudios 思路一致）。
+     * 4. 完成后等 [WAIT_NEXT_CHAPTER_MS] 让 ReaderViewModel 推进章节。
+     *
+     * 失败处理：HttpTtsEngine 已经做了"连续 5 次失败抛 IOException"——这里只兜底
+     * 把错误提示给用户并停止播放，不再做引擎级回退（用户答确认）。
+     */
+    private suspend fun runHttpChapterPlayback(engine: HttpTtsEngine) {
+        try {
+            data class ToRead(val origIdx: Int, val text: String)
+            val toRead = ArrayList<ToRead>()
+            for (i in paragraphIndex until paragraphs.size) {
+                val p = paragraphs[i]
+                if (p.isBlank() || skipRegex?.containsMatchIn(p) == true) continue
+                // 第一段从断点切片（与 Edge 路径不同：HttpTts 单段一文件，切片只影响第一段缓存命名）
+                val text = if (i == paragraphIndex && paragraphStartPos in 1 until p.length) {
+                    p.substring(paragraphStartPos)
+                } else p
+                toRead.add(ToRead(i, text))
+            }
+            if (toRead.isEmpty()) {
+                AppLog.warn("TtsHost", "runHttpChapterPlayback: nothing to read")
+                publishState(playing = false)
+                waitingForNextChapter = true
+                TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
+                return
+            }
+            AppLog.info(
+                "TTS",
+                "Host.runHttpChapterPlayback: nonEmpty=${toRead.size} startPara=$paragraphIndex " +
+                    "totalChars=${toRead.sumOf { it.text.length }} chapter='$chapterTitle'",
+            )
+            val texts = toRead.map { it.text }
+            val origIndices = toRead.map { it.origIdx }
+
+            // 启动下一章预下载（独立 job，章节失败不会影响当前播放）
+            startHttpPreloadNextChapter(engine)
+
+            try {
+                engine.speakChapter(
+                    paragraphs = texts,
+                    speed = speed,
+                    chapterTitleHint = chapterTitle,
+                    onParagraphStart = { localIdx ->
+                        if (!TtsEventBus.playbackState.value.isPlaying) return@speakChapter
+                        markCallback("httpPara")
+                        val origIdx = origIndices.getOrNull(localIdx) ?: return@speakChapter
+                        if (paragraphIndex != origIdx) {
+                            AppLog.debug(
+                                "TtsHost",
+                                "http para advance: $paragraphIndex → $origIdx (local=$localIdx)",
+                            )
+                            paragraphIndex = origIdx
+                            paragraphStartPos = 0
+                            publishState(playing = true)
+                        }
+                    },
+                ).collect {
+                    markCallback("httpChunk")
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                AppLog.error("TtsHost", "HttpTtsEngine.speakChapter failed", e)
+                TtsEventBus.sendEvent(
+                    TtsEventBus.Event.Error(
+                        e.message ?: "HTTP 朗读失败",
+                        canOpenSettings = false,
+                    )
+                )
+                publishState(playing = false)
+                return
+            }
+
+            // chapter end
+            waitForNextChapterOrAutoAdvance()
+        } catch (_: CancellationException) {
+            // normal cancel
+        } catch (e: Exception) {
+            AppLog.error("TtsHost", "runHttpChapterPlayback crashed", e)
+            publishState(playing = false)
+        }
+    }
+
+    /**
+     * 章节级预下载——后台拉下一章前 [HTTP_PRELOAD_NEXT_PARAGRAPHS] 段到磁盘缓存。
+     *
+     * 关键点：host 自己**没有**章节列表（ViewModel 那边持有 BookChapter[]），所以
+     * 这里只能通过 [TtsEventBus.Event.RequestNextChapterPreload] 让 ViewModel 把
+     * 下一章正文回传，然后 host 调 engine 拉缓存。如果 ViewModel 不响应（比如
+     * 阅读器已退出），preloadNextChapterJob 自然超时退出，不影响功能。
+     *
+     * 当前**简化实现**：直接结束（占位）；ViewModel 桥接留作后续 PR。Legado 的
+     * preDownloadAudios 在同 service 内能直接拿 ReadBook.nextTextChapter，MoRealm
+     * 的解耦架构需要新增一条事件桥，避免本次 PR 跨过 host/VM 边界改动太大。
+     */
+    private fun startHttpPreloadNextChapter(@Suppress("UNUSED_PARAMETER") engine: HttpTtsEngine) {
+        preloadNextChapterJob?.cancel()
+        preloadNextChapterJob = scope.launch {
+            // TODO(http-tts): 让 ReaderViewModel 通过新增事件回传下一章正文，
+            //  这里再调 engine.downloadOrFromCache(text, speed, nextChapterTitle)
+            //  把前 N 段提前拉到磁盘。先空实现，留 hook 点。
+            AppLog.debug("TtsHost", "preloadNextChapter: stub (waiting for VM bridge)")
+        }
+    }
+
+    /**
      * 旧的逐段流式路径，从 [runStreamingPlayback] 抽出来供 [runEdgeChapterPlayback]
-     * 失败时回退使用。其他流式引擎（HttpTts）的正常路径也走这个实现。
+     * 失败时回退使用。**HttpTts 已改走 [runHttpChapterPlayback]**——这里只剩潜在的
+     * "其他自定义流式引擎"备用。
      */
     private suspend fun runPerParagraphStreaming(engine: TtsEngine) {
         var consecutiveErrors = 0
@@ -871,13 +1367,7 @@ class TtsEngineHost(
                     delay(200)
                 }
             }
-            waitingForNextChapter = true
-            TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
-            val gotNext = withTimeoutOrNull(WAIT_NEXT_CHAPTER_MS) {
-                while (waitingForNextChapter) delay(50)
-                true
-            }
-            if (gotNext != true) publishState(playing = false)
+            waitForNextChapterOrAutoAdvance()
         } catch (_: CancellationException) {
             // normal cancel
         }
@@ -911,7 +1401,7 @@ class TtsEngineHost(
                     speakJob?.cancelAndJoin()
                     runCatching { currentEngine().stop() }
                     publishState(playing = true)
-                    speakJob = scope.launch { speakLoop() }
+                    speakJob = scope.launch(Dispatchers.IO) { speakLoop() }
                 }
             }
         }
@@ -923,18 +1413,35 @@ class TtsEngineHost(
             controlMutex.withLock {
                 val wasPlaying = TtsEventBus.playbackState.value.isPlaying
                 speakJob?.cancelAndJoin()
+                preloadNextChapterJob?.cancel()
                 runCatching { currentEngine().stop() }
-                engineId = newEngine
-                prefs.setTtsEngine(newEngine)
-                voiceName = savedVoiceForEngine(newEngine)
+                // 切到 http_* 时校验源仍存在；源被删则 fallback system 并报错
+                val resolvedEngine: String = if (newEngine.startsWith("http_")) {
+                    val id = parseHttpEngineId(newEngine)
+                    val cfg = id?.let { httpTtsDao.getById(it) }
+                    if (cfg == null) {
+                        AppLog.warn("TtsHost", "setEngine: $newEngine missing in DAO, fallback system")
+                        TtsEventBus.sendEvent(
+                            TtsEventBus.Event.Error(
+                                "选择的 HTTP 朗读源不存在，已切回系统朗读",
+                                canOpenSettings = false,
+                            )
+                        )
+                        "system"
+                    } else newEngine
+                } else newEngine
+                engineId = resolvedEngine
+                clearEngineFatal() // 用户主动切引擎，等同重置——之前 fatal 与新引擎无关
+                prefs.setTtsEngine(resolvedEngine)
+                voiceName = savedVoiceForEngine(resolvedEngine)
                 applyVoiceToEngine()
-                val voices = loadVoicesForEngine(newEngine)
+                val voices = loadVoicesForEngine(resolvedEngine)
                 TtsEventBus.updatePlayback {
-                    copy(engine = newEngine, voiceName = voiceName, voices = voices)
+                    copy(engine = resolvedEngine, voiceName = voiceName, voices = voices)
                 }
                 if (wasPlaying && paragraphs.isNotEmpty()) {
                     publishState(playing = true)
-                    speakJob = scope.launch { speakLoop() }
+                    speakJob = scope.launch(Dispatchers.IO) { speakLoop() }
                 }
             }
         }
@@ -943,7 +1450,10 @@ class TtsEngineHost(
     private fun setVoice(newVoice: String) {
         val resolved = resolveVoiceOrEmpty(newVoice, TtsEventBus.playbackState.value.voices)
         voiceName = resolved
-        applyVoiceToEngine()
+        // applyVoiceToEngine 是 suspend（内部 IO 包裹同步 binder 调用），
+        // 这里 setVoice 本身是非 suspend 入口，所以丢到 scope.launch 异步跑。
+        // 不阻塞 handleCommand 路径，也不阻塞调用者（UI/通知）。
+        scope.launch { applyVoiceToEngine() }
         scope.launch { saveVoiceForEngine(engineId, resolved) }
         TtsEventBus.updatePlayback { copy(voiceName = resolved) }
     }
@@ -977,6 +1487,7 @@ class TtsEngineHost(
 
     private fun speakOneShot(text: String) {
         if (text.isBlank()) return
+        if (shortCircuitIfEngineFatal()) return
         oneShotJob?.cancel()
         oneShotJob = scope.launch {
             try {
@@ -1022,6 +1533,12 @@ class TtsEngineHost(
         val total = paragraphs.size
         val pos = paragraphPositions.getOrNull(paragraphIndex) ?: 0
         val progress = if (total > 1) paragraphIndex.toFloat() / (total - 1) else if (total == 1) 1f else -1f
+        // Bug 2/3 数据通路：把当前段落的章内字符区间 [start, end) 算出来发到 EventBus，
+        // 阅读器渲染层用它给当前段画高亮，外层用它判断 "回到朗读 FAB" / 自动跟随翻页。
+        // 非播放态置 null —— 不让停止后的高亮残留在阅读器上。
+        val paragraphLen = paragraphs.getOrNull(paragraphIndex)?.length ?: 0
+        val range: IntRange? = if (playing && paragraphLen > 0)
+            pos until (pos + paragraphLen) else null
         TtsEventBus.updatePlayback {
             copy(
                 bookTitle = this@TtsEngineHost.bookTitle.ifBlank { this.bookTitle },
@@ -1031,12 +1548,16 @@ class TtsEngineHost(
                 paragraphIndex = paragraphIndex,
                 totalParagraphs = total,
                 chapterPosition = if (playing) pos else -1,
+                paragraphRange = range,
                 scrollProgress = if (playing) progress else -1f,
                 speed = speed,
                 engine = engineId,
                 voiceName = voiceName,
             )
         }
+        // 进入播放态时按需启动心跳（idempotent — 已在跑就 noop）；播放态结束
+        // 时心跳 job 自己会从 while 里 break 退出，无需主动 cancel。
+        if (playing) startHeartbeat()
         // 只在 (idx, total, playing) 变化时记日志：onRangeStart 高频触发时
         // 不会刷屏，但段切换、章切换、暂停/恢复都会留下记录。
         val triple = Triple(paragraphIndex, total, playing)
@@ -1053,40 +1574,126 @@ class TtsEngineHost(
     private fun currentEngine(): TtsEngine {
         return when {
             engineId == "edge" -> edgeTtsEngine
-            else -> systemTtsEngine
+            engineId.startsWith("http_") -> ensureHttpTtsEngine(engineId)
+                ?: ensureSystemTtsEngine().also {
+                    // 切到不存在的 http_<id>（用户删了源但 prefs 还指着）→ 回退 system，
+                    // 同时报一条 Error 让 UI 弹 snackbar，引导用户重选引擎。
+                    AppLog.warn(
+                        "TtsHost",
+                        "currentEngine: http engine $engineId not found in DAO, fallback to system",
+                    )
+                    TtsEventBus.sendEvent(
+                        TtsEventBus.Event.Error(
+                            "已选的 HTTP 朗读源已被删除，已临时切回系统朗读",
+                            canOpenSettings = false,
+                        )
+                    )
+                }
+            else -> ensureSystemTtsEngine()
         }
     }
 
-    private fun applyVoiceToEngine() {
-        when (engineId) {
-            "edge" -> edgeTtsEngine.setVoice(voiceName)
-            else -> systemTtsEngine.setVoice(voiceName)
+    /**
+     * 把 [voiceName] 写到当前激活的引擎上。
+     *
+     * suspend + `withContext(Dispatchers.IO)`：内部
+     * - [SystemTtsEngine.setVoice] 现已只读 cachedVoices，常态下不再 IPC，
+     *   但缓存 miss 兜底（极少数情况）仍可能跑同步 binder；
+     * - [EdgeTtsEngine.setVoice] 仅写本地字段，本身不阻塞，但放在 IO 也无害。
+     *
+     * 切到 IO 是 ANR 防御的关键一环：业务路径不会再因 TextToSpeech 同步方法
+     * 卡住协程所在的线程；最坏情况是 IO 线程池里某个 worker 暂时被占用。
+     */
+    private suspend fun applyVoiceToEngine() = withContext(Dispatchers.IO) {
+        when {
+            engineId == "edge" -> edgeTtsEngine.setVoice(voiceName)
+            engineId.startsWith("http_") -> { /* HttpTts 不暴露多音色，noop */ }
+            else -> ensureSystemTtsEngine().setVoice(voiceName)
+        }
+    }
+
+    /**
+     * 切换 system TTS 引擎包名 —— 不需要重启阅读器。
+     *
+     * 流程（持 controlMutex 串行化）：
+     * 1. 记录"切换前是否在朗读"。
+     * 2. cancelAndJoin speakJob → 旧 engine.stop() + shutdown()。
+     * 3. 新建 SystemTtsEngine 用新包名 initialize；voice/rate 也重新应用。
+     * 4. 之前在朗读则继续 speakLoop（从当前 paragraphIndex/StartPos 续读）。
+     *
+     * 仅当 [engineId] 当前是 "system" 时才有意义。"edge" 时该命令仅更新 prefs，
+     * 待用户切回 system 时新包名生效。
+     */
+    private fun rebindSystemEngine(newPkg: String) {
+        scope.launch {
+            controlMutex.withLock {
+                AppLog.info(
+                    "TtsHost",
+                    "rebindSystemEngine: pkg='${newPkg.ifBlank { "<system-default>" }}', engineId=$engineId",
+                )
+                prefs.setTtsSystemEnginePackage(newPkg)
+                if (engineId != "system") {
+                    AppLog.info("TtsHost", "rebindSystemEngine: engineId=$engineId, pkg saved but not active")
+                    return@withLock
+                }
+                val wasPlaying = TtsEventBus.playbackState.value.isPlaying
+                speakJob?.cancelAndJoin()
+                runCatching { systemTtsEngine?.stop() }
+                runCatching { systemTtsEngine?.shutdown() }
+                systemTtsEngine = null
+                // 直接调 ensureSystemTtsEngine 会再读一次 prefs；这里直接传新包名避免竞态
+                val fresh = SystemTtsEngine(context).also { it.initialize(enginePackage = newPkg.ifBlank { null }) }
+                systemTtsEngine = fresh
+                clearEngineFatal() // 重新绑定了引擎实例，旧 fatal 不再适用
+                fresh.setSpeechRate(speed)
+                applyVoiceToEngine()
+                if (wasPlaying && paragraphs.isNotEmpty()) {
+                    publishState(playing = true)
+                    speakJob = scope.launch(Dispatchers.IO) { speakLoop() }
+                }
+                TtsEventBus.sendEvent(
+                    TtsEventBus.Event.Error(
+                        "已切换 TTS 引擎${if (newPkg.isBlank()) "（跟随系统默认）" else "：$newPkg"}",
+                        canOpenSettings = false,
+                    )
+                )
+            }
         }
     }
 
     private suspend fun loadVoicesForEngine(engine: String): List<TtsVoice> {
-        return if (engine == "edge") {
-            // 优先远程拉 600+ 多语种音色（带 24h 文件缓存 + 失败回退到硬编码）。
-            // EdgeTtsEngine.fetchRemoteVoices 内部已 try/catch，不会抛出，但稳妥
-            // 起见再加一层 runCatching —— 任何意外都退到硬编码列表，保证语音设置
-            // 至少有 21 个 zh-* 可选。
-            runCatching { edgeTtsEngine.fetchRemoteVoices() }
-                .getOrNull()
-                ?.takeIf { it.isNotEmpty() }
-                ?: EdgeTtsEngine.VOICES
-        } else {
-            // Same timeout-bounded init resolution used by speakLoop —
-            // prevents the voice picker from hanging forever when the device
-            // has no TTS engine bound.
-            when (val initRes = systemTtsEngine.awaitReadyResult()) {
-                is SystemTtsEngine.InitResult.Failed -> {
-                    AppLog.warn("TtsHost", "loadVoicesForEngine: ${initRes.reason}")
-                    TtsEventBus.sendEvent(
-                        TtsEventBus.Event.Error(initRes.reason, canOpenSettings = true)
-                    )
-                    emptyList()
+        return when {
+            engine == "edge" -> {
+                // 优先远程拉 600+ 多语种音色（带 24h 文件缓存 + 失败回退到硬编码）。
+                // EdgeTtsEngine.fetchRemoteVoices 内部已 try/catch，不会抛出，但稳妥
+                // 起见再加一层 runCatching —— 任何意外都退到硬编码列表，保证语音设置
+                // 至少有 21 个 zh-* 可选。
+                runCatching { edgeTtsEngine.fetchRemoteVoices() }
+                    .getOrNull()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: EdgeTtsEngine.VOICES
+            }
+            engine.startsWith("http_") -> {
+                // HttpTts 没有多音色概念——每个源就是一个声音；这里返回单元素，
+                // 让 UI 的语音选择器直接显示源名当作唯一可选项。
+                val httpEngine = ensureHttpTtsEngine(engine)
+                httpEngine?.getVoices() ?: emptyList()
+            }
+            else -> {
+                // Same timeout-bounded init resolution used by speakLoop —
+                // prevents the voice picker from hanging forever when the device
+                // has no TTS engine bound.
+                val sys = ensureSystemTtsEngine()
+                when (val initRes = sys.awaitReadyResult()) {
+                    is SystemTtsEngine.InitResult.Failed -> {
+                        AppLog.warn("TtsHost", "loadVoicesForEngine: ${initRes.reason}")
+                        TtsEventBus.sendEvent(
+                            TtsEventBus.Event.Error(initRes.reason, canOpenSettings = true)
+                        )
+                        emptyList()
+                    }
+                    SystemTtsEngine.InitResult.Success -> sys.getChineseVoices()
                 }
-                SystemTtsEngine.InitResult.Success -> systemTtsEngine.getChineseVoices()
             }
         }
     }
@@ -1206,6 +1813,10 @@ class TtsEngineHost(
         /** How long the host waits for a LoadAndPlay after ChapterFinished before giving up. */
         private const val WAIT_NEXT_CHAPTER_MS = 5_000L
 
+        /** HttpTts 章节级预下载的段数上限（与 Legado preDownloadAudios 的 10 段对齐）。 */
+        @Suppress("unused") // 在 [startHttpPreloadNextChapter] VM 桥接打通后会用到
+        private const val HTTP_PRELOAD_NEXT_PARAGRAPHS = 10
+
         /** 长段二次切句阈值（字符数）。<= 80 不切，避免短段被切碎。 */
         private const val LONG_PARA_THRESHOLD = 80
 
@@ -1223,5 +1834,23 @@ class TtsEngineHost(
 
         /** 切句分隔符：中文标点 + 换行（结合 splitIntoSubSentences 使用）。 */
         private val SENTENCE_SEPARATORS = setOf('。', '！', '？', '；', '\n')
+
+        /** 心跳日志间隔。播放态期间每隔这么久打一行 TtsHB；非播放态自动退出循环。 */
+        private const val HEARTBEAT_INTERVAL_MS = 15_000L
+
+        /**
+         * 批量播放 watchdog：enqueue 后如果 [BATCH_WATCHDOG_TIMEOUT_MS] 内没有收到
+         * 任何 onUtteranceStart，认为引擎回调走丢，触发 reInit + 重播。
+         * 值取 10s：正常引擎从 enqueue 到 onStart 通常 ≤500ms，10s 足够宽容。
+         */
+        private const val BATCH_WATCHDOG_TIMEOUT_MS = 10_000L
+
+        /**
+         * 引擎 fatal 冷却期。第一次 [markEngineFatal] 后，[ENGINE_FATAL_COOLDOWN_MS]
+         * 内任何播放入口都会被 [shortCircuitIfEngineFatal] 拦下，避免反复触发同样的
+         * ANR 路径。30s 是经验值：足够引擎进程被系统重启或用户察觉并切换引擎，
+         * 又不会让用户长时间无法使用 TTS。
+         */
+        private const val ENGINE_FATAL_COOLDOWN_MS = 30_000L
     }
 }

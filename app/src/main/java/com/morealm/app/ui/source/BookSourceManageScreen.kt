@@ -25,12 +25,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.morealm.app.core.error.ErrorMessages
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.webbook.CheckSource
@@ -92,7 +95,7 @@ fun BookSourceManageScreen(
                 }
             } catch (e: Exception) {
                 AppLog.error("SourceManage", "读取文件失败", e)
-                Toast.makeText(context, "读取文件失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, ErrorMessages.forUser("读取文件", e), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -392,10 +395,16 @@ fun BookSourceManageScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
                         if (sources.isEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Text("点击右上角 + 导入书源",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f))
+                            Spacer(Modifier.height(12.dp))
+                            // UX-6: 空态提供 CTA — 直接跳转到导入对话框，比让用户找右上角 + 更直接。
+                            Button(
+                                onClick = { showImportDialog = true },
+                                shape = MaterialTheme.shapes.medium,
+                            ) {
+                                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("导入书源")
+                            }
                         }
                     }
                 }
@@ -482,11 +491,50 @@ fun BookSourceManageScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                     Spacer(Modifier.height(12.dp))
+                    // UX-3: 弹出导入对话框 → 自动聚焦到 URL/JSON 输入框 + 弹软键盘
+                    val importFocusRequester = remember { FocusRequester() }
+                    LaunchedEffect(Unit) { importFocusRequester.requestFocus() }
+                    // UX-5: 剪贴板嗅探 — 弹出对话框时检测剪贴板里是否含 http(s) URL 或 JSON，
+                    // 是则展示一行「使用剪贴板内容」chip，省一次粘贴。
+                    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+                    var clipHint by remember { mutableStateOf<String?>(null) }
+                    LaunchedEffect(Unit) {
+                        if (importUrl.isNotBlank()) return@LaunchedEffect
+                        val raw = clipboardManager.getText()?.text?.trim().orEmpty()
+                        // 200 字以内的合法 URL 直接吸；JSON 长，>200 也允许（书源 JSON 通常很长）
+                        val looksUrl = raw.startsWith("http://", true) || raw.startsWith("https://", true)
+                        val looksJson = raw.startsWith("[") || raw.startsWith("{")
+                        if ((looksUrl && raw.length < 500) || (looksJson && raw.length > 30)) {
+                            clipHint = raw
+                        }
+                    }
+                    if (clipHint != null) {
+                        AssistChip(
+                            onClick = {
+                                importUrl = clipHint!!
+                                clipHint = null
+                            },
+                            label = {
+                                val preview = clipHint!!.take(40).replace("\n", " ") + if (clipHint!!.length > 40) "…" else ""
+                                Text("使用剪贴板：$preview", style = MaterialTheme.typography.labelSmall)
+                            },
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+                    // UX-4: 内联校验 — 输入空白不报错，否则要么 http(s) URL 要么 JSON 起首
+                    val trimmed = importUrl.trim()
+                    val looksLikeUrl = trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true)
+                    val looksLikeJson = trimmed.startsWith("[") || trimmed.startsWith("{")
+                    val importError = trimmed.isNotEmpty() && !looksLikeUrl && !looksLikeJson
                     OutlinedTextField(
                         value = importUrl,
                         onValueChange = { importUrl = it },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().focusRequester(importFocusRequester),
                         placeholder = { Text("URL 或 JSON") },
+                        isError = importError,
+                        supportingText = if (importError) {
+                            { Text("应以 http(s):// 开头或粘贴 JSON 数组/对象", color = MaterialTheme.colorScheme.error) }
+                        } else null,
                         shape = MaterialTheme.shapes.small,
                         minLines = 3,
                         maxLines = 6,

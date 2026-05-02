@@ -5,6 +5,7 @@ import android.os.Environment
 import android.provider.DocumentsContract
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -38,6 +39,7 @@ import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.shelf.ShelfViewModel
 import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.Calendar
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -90,10 +92,15 @@ fun ShelfScreen(
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<Book>>(emptyList()) }
     var showDeleteFolderConfirm by remember { mutableStateOf<String?>(null) }
+    /**
+     * 自定义封面长按菜单：值非 null 时弹出 [BookCoverActionDialog]，提供"设置封面 / 移除封面"。
+     * 跟"批量选中"互斥 —— 进入 batchMode 时这里清空。
+     */
+    var bookActionTarget by remember { mutableStateOf<Book?>(null) }
     // Batch selection mode
     var batchMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
-    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    // UX-1: showBatchDeleteConfirm 已下线 — 删除改为「立即删 + Snackbar 撤销」内联到 onClick。
     // Group management
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showMoveToGroupDialog by remember { mutableStateOf(false) }
@@ -102,6 +109,11 @@ fun ShelfScreen(
     val folderBookCounts by viewModel.folderBookCounts.collectAsStateWithLifecycle()
     val folderCoverUrls by viewModel.folderCoverUrls.collectAsStateWithLifecycle()
     val folderImportState by viewModel.folderImportState.collectAsStateWithLifecycle()
+    // 后台 toc 刷新状态：顶栏铃铛旋转 + 红点显示。两个 flow 都来自 ShelfRefreshController
+    // / books 派生，没有额外订阅成本。
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val hasAnyUpdate by viewModel.hasAnyUpdate.collectAsStateWithLifecycle()
+    val groupHasUpdate by viewModel.groupHasUpdate.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
     // Web book long-press cache dialog
     var showCacheBookDialog by remember { mutableStateOf<Book?>(null) }
@@ -183,6 +195,11 @@ fun ShelfScreen(
         )
     }
 
+    // UX-1: Snackbar host 用于「批量删书」的撤销窗口（5s）。原 BatchDeleteDialog 二次确认已下线。
+    val snackbarHost = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier.fillMaxSize()
     ) {
@@ -232,7 +249,31 @@ fun ShelfScreen(
                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
                     }
                     IconButton(
-                        onClick = { if (selectedIds.isNotEmpty()) showBatchDeleteConfirm = true },
+                        onClick = {
+                            // UX-1: 立即软删 + Snackbar 撤销，不再弹 BatchDeleteDialog 二次确认。
+                            // snapshot 在 viewModel.batchDeleteSoft 之前抓，DB 只删 row 不删封面文件，
+                            // 撤销 → restoreBooks 把整批 re-insert；不撤销 → commitCoverDeletion 收尾。
+                            if (selectedIds.isEmpty()) return@IconButton
+                            val ids = selectedIds
+                            val snapshot = allBooks.filter { it.id in ids }
+                            batchMode = false
+                            selectedIds = emptySet()
+                            if (snapshot.isEmpty()) return@IconButton
+                            viewModel.batchDeleteSoft(ids)
+                            scope.launch {
+                                val r = snackbarHost.showSnackbar(
+                                    message = "已删除 ${snapshot.size} 本书",
+                                    actionLabel = "撤销",
+                                    duration = SnackbarDuration.Short,
+                                    withDismissAction = true,
+                                )
+                                if (r == SnackbarResult.ActionPerformed) {
+                                    viewModel.restoreBooks(snapshot)
+                                } else {
+                                    viewModel.commitCoverDeletion(ids)
+                                }
+                            }
+                        },
                         enabled = selectedIds.isNotEmpty(),
                     ) {
                         Icon(Icons.Default.Delete, "删除",
@@ -286,6 +327,41 @@ fun ShelfScreen(
                 }
                 IconButton(onClick = { showSearch = true }) {
                     Icon(Icons.Default.Search, "搜索", tint = MaterialTheme.colorScheme.onBackground)
+                }
+                // ── 后台刷新按钮（带红点）──
+                // 自动刷新已经在 ShelfViewModel.init 里跑了一次（性能优先策略），
+                // 这里给用户一个手动入口：1) 想立即拉一次 toc 时点；2) 任意书有
+                // lastCheckCount > 0 时按钮右上角小红点亮起作为"有更新"提示。
+                // 刷新中图标转圈，点击行为忽略，避免重复入队 — controller 自身有去重，
+                // 但 UI 反馈一致更让人安心。
+                BadgedBox(
+                    badge = {
+                        if (hasAnyUpdate && !isRefreshing) {
+                            Badge(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(8.dp),
+                            )
+                        }
+                    },
+                ) {
+                    IconButton(
+                        onClick = { if (!isRefreshing) viewModel.refreshAllBooks() },
+                        enabled = !isRefreshing,
+                    ) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "检查书架更新",
+                                tint = MaterialTheme.colorScheme.onBackground,
+                            )
+                        }
+                    }
                 }
                 // ── 排序按钮 ──
                 // 立即整理 / 列表视图切换已上提到顶栏；检查更新走后台自动刷新。
@@ -409,13 +485,13 @@ fun ShelfScreen(
         }
         val bookLongClick: (String) -> Unit = { id ->
             if (!batchMode) {
-                // Check if it's a web book — show cache dialog
                 val book = allBooks.find { it.id == id }
                 if (book != null && book.format == BookFormat.WEB) {
                     showCacheBookDialog = book
-                } else {
-                    batchMode = true
-                    selectedIds = setOf(id)
+                } else if (book != null) {
+                    // 单本书长按：弹"自定义封面 / 进入多选"菜单（默认）；
+                    // WEB 书走原 cache dialog（不变）
+                    bookActionTarget = book
                 }
             } else {
                 selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
@@ -448,6 +524,7 @@ fun ShelfScreen(
                             name = groupNames[folderId] ?: "文件夹",
                             bookCount = folderBookCounts[folderId] ?: 0,
                             coverUrl = folderCoverUrls[folderId]?.firstOrNull(),
+                            hasUpdate = groupHasUpdate[folderId] == true,
                             onClick = { currentFolderId = folderId },
                             onLongClick = { showDeleteFolderConfirm = folderId },
                         )
@@ -473,10 +550,13 @@ fun ShelfScreen(
                 if (currentFolderId == null) {
                     items(folderIds.size, key = { "folder_${folderIds[it]}" }, contentType = { "folder" }) { idx ->
                         val folderId = folderIds[idx]
+                        val folderGroup = allGroups.firstOrNull { it.id == folderId }
                         FolderCard(
                             name = groupNames[folderId] ?: "文件夹",
                             bookCount = folderBookCounts[folderId] ?: 0,
                             coverUrls = folderCoverUrls[folderId] ?: emptyList(),
+                            customCoverUrl = folderGroup?.customCoverUrl,
+                            hasUpdate = groupHasUpdate[folderId] == true,
                             onClick = { currentFolderId = folderId },
                             onLongClick = { showDeleteFolderConfirm = folderId },
                         )
@@ -519,13 +599,30 @@ fun ShelfScreen(
     // Folder delete/rename confirmation dialog
     showDeleteFolderConfirm?.let { folderId ->
         val group = allGroups.firstOrNull { it.id == folderId }
+        // 分组封面 picker —— PickVisualMedia 走 Photo Picker，自动持久化只读权限
+        val groupCoverPicker = rememberLauncherForActivityResult(
+            ActivityResultContracts.PickVisualMedia()
+        ) { uri ->
+            if (uri != null) viewModel.setCustomGroupCover(folderId, uri)
+            showDeleteFolderConfirm = null
+        }
         ManageFolderDialog(
             folderName = groupNames[folderId] ?: "文件夹",
             autoKeywords = group?.autoKeywords.orEmpty(),
+            hasCustomCover = !group?.customCoverUrl.isNullOrBlank(),
             onRename = { showRenameGroupDialog = folderId; showDeleteFolderConfirm = null },
             onReclassify = {
                 viewModel.reclassifyUngroupedBooks()
                 Toast.makeText(context, "已按关键词重新归类未分组书籍", Toast.LENGTH_SHORT).show()
+                showDeleteFolderConfirm = null
+            },
+            onSetCover = {
+                groupCoverPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                )
+            },
+            onClearCover = {
+                viewModel.clearCustomGroupCover(folderId)
                 showDeleteFolderConfirm = null
             },
             onDelete = {
@@ -537,19 +634,37 @@ fun ShelfScreen(
         )
     }
 
-    // Batch delete confirmation dialog
-    if (showBatchDeleteConfirm) {
-        BatchDeleteDialog(
-            count = selectedIds.size,
-            onConfirm = {
-                viewModel.batchDelete(selectedIds)
-                showBatchDeleteConfirm = false
-                batchMode = false
-                selectedIds = emptySet()
+    // 书籍长按菜单：自定义封面 / 进入多选
+    bookActionTarget?.let { targetBook ->
+        val bookCoverPicker = rememberLauncherForActivityResult(
+            ActivityResultContracts.PickVisualMedia()
+        ) { uri ->
+            if (uri != null) viewModel.setCustomBookCover(targetBook.id, uri)
+            bookActionTarget = null
+        }
+        BookActionDialog(
+            bookTitle = targetBook.title,
+            hasCustomCover = !targetBook.customCoverUrl.isNullOrBlank(),
+            onSetCover = {
+                bookCoverPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                )
             },
-            onDismiss = { showBatchDeleteConfirm = false },
+            onClearCover = {
+                viewModel.clearCustomBookCover(targetBook.id)
+                bookActionTarget = null
+            },
+            onEnterBatchMode = {
+                batchMode = true
+                selectedIds = setOf(targetBook.id)
+                bookActionTarget = null
+            },
+            onDismiss = { bookActionTarget = null },
         )
     }
+
+    // UX-1: 批量删书已迁移到删除按钮 onClick 内联（立即软删 + Snackbar 撤销），
+    // 原 BatchDeleteDialog 弹窗及 showBatchDeleteConfirm 状态已下线。
 
     // Create group dialog
     if (showCreateGroupDialog) {
@@ -644,6 +759,8 @@ fun ShelfScreen(
                 }
             },
         )
+    }
+    SnackbarHost(snackbarHost, modifier = Modifier.align(Alignment.BottomCenter))
     }
 }
 
@@ -778,8 +895,11 @@ private fun ShelfSearchDialog(
 private fun ManageFolderDialog(
     folderName: String,
     autoKeywords: String,
+    hasCustomCover: Boolean,
     onRename: () -> Unit,
     onReclassify: () -> Unit,
+    onSetCover: () -> Unit,
+    onClearCover: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -808,6 +928,38 @@ private fun ManageFolderDialog(
                     )
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                // 自定义封面入口（设置 / 移除二选一）
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSetCover() }
+                        .padding(vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.Image, null, modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        if (hasCustomCover) "更换自定义封面" else "设置自定义封面",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+                if (hasCustomCover) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onClearCover() }
+                            .padding(vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.HideImage, null, modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.width(12.dp))
+                        Text("恢复默认封面", style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -833,6 +985,83 @@ private fun ManageFolderDialog(
                     Spacer(Modifier.width(12.dp))
                     Text("删除分组", style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
+
+/**
+ * 书籍长按菜单：自定义封面（设置/移除）+ 进入多选模式。
+ *
+ * 为什么合并在一个对话框：
+ *  - 长按原本只进多选，现在加封面后两条路径共用一个入口，不分散心智
+ *  - 对话框内 3 项而已，不需要独立菜单库
+ */
+@Composable
+private fun BookActionDialog(
+    bookTitle: String,
+    hasCustomCover: Boolean,
+    onSetCover: () -> Unit,
+    onClearCover: () -> Unit,
+    onEnterBatchMode: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                bookTitle.take(20) + if (bookTitle.length > 20) "…" else "",
+                maxLines = 1,
+            )
+        },
+        text = {
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSetCover() }
+                        .padding(vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.Image, null, modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        if (hasCustomCover) "更换自定义封面" else "设置自定义封面",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+                if (hasCustomCover) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onClearCover() }
+                            .padding(vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.HideImage, null, modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.width(12.dp))
+                        Text("恢复默认封面", style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEnterBatchMode() }
+                        .padding(vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.width(12.dp))
+                    Text("进入多选模式", style = MaterialTheme.typography.bodyLarge)
                 }
             }
         },

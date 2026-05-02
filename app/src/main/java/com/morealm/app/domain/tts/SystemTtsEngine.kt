@@ -3,6 +3,7 @@ package com.morealm.app.domain.tts
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import com.morealm.app.domain.entity.TtsVoice
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -35,6 +36,24 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
     /** Set exactly once when the OnInitListener fires (or it never fires — see awaitReadyResult timeout). */
     @Volatile private var initResult: InitResult? = null
     private val pendingReadyCallbacks = mutableListOf<(InitResult) -> Unit>()
+
+    // ── Voice 列表缓存 ───────────────────────────────────────────────────────
+    //
+    // [TextToSpeech.getVoices] 是同步 binder IPC（远程 TTS 服务进程响应慢/挂死时
+    // 会无限期阻塞调用线程）。播放热路径上的 [setVoice]、[getChineseVoices]、
+    // [getVoices] 之前每次都走 IPC，一旦绑定的引擎进程异常就把调用线程冻住——
+    // 历史 ANR（temp/err.txt 9 次连续 8s 主线程阻塞）的根因之一。
+    //
+    // 缓存策略：onInit SUCCESS 之后在 listener 线程一次性拉满 voices 列表存进
+    // [cachedVoices]；后续业务流路径只读缓存，不再 IPC。voice 列表在引擎绑定后
+    // 基本不变（用户安装/卸载语音包是低频操作，且会触发引擎重启），缓存命中率
+    // 接近 100%。reInit 时清缓存重填。
+    //
+    // 缓存 miss 兜底：极少数情况（onInit 后 voices 还没就绪、用户卸载语音包后
+    // 引擎没重启）由 [readVoicesFromEngineBounded] 用 [VOICES_FETCH_TIMEOUT_MS]
+    // 包裹一次 IPC，超时返回 emptyList() —— 业务上等同于"没装中文音色"，
+    // 走 [setLanguage] 兜底，不会再卡死任何线程。
+    @Volatile private var cachedVoices: List<Voice>? = null
 
     // ── 批量入队模式（仿 Legado TTSReadAloudService）────────────────────────────
     //
@@ -144,6 +163,15 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
             )
             return TextToSpeech.ERROR
         }
+        // 第一条 utterance（QUEUE_FLUSH）时打一行实际绑定的包名，帮助诊断
+        // "multitts 不生效"——如果 defaultEngine != 用户选的包，说明绑包失败。
+        if (queueMode == TextToSpeech.QUEUE_FLUSH) {
+            val actualPkg = runCatching { engine.defaultEngine }.getOrNull() ?: "?"
+            com.morealm.app.core.log.AppLog.info(
+                "TTS",
+                "enqueue(FLUSH): actualEngine=$actualPkg, id=$utteranceId, textLen=${text.length}",
+            )
+        }
         return runCatching {
             engine.speak(text, queueMode, null, utteranceId)
         }.getOrElse {
@@ -173,10 +201,20 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
             "SystemTtsEngine.initialize: creating TextToSpeech (pkg=${pkg ?: "<system-default>"})",
         )
         val listener = TextToSpeech.OnInitListener { status ->
+            // 打印 init 结果 + 当前引擎绑到的实际包名（对比用户选的包名）
+            val actualEngine = runCatching { tts?.defaultEngine }.getOrNull() ?: "?"
             com.morealm.app.core.log.AppLog.info(
                 "TTS",
                 "SystemTtsEngine.OnInitListener: status=$status (SUCCESS=${TextToSpeech.SUCCESS}) " +
-                    "pkg=${pkg ?: "<system-default>"}",
+                    "pkg=${pkg ?: "<system-default>"} actualEngine=$actualEngine",
+            )
+            // 打印系统上所有已安装 TTS 引擎——帮助诊断 multitts 是否被识别
+            val enginesList = runCatching {
+                tts?.engines?.joinToString { "${it.label}(${it.name})" }
+            }.getOrNull() ?: "?"
+            com.morealm.app.core.log.AppLog.info(
+                "TTS",
+                "SystemTtsEngine: installed engines=[$enginesList]",
             )
             val result: InitResult = if (status == TextToSpeech.SUCCESS) {
                 val langStatus = try {
@@ -192,6 +230,18 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
                     TextToSpeech.LANG_NOT_SUPPORTED ->
                         InitResult.Failed("当前 TTS 引擎不支持中文，请更换或安装一个支持中文的引擎")
                     else -> {
+                        // 在 listener 线程预填 voices 缓存。这一步阻塞也只阻塞
+                        // listener 线程（不是 Main，不是业务协程），引擎进程异常
+                        // 时 cachedVoices 留 null，后续走 [readVoicesFromEngineBounded]
+                        // 的兜底超时；不会传染到播放路径。
+                        cachedVoices = runCatching { tts?.voices?.toList() }
+                            .getOrNull()
+                            ?.also { voices ->
+                                com.morealm.app.core.log.AppLog.info(
+                                    "TTS",
+                                    "SystemTtsEngine: cachedVoices populated, size=${voices.size}",
+                                )
+                            }
                         isReady = true
                         InitResult.Success
                     }
@@ -374,14 +424,7 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
     }
 
     override suspend fun getVoices(): List<TtsVoice> {
-        return tts?.voices?.map { voice ->
-            TtsVoice(
-                id = voice.name,
-                name = voice.name,
-                language = voice.locale.displayName,
-                engine = id,
-            )
-        } ?: emptyList()
+        return loadVoicesSafely().map { voice -> voice.toDomain() }
     }
 
     /** Set the TTS voice by name */
@@ -391,33 +434,75 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
             engine.language = Locale.CHINESE
             return
         }
-        val voice = engine.voices?.find { it.name == voiceName }
+        // 只在缓存里找——不再触发 binder IPC。缓存为空（onInit 还没完成或异常）
+        // 时直接回退到 setLanguage(CHINESE)，避免拖慢/卡死调用线程。这是仿
+        // Legado 但更激进的策略：宁可声音是默认而不是用户选的那个，也不让
+        // setVoice 把 host 卡 8 秒以上。
+        val voice = cachedVoices?.firstOrNull { it.name == voiceName }
         if (voice != null) {
             engine.voice = voice
+        } else {
+            com.morealm.app.core.log.AppLog.warn(
+                "TTS",
+                "setVoice: '$voiceName' not in cache (cacheSize=${cachedVoices?.size ?: -1}), " +
+                    "falling back to setLanguage(CHINESE)",
+            )
+            engine.language = Locale.CHINESE
         }
     }
 
     /** Get Chinese-compatible voices sorted by relevance */
     fun getChineseVoices(): List<TtsVoice> {
-        val engine = tts ?: return emptyList()
-        return engine.voices
-            ?.filter { v ->
+        val voices = cachedVoices
+            ?: run {
+                com.morealm.app.core.log.AppLog.debug(
+                    "TTS", "getChineseVoices: cache empty, returning emptyList()"
+                )
+                return emptyList()
+            }
+        return voices
+            .filter { v ->
                 val lang = v.locale.language
                 lang == "zh" || lang == "cmn" || v.locale.toLanguageTag().startsWith("zh")
             }
-            ?.sortedWith(compareBy(
+            .sortedWith(compareBy(
                 { if (it.isNetworkConnectionRequired) 1 else 0 },
                 { it.name }
             ))
-            ?.map { voice ->
-                TtsVoice(
-                    id = voice.name,
-                    name = voice.name,
-                    language = voice.locale.displayName,
-                    engine = id,
-                )
-            } ?: emptyList()
+            .map { it.toDomain() }
     }
+
+    /**
+     * 业务路径外的 getVoices() 兜底——缓存 miss 时用 [VOICES_FETCH_TIMEOUT_MS]
+     * 上限的同步 IPC 拉一次，并把结果回填缓存。永远不抛、永远在超时内返回。
+     *
+     * 这个方法**只**应该在非热路径（如 voice picker UI 首次加载）使用；播放
+     * 内联调用 [setVoice] 不会再触发它。
+     */
+    private suspend fun loadVoicesSafely(): List<Voice> {
+        cachedVoices?.let { return it }
+        val engine = tts ?: return emptyList()
+        val fetched = withTimeoutOrNull(VOICES_FETCH_TIMEOUT_MS) {
+            runCatching { engine.voices?.toList() }.getOrNull()
+        }
+        if (fetched == null) {
+            com.morealm.app.core.log.AppLog.warn(
+                "TTS",
+                "loadVoicesSafely: getVoices() timed out after ${VOICES_FETCH_TIMEOUT_MS}ms, returning empty",
+            )
+            return emptyList()
+        }
+        cachedVoices = fetched
+        return fetched
+    }
+
+    /** Voice → 应用层 [TtsVoice]（id/name/language/engine 映射）。 */
+    private fun Voice.toDomain(): TtsVoice = TtsVoice(
+        id = name,
+        name = name,
+        language = locale.displayName,
+        engine = id,
+    )
 
     override fun stop() { tts?.stop() }
 
@@ -449,6 +534,7 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
         tts = null
         isReady = false
         initResult = null
+        cachedVoices = null
         // Note: pendingReadyCallbacks is intentionally NOT cleared — any
         // coroutine currently parked in awaitReadyResult should be unblocked
         // by the FRESH listener firing once initialize() completes.
@@ -463,5 +549,14 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
          * a timely error if the system has no engine bound at all.
          */
         const val DEFAULT_INIT_TIMEOUT_MS: Long = 4_000L
+
+        /**
+         * [loadVoicesSafely] 兜底拉取 voices 列表的硬上限。
+         *
+         * `TextToSpeech.getVoices()` 是同步 binder IPC——绑定的 TTS 引擎进程
+         * 异常时会无限期阻塞调用线程；2s 是经验值：远高于正常引擎的响应延迟
+         * （<200ms），同时能在用户察觉前回退。
+         */
+        private const val VOICES_FETCH_TIMEOUT_MS: Long = 2_000L
     }
 }

@@ -51,11 +51,22 @@ class ReadingSettingsViewModel @Inject constructor(
     val showTimeBattery: StateFlow<Boolean> = prefs.showTimeBattery
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
+    /**
+     * 章节标题对齐方式：0=左 / 1=中 / 2=右。默认 0。
+     * UI 用 [setTitleAlign] 写回；排版层会自动 recompose（CanvasRenderer 监听）。
+     */
+    val titleAlign: StateFlow<Int> = prefs.titleAlign
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
     val customTxtChapterRegex: StateFlow<String> = prefs.customTxtChapterRegex
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     val ttsSkipPattern: StateFlow<String> = prefs.ttsSkipPattern
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    /** 见 [com.morealm.app.domain.preference.AppPreferences.ttsKeepCpuAwake]——默认关。 */
+    val ttsKeepCpuAwake: StateFlow<Boolean> = prefs.ttsKeepCpuAwake
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val readerBgImageDay: StateFlow<String> = prefs.readerBgImageDay
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
@@ -87,8 +98,10 @@ class ReadingSettingsViewModel @Inject constructor(
     fun setShowStatusBar(v: Boolean) = viewModelScope.launch { prefs.setShowStatusBar(v) }
     fun setShowChapterName(v: Boolean) = viewModelScope.launch { prefs.setShowChapterName(v) }
     fun setShowTimeBattery(v: Boolean) = viewModelScope.launch { prefs.setShowTimeBattery(v) }
+    fun setTitleAlign(v: Int) = viewModelScope.launch { prefs.setTitleAlign(v) }
     fun setCustomTxtChapterRegex(v: String) = viewModelScope.launch { prefs.setCustomTxtChapterRegex(v) }
     fun setTtsSkipPattern(v: String) = viewModelScope.launch { prefs.setTtsSkipPattern(v) }
+    fun setTtsKeepCpuAwake(v: Boolean) = viewModelScope.launch { prefs.setTtsKeepCpuAwake(v) }
     fun setReaderBgImageDay(v: String) = viewModelScope.launch { prefs.setReaderBgImageDay(v) }
     fun setReaderBgImageNight(v: String) = viewModelScope.launch { prefs.setReaderBgImageNight(v) }
 

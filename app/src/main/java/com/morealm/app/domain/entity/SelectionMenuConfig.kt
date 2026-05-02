@@ -19,6 +19,12 @@ enum class SelectionMenuItem(val displayName: String) {
     SHARE("分享"),
     LOOKUP("查词"),
     HIGHLIGHT("高亮"),
+    /**
+     * 字体强调色 —— 与 HIGHLIGHT 同形 UI（点击展开调色板），但回调走另一条线，
+     * 落库时 [com.morealm.app.domain.entity.Highlight.kind] = 1，渲染层不画
+     * 背景而是替换前景字色。默认在 EXPANDED 桶里（不强占主行）。
+     */
+    TEXT_COLOR("字体色"),
     ;
 
     companion object {
@@ -120,6 +126,7 @@ data class SelectionMenuConfig(
                 SelectionMenuEntry(SelectionMenuItem.SPEAK, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.TRANSLATE, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.SHARE, SelectionMenuPosition.EXPANDED),
+                SelectionMenuEntry(SelectionMenuItem.TEXT_COLOR, SelectionMenuPosition.EXPANDED),
             )
         )
 

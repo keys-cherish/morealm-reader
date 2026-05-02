@@ -42,4 +42,25 @@ data class Highlight(
     val colorArgb: Int,
     val note: String = "",
     val createdAt: Long = System.currentTimeMillis(),
-)
+    /**
+     * 高亮种类 —— 决定渲染层怎么用 [colorArgb]：
+     *   - [KIND_BACKGROUND] (0)：传统背景高亮 —— 在选区文字下面铺一层 bgFill；
+     *   - [KIND_TEXT_COLOR] (1)：字体强调色 —— 把选区文字的前景色（drawText 的
+     *     paint.color）替换为 colorArgb，背景不动；适合"段落重点字句换色"。
+     *
+     * 数据层不区分两种 kind 的查询路径（同 bookId+chapterIndex 一起返回）；
+     * 渲染层在 [com.morealm.app.ui.reader.renderer.PageContentDrawer.PageCanvas]
+     * 内按 kind 分桶，分别画。
+     *
+     * 默认 0 —— v19→v20 迁移给历史行加列时填 0，行为等价于"全部都是背景高亮"，
+     * 不破坏老数据。
+     */
+    val kind: Int = KIND_BACKGROUND,
+) {
+    companion object {
+        /** 背景高亮（默认） —— 在文字下铺一层透明色块。 */
+        const val KIND_BACKGROUND = 0
+        /** 字体强调色 —— 替换文字前景色，不画背景。 */
+        const val KIND_TEXT_COLOR = 1
+    }
+}

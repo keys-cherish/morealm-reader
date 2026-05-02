@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  小组件圆角背景。颜色用 ?android:attr/colorBackground 直接吃系统主题色，
+  浅色/深色自动适配，不需要写两份 drawable。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="20dp" />
+    <solid android:color="?android:attr/colorBackground" />
+</shape>

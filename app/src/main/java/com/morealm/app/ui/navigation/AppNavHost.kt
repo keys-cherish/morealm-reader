@@ -79,7 +79,7 @@ fun MoRealmNavHost(
     }
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route == "appearance" || route.startsWith("theme_editor")
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route == "legado_import" || route == "appearance" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -149,7 +149,9 @@ fun MoRealmNavHost(
                 val onNavDonate = remember { { navController.safeNavigate("donate") } }
                 val onNavBackupExport = remember { { navController.safeNavigate("backup_export") } }
                 val onNavBackupImport = remember { { navController.safeNavigate("backup_import") } }
+                val onNavLegadoImport = remember { { navController.safeNavigate("legado_import") } }
                 val onNavBookmarks = remember { { navController.safeNavigate("bookmarks") } }
+                val onNavHttpTtsManage = remember { { navController.safeNavigate("http_tts_manage") } }
                 val onSearchBack = remember(switchTab) { { switchTab(0) } }
 
                 var dragAmount by remember { mutableFloatStateOf(0f) }
@@ -249,7 +251,9 @@ fun MoRealmNavHost(
                                 navController.navigate("reader/$bookId")
                             },
                         )
-                        BottomTab.Listen -> ListenScreen()
+                        BottomTab.Listen -> ListenScreen(
+                            onNavigateHttpTtsManage = onNavHttpTtsManage,
+                        )
                         BottomTab.Profile -> ProfileScreen(
                             themeViewModel = themeViewModel,
                             onNavigateWebDav = onNavWebDav,
@@ -264,6 +268,7 @@ fun MoRealmNavHost(
                             onNavigateDonate = onNavDonate,
                             onNavigateBackupExport = onNavBackupExport,
                             onNavigateBackupImport = onNavBackupImport,
+                            onNavigateLegadoImport = onNavLegadoImport,
                             onNavigateBookmarks = onNavBookmarks,
                             onNavigateAppearance = onNavAppearance,
                         )
@@ -313,6 +318,12 @@ fun MoRealmNavHost(
                 BackupImportScreen(onBack = { navController.safePopBackStack() })
             }
 
+            composable("legado_import") {
+                com.morealm.app.ui.profile.LegadoImportScreen(
+                    onBack = { navController.safePopBackStack() },
+                )
+            }
+
             composable("source_manage") {
                 BookSourceManageScreen(
                     onBack = { navController.safePopBackStack() },
@@ -326,6 +337,12 @@ fun MoRealmNavHost(
 
             composable("font_manager") {
                 com.morealm.app.ui.settings.FontManagerScreen(
+                    onBack = { navController.safePopBackStack() }
+                )
+            }
+
+            composable("http_tts_manage") {
+                com.morealm.app.ui.settings.HttpTtsManageScreen(
                     onBack = { navController.safePopBackStack() }
                 )
             }
