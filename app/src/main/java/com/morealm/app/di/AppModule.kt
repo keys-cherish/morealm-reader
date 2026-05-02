@@ -408,6 +408,55 @@ private val MIGRATION_23_24 = object : Migration(23, 24) {
     }
 }
 
+/**
+ * v24 → v25: 自定义封面系统。
+ *  - books: 新增 customCoverUrl (TEXT NULL) — 用户手动设置的封面 file:// URI
+ *  - book_groups: 同上 — 分组自定义封面覆盖默认九宫格
+ * 非破坏性；null 默认，UI 读取时做 ?:  回退。
+ */
+private val MIGRATION_24_25 = object : Migration(24, 25) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `books` ADD COLUMN `customCoverUrl` TEXT")
+        db.execSQL("ALTER TABLE `book_groups` ADD COLUMN `customCoverUrl` TEXT")
+    }
+}
+
+/**
+ * v25 → v26: HttpTts 自定义朗读源补齐 Legado 字段。
+ *
+ *  - loginUrl       — 鉴权登录入口（与 Legado HttpTTS.loginUrl 对齐）
+ *  - loginUi        — LoginUi JSON（保存即可，登录面板渲染留作后续）
+ *  - loginCheckJs   — 响应预检脚本，对齐 Legado HttpReadAloudService.kt:338-364：
+ *                     evalJS 包一层 response 做鉴权校验；失败时可走 errResponse 重试
+ *  - concurrentRate — "1/1000" 风格限速字符串，由 ConcurrentRateLimiter 解析
+ *
+ * 全部 TEXT DEFAULT NULL 列，旧 row 升级后为 null —— HttpTtsEngine 在使用前都会
+ * 显式判空，无任何回归风险。Room 在 schema 校验阶段会比对实体定义，因此
+ * [HttpTts] 实体本次同步加上 4 个 nullable 字段。
+ */
+private val MIGRATION_25_26 = object : Migration(25, 26) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `http_tts` ADD COLUMN `loginUrl` TEXT")
+        db.execSQL("ALTER TABLE `http_tts` ADD COLUMN `loginUi` TEXT")
+        db.execSQL("ALTER TABLE `http_tts` ADD COLUMN `loginCheckJs` TEXT")
+        db.execSQL("ALTER TABLE `http_tts` ADD COLUMN `concurrentRate` TEXT")
+    }
+}
+
+/**
+ * v26 → v27：高亮表加 `kind` 字段，区分背景高亮 (0) 和字体强调色 (1)。
+ *
+ * 历史行用 DEFAULT 0 兜底（即按背景高亮处理），不破坏老用户已有的数据。
+ * 渲染层 [com.morealm.app.ui.reader.renderer.PageContentDrawer] 按 kind 分桶：
+ *   - kind=0 → 画 bgFill 矩形（旧行为）
+ *   - kind=1 → 替换该范围内字符的 paint.color
+ */
+private val MIGRATION_26_27 = object : Migration(26, 27) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `highlights` ADD COLUMN `kind` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 private val MIGRATION_9_10 = object : Migration(9, 10) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // book_sources 表结构完全重构，删除旧表并重建
@@ -526,6 +575,9 @@ object AppModule {
                 MIGRATION_21_22,
                 MIGRATION_22_23,
                 MIGRATION_23_24,
+                MIGRATION_24_25,
+                MIGRATION_25_26,
+                MIGRATION_26_27,
             )
             // On downgrade: try restore from backup, otherwise keep tables as-is
             .addCallback(object : RoomDatabase.Callback() {
@@ -555,6 +607,9 @@ object AppModule {
     @Provides fun provideCookieDao(db: AppDatabase): CookieDao = db.cookieDao()
     @Provides fun provideSearchBookCacheDao(db: AppDatabase): SearchBookCacheDao = db.searchBookCacheDao()
     @Provides fun provideSearchKeywordDao(db: AppDatabase): SearchKeywordDao = db.searchKeywordDao()
+    // HttpTts 自定义朗读源 DAO —— 之前 AppDatabase 已声明 abstract fun，但 Hilt provider
+    // 落了；TtsService / ListenViewModel 现在要 @Inject 拿这个 DAO 选源、加载、试听。
+    @Provides fun provideHttpTtsDao(db: AppDatabase): HttpTtsDao = db.httpTtsDao()
 
     @Provides
     @Singleton

@@ -164,6 +164,21 @@ class ThemeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 撤销「删除自定义主题」：UI 在删除前 snapshot ThemeEntity，用户点 Snackbar 撤销时
+     * 调本方法重新写入。不会主动切回原主题（删除时若是 active，repo 已切到默认主题），
+     * 用户如想切回，列表里再点一下即可。
+     */
+    fun restoreCustomTheme(theme: ThemeEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                themeRepo.restoreCustomTheme(theme)
+            } catch (e: Exception) {
+                AppLog.warn("Theme", "Restore failed: ${e.message}")
+            }
+        }
+    }
+
     private fun isNightTime(): Boolean {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         return hour < 6 || hour >= 22

@@ -70,6 +70,13 @@ data class PageInfoOverlaySpec(
     val chapterIndex: Int,
     val chaptersSize: Int,
     val batteryLevel: Int,
+    /**
+     * 充电状态。CanvasRenderer 把它透传给 BatteryIcon，画一道闪电小象形。
+     * 默认 false 保留旧调用方零参数 / 旧 spec 的兼容性（PageContentDrawer 自己
+     * 不画电池图标，电池绘制在 Compose 层 BatteryIcon 完成；本字段在 spec 里
+     * 仅作为状态承载，不影响 Canvas 路径）。
+     */
+    val batteryCharging: Boolean = false,
     val currentTime: String,
     val textColorArgb: Int,
     val backgroundColorArgb: Int,
@@ -128,6 +135,12 @@ fun PageCanvas(
      * 因为高亮内容会随用户增删而变，缓存版本不再准确。
      */
     highlights: List<HighlightSpan> = emptyList(),
+    /**
+     * 字体强调色高亮（[com.morealm.app.domain.entity.Highlight.kind] = 1）。
+     * 与 [highlights] 同结构 [HighlightSpan]，但不画背景，而是在画字符时把
+     * 命中范围内 column 的 paint.color 临时替换为该 span 的 colorArgb。
+     */
+    textColorSpans: List<HighlightSpan> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     val selColorArgb = selectionColor.toArgb()
@@ -146,8 +159,13 @@ fun PageCanvas(
     // highlights.size 也作为重组 trigger — 用户增删高亮时强制重算 hasOverlay。
     @Suppress("UNUSED_VARIABLE")
     val highlightsKey = highlights.size
+    @Suppress("UNUSED_VARIABLE")
+    val textColorSpansKey = textColorSpans.size
+    // 字体色 span 也算 overlay：和背景高亮一样，画字符时实时染色无法走 canvasRecorder
+    // 缓存（缓存里色已经定死）；用户增删 textColor 高亮时也要走直绘路径。
     val hasOverlay = selectionStart != null || aloudLineIndex >= 0 ||
-        page.lines.any { it.isReadAloud } || highlights.isNotEmpty()
+        page.lines.any { it.isReadAloud } || highlights.isNotEmpty() ||
+        textColorSpans.isNotEmpty()
     Canvas(modifier = modifier.fillMaxSize()) {
         val canvas = drawContext.canvas.nativeCanvas
         val w = size.width.toInt()
@@ -175,6 +193,7 @@ fun PageCanvas(
                 bmColorArgb = bmColorArgb,
                 canvasWidth = size.width,
                 highlights = highlights,
+                textColorSpans = textColorSpans,
             )
         } else {
             // No overlay — use CanvasRecorder: record once, replay on subsequent frames
@@ -234,6 +253,11 @@ fun drawPageContent(
      * TTS 朗读高亮再画在最上面，朗读期间用户能清楚看到当前段。
      */
     highlights: List<HighlightSpan> = emptyList(),
+    /**
+     * 字体强调色高亮（kind=1）。在画字符时按 chapterPosition 命中替换 paint.color。
+     * 与 [highlights] 互不影响，可同时存在（同一段文字可同时是背景高亮 + 字色强调）。
+     */
+    textColorSpans: List<HighlightSpan> = emptyList(),
 ) {
     val highlightPaint = sharedHighlightPaint
     val spacingPaint = sharedSpacingPaint
@@ -346,6 +370,14 @@ fun drawPageContent(
             } else paint
 
             val lineBase = line.lineBase + paddingTop
+            // 字体色覆盖：跟随 column 推进 charPos，对每个 column 用 mid-char 位置
+            // 命中 textColorSpans。命中则临时换 paint.color，画完恢复。
+            // 命中检测用 mid-char 而不是 col-start，避免边界 column 被错误染色
+            // （比如 span [10,15)，column 第 10 个字往前的 column 不该染）。
+            //
+            // 警告：drawPaint 可能是共享 paint（contentPaint/titlePaint），不能
+            // 永久写入；我们只在画该 column 时改色，画完恢复。
+            var charPos = line.chapterPosition
             for (col in line.columns) {
                 if (col is TextBaseColumn) {
                     if (col is TextHtmlColumn) {
@@ -354,12 +386,25 @@ fun drawPageContent(
                         col.textColor?.let { spacingPaint.color = it }
                     }
                     val actualPaint = if (col is TextHtmlColumn) spacingPaint else drawPaint
+                    // 字色 override —— 用 charData.length 算 mid 位置；
+                    // span 半开区间 [start, end) 命中即覆盖。
+                    val charLen = col.charData.length.coerceAtLeast(1)
+                    val midPos = charPos + charLen / 2
+                    val overrideArgb = if (textColorSpans.isNotEmpty()) {
+                        textColorSpans.firstOrNull {
+                            midPos >= it.startChapterPos && midPos < it.endChapterPos
+                        }?.colorArgb
+                    } else null
+                    val originalColor = actualPaint.color
+                    if (overrideArgb != null) actualPaint.color = overrideArgb
                     canvas.drawText(
                         col.charData,
                         col.start + line.extraLetterSpacingOffsetX,
                         lineBase,
                         actualPaint,
                     )
+                    if (overrideArgb != null) actualPaint.color = originalColor
+                    charPos += charLen
                 }
             }
         }

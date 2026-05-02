@@ -11,6 +11,7 @@ import com.morealm.app.domain.source.BookSourceImporter
 import com.morealm.app.domain.webbook.CheckSource
 import com.morealm.app.domain.webbook.SourceDebug
 import com.morealm.app.service.CheckSourceService
+import com.morealm.app.core.error.ErrorMessages
 import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -176,7 +177,7 @@ class BookSourceManageViewModel @Inject constructor(
                     _importResult.value = if (why.isNullOrBlank()) "未识别到有效书源" else "未识别到有效书源：$why"
                 }
             } catch (e: Exception) {
-                _importResult.value = "导入失败: ${e.message}"
+                _importResult.value = ErrorMessages.forUser("导入", e)
                 AppLog.error("SourceManage", "Import failed", e)
             } finally {
                 _isImporting.value = false
@@ -210,7 +211,7 @@ class BookSourceManageViewModel @Inject constructor(
                     _importResult.value = if (why.isNullOrBlank()) "未识别到有效书源" else "未识别到有效书源：$why"
                 }
             } catch (e: Exception) {
-                _importResult.value = "导入失败: ${e.message}"
+                _importResult.value = ErrorMessages.forUser("导入", e)
                 AppLog.error("SourceManage", "Import failed", e)
             } finally {
                 _isImporting.value = false
@@ -239,7 +240,7 @@ class BookSourceManageViewModel @Inject constructor(
                     _importResult.value = if (why.isNullOrBlank()) "未识别到有效书源" else "未识别到有效书源：$why"
                 }
             } catch (e: Exception) {
-                _importResult.value = "导入失败: ${e.message}"
+                _importResult.value = ErrorMessages.forUser("导入", e)
                 AppLog.error("SourceManage", "Import from file failed", e)
             } finally {
                 _isImporting.value = false

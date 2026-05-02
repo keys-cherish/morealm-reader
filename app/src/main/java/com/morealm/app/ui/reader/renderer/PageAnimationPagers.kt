@@ -367,12 +367,15 @@ private fun SimulationPager(
     //    没及时 scrollToPage——SIMULATION 分支虽然不绘制 pageContent，但
     //    pagerState 共享给其它分支，可能侧漏出"首页"那一帧。
     //  · cap / pages.size / displayPage 三者之间的越界期 dance
-    AppLog.debug(
-        "PageTurnFlicker",
-        "[3p] SimulationPager COMPOSE pagerCurrentPage=${pagerState.currentPage}" +
-            " currentDisplayPage=$currentDisplayPage pages.size=${pages.size}" +
-            " cap=$cap displayPage=$displayPage",
-    )
+    // ── B 修复：prelayout 期间 setIdleBitmap 抖动抑制 ──────────────────────────
+    // pages 流式增长（155→275→276→...）过程中，即便 displayPage=0 / pageId 不变，
+    // PageInfoOverlay 的身份哈希（时间/电量刷新）会换 → contentKey 不同 → 每次 pages.size
+    // 变化都触发一次完整的 setIdleBitmap 路径（渲染 bitmap / 日志 / BitmapPool 操作）。
+    //
+    // 解法：在 SimulationPager 这一层缓存上一次的 (displayPage, pageId)，相同就整段跳过
+    // setIdleBitmap。overlayId 的变化本身不值得重绘（时间/电量每秒都在变，只有真的翻页
+    // 或 displayPage 改变才重绘）。
+    val lastBitmapState = remember { intArrayOf(-1, 0) } // [0]=displayPage, [1]=pageId
 
     // Single-layer: SimulationReadView handles both idle display and animation.
     // Idle state draws idleBitmap (rendered with correct theme bgColor).
@@ -458,6 +461,24 @@ private fun SimulationPager(
             // pages 列表追上后下一次 update 会用正确内容补齐。
             if (w > 0 && h > 0 && displayPage in pages.indices) {
                 val page = params.pageForTurn(displayPage, 0)
+                val curPageId = page?.let(System::identityHashCode) ?: 0
+
+                // B 修复的 short-circuit：displayPage 和 pageId 都没变 → 直接跳过。
+                // 只有当 page 为 null 的无效 case，才允许第二次进入（可能被缓存修复）。
+                if (page != null &&
+                    displayPage == lastBitmapState[0] &&
+                    curPageId == lastBitmapState[1]
+                ) {
+                    // 跳过整段 —— overlay 时间/电量会在下次真翻页时自然刷新
+                    AppLog.debug(
+                        "PageTurnFlicker",
+                        "[3a] setIdleBitmap SKIPPED (unchanged) displayPage=$displayPage pageId=$curPageId",
+                    )
+                    return@AndroidView
+                }
+                lastBitmapState[0] = displayPage
+                lastBitmapState[1] = curPageId
+
                 // 内容签名：相同的 (TextPage 身份, 视图尺寸, 背景颜色, 背景图,
                 // info 叠加层) → 渲染结果完全一样。SimulationReadView 拿到
                 // 同 key 会 short-circuit 整个渲染调用，避免 19:06:52 那段

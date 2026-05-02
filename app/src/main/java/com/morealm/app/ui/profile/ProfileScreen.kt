@@ -60,7 +60,9 @@ import com.morealm.app.presentation.theme.ThemeViewModel
 import com.morealm.app.domain.entity.BuiltinThemes
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.ui.theme.toComposeColor
+import com.morealm.app.widget.WidgetPinHelper
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 
@@ -81,6 +83,8 @@ fun ProfileScreen(
     onNavigateDonate: () -> Unit = {},
     onNavigateBackupExport: () -> Unit = {},
     onNavigateBackupImport: () -> Unit = {},
+    /** 跳到 Legado 一键搬家页（独立流程，不复用备份导入页的状态）。 */
+    onNavigateLegadoImport: () -> Unit = {},
     /** 跳到外观设置页。 */
     onNavigateAppearance: () -> Unit = {},
     /** 跳到全局书签管理屏。 */
@@ -94,7 +98,6 @@ fun ProfileScreen(
     val todayReadMs by profileViewModel.todayReadMs.collectAsStateWithLifecycle()
     val recentDays by profileViewModel.recentDays.collectAsStateWithLifecycle()
     val annualReport by profileViewModel.annualReport.collectAsStateWithLifecycle()
-    var showDeleteThemeConfirm by remember { mutableStateOf<String?>(null) }
     var showAnnualReport by remember { mutableStateOf(false) }
 
     val backupImportLauncher = rememberLauncherForActivityResult(
@@ -126,6 +129,11 @@ fun ProfileScreen(
         uri?.let { themeViewModel.importThemeFromUri(it) }
     }
 
+    // UX-1: Snackbar host 用于「删除主题」的撤销窗口
+    val snackbarHost = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier.fillMaxSize()
             .verticalScroll(rememberScrollState())
@@ -217,7 +225,23 @@ fun ProfileScreen(
                         items(customThemes, key = { it.id }) { theme ->
                             ThemeGridItem(theme = theme, isActive = activeTheme?.id == theme.id,
                                 onClick = { themeViewModel.switchTheme(theme.id) },
-                                onLongClick = { showDeleteThemeConfirm = theme.id },
+                                onLongClick = {
+                                    // UX-1: 长按 → 立即删 + Snackbar 撤销，不再弹 AlertDialog。
+                                    // customThemes 来源已过滤 isBuiltin = false，repo 也有兜底。
+                                    val snapshot = theme
+                                    themeViewModel.deleteCustomTheme(theme.id)
+                                    scope.launch {
+                                        val r = snackbarHost.showSnackbar(
+                                            message = "已删除主题「${snapshot.name}」",
+                                            actionLabel = "撤销",
+                                            duration = SnackbarDuration.Short,
+                                            withDismissAction = true,
+                                        )
+                                        if (r == SnackbarResult.ActionPerformed) {
+                                            themeViewModel.restoreCustomTheme(snapshot)
+                                        }
+                                    }
+                                },
                                 modifier = Modifier.width(80.dp))
                         }
                     }
@@ -305,10 +329,34 @@ fun ProfileScreen(
         SettingsCard(Icons.Default.CloudDownload, "离线缓存",
             "批量下载章节，支持离线阅读", onClick = onNavigateCacheBook)
         SettingsCard(Icons.Default.ImportExport, "Legado 一键搬家",
-            "导入 Legado 备份，书源/书架/进度全部迁移", onClick = {})
+            "导入 Legado 备份，书源/书架/进度全部迁移", onClick = onNavigateLegadoImport)
 
-        // Widget preview
-        SettingsCard(Icons.Default.Widgets, "桌面小组件", "预览效果", onClick = {}) {
+        // Widget preview — 点击尝试请求把「继续阅读」小组件 pin 到桌面；
+        // Launcher 不支持 (API 23~25 或部分老版 OEM) 时弹引导 Dialog 教用户长按桌面手动添加。
+        // SDK < 23 (Android 6.0) 整张卡片置灰：Glance 不支持，receiver 由
+        // res/values/widget_bools.xml 资源守卫禁用。
+        val widgetContext = LocalContext.current
+        val widgetSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+        var showWidgetGuide by remember { mutableStateOf(false) }
+        SettingsCard(
+            Icons.Default.Widgets,
+            "桌面小组件",
+            if (widgetSupported) "把「继续阅读」放到桌面，一键回到上次位置"
+            else "需要 Android 6.0 或以上系统",
+            onClick = if (widgetSupported) {
+                {
+                    val pinned = WidgetPinHelper.requestPin(widgetContext)
+                    if (!pinned) {
+                        // Launcher 不支持 requestPinAppWidget → 弹引导 Dialog
+                        showWidgetGuide = true
+                    }
+                    // 成功投递时由 Launcher 自己弹「添加到桌面」对话框，无需
+                    // 我们再 Toast，避免重复信息。
+                }
+            } else {
+                { /* SDK 不支持，整张卡片不可交互（点击无反应） */ }
+            },
+        ) {
             Card(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 shape = MaterialTheme.shapes.medium,
@@ -333,6 +381,25 @@ fun ProfileScreen(
             }
         }
 
+        // 「不支持自动添加」的回退 Dialog —— 教用户长按桌面手动添加
+        if (showWidgetGuide) {
+            AlertDialog(
+                onDismissRequest = { showWidgetGuide = false },
+                title = { Text("手动添加小组件") },
+                text = {
+                    Text(
+                        "你的桌面 Launcher 不支持一键添加。请：\n" +
+                            "1. 长按桌面空白处\n" +
+                            "2. 选择「小组件」/「Widgets」\n" +
+                            "3. 找到「墨境·继续阅读」，拖到桌面",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showWidgetGuide = false }) { Text("知道了") }
+                },
+            )
+        }
+
         SettingsSection("关于") {
             SettingsItem(Icons.Default.Info, "关于墨境", onClick = onNavigateAbout)
             SettingsItem(Icons.Default.BugReport, "应用日志",
@@ -351,24 +418,8 @@ fun ProfileScreen(
         Spacer(Modifier.height(96.dp))
     }
 
-    // Delete custom theme confirmation
-    showDeleteThemeConfirm?.let { themeId ->
-        val themeName = allThemes.find { it.id == themeId }?.name ?: "主题"
-        AlertDialog(
-            onDismissRequest = { showDeleteThemeConfirm = null },
-            title = { Text("删除主题") },
-            text = { Text("确定删除「$themeName」？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    themeViewModel.deleteCustomTheme(themeId)
-                    showDeleteThemeConfirm = null
-                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteThemeConfirm = null }) { Text("取消") }
-            },
-        )
-    }
+    // UX-1: 删除主题已迁移到 onLongClick 内联处理（立即删 + Snackbar 撤销），
+    // 原 AlertDialog + showDeleteThemeConfirm 状态已下线。
 
     // Annual report dialog
     if (showAnnualReport) {
@@ -377,6 +428,8 @@ fun ProfileScreen(
             accentColor = MaterialTheme.colorScheme.primary,
             onDismiss = { showAnnualReport = false },
         )
+    }
+    SnackbarHost(snackbarHost, modifier = Modifier.align(Alignment.BottomCenter))
     }
 }
 

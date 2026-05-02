@@ -87,6 +87,27 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!--
+          桌面小组件「继续阅读」receiver。
+          android:enabled 通过 @bool/widget_supported 资源守卫：
+            - res/values/widget_bools.xml = false  → API < 23 设备禁用
+            - res/values-v23/widget_bools.xml = true → API 23+ 启用
+          这样在 minSdk=21 的低版本设备上系统不会实例化 Glance receiver，
+          避免 Glance 1.1.x 内部对 API 23+ 的依赖触发 ClassNotFoundException。
+        -->
+        <receiver
+            android:name=".widget.ContinueReadingWidgetReceiver"
+            android:exported="false"
+            android:enabled="@bool/widget_supported"
+            android:label="@string/widget_continue_reading_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_continue_reading_info" />
+        </receiver>
+
     </application>
 
     <!--

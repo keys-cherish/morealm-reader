@@ -26,4 +26,9 @@ data class BookGroup(
      * [AppPreferences.autoFolderIgnored] so we don't recreate it next time.
      */
     val auto: Boolean = false,
+    /**
+     * 用户自定义分组封面（走 CoverStorage，WebP 存 filesDir/covers/GROUP/{id}.webp）。
+     * 非 null 时覆盖自动拼图封面；null 时 UI 回退到自动 2×2 九宫格。
+     */
+    val customCoverUrl: String? = null,
 )

@@ -77,6 +77,16 @@ class ReaderTtsController(
         .map { it.chapterPosition }
         .stateIn(scope, SharingStarted.Eagerly, -1)
 
+    /**
+     * 当前正在朗读段落的章内字符区间 [start, end)。null = 未朗读 / 引擎未提供。
+     *
+     * 渲染层（`PageContentDrawer`）订阅这个 Flow 给当前段加高亮；
+     * 阅读器外层订阅它判断 "回到朗读位置" FAB 是否显示 / 是否自动跟随翻页。
+     */
+    val ttsParagraphRange: StateFlow<IntRange?> = TtsEventBus.playbackState
+        .map { it.paragraphRange }
+        .stateIn(scope, SharingStarted.Eagerly, null)
+
     // ── ViewModel callbacks (set via collectChapterEvents) ───────────────────
     // Removed: events are now consumed directly by ReaderViewModel. See `initialize`.
 
@@ -116,6 +126,8 @@ class ReaderTtsController(
         coverUrl: String? = null,
         startChapterPosition: Int? = null,
         paragraphPositions: List<Int>? = null,
+        bookId: String? = null,
+        chapterIndex: Int? = null,
         onChapterFinished: (() -> Unit)? = null,
     ) {
         if (ttsPlaying.value) {
@@ -129,6 +141,8 @@ class ReaderTtsController(
             coverUrl = coverUrl,
             startChapterPosition = startChapterPosition,
             paragraphPositions = paragraphPositions,
+            bookId = bookId,
+            chapterIndex = chapterIndex,
             onChapterFinished = onChapterFinished,
         )
     }
@@ -140,6 +154,10 @@ class ReaderTtsController(
      *   [startChapterPosition] (defaults to 0).
      * - When [displayedContent] is null: simply send Play (resume from current paragraph).
      *
+     * @param bookId 当前书的 id；传入后 host 会缓存它，章末超时未收到 ViewModel 推章
+     *               时直接从 BookRepository 加载下一章续播。**离开 Reader 后续章不断声
+     *               的关键参数**——任何 reader 路径都应该尽量带上。
+     * @param chapterIndex 当前章节在书目录中的下标；同样用于 host 的自动续章兜底。
      * @param onChapterFinished kept for API compatibility but ignored: chapter-end handling
      *        now lives in `ReaderViewModel`'s direct TtsEventBus listener.
      */
@@ -150,6 +168,8 @@ class ReaderTtsController(
         coverUrl: String? = null,
         startChapterPosition: Int? = null,
         paragraphPositions: List<Int>? = null,
+        bookId: String? = null,
+        chapterIndex: Int? = null,
         @Suppress("UNUSED_PARAMETER") onChapterFinished: (() -> Unit)? = null,
     ) {
         // TTS-DIAG #2 — controller received params. If we never reach the
@@ -159,7 +179,8 @@ class ReaderTtsController(
             "TTS",
             "Controller.ttsPlay: contentLen=${displayedContent?.length ?: -1}, " +
                 "book='${bookTitle ?: ""}', chapter='${chapterTitle ?: ""}', " +
-                "startPos=$startChapterPosition, positions=${paragraphPositions?.size ?: -1}",
+                "startPos=$startChapterPosition, positions=${paragraphPositions?.size ?: -1}, " +
+                "bookId=${bookId ?: "<none>"}, chapterIndex=${chapterIndex ?: -1}",
         )
         ensureTtsService(bookTitle ?: "", chapterTitle ?: "", coverUrl)
         if (displayedContent != null) {
@@ -172,6 +193,8 @@ class ReaderTtsController(
                     content = displayedContent,
                     paragraphPositions = paragraphPositions,
                     startChapterPosition = startChapterPosition?.coerceAtLeast(0) ?: 0,
+                    bookId = bookId,
+                    chapterIndex = chapterIndex,
                 )
             )
         } else {
@@ -243,6 +266,8 @@ class ReaderTtsController(
         coverUrl: String? = null,
         startChapterPosition: Int,
         paragraphPositions: List<Int>? = null,
+        bookId: String? = null,
+        chapterIndex: Int? = null,
         onChapterFinished: (() -> Unit)?,
     ) {
         ttsPlay(
@@ -252,6 +277,8 @@ class ReaderTtsController(
             coverUrl = coverUrl,
             startChapterPosition = startChapterPosition,
             paragraphPositions = paragraphPositions,
+            bookId = bookId,
+            chapterIndex = chapterIndex,
             onChapterFinished = onChapterFinished,
         )
     }

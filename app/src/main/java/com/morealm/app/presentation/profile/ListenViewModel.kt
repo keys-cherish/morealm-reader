@@ -3,6 +3,8 @@ package com.morealm.app.presentation.profile
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.morealm.app.domain.db.HttpTtsDao
+import com.morealm.app.domain.entity.HttpTts
 import com.morealm.app.domain.entity.TtsVoice
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.tts.EdgeTtsEngine
@@ -25,6 +27,7 @@ import javax.inject.Inject
 @HiltViewModel
 class ListenViewModel @Inject constructor(
     private val prefs: AppPreferences,
+    private val httpTtsDao: HttpTtsDao,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -50,6 +53,14 @@ class ListenViewModel @Inject constructor(
 
     val selectedEngine: StateFlow<String> = prefs.ttsEngine
         .stateIn(viewModelScope, SharingStarted.Eagerly, "system")
+
+    /**
+     * 已启用的 HttpTts 自定义朗读源列表。引擎选择 chip 行需要把这些 chip 接在
+     * "system / edge" 后面。源被禁用 (enabled=false) 的不显示——避免误选到一个
+     * 用户特意关掉的源。
+     */
+    val httpTtsList: StateFlow<List<HttpTts>> = httpTtsDao.getAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
      * 当前用户绑定的系统 TTS 引擎包名。空字符串 = 跟随系统默认。
@@ -83,6 +94,18 @@ class ListenViewModel @Inject constructor(
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    /**
+     * Bug 4 收敛：TtsErrorPresenter 在 `canOpenSettings=true` 时不再弹 app Toast，
+     * 改由 Listen 页持久化 banner 展示——红字提示 + 「前往系统 TTS 设置」按钮，比
+     * 1.5s 一闪而过的 Toast 体验好。null = 没有当前错误，banner 不渲染。
+     *
+     * 写入触发：[TtsEventBus.Event.Error] 且 `canOpenSettings=true`。
+     * 清除路径：用户点 [dismissTtsErrorBanner]，或下一次 LoadAndPlay 成功时（host 端不主动清，
+     *   暂留给用户手动关——避免 banner 闪现没看清）。
+     */
+    private val _ttsErrorBanner = MutableStateFlow<String?>(null)
+    val ttsErrorBanner: StateFlow<String?> = _ttsErrorBanner.asStateFlow()
+
     init {
         systemTtsEngine.initialize()
         viewModelScope.launch {
@@ -90,6 +113,21 @@ class ListenViewModel @Inject constructor(
                 refreshVoices(engine)
             }
         }
+        // 订阅 EventBus 上的 TTS 错误事件，落到 banner state。只看 canOpenSettings=true
+        // 的事件——这些是「需要用户去系统设置修」的硬错误（缺引擎、缺语音数据等）；
+        // 临时性错误（单段 speak 失败）走 TtsErrorPresenter 的 Toast 路径，不挡用户视野。
+        viewModelScope.launch {
+            TtsEventBus.events.collect { event ->
+                if (event is TtsEventBus.Event.Error && event.canOpenSettings) {
+                    _ttsErrorBanner.value = event.message
+                }
+            }
+        }
+    }
+
+    /** 用户点 banner 上的关闭按钮 / 完成跳转设置后调；清空 banner。 */
+    fun dismissTtsErrorBanner() {
+        _ttsErrorBanner.value = null
     }
 
     /**
@@ -103,9 +141,11 @@ class ListenViewModel @Inject constructor(
     }
 
     /**
-     * 设置系统 TTS 引擎包名。传空字符串 = 恢复 "跟系统默认"。设置后会 toast
-     * 提示用户重启阅读器生效——因为 TtsEngineHost 的 systemTtsEngine 是 lazy
-     * 在首次用到时初始化的，已经初始化的实例不会自动换包。
+     * 设置系统 TTS 引擎包名。传空字符串 = 恢复 "跟系统默认"。
+     *
+     * 之前依赖"重启阅读器后生效"的 lazy init 路径，体验差：用户切了 multitts
+     * 还得退出重进。改用 [TtsEventBus.Command.RebindSystemEngine] 让 host 即时
+     * 销毁旧引擎 + 用新包名重 init，正在播放的话还会自动续播。
      */
     fun selectSystemEnginePackage(pkg: String) {
         viewModelScope.launch {
@@ -114,6 +154,8 @@ class ListenViewModel @Inject constructor(
                 "TTS",
                 "user picked system TTS package: ${pkg.ifBlank { "<system-default>" }}",
             )
+            // 关键：发 RebindSystemEngine，host 收到会即时切换 systemTtsEngine 实例
+            TtsEventBus.sendCommand(TtsEventBus.Command.RebindSystemEngine(pkg))
         }
     }
 
@@ -175,8 +217,11 @@ class ListenViewModel @Inject constructor(
     }
 
     private fun voiceEngineId(engine: String): String? =
-        when (engine) {
-            "edge", "system" -> engine
+        when {
+            engine == "edge" || engine == "system" -> engine
+            // HttpTts 引擎也参与 voice 维护流程（虽然就一个虚拟"声音"），让
+            // refreshVoices 给 _voices 写入单元素列表，UI 选择器能正常显示
+            engine.startsWith("http_") -> engine
             else -> null
         }
 
@@ -192,12 +237,20 @@ class ListenViewModel @Inject constructor(
         }
         _voicesRefreshing.value = true
         try {
-            _voices.value = when (engineId) {
-                "edge" -> {
+            _voices.value = when {
+                engineId == "edge" -> {
                     // 远程拉 600+ 条 zh/en/ja/... 音色（带 24h voices.json 缓存 + 失败回退到硬编码）
                     runCatching { edgeTtsEngine.fetchRemoteVoices() }
                         .getOrNull()?.takeIf { it.isNotEmpty() }
                         ?: EdgeTtsEngine.VOICES
+                }
+                engineId.startsWith("http_") -> {
+                    // HttpTts 没有多音色概念。给 UI 一个单元素，name 用源名
+                    val id = engineId.removePrefix("http_").toLongOrNull()
+                    val cfg = id?.let { httpTtsDao.getById(it) }
+                    if (cfg != null) {
+                        listOf(TtsVoice(id = cfg.name, name = cfg.name, language = "custom", engine = "http"))
+                    } else emptyList()
                 }
                 else -> {
                     // Mirror the host-side fix: bound the wait so a missing/broken system

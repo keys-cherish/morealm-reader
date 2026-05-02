@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      默认 false：minSdk=21 设备启动时把 ContinueReadingWidgetReceiver 关闭，
+      避免 Glance 内部 (要求 API 23+) 被实例化导致崩溃。
+      v23 限定符版本会覆盖为 true，让 6.0+ 设备正常启用。
+    -->
+    <bool name="widget_supported">false</bool>
+</resources>

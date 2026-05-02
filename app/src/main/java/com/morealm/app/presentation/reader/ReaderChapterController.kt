@@ -167,6 +167,7 @@ class ReaderChapterController(
             title = title,
             content = content,
             initialProgress = 0,
+            restoreToken = System.nanoTime(),
         )
         visiblePageState.value = VisibleReaderPage(0, title, "0.0%", 0)
         scrollProgressState.value = 0
@@ -204,6 +205,16 @@ class ReaderChapterController(
                     lastPreCacheCenter = startIndex
                     val savedScrollProgress = progress?.scrollProgress ?: estimateChapterProgress(book, startIndex, cachedChapters.size)
                     val savedChapterPosition = progress?.chapterPosition ?: book.lastReadPosition
+                    AppLog.info(
+                        "BookmarkDebug",
+                        "loadBook ENTRY (web) bookId=$bookId startIndex=$startIndex" +
+                            " savedScrollProgress=$savedScrollProgress savedChapterPosition=$savedChapterPosition" +
+                            " bookLastReadChapter=${book.lastReadChapter}" +
+                            " bookLastReadPosition=${book.lastReadPosition}" +
+                            " dbProgress.chapterIndex=${progress?.chapterIndex}" +
+                            " dbProgress.chapterPosition=${progress?.chapterPosition}" +
+                            " dbProgress.scrollProgress=${progress?.scrollProgress}",
+                    )
                     scrollProgressState.value = savedScrollProgress
                     loadChapter(startIndex, restoreProgress = savedScrollProgress, restoreChapterPosition = savedChapterPosition)
 
@@ -329,6 +340,16 @@ class ReaderChapterController(
 
             val savedScrollProgress = progress?.scrollProgress ?: estimateChapterProgress(book, startIndex, chapters.size)
             val savedChapterPosition = progress?.chapterPosition ?: book.lastReadPosition
+            AppLog.info(
+                "BookmarkDebug",
+                "loadBook ENTRY (local) bookId=$bookId startIndex=$startIndex" +
+                    " savedScrollProgress=$savedScrollProgress savedChapterPosition=$savedChapterPosition" +
+                    " bookLastReadChapter=${book.lastReadChapter}" +
+                    " bookLastReadPosition=${book.lastReadPosition}" +
+                    " dbProgress.chapterIndex=${progress?.chapterIndex}" +
+                    " dbProgress.chapterPosition=${progress?.chapterPosition}" +
+                    " dbProgress.scrollProgress=${progress?.scrollProgress}",
+            )
             scrollProgressState.value = savedScrollProgress
             loadChapter(startIndex, restoreProgress = savedScrollProgress, restoreChapterPosition = savedChapterPosition)
 
@@ -425,6 +446,7 @@ class ReaderChapterController(
                     content = content,
                     initialProgress = targetProgress,
                     initialChapterPosition = targetChapterPosition,
+                    restoreToken = System.nanoTime(),
                 )
                 _currentChapterIndex.value = index
 
@@ -478,6 +500,7 @@ class ReaderChapterController(
                     content = errorContent,
                     initialProgress = 0,
                     initialChapterPosition = 0,
+                    restoreToken = System.nanoTime(),
                 )
                 _currentChapterIndex.value = index
                 visiblePageState.value = VisibleReaderPage(index, chapter.title.ifBlank { title }, "0.0%", 0)

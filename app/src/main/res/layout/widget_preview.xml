@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Launcher 选择面板里给用户看的预览。Glance 实际渲染时会被替换为
+  ContinueReadingWidget 的真实内容；这份 layout 仅在 widget 还没有任何实例
+  之前展示。保持极简：标题 + 进度条意象。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_background"
+    android:padding="14dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/widget_continue_reading_title"
+        android:textStyle="bold"
+        android:textSize="13sp"
+        android:textColor="?android:attr/textColorPrimary" />
+
+    <Space
+        android:layout_width="match_parent"
+        android:layout_height="6dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/widget_preview_book_title"
+        android:textSize="12sp"
+        android:textColor="?android:attr/textColorSecondary" />
+
+    <Space
+        android:layout_width="match_parent"
+        android:layout_height="8dp" />
+
+    <ProgressBar
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="4dp"
+        android:max="100"
+        android:progress="62" />
+</LinearLayout>

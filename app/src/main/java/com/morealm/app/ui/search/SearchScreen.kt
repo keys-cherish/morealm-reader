@@ -25,6 +25,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -42,6 +44,7 @@ import com.morealm.app.presentation.search.SearchResult
 import com.morealm.app.presentation.search.SearchViewModel
 import com.morealm.app.presentation.search.SourceSearchProgress
 import com.morealm.app.presentation.search.SourceStatus
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -58,6 +61,12 @@ fun SearchScreen(
     val disclaimerAccepted by viewModel.disclaimerAccepted.collectAsStateWithLifecycle()
     val sourceCount by viewModel.sourceCount.collectAsStateWithLifecycle()
 
+    // UX-1: Snackbar host 用于「清空历史」的撤销窗口。SearchScreen 之前没有 Scaffold，
+    // 这里直接在 Box 里手动放 SnackbarHost，避免大改原有 Column 布局。
+    val snackbarHost = remember { SnackbarHostState() }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -90,6 +99,9 @@ fun SearchScreen(
         Spacer(Modifier.height(4.dp))
 
         // Search box: input + button
+        // UX-3: 进入搜索页自动 focus + 弹出软键盘，省一次「点输入框」交互。
+        val focusRequester = remember { FocusRequester() }
+        LaunchedEffect(Unit) { focusRequester.requestFocus() }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -98,7 +110,7 @@ fun SearchScreen(
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                modifier = Modifier.weight(1f).height(48.dp),
+                modifier = Modifier.weight(1f).height(48.dp).focusRequester(focusRequester),
                 placeholder = { Text("搜索书名、作者…", style = MaterialTheme.typography.bodySmall) },
                 shape = MaterialTheme.shapes.medium,
                 singleLine = true,
@@ -189,7 +201,24 @@ fun SearchScreen(
                         viewModel.search(word)
                     },
                     onDelete = { viewModel.deleteHistory(it) },
-                    onClear = { viewModel.clearHistory() },
+                    onClear = {
+                        // UX-1: 快删 + Snackbar 撤销取代 AlertDialog 二次确认。
+                        // 先 snapshot 当前 history，再清空 DB；用户 5s 内点撤销 → 走
+                        // restoreHistory 把整批 upsert 回去（保留原 usage / lastUseTime）。
+                        val snapshot = history.toList()
+                        viewModel.clearHistory()
+                        scope.launch {
+                            val r = snackbarHost.showSnackbar(
+                                message = "已清空 ${snapshot.size} 条搜索历史",
+                                actionLabel = "撤销",
+                                duration = SnackbarDuration.Short,
+                                withDismissAction = true,
+                            )
+                            if (r == SnackbarResult.ActionPerformed) {
+                                viewModel.restoreHistory(snapshot)
+                            }
+                        }
+                    },
                 )
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -258,6 +287,8 @@ fun SearchScreen(
                 item { Spacer(Modifier.height(80.dp)) }
             }
         }
+    }
+        SnackbarHost(snackbarHost, modifier = Modifier.align(Alignment.BottomCenter))
     }
 }
 
@@ -713,7 +744,6 @@ private fun SearchHistorySection(
     onDelete: (String) -> Unit,
     onClear: () -> Unit,
 ) {
-    var confirmClear by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -731,7 +761,9 @@ private fun SearchHistorySection(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = { confirmClear = true }) {
+            // 直接清空 — 顶层 SearchScreen 会用 Snackbar 提供 5s 撤销窗口；
+            // 不再弹 AlertDialog 二次确认。
+            TextButton(onClick = onClear) {
                 Text(
                     "清空",
                     style = MaterialTheme.typography.labelMedium,
@@ -778,22 +810,6 @@ private fun SearchHistorySection(
         }
     }
 
-    if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("清空搜索历史") },
-            text = { Text("将删除全部 ${history.size} 条历史记录，此操作不可撤销。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    onClear()
-                    confirmClear = false
-                }) {
-                    Text("清空", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClear = false }) { Text("取消") }
-            },
-        )
-    }
+    // 二次确认对话框已移除：清空动作改为顶层 SearchScreen 的 Snackbar 撤销模式
+    // (UX-1)。SearchHistorySection 只发出"清空"信号，撤销窗口期由 5s Snackbar 提供。
 }

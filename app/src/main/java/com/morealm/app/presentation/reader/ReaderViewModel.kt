@@ -17,6 +17,7 @@ import com.morealm.app.domain.repository.ReplaceRuleRepository
 import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.service.TtsEventBus
+import com.morealm.app.widget.WidgetUpdater
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +52,17 @@ data class RenderedReaderChapter(
     val content: String = "",
     val initialProgress: Int = 0,
     val initialChapterPosition: Int = 0,
+    /**
+     * 每次 loadChapter 赋一个新值（System.nanoTime()），让 CanvasRenderer 的
+     * restoreProgress LaunchedEffect 仅在"真正发起了新的恢复请求"时触发。
+     *
+     * 解决的 bug：initialChapterPosition 作为 data class 字段持久存活在 StateFlow
+     * 里，用户翻页后 Compose 重组（前后台 / renderPageCount 变化）时 key 没变
+     * 但 progressRestored 被别的 LaunchedEffect 清掉 → 幽灵恢复。
+     *
+     * 对齐 Legado 精神：恢复是命令（token 变 = 一次新命令），不是状态订阅。
+     */
+    val restoreToken: Long = 0L,
 )
 
 data class VisibleReaderPage(
@@ -150,6 +162,17 @@ class ReaderViewModel @Inject constructor(
         chapter.linkedBooksState = navigation._linkedBooks
         // Progress controller needs chapter controller reference
         progress.chapterController = chapter
+
+        // Legado-parity：进入阅读器即清除"N 新"徽章。
+        // Legado 是在 ReadBook.saveRead() 每次保存进度时清，我们这里在 init 一次性清掉，
+        // 因为：1) 即使用户不滑动，他也已经"看到"这本书；2) 避免依赖 saveProgress 的调用频率；
+        // 3) 失败容错（DB 异常不影响阅读功能）。新加的 web 书 lastCheckCount 默认 0，所以 IO 也只是
+        // 一次主键 UPDATE 命中行为零的查询，开销可忽略。
+        if (bookId.isNotBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { bookRepo.clearLastCheckCount(bookId) }
+            }
+        }
     }
 
     // ── Forwarded StateFlows (for backward compatibility with ReaderScreen) ──
@@ -275,6 +298,8 @@ class ReaderViewModel @Inject constructor(
             startChapterPosition = visibleReadAloudChapterPosition
                 .takeIf { tts.ttsPlaying.value.not() && it >= 0 },
             paragraphPositions = readAloudParagraphPositions,
+            bookId = chapter.book.value?.id,
+            chapterIndex = chapter.currentChapterIndex.value,
             onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
         )
     }
@@ -363,6 +388,8 @@ class ReaderViewModel @Inject constructor(
             chapterTitle = chapter.chapters.value.getOrNull(chapter.currentChapterIndex.value)?.title ?: "",
             startChapterPosition = chapterPosition.coerceAtLeast(0),
             paragraphPositions = readAloudParagraphPositions,
+            bookId = chapter.book.value?.id,
+            chapterIndex = chapter.currentChapterIndex.value,
             onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
         )
         _showTtsPanel.value = true
@@ -459,6 +486,8 @@ class ReaderViewModel @Inject constructor(
                         coverUrl = chapter.book.value?.coverUrl,
                         startChapterPosition = 0,
                         paragraphPositions = readAloudParagraphPositions,
+                        bookId = chapter.book.value?.id,
+                        chapterIndex = chapter.currentChapterIndex.value,
                         onChapterFinished = null,
                     )
                 }
@@ -479,6 +508,11 @@ class ReaderViewModel @Inject constructor(
             com.morealm.app.domain.parser.LocalBookParser.releaseTxtBuffer()
             progress.saveProgress()
             if (sessionMs > 5000) progress.saveReadingStats(sessionMs)
+            // 进度落库后再推 widget — 顺序很重要：widget 取的是
+            // BookRepository.getLastReadBook()，必须等 saveProgress 写完才能
+            // 让桌面读到最新章节/进度。WidgetUpdater 内置 try/catch + SDK 守卫，
+            // 失败仅记日志，不会影响阅读器本身的清理流程。
+            WidgetUpdater.refresh(context)
         }
     }
 }

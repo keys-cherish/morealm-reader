@@ -193,6 +193,12 @@ dependencies {
     // WebView
     implementation(libs.webkit)
 
+    // Glance App Widget — 桌面小组件「继续阅读」。运行时 SDK_INT < 23 通过
+    // res/values/widget_bools.xml 把 receiver 禁用，所以低版本设备不会触达
+    // Glance 代码路径，依赖本身保留以便 R8 不剥离 Glance 类。
+    implementation(libs.glance.appwidget)
+    implementation(libs.glance.material3)
+
     // WiFi 传书 — local HTTP server (ported from Legado NanoHTTPD)
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")

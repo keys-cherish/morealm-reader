@@ -170,6 +170,14 @@ class ReaderSettingsController(
     val pageAnim: StateFlow<String> = prefs.pageAnim
         .stateIn(scope, SharingStarted.Eagerly, "slide")
 
+    /**
+     * 章节标题对齐：0=左 / 1=中 / 2=右。
+     * 来自 [com.morealm.app.domain.preference.AppPreferences.titleAlign] 全局偏好；
+     * UI 层在 ReadingSettingsScreen 修改，阅读器实时透传到排版引擎。
+     */
+    val titleAlign: StateFlow<Int> = prefs.titleAlign
+        .stateIn(scope, SharingStarted.Eagerly, 0)
+
     // ══════════════════════════════════════════════════════════════
     // Initialization
     // ══════════════════════════════════════════════════════════════
