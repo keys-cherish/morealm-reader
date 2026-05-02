@@ -115,11 +115,11 @@ data class SelectionMenuConfig(
         val DEFAULT: SelectionMenuConfig = SelectionMenuConfig(
             listOf(
                 SelectionMenuEntry(SelectionMenuItem.COPY, SelectionMenuPosition.MAIN),
-                SelectionMenuEntry(SelectionMenuItem.SPEAK, SelectionMenuPosition.MAIN),
                 SelectionMenuEntry(SelectionMenuItem.HIGHLIGHT, SelectionMenuPosition.MAIN),
+                SelectionMenuEntry(SelectionMenuItem.LOOKUP, SelectionMenuPosition.MAIN),
+                SelectionMenuEntry(SelectionMenuItem.SPEAK, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.TRANSLATE, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.SHARE, SelectionMenuPosition.EXPANDED),
-                SelectionMenuEntry(SelectionMenuItem.LOOKUP, SelectionMenuPosition.EXPANDED),
             )
         )
 
