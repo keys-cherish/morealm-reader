@@ -14,6 +14,10 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import com.morealm.app.presentation.profile.ProfileViewModel
 import com.morealm.app.presentation.profile.AnnualReport
+import com.morealm.app.presentation.appearance.GlobalBgViewModel
+import com.morealm.app.ui.common.LocalCardAlpha
+import com.morealm.app.ui.common.LocalCardBlur
+import com.morealm.app.ui.common.supportsBlur
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -38,6 +42,7 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -76,6 +81,8 @@ fun ProfileScreen(
     onNavigateDonate: () -> Unit = {},
     onNavigateBackupExport: () -> Unit = {},
     onNavigateBackupImport: () -> Unit = {},
+    /** 跳到外观设置页。 */
+    onNavigateAppearance: () -> Unit = {},
     /** 跳到全局书签管理屏。 */
     onNavigateBookmarks: () -> Unit = {},
 ) {
@@ -121,7 +128,6 @@ fun ProfileScreen(
 
     Column(
         modifier = Modifier.fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
     ) {
         TopAppBar(
@@ -272,6 +278,8 @@ fun ProfileScreen(
         Spacer(Modifier.height(16.dp))
 
         @Suppress("DEPRECATION")
+        SettingsCard(Icons.Default.Wallpaper, "外观",
+            "全局背景图、透明度、模糊度", onClick = onNavigateAppearance)
         SettingsCard(Icons.Default.MenuBook, "阅读设置",
             "翻页动画、音量键翻页、屏幕常亮、界面显示", onClick = onNavigateReadingSettings)
         SettingsCard(Icons.Default.FindReplace, "正文替换净化",
@@ -435,7 +443,9 @@ fun SettingsCard(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
         shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -794,3 +804,7 @@ private fun Color.toArgbCompat(): Int = android.graphics.Color.argb(
     (green * 255).toInt(),
     (blue * 255).toInt(),
 )
+
+/**
+ * AppearanceCard 已迁移到独立 AppearanceScreen，本文件不再保留实现。
+ */

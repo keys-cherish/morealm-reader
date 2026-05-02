@@ -31,6 +31,7 @@ import androidx.navigation.navArgument
 import com.morealm.app.ui.detail.BookDetailScreen
 import com.morealm.app.ui.listen.ListenScreen
 import com.morealm.app.ui.profile.AboutScreen
+import com.morealm.app.ui.profile.AppearanceScreen
 import com.morealm.app.ui.profile.BackupExportScreen
 import com.morealm.app.ui.profile.BackupImportScreen
 import com.morealm.app.ui.profile.ChangelogScreen
@@ -49,6 +50,7 @@ import com.morealm.app.ui.shelf.ShelfScreen
 import com.morealm.app.ui.source.BookSourceManageScreen
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.theme.ThemeViewModel
+import com.morealm.app.ui.common.GlobalBackgroundScaffold
 import kotlinx.coroutines.launch
 
 @Composable
@@ -77,7 +79,7 @@ fun MoRealmNavHost(
     }
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route.startsWith("theme_editor")
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route == "appearance" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -136,6 +138,7 @@ fun MoRealmNavHost(
                 val onToggleDayNight = remember(themeViewModel) { { themeViewModel.toggleDayNight() } }
                 val onNavWebDav = remember { { navController.safeNavigate("webdav") } }
                 val onNavAbout = remember { { navController.safeNavigate("about") } }
+                val onNavAppearance = remember { { navController.safeNavigate("appearance") } }
                 val onNavSourceManage = remember { { navController.safeNavigate("source_manage") } }
                 val onNavReadingSettings = remember { { navController.safeNavigate("reading_settings") } }
                 val onNavReplaceRules = remember { { navController.safeNavigate("replace_rules") } }
@@ -150,6 +153,7 @@ fun MoRealmNavHost(
                 val onSearchBack = remember(switchTab) { { switchTab(0) } }
 
                 var dragAmount by remember { mutableFloatStateOf(0f) }
+                GlobalBackgroundScaffold {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -261,12 +265,14 @@ fun MoRealmNavHost(
                             onNavigateBackupExport = onNavBackupExport,
                             onNavigateBackupImport = onNavBackupImport,
                             onNavigateBookmarks = onNavBookmarks,
+                            onNavigateAppearance = onNavAppearance,
                         )
                                 }
                             }
                         }
                     }
                 }
+                } // GlobalBackgroundScaffold
             }
 
             composable("webdav") {
@@ -285,6 +291,10 @@ fun MoRealmNavHost(
                     onBack = { navController.safePopBackStack() },
                     onNavigateChangelog = { navController.safeNavigate("changelog") },
                 )
+            }
+
+            composable("appearance") {
+                AppearanceScreen(onBack = { navController.safePopBackStack() })
             }
 
             composable("changelog") {
