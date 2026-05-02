@@ -1,0 +1,138 @@
+name: Release
+
+# 仅 git tag v* 推送时触发（不在 main push 自动发版，避免误发）
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # softprops/action-gh-release 创建 release 需要
+
+concurrency:
+  # 同一 tag 重复推送时排队，发版操作不能被取消
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 需要历史以便后续可能的 git log 增强
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Gradle 缓存（与 ci.yml 共用 key）
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      # ── Gate 1: tag 必须与 app/build.gradle.kts 中的 versionName 完全一致 ──
+      # 防止 "改了 tag 忘了改 gradle" 或 "改了 gradle 忘了打 tag" 这两类常见错误
+      - name: 校验 tag 与 versionName 一致
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          GRADLE_VERSION="$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)"
+          echo "tag=$TAG"
+          echo "gradle versionName=$GRADLE_VERSION"
+          if [ "$TAG" != "$GRADLE_VERSION" ]; then
+            echo "::error::tag '$TAG' 与 app/build.gradle.kts 中的 versionName '$GRADLE_VERSION' 不一致"
+            echo "::error::请同步两边再重新打 tag"
+            exit 1
+          fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+      # ── Gate 2: CHANGELOG.md 必须有对应 section ──
+      # 抽取 ## [X.Y.Z] 到下一个 ## [...] 之间的内容当 release notes
+      - name: 抽取 release notes
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          awk -v ver="$TAG" '
+            $0 ~ "^## \\["ver"\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::CHANGELOG.md 缺少 [$TAG] section"
+            echo "::error::请在 CHANGELOG.md 中添加：## [$TAG] - $(date +%Y-%m-%d)"
+            exit 1
+          fi
+
+          echo "── Release notes preview ──"
+          cat RELEASE_NOTES.md
+          echo "───────────────────────────"
+
+      # ── Gate 3: 单元测试必须通过（不能跳过） ──
+      - name: 单元测试
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      # ── 签名 keystore 解码 ──
+      # 4 个 secret 缺一不可，缺则 fail-fast
+      - name: 解码签名 keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::缺少 RELEASE_KEYSTORE_BASE64 secret"
+            echo "::error::配置方法见 docs/release-setup.md"
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          # 把绝对路径写入环境变量；app/build.gradle.kts 的 releaseSigningValue()
+          # 会通过 environmentVariable 拿到
+          echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      # ── 构建签名 release APK ──
+      - name: 构建 Release APK
+        env:
+          # build.gradle.kts releaseSigningValue() 顺序：gradleProperty > local.properties > env
+          # CI 上 gradleProperty 与 local.properties 都没有，所以走 env
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$RELEASE_STORE_PASSWORD" ] || [ -z "$RELEASE_KEY_ALIAS" ] || [ -z "$RELEASE_KEY_PASSWORD" ]; then
+            echo "::error::缺少签名相关 secret（RELEASE_STORE_PASSWORD / RELEASE_KEY_ALIAS / RELEASE_KEY_PASSWORD）"
+            exit 1
+          fi
+          ./gradlew assembleRelease --no-daemon
+
+          # 重命名 APK：MoRealm-1.0.0-alpha2.apk
+          TAG="${GITHUB_REF#refs/tags/v}"
+          mv app/build/outputs/apk/release/app-release.apk "MoRealm-${TAG}.apk"
+          ls -lh "MoRealm-${TAG}.apk"
+
+      # ── 发布到 GitHub Releases ──
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: MoRealm ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          # tag 含 alpha/beta/rc 自动标记预发布；正式版去掉这些字样即为 stable
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          files: MoRealm-*.apk
+          fail_on_unmatched_files: true
+
+      # ── 兜底清理 keystore（即使前面失败也跑） ──
+      - name: 清理 keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"

@@ -791,9 +791,10 @@ private fun SearchHistorySection(
                         // 单条删除：用 close 图标做 trailingIcon，让 chip 既可点搜也可删；
                         // 不引入长按手势是因为 chip 本身没 onLongClick 接口，且 trailing X
                         // 在密集列表里更易点中。
+                        // UX-7: 触摸热区 ≥40dp，图标视觉仍是 12dp，外层 Box 拓展可点区域。
                         androidx.compose.foundation.layout.Box(
                             modifier = Modifier
-                                .size(16.dp)
+                                .size(40.dp)
                                 .clickable { onDelete(kw.word) },
                             contentAlignment = Alignment.Center,
                         ) {

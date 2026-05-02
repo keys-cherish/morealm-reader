@@ -703,16 +703,20 @@ fun ReaderScreen(
         // Floating day/night toggle button (always visible, independent of control bar).
         // Anchored at BottomCenter so the toggle is reachable with either thumb regardless
         // of handedness — previously BottomEnd, which crowded right-handed page-turn taps.
+        //
+        // UX-1 (沉浸感): 阅读时常驻浮动按钮违背"沉浸式阅读"直觉. 不删除 (用户依赖该入口),
+        //   但削弱 alpha (0.6→0.35 / 0.7→0.5) 让它"半隐", 并把 padding 从 16dp→22dp
+        //   让按钮远离 BC 翻页区, 减少用户对误触的视觉担忧.
         if (!showControls && !showSettings && !showTtsPanel && !showChapterList && !showBookmarks && !showFullSearch) {
             androidx.compose.material3.FilledIconButton(
                 onClick = { themeViewModel?.toggleDayNight() },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 16.dp)
+                    .padding(bottom = 22.dp)
                     .size(36.dp),
                 colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
-                    contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
+                    contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 ),
             ) {
                 androidx.compose.material3.Icon(

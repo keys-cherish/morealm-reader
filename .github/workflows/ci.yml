@@ -35,8 +35,13 @@ jobs:
 
       - name: 许可证文件检查
         run: |
+          # MoRealm 采用 GPL-3.0 + 商业双许可（dual license）。
+          # 这里仅校验 LICENSE 存在且包含其中一种声明，避免误删/被替换为不兼容许可。
           test -f LICENSE || (echo "::error::缺少 LICENSE 文件" && exit 1)
-          grep -q "MIT License" LICENSE || (echo "::error::LICENSE 不是 MIT" && exit 1)
+          if ! grep -qE "GNU General Public License|GPL-3\.0|Commercial License" LICENSE; then
+            echo "::error::LICENSE 缺少 GPL-3.0 或 Commercial License 声明"
+            exit 1
+          fi
 
       - name: MVVM 层级边界检查
         run: |
