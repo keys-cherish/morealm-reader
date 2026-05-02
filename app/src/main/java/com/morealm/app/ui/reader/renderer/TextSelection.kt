@@ -133,7 +133,12 @@ fun hitTestPage(page: TextPage, x: Float, y: Float): TextPos? {
     return null
 }
 
-/** Legado ContentTextView.touchRough equivalent for selection handles. */
+/** Legado ContentTextView.touchRough equivalent for selection handles.
+ *
+ * 返回的 TextPos 保证 lineIndex ≥ 0 且 columnIndex ≥ 0（即 isSelected() == true），
+ * 避免拖拽到行首左侧时 columnIndex = -1 导致 SelectionState.isActive 被置 false、
+ * 游标消失。边界情况 clamp 到首列 / 末列。
+ */
 fun hitTestPageRough(page: TextPage, x: Float, y: Float, relativePagePos: Int = 0): TextPos? {
     val paddingTop = page.paddingTop
     for (lineIndex in page.lines.indices) {
@@ -145,8 +150,8 @@ fun hitTestPageRough(page: TextPage, x: Float, y: Float, relativePagePos: Int = 
                 }
             }
             if (line.columns.isNotEmpty()) {
-                val isLast = line.columns.first().start < x
-                val charIndex = if (isLast) line.columns.lastIndex + 1 else -1
+                // clamp 到有效列索引：左侧 → 首列，右侧 → 末列
+                val charIndex = if (line.columns.first().start < x) line.columns.lastIndex else 0
                 return TextPos(relativePagePos, lineIndex, charIndex)
             }
         }
@@ -644,14 +649,43 @@ object HighlightPalette {
 /**
  * 把页面坐标 (x, y) 映射回章节字符 offset；命中 line 外区域返回 null。
  *
- * 实现思路：先用现成的 [hitTestPage] 拿到 TextPos，再走
+ * 实现思路：先用严格命中检测（只匹配 isTouchY 的行）拿到 TextPos，再走
  * `page.chapterPosition + getPosByLineColumn` 转回 chapter-level 字符位置。
- * 这是 ReaderSelectionToolbar.selectedStartChapterPosition() 的复用版本，
- * 单独抽出来给"点击已存高亮"的命中检测路径用。
+ *
+ * 注意：这里故意 **不** 使用 hitTestPage 的 "closest line" 兜底逻辑——
+ * 那个兜底会把任何空白区域的点击映射到最近的文字行，导致用户点击非高亮
+ * 区域时误命中高亮范围，弹出不该出现的 HighlightActionToolbar。
  */
 fun chapterPositionAt(page: TextPage, x: Float, y: Float): Int? {
-    val pos = hitTestPage(page, x, y) ?: return null
+    val pos = hitTestPageStrict(page, x, y) ?: return null
     return page.chapterPosition + page.getPosByLineColumn(pos.lineIndex, pos.columnIndex)
+}
+
+/**
+ * 严格命中检测：只在点击坐标确实落在某行的 Y 范围内时才返回 TextPos。
+ * 不做 "closest line" 兜底，避免空白区域误命中。
+ */
+fun hitTestPageStrict(page: TextPage, x: Float, y: Float): TextPos? {
+    val paddingTop = page.paddingTop
+    for (lineIndex in page.lines.indices) {
+        val line = page.lines[lineIndex]
+        if (line.isTouchY(y - paddingTop)) {
+            val colIndex = line.columnAtX(x)
+            if (colIndex >= 0) {
+                return TextPos(0, lineIndex, colIndex)
+            }
+            // 行内找最近的列
+            val closest = line.columns.indices.minByOrNull {
+                val col = line.columns[it]
+                abs((col.start + col.end) / 2 - x)
+            }
+            if (closest != null) {
+                return TextPos(0, lineIndex, closest)
+            }
+            return null
+        }
+    }
+    return null
 }
 
 /**
