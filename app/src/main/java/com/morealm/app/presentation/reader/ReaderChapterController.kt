@@ -442,6 +442,14 @@ class ReaderChapterController(
                 setSuppressNextProgressSave(targetProgress > 0 || targetChapterPosition > 0)
 
                 AppLog.info("Chapter", "loadChapter #$index/${chapterList.size} \"${chapter.title.take(20)}\" prog=$targetProgress pos=$targetChapterPosition ${if (isWebBook) "web" else "local"}")
+                // BookmarkDebug: 同步打到书签调试 tag 方便抓链路（addBookmark →
+                // jumpToBookmark → loadChapter → RenderedReaderChapter.initialChapterPosition
+                // → CanvasRenderer.restoreProgress）。
+                AppLog.info(
+                    "BookmarkDebug",
+                    "loadChapter #$index prog=$targetProgress pos=$targetChapterPosition" +
+                        " renderedInitialChapPos=$targetChapterPosition",
+                )
                 // Don't reset navigateDirection here — let CanvasRenderer consume it
                 // for startFromLastPage before resetting after progress restoration.
                 if (targetProgress == 0 && targetChapterPosition == 0) onChapterLoaded()

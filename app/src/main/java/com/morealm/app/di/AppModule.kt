@@ -393,6 +393,21 @@ private val MIGRATION_22_23 = object : Migration(22, 23) {
     }
 }
 
+/**
+ * v23 → v24：Bookmark 增加 chapterPos（章内字符偏移），对齐 Legado。
+ *
+ * 老书签 chapterPos 默认 0（章节首字符），跳转时退化为"跳到章节首页"——和迁移前
+ * 行为一致，无回归；新书签会保存精确章内位置，jumpToBookmark 时调
+ * loadChapter(restoreChapterPosition=...) 直达具体页。
+ *
+ * scrollProgress 列保留：滚动模式（SCROLL）下仍用百分比兜底；两个字段各管一摊。
+ */
+private val MIGRATION_23_24 = object : Migration(23, 24) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `bookmarks` ADD COLUMN `chapterPos` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 private val MIGRATION_9_10 = object : Migration(9, 10) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // book_sources 表结构完全重构，删除旧表并重建
@@ -510,6 +525,7 @@ object AppModule {
                 MIGRATION_20_21,
                 MIGRATION_21_22,
                 MIGRATION_22_23,
+                MIGRATION_23_24,
             )
             // On downgrade: try restore from backup, otherwise keep tables as-is
             .addCallback(object : RoomDatabase.Callback() {
