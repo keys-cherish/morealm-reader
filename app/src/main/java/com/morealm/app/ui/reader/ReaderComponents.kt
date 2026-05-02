@@ -44,6 +44,8 @@ fun ReaderTopBar(
     onBookmark: () -> Unit = {},
     /** 顶栏「生效规则」按钮 — 打开 EffectiveReplacesDialog (#5)。 */
     onEffectiveReplaces: () -> Unit = {},
+    /** 顶栏「阅读设置」— 打开底部设置面板，方便用户从右上角快速进入。 */
+    onSettings: () -> Unit = {},
 ) {
     val moColors = LocalMoRealmColors.current
     var showMenu by remember { mutableStateOf(false) }
@@ -94,6 +96,17 @@ fun ReaderTopBar(
                 },
             ) {
                 Icon(Icons.Default.BookmarkAdd, "书签",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp))
+            }
+            IconButton(
+                onClick = onSettings,
+                modifier = Modifier.semantics {
+                    contentDescription = "阅读设置"
+                    role = Role.Button
+                },
+            ) {
+                Icon(Icons.Default.Settings, "设置",
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(20.dp))
             }
@@ -330,6 +343,8 @@ fun ReaderSettingsPanel(
     onTextSelectableChange: (Boolean) -> Unit = {},
     chineseConvertMode: Int = 0,
     onChineseConvertModeChange: (Int) -> Unit = {},
+    footerRight: String = "page_progress",
+    onFooterRightChange: (String) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val moColors = LocalMoRealmColors.current
@@ -403,6 +418,66 @@ fun ReaderSettingsPanel(
                 }
                 Spacer(Modifier.height(12.dp))
             }
+
+            // ── Page animation (翻页动画) — 提前到样式预设之后，用户最常调 ──
+            Text("翻页动画", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            Spacer(Modifier.height(6.dp))
+            val animOptions = listOf(
+                "slide" to "平移",
+                "cover" to "覆盖",
+                "simulation" to "仿真",
+                "vertical" to "上下滚动",
+                "none" to "无动画",
+            )
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                animOptions.forEach { (key, label) ->
+                    FilterChip(
+                        selected = pageAnim == key,
+                        onClick = { onPageAnimChange(key) },
+                        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                            selectedLabelColor = MaterialTheme.colorScheme.primary),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // ── 页码显示 ──
+            Text("页码显示", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            Spacer(Modifier.height(6.dp))
+            val pageDisplayOptions = listOf(
+                "page_progress" to "本章页码+进度",
+                "page" to "本章页码",
+                "chapter_progress" to "全书章节进度",
+                "progress" to "仅百分比",
+                "none" to "关闭",
+            )
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                pageDisplayOptions.forEach { (key, label) ->
+                    FilterChip(
+                        selected = footerRight == key,
+                        onClick = { onFooterRightChange(key) },
+                        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                            selectedLabelColor = MaterialTheme.colorScheme.primary),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
 
             // ── Brightness ──
             Text("亮度", style = MaterialTheme.typography.labelMedium,
@@ -746,36 +821,6 @@ fun ReaderSettingsPanel(
             )
 
             Spacer(Modifier.height(16.dp))
-
-            // ── Page animation (翻页动画) ──
-            Text("翻页动画", style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-            Spacer(Modifier.height(6.dp))
-            val animOptions = listOf(
-                "slide" to "平移",
-                "cover" to "覆盖",
-                "simulation" to "仿真",
-                "vertical" to "上下滚动",
-                "none" to "无动画",
-            )
-            @OptIn(ExperimentalLayoutApi::class)
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                animOptions.forEach { (key, label) ->
-                    FilterChip(
-                        selected = pageAnim == key,
-                        onClick = { onPageAnimChange(key) },
-                        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                            selectedLabelColor = MaterialTheme.colorScheme.primary),
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
 
             // ── Screen orientation ──
             Text("屏幕方向", style = MaterialTheme.typography.labelMedium,

@@ -603,6 +603,10 @@ fun ReaderScreen(
                 },
                 onBookmark = { viewModel.addBookmark() },
                 onEffectiveReplaces = { viewModel.showEffectiveReplacesDialog() },
+                onSettings = {
+                    viewModel.hideControls()
+                    viewModel.toggleSettingsPanel()
+                },
             )
         }
 
@@ -747,6 +751,8 @@ fun ReaderScreen(
                 onTextSelectableChange = viewModel.settings::setTextSelectable,
                 chineseConvertMode = viewModel.settings.chineseConvertMode.collectAsStateWithLifecycle().value,
                 onChineseConvertModeChange = viewModel::setChineseConvertMode,
+                footerRight = ftrRight,
+                onFooterRightChange = { viewModel.settings.setHeaderFooter("footerRight", it) },
                 onDismiss = viewModel::hideSettingsPanel,
             )
         }

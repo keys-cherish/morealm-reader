@@ -3,11 +3,9 @@ package com.morealm.app.presentation.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.preference.AppPreferences
-import com.morealm.app.domain.repository.ReaderStyleRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -15,7 +13,6 @@ import javax.inject.Inject
 @HiltViewModel
 class ReadingSettingsViewModel @Inject constructor(
     private val prefs: AppPreferences,
-    private val styleRepo: ReaderStyleRepository,
 ) : ViewModel() {
 
     val pageAnim: StateFlow<String> = prefs.pageAnim
@@ -78,10 +75,6 @@ class ReadingSettingsViewModel @Inject constructor(
 
     fun setPageAnim(v: String) = viewModelScope.launch {
         prefs.setPageAnim(v)
-        val activeId = prefs.activeReaderStyle.first()
-        styleRepo.getById(activeId)?.let { style ->
-            styleRepo.upsert(style.copy(pageAnim = v))
-        }
     }
     fun setTapLeftAction(v: String) = viewModelScope.launch { prefs.setTapLeftAction(v) }
     fun setVolumeKeyPage(v: Boolean) = viewModelScope.launch { prefs.setVolumeKeyPage(v) }
