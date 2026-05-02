@@ -1250,9 +1250,8 @@ class TtsEngineHost(
             }
             if (toRead.isEmpty()) {
                 AppLog.warn("TtsHost", "runHttpChapterPlayback: nothing to read")
-                publishState(playing = false)
-                waitingForNextChapter = true
-                TtsEventBus.sendEvent(TtsEventBus.Event.ChapterFinished)
+                // 整章空 → 等同于读完，走自动续章兜底
+                waitForNextChapterOrAutoAdvance()
                 return
             }
             AppLog.info(
@@ -1810,8 +1809,17 @@ class TtsEngineHost(
     }
 
     companion object {
-        /** How long the host waits for a LoadAndPlay after ChapterFinished before giving up. */
-        private const val WAIT_NEXT_CHAPTER_MS = 5_000L
+        /**
+         * ChapterFinished 事件后等待 reader 推送新 LoadAndPlay 的窗口。
+         *
+         * Phase D 把这个值从 5s 缩到 2s——基于以下事实：
+         *  - reader 在前台时 ViewModel collect Event.ChapterFinished → 翻页 →
+         *    chapter.chapterContent.collect → tts.ttsPlay 的链路通常 <500ms 完成；
+         *  - 用户离开 reader 后 ViewModel 已销毁，等待越久断声越久；
+         *  - 超时后由 [tryAutoAdvanceChapter] 用 [chapterContentLoader] 自加载下一章
+         *    续播，所以"超时停止"不再是终态——2s 静默是可接受的过渡。
+         */
+        private const val WAIT_NEXT_CHAPTER_MS = 2_000L
 
         /** HttpTts 章节级预下载的段数上限（与 Legado preDownloadAudios 的 10 段对齐）。 */
         @Suppress("unused") // 在 [startHttpPreloadNextChapter] VM 桥接打通后会用到

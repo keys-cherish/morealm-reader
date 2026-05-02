@@ -41,6 +41,7 @@ import com.morealm.app.presentation.source.BookSourceManageViewModel
 import com.morealm.app.presentation.source.SourceSortKey
 import com.morealm.app.presentation.source.sortedBySourceKey
 import com.morealm.app.ui.theme.LocalMoRealmColors
+import com.morealm.app.ui.widget.swipeBackEdge
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -148,6 +149,8 @@ fun BookSourceManageScreen(
     LaunchedEffect(groupMode) { collapsedGroups.clear() }
 
     Scaffold(
+        // UX-10：左缘水平拖动 → 返回
+        modifier = Modifier.swipeBackEdge(onBack = onBack),
         topBar = {
             TopAppBar(
                 title = { Text("书源管理", fontWeight = FontWeight.Bold) },
