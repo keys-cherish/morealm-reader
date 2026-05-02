@@ -51,6 +51,11 @@ class ReaderHighlightController(
         content: String,
         colorArgb: Int,
         note: String = "",
+        /**
+         * 高亮种类：0=背景高亮（默认）/ 1=字体强调色。
+         * 渲染层据此决定画 bgFill 还是替换前景色，详见 [Highlight.KIND_TEXT_COLOR]。
+         */
+        kind: Int = Highlight.KIND_BACKGROUND,
     ) {
         if (startChapterPos >= endChapterPos) {
             AppLog.warn("Highlight", "add() rejected: empty range $startChapterPos..$endChapterPos")
@@ -69,10 +74,11 @@ class ReaderHighlightController(
             content = content.take(2000),  // hard cap to keep DB rows small
             colorArgb = colorArgb,
             note = note,
+            kind = kind,
         )
         scope.launch(Dispatchers.IO) {
             highlightRepo.insert(highlight)
-            AppLog.info("Highlight", "added id=${highlight.id} ch=$chapterIndex range=$startChapterPos..$endChapterPos len=${highlight.content.length}")
+            AppLog.info("Highlight", "added id=${highlight.id} ch=$chapterIndex range=$startChapterPos..$endChapterPos kind=$kind len=${highlight.content.length}")
         }
     }
 
@@ -85,6 +91,53 @@ class ReaderHighlightController(
         scope.launch(Dispatchers.IO) {
             highlightRepo.deleteById(id)
             AppLog.info("Highlight", "deleted id=$id")
+        }
+    }
+
+    /**
+     * 橡皮擦 — 删除当前章节里所有与 `[startChapterPos, endChapterPos)` 有交集的高亮。
+     *
+     * 「有交集」定义：existing.start < endChapterPos && existing.end > startChapterPos。
+     * 选 chapter-pos 作为坐标系是为了和 [add] 一致——正文重排不影响。
+     *
+     * 注意：这是覆盖删除，不做边界裁剪（用户答的是"调色板加橡皮按钮，覆盖删除"
+     * 这一选项；要"切割"语义另外开门）。即使用户只选了高亮中间一小段，整条
+     * 高亮也会被删除。
+     *
+     * 失败容忍：getForChapterSync / deleteById 都各自 try 包；某一条删除失败不
+     * 影响其他条 —— 万一 DB 临时故障也能尽量擦干净，剩下的下次手动点删除。
+     */
+    fun eraseInRange(chapterIndex: Int, startChapterPos: Int, endChapterPos: Int) {
+        if (startChapterPos >= endChapterPos) {
+            AppLog.warn("Highlight",
+                "eraseInRange() rejected: empty range $startChapterPos..$endChapterPos")
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            val candidates = runCatching {
+                highlightRepo.getForChapterSync(bookId, chapterIndex)
+            }.getOrElse {
+                AppLog.warn("Highlight",
+                    "eraseInRange query failed ch=$chapterIndex range=$startChapterPos..$endChapterPos: ${it.message}")
+                return@launch
+            }
+            val overlapping = candidates.filter {
+                it.startChapterPos < endChapterPos && it.endChapterPos > startChapterPos
+            }
+            if (overlapping.isEmpty()) {
+                AppLog.info("Highlight",
+                    "eraseInRange ch=$chapterIndex range=$startChapterPos..$endChapterPos no-op (0 overlap of ${candidates.size})")
+                return@launch
+            }
+            overlapping.forEach { h ->
+                runCatching { highlightRepo.deleteById(h.id) }
+                    .onFailure {
+                        AppLog.warn("Highlight",
+                            "eraseInRange deleteById failed id=${h.id}: ${it.message}")
+                    }
+            }
+            AppLog.info("Highlight",
+                "eraseInRange ch=$chapterIndex range=$startChapterPos..$endChapterPos deleted=${overlapping.size}")
         }
     }
 }

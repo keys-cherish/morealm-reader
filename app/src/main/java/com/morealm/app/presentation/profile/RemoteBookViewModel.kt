@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.morealm.app.core.error.ErrorMessages
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
@@ -70,7 +71,7 @@ class RemoteBookViewModel @Inject constructor(
                     _status.value = "云端 books/ 目录为空 — 把 epub / txt 等放进去就能在这里看到"
                 }
             } catch (e: Exception) {
-                _status.value = "读取失败：${e.message}"
+                _status.value = ErrorMessages.forUser("读取", e)
                 AppLog.error("RemoteBook", "Refresh failed", e)
             } finally {
                 _loading.value = false
@@ -116,7 +117,7 @@ class RemoteBookViewModel @Inject constructor(
                 _status.value = "已导入：${file.name}"
                 AppLog.info("RemoteBook", "Imported: ${target.absolutePath} (${bytes.size} bytes, $format)")
             } catch (e: Exception) {
-                _status.value = "下载失败：${e.message}"
+                _status.value = ErrorMessages.forUser("下载", e)
                 AppLog.error("RemoteBook", "Download failed for ${file.name}", e)
             } finally {
                 _downloading.value = _downloading.value - file.name

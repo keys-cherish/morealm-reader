@@ -36,7 +36,24 @@ internal class PageTurnCoordinator(
     private val onVisiblePageChanged: (Int, String, String, Int) -> Unit,
 ) {
     // ── Mutable state (all reset when coordinator is recreated on mode/chapter change) ──
-    var lastSettledDisplayPage by mutableIntStateOf(0)
+    private var _lastSettledDisplayPage by mutableIntStateOf(0)
+
+    /**
+     * 实际 setter 日志钩 — 任何人写 lastSettledDisplayPage 都会被 BookmarkDebug 记录。
+     * 用于定位"书签跳转设了 5，下一秒被别的路径覆盖回 1"这种幽灵覆盖。
+     */
+    var lastSettledDisplayPage: Int
+        get() = _lastSettledDisplayPage
+        set(value) {
+            if (_lastSettledDisplayPage != value) {
+                AppLog.info(
+                    "BookmarkDebug",
+                    "coord.lastSettledDisplayPage ${_lastSettledDisplayPage}→$value" +
+                        " caller=${Throwable().stackTrace.getOrNull(1)?.let { "${it.fileName}:${it.lineNumber}" }}",
+                )
+            }
+            _lastSettledDisplayPage = value
+        }
     var pendingSettledDirection by mutableStateOf<ReaderPageDirection?>(null)
     var pendingTurnStartDisplayPage by mutableIntStateOf(0)
     var ignoredSettledDisplayPage by mutableStateOf<Int?>(null)

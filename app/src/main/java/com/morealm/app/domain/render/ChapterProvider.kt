@@ -35,6 +35,19 @@ class ChapterProvider(
     val textFullJustify: Boolean = true,
     val titleMode: Int = 0,       // 0=left, 1=center, 2=hidden
     val isMiddleTitle: Boolean = false,
+    /**
+     * 章节标题对齐方式。0=左 / 1=中 / 2=右。
+     *
+     * 与 [titleMode] 解耦：titleMode 仅决定「是否隐藏标题」(== 2)，对齐由本字段控制。
+     * 在 [setTypeText] 计算最后一行 / 中间行的 `startXOffset` 时用：
+     *   - 0  → 0f
+     *   - 1  → max(0, (visibleWidth - desiredWidth) / 2)
+     *   - 2  → max(0, visibleWidth - desiredWidth)
+     *
+     * 仅在 isTitle==true 且 isChapterNum==false 时生效；isVolumeTitle / 整页空内容
+     * 仍走旧的居中分支（避免视觉破坏）。
+     */
+    val titleAlign: Int = 0,
     val useZhLayout: Boolean = true,
     val lineSpacingExtra: Float = 1.2f,
     val paragraphSpacing: Int = 8,
@@ -394,6 +407,38 @@ class ChapterProvider(
 
     // ── Text layout with full justification ──
 
+    /**
+     * 计算章节标题行的水平起始偏移。
+     *
+     * 规则（优先级从高到低）：
+     * 1. 不是标题（[isTitle]==false）  → 0f；
+     * 2. 标题但 chapter-number 小行（[isChapterNum]）  → 0f（数字行始终左贴边，
+     *    避免和正文标题对齐方式不一致看起来散）；
+     * 3. forceLeftTitle==true 且不是 volume/empty 特殊页 → 走 [titleAlign]
+     *    （0=左/1=中/2=右）。这是用户全局偏好生效的主入口；
+     * 4. forceLeftTitle==false（volume / 整页空内容）→ 维持老的居中逻辑，避免
+     *    破坏现有视觉（比如卷标题、空章节占位页）。
+     */
+    private fun computeTitleStartXOffset(
+        isTitle: Boolean,
+        forceLeftTitle: Boolean,
+        isVolumeTitle: Boolean,
+        emptyContent: Boolean,
+        isChapterNum: Boolean,
+        desiredWidth: Float,
+    ): Float {
+        if (!isTitle) return 0f
+        if (isChapterNum) return 0f
+        if (forceLeftTitle && !isVolumeTitle && !emptyContent) {
+            return when (titleAlign) {
+                1 -> ((visibleWidth - desiredWidth) / 2).coerceAtLeast(0f)
+                2 -> (visibleWidth - desiredWidth).coerceAtLeast(0f)
+                else -> 0f
+            }
+        }
+        return 0f
+    }
+
     @Suppress("DEPRECATION")
     private fun setTypeText(
         x: Int,
@@ -478,18 +523,26 @@ class ChapterProvider(
                 }
                 lineIndex == layout.lineCount - 1 -> {
                     textLine.text = lineText
-                    val startXOffset = if (
-                        isTitle && !forceLeftTitle && (isMiddleTitle || emptyContent || isVolumeTitle)
-                    ) {
-                        ((visibleWidth - desiredWidth) / 2).coerceAtLeast(0f)
-                    } else 0f
+                    val startXOffset = computeTitleStartXOffset(
+                        isTitle, forceLeftTitle, isVolumeTitle, emptyContent, isChapterNum,
+                        desiredWidth,
+                    )
                     addCharsToLineNatural(
                         absStartX, textLine, words, startXOffset,
                         !isTitle && lineIndex == 0, widths,
                     )
                 }
                 else -> {
-                    if (isTitle && !forceLeftTitle && (isMiddleTitle || emptyContent || isVolumeTitle)) {
+                    val titleStartXOffset = computeTitleStartXOffset(
+                        isTitle, forceLeftTitle, isVolumeTitle, emptyContent, isChapterNum,
+                        desiredWidth,
+                    )
+                    if (isTitle && titleStartXOffset > 0f) {
+                        addCharsToLineNatural(
+                            absStartX, textLine, words, titleStartXOffset, false, widths,
+                        )
+                    } else if (isTitle && !forceLeftTitle && (isMiddleTitle || emptyContent || isVolumeTitle)) {
+                        // 兼容老逻辑：volume / empty 两类原本就居中
                         val startXOffset = ((visibleWidth - desiredWidth) / 2).coerceAtLeast(0f)
                         addCharsToLineNatural(
                             absStartX, textLine, words, startXOffset, false, widths,

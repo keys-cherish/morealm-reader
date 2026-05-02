@@ -67,6 +67,11 @@ class SearchViewModel @Inject constructor(
     private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
     private val autoGroupClassifier: AutoGroupClassifier,
     private val searchHistoryRepo: com.morealm.app.domain.repository.SearchKeywordRepository,
+    /**
+     * 加书后立刻拉 toc：保证 totalChapters 第一时间填上，免得用户看到一本"0 章"的书。
+     * 进入书详情/阅读页时也不再被迫先发一次同步请求。
+     */
+    private val refreshController: com.morealm.app.presentation.shelf.ShelfRefreshController,
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
@@ -111,6 +116,15 @@ class SearchViewModel @Inject constructor(
     /** 清空所有历史；UI 二次确认后调用。 */
     fun clearHistory() {
         viewModelScope.launch(Dispatchers.IO) { searchHistoryRepo.clear() }
+    }
+
+    /**
+     * 撤销「清空历史」：UI 在清空前 snapshot 列表，用户点 Snackbar 的「撤销」时
+     * 调本方法重新写入。Repo 层走 upsert 保留原计数和时间戳。
+     */
+    fun restoreHistory(keywords: List<com.morealm.app.domain.entity.SearchKeyword>) {
+        if (keywords.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) { searchHistoryRepo.restoreAll(keywords) }
     }
 
     init {
@@ -365,6 +379,10 @@ class SearchViewModel @Inject constructor(
                 val book = rawBook.copy(folderId = autoGroupClassifier.classify(rawBook))
                 bookRepo.insert(book)
                 AppLog.info("Search", "Added to shelf: ${result.title} from ${result.sourceName}")
+                // 实时同步 toc：触发后台单本刷新，让 totalChapters / lastChapter 字段立即落库。
+                // ShelfRefreshController.refreshOne 在 oldTotal == 0 时跳过 lastCheckCount 写入，
+                // 所以新书首屏不会蹦出"N 新"红字徽章。
+                refreshController.refresh(listOf(book), parallelism = 1)
                 withContext(Dispatchers.Main) { onBookReady(bookId) }
             } catch (e: Exception) {
                 AppLog.error("Search", "Failed to add to shelf: ${e.message}", e)

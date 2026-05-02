@@ -396,7 +396,11 @@ fun CacheBookScreen(
         }
     }
 
-    // #4: 「全部清空」二次确认 — 危险操作，必须经用户再次同意才执行。
+    // #4 + UX-1：「全部清空缓存」保留 AlertDialog 二次确认，故意不改成 Snackbar+Undo —
+    // 章节缓存是物理 fs 文件 + DB 行的级联清理，删除后唯一恢复路径是重新从书源下载，
+    // 跟 SearchHistory / Theme / Book（均可 DB 内 re-insert）的语义不一样。Snackbar 撤销
+    // 在这里会给用户错误的安全感（"以为撤了就回来"，其实文件已经飞了）。
+    // 风险等级足够高 → 仍然走「先弹窗，明确告知不可撤销，再执行」。
     if (showClearAllConfirm) {
         AlertDialog(
             onDismissRequest = { showClearAllConfirm = false },

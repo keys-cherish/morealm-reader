@@ -286,6 +286,24 @@ fun SelectionToolbar(
      * 自动从渲染列表里摘掉（即便 config 把它放在 MAIN）。
      */
     onHighlight: ((colorArgb: Int) -> Unit)? = null,
+    /**
+     * 橡皮擦回调（可选）。非 null 时调色板最左侧渲染一个橡皮按钮，点击即触发：
+     * 上层 wrapper 负责把当前选区的 chapter-pos 范围拿出来，调用
+     * [com.morealm.app.presentation.reader.ReaderHighlightController.eraseInRange]
+     * 删掉所有有交集的高亮。
+     *
+     * 与 [onHighlight] 一起出现才有意义：仅有 onErase 不见得是有用配置，但代码上
+     * 不强制配对——上层若想"只能擦不能划"也可以这么传。
+     */
+    onEraseHighlight: (() -> Unit)? = null,
+    /**
+     * 字体强调色回调；参数为 ARGB Int。null 时 TEXT_COLOR 按钮自动从渲染列表里
+     * 摘掉，且独立调色板（与 HIGHLIGHT 调色板互斥显示）也不渲染。
+     *
+     * 与 [onHighlight] 走同一套色盘 PRESETS 但是另一条数据路径 ——
+     * 落库时 [com.morealm.app.domain.entity.Highlight.kind] = 1。
+     */
+    onTextColor: ((colorArgb: Int) -> Unit)? = null,
     onDismiss: () -> Unit,
     config: com.morealm.app.domain.entity.SelectionMenuConfig =
         com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
@@ -297,16 +315,22 @@ fun SelectionToolbar(
     /** HIGHLIGHT 按钮点开调色板的开关。和 [expanded] 解耦：用户在主行点
      *  HIGHLIGHT 不展开扩展行；在扩展行点 HIGHLIGHT 也不收起扩展行。 */
     var paletteVisible by remember { mutableStateOf(false) }
+    /** TEXT_COLOR 按钮的独立调色板开关。与 [paletteVisible] 互斥：
+     *  打开其中一个就关掉另一个，避免两层调色板叠在一起占满 toolbar 高度。 */
+    var textColorPaletteVisible by remember { mutableStateOf(false) }
     val arrowColor = MaterialTheme.colorScheme.surfaceContainerHigh
 
-    // 按 position 切分，并把 HIDDEN / 不可用的 HIGHLIGHT 摘掉。如果 onHighlight
-    // 为 null，HIGHLIGHT 这个动作即使在 config 里被设为 MAIN/EXPANDED 也忽略。
-    val grouped = remember(config, onHighlight) {
+    // 按 position 切分，并把 HIDDEN / 不可用的 HIGHLIGHT / TEXT_COLOR 摘掉。
+    // 如果 onHighlight 为 null，HIGHLIGHT 即使在 config 里被设为 MAIN/EXPANDED 也忽略；
+    // onTextColor 为 null 时同理摘掉 TEXT_COLOR。
+    val grouped = remember(config, onHighlight, onTextColor) {
         val raw = config.groupedByPosition()
         val filterHighlight = onHighlight == null
+        val filterTextColor = onTextColor == null
         fun List<com.morealm.app.domain.entity.SelectionMenuItem>?.cleaned() =
             this.orEmpty().filter {
-                !filterHighlight || it != com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT
+                (!filterHighlight || it != com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT) &&
+                    (!filterTextColor || it != com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR)
             }
         val main = raw[com.morealm.app.domain.entity.SelectionMenuPosition.MAIN].cleaned().take(3)
         val ext = raw[com.morealm.app.domain.entity.SelectionMenuPosition.EXPANDED].cleaned()
@@ -329,15 +353,18 @@ fun SelectionToolbar(
     val yDp = with(density) { offset.y.toDp() }
     val screenWidth = configuration.screenWidthDp.dp
     val screenHeight = configuration.screenHeightDp.dp
-    // 高度估算：主行 46dp；扩展行（如果展开且有内容）+~40dp；调色板（如果可见
-    // 且 HIGHLIGHT 存在于某个可见行）+~38dp。这是 menu 整体下边界检测用，
-    // 不影响实际渲染高度。
+    // 高度估算：主行 46dp；扩展行 +~40dp；调色板 +~38dp。这是 menu 整体下边界
+    // 检测用，不影响实际渲染高度。两类调色板互斥，所以最多只会加一份 38dp。
     val highlightVisibleInMainOrExpanded =
         com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in mainItems ||
             (expanded && com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in expandedItems)
+    val textColorVisibleInMainOrExpanded =
+        com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR in mainItems ||
+            (expanded && com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR in expandedItems)
     var menuHeightDp = 46
     if (expanded && hasExpandedRow) menuHeightDp += 40
     if (paletteVisible && onHighlight != null && highlightVisibleInMainOrExpanded) menuHeightDp += 38
+    if (textColorPaletteVisible && onTextColor != null && textColorVisibleInMainOrExpanded) menuHeightDp += 38
     val menuHeight = menuHeightDp.dp
     val showBelow = yDp - menuHeight - 12.dp < 8.dp
     val menuX = (xDp - menuWidth / 2).coerceIn(8.dp, screenWidth - menuWidth - 8.dp)
@@ -381,7 +408,14 @@ fun SelectionToolbar(
                                 onTranslate = onTranslate,
                                 onShare = onShare,
                                 onLookup = onLookup,
-                                onToggleHighlight = { paletteVisible = !paletteVisible },
+                                onToggleHighlight = {
+                                    paletteVisible = !paletteVisible
+                                    if (paletteVisible) textColorPaletteVisible = false
+                                },
+                                onToggleTextColor = {
+                                    textColorPaletteVisible = !textColorPaletteVisible
+                                    if (textColorPaletteVisible) paletteVisible = false
+                                },
                             )
                         }
                         if (hasExpandedRow) {
@@ -419,7 +453,14 @@ fun SelectionToolbar(
                                         onTranslate = onTranslate,
                                         onShare = onShare,
                                         onLookup = onLookup,
-                                        onToggleHighlight = { paletteVisible = !paletteVisible },
+                                        onToggleHighlight = {
+                                            paletteVisible = !paletteVisible
+                                            if (paletteVisible) textColorPaletteVisible = false
+                                        },
+                                        onToggleTextColor = {
+                                            textColorPaletteVisible = !textColorPaletteVisible
+                                            if (textColorPaletteVisible) paletteVisible = false
+                                        },
                                     )
                                 }
                             }
@@ -446,6 +487,31 @@ fun SelectionToolbar(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceEvenly,
                             ) {
+                                // 橡皮按钮 — 仅当 onEraseHighlight 非空时渲染。
+                                // 视觉上做一个空心圈 + 斜线（FormatColorReset 图标）
+                                // 与色块在视觉权重上对齐：圆形 20dp，浅边框，
+                                // 让用户一眼分辨"清除"vs"上色"。
+                                if (onEraseHighlight != null) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                MaterialTheme.colorScheme.surfaceVariant
+                                                    .copy(alpha = 0.6f),
+                                            )
+                                            .clickable { onEraseHighlight() },
+                                    ) {
+                                        Icon(
+                                            Icons.Default.FormatColorReset,
+                                            contentDescription = "擦除高亮",
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                                .copy(alpha = 0.75f),
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
+                                }
                                 HighlightPalette.PRESETS.forEach { argb ->
                                     Box(
                                         modifier = Modifier
@@ -454,6 +520,75 @@ fun SelectionToolbar(
                                             .background(Color(argb))
                                             .clickable { onHighlight?.invoke(argb) },
                                     )
+                                }
+                            }
+                        }
+                    }
+                    // ── Text-color palette row ──
+                    // 与 highlight 调色板互斥：同一时刻最多展开一个色盘。共用
+                    // [HighlightPalette.PRESETS] 但点选时回调走 onTextColor，
+                    // 落库 kind=1 → 渲染层替换字符前景色而不是画背景。
+                    val showTextColorPalette = textColorPaletteVisible && onTextColor != null &&
+                        (com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR in mainItems ||
+                            (expanded && com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR in expandedItems))
+                    androidx.compose.animation.AnimatedVisibility(visible = showTextColorPalette) {
+                        Column {
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                thickness = 0.5.dp,
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                            ) {
+                                // 给字体色调色板加一个"取消"小按钮（FormatColorReset）
+                                // 用同一套擦除回调 —— 用户的语义统一是"擦掉这段选区
+                                // 上的所有特殊色（不论 bg/fg）"，省心。
+                                if (onEraseHighlight != null) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                MaterialTheme.colorScheme.surfaceVariant
+                                                    .copy(alpha = 0.6f),
+                                            )
+                                            .clickable { onEraseHighlight() },
+                                    ) {
+                                        Icon(
+                                            Icons.Default.FormatColorReset,
+                                            contentDescription = "清除字体色",
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                                .copy(alpha = 0.75f),
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
+                                }
+                                HighlightPalette.PRESETS.forEach { argb ->
+                                    // 字体色色盘 — 用一个圆环（描边而非填色）来视觉
+                                    // 区分"这是字色不是背景"。环内填 surface 色让小
+                                    // 圆点看起来像"该位置的字将变这个色"的预览。
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surface)
+                                            .clickable { onTextColor?.invoke(argb) },
+                                    ) {
+                                        // 画一个小 "A" 用该 argb 色作为前景预览
+                                        Text(
+                                            "A",
+                                            color = Color(argb),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -480,6 +615,7 @@ private fun ItemButton(
     onShare: () -> Unit,
     onLookup: () -> Unit,
     onToggleHighlight: () -> Unit,
+    onToggleTextColor: () -> Unit,
 ) {
     when (item) {
         com.morealm.app.domain.entity.SelectionMenuItem.COPY ->
@@ -494,6 +630,10 @@ private fun ItemButton(
             MenuBtn(Icons.Default.Search, "查词", onLookup)
         com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT ->
             MenuBtn(Icons.Default.FormatColorFill, "高亮", onToggleHighlight)
+        // 字体强调色用 FormatColorText 图标（"A"上面一笔色块），
+        // 视觉上和"高亮"图标的填色块明确区分，用户一眼分辨"改字色"vs"涂背景"。
+        com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR ->
+            MenuBtn(Icons.Default.FormatColorText, "字体色", onToggleTextColor)
     }
 }
 

@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
@@ -64,6 +66,7 @@ class ShelfViewModel @Inject constructor(
     private val refreshController: ShelfRefreshController,
     private val databaseSeeder: com.morealm.app.domain.db.DatabaseSeeder,
     private val sourceRepo: SourceRepository,
+    private val coverStorage: com.morealm.app.domain.cover.CoverStorage,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -209,6 +212,54 @@ class ShelfViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             val group = groupRepo.getById(folderId) ?: return@launch
             groupRepo.insert(group.copy(pinned = !group.pinned))
+        }
+    }
+
+    // ── 自定义封面（书籍 + 分组） ──
+    //
+    // 数据流：相册选图 → CoverStorage 异步处理（IO 线程降采样 + WebP 压缩 + 写文件）
+    // → 返回 file:// URI → 写入对应 entity 的 customCoverUrl 字段。Compose 通过
+    // bookRepo.getAllBooks() / groupRepo.getAllGroups() Flow 自动订阅刷新。
+    //
+    // 失败处理：CoverStorage.saveCover 返回 null 时不动 DB，UI 仍展示原 coverUrl。
+
+    fun setCustomBookCover(bookId: String, sourceUri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val book = bookRepo.getById(bookId) ?: return@launch
+            val savedUri = coverStorage.saveCover(
+                sourceUri,
+                com.morealm.app.domain.cover.CoverKind.BOOK,
+                bookId,
+            ) ?: return@launch
+            bookRepo.update(book.copy(customCoverUrl = savedUri))
+        }
+    }
+
+    fun clearCustomBookCover(bookId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val book = bookRepo.getById(bookId) ?: return@launch
+            coverStorage.deleteCover(com.morealm.app.domain.cover.CoverKind.BOOK, bookId)
+            bookRepo.update(book.copy(customCoverUrl = null))
+        }
+    }
+
+    fun setCustomGroupCover(groupId: String, sourceUri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val group = groupRepo.getById(groupId) ?: return@launch
+            val savedUri = coverStorage.saveCover(
+                sourceUri,
+                com.morealm.app.domain.cover.CoverKind.GROUP,
+                groupId,
+            ) ?: return@launch
+            groupRepo.insert(group.copy(customCoverUrl = savedUri))
+        }
+    }
+
+    fun clearCustomGroupCover(groupId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val group = groupRepo.getById(groupId) ?: return@launch
+            coverStorage.deleteCover(com.morealm.app.domain.cover.CoverKind.GROUP, groupId)
+            groupRepo.insert(group.copy(customCoverUrl = null))
         }
     }
 
@@ -533,6 +584,8 @@ class ShelfViewModel @Inject constructor(
                 prefs.addAutoFolderIgnored(tagId)
                 AppLog.info("Shelf", "Ignoring future auto-folder for tag $tagId")
             }
+            // 删除分组时一并清理自定义封面文件（DB 级联由 bookRepo.deleteFolder 处理）
+            coverStorage.deleteCover(com.morealm.app.domain.cover.CoverKind.GROUP, folderId)
             bookRepo.deleteFolder(folderId)
             AppLog.info("Shelf", "Deleted folder: $folderId")
         }
@@ -540,8 +593,57 @@ class ShelfViewModel @Inject constructor(
 
     fun batchDelete(bookIds: Set<String>) {
         viewModelScope.launch(Dispatchers.IO) {
-            bookIds.forEach { bookRepo.deleteById(it) }
+            // 删书时连带清理自定义封面文件，避免 filesDir/covers/BOOK/ 越积越大
+            bookIds.forEach { id ->
+                coverStorage.deleteCover(com.morealm.app.domain.cover.CoverKind.BOOK, id)
+                bookRepo.deleteById(id)
+            }
             AppLog.info("Shelf", "Batch deleted ${bookIds.size} books")
+        }
+    }
+
+    /**
+     * 软删除：仅从 DB 移除 Book，自定义封面文件留着。配合 UI Snackbar 撤销用：
+     *  - 用户撤销 → 调 [restoreBooks]，封面还在，无副作用
+     *  - 用户不撤销，Snackbar 自然消失 → UI 端再调 [commitCoverDeletion] 清理封面
+     *
+     * 这样设计避免「删了再撤销 → 封面丢了」的体验断层。代价是封面文件可能短暂滞留
+     * (Snackbar 5s 内)，从存储清理角度可接受。
+     */
+    fun batchDeleteSoft(bookIds: Set<String>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            bookIds.forEach { id -> bookRepo.deleteById(id) }
+            AppLog.info("Shelf", "Batch soft-deleted ${bookIds.size} books (covers retained)")
+        }
+    }
+
+    /**
+     * 撤销 [batchDeleteSoft]：UI 在删除前 snapshot Book 列表，撤销时把整批 re-insert。
+     * 走 [BookRepository.insertAll] 一次性写入避免 N 次事务。
+     * 失败只打 warn，已经在用户视野外的"撤销"出错没必要 toast 干扰。
+     */
+    fun restoreBooks(books: List<Book>) {
+        if (books.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                bookRepo.insertAll(books)
+                AppLog.info("Shelf", "Restored ${books.size} books")
+            } catch (e: Exception) {
+                AppLog.warn("Shelf", "Restore failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 「软删除」的最终化：Snackbar 消失（用户没撤销）后调用，把封面文件物理删除。
+     * 必须在 [restoreBooks] 不会被调用的时机才能跑，否则用户撤销后看到默认封面。
+     */
+    fun commitCoverDeletion(bookIds: Set<String>) {
+        if (bookIds.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            bookIds.forEach { id ->
+                coverStorage.deleteCover(com.morealm.app.domain.cover.CoverKind.BOOK, id)
+            }
         }
     }
 
@@ -836,6 +938,54 @@ class ShelfViewModel @Inject constructor(
             try {
                 bookRepo.clearLastCheckCount(bookId)
             } catch (_: Exception) {}
+        }
+    }
+
+    // ── Update-indicator state (per-group + global) ──────────────────────────────
+    //
+    // Legado 的红点设计：单本封面右上角 "N 新" 徽章已经在 BookGridItem 渲染了。
+    // MoRealm 在此之上再做两层聚合：
+    //  1) 分组卡片右上角的小红点 — 只要分组内任意书 lastCheckCount > 0 就亮
+    //  2) 顶栏刷新按钮上的 BadgedBox — 只要全书架任意书有更新就亮
+    //
+    // 两个 flow 都从 books 派生，免去额外 DB 读 — books 已经是 Eagerly stateIn。
+    // distinctUntilChanged 防止地图引用变了但内容没变时触发重组。
+
+    /** 每个 folderId 是否有"待读新章节"：folderId → hasUpdate。无 folderId 的书不参与。 */
+    val groupHasUpdate: StateFlow<Map<String, Boolean>> = books
+        .map { list ->
+            withContext(Dispatchers.Default) {
+                list.asSequence()
+                    .filter { it.folderId != null && it.lastCheckCount > 0 }
+                    .map { it.folderId!! }
+                    .toSet()
+                    .associateWith { true }
+            }
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    /** 全书架是否有任意书 lastCheckCount > 0。 */
+    val hasAnyUpdate: StateFlow<Boolean> = books
+        .map { list -> list.any { it.lastCheckCount > 0 } }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    // ── Auto-refresh on cold start ───────────────────────────────────────────────
+    //
+    // 性能优先策略：仅在 ViewModel 首次创建时（= 应用冷启动 / 进程被 kill 后重新拉起）
+    // 触发一次后台批量刷新，每个会话最多一次。理由：
+    //  - 不在 ON_RESUME 上钩 — 用户切到 Profile 再切回来不应该触发额外网络请求
+    //  - 不和启动关键路径竞争 — 延迟到 books flow 第一次 emit 之后再发起，
+    //    避免冷启动 IO 风暴（封面解析 + 标签 seeder + 自动分组都在 init 里跑）
+    //  - ShelfRefreshController 自身有 inFlight Set 去重 + bounded parallelism = 4，
+    //    重复 refresh 调用是幂等的，所以这里出错不会"漏刷"
+    init {
+        viewModelScope.launch {
+            // 等首屏书目加载完，再延 5s 让 UI 稳定 — 用户已经看到书架，后台拉 toc 不打扰
+            books.first { it.isNotEmpty() }
+            delay(5_000L)
+            refreshAllBooks()
         }
     }
 }

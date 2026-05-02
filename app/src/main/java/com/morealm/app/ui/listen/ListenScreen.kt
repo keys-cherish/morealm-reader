@@ -34,6 +34,7 @@ import com.morealm.app.service.TtsSystemSettings
 @Composable
 fun ListenScreen(
     viewModel: ListenViewModel = hiltViewModel(),
+    onNavigateHttpTtsManage: () -> Unit = {},
 ) {
     val playback by viewModel.playbackState.collectAsStateWithLifecycle()
     val selectedEngine by viewModel.selectedEngine.collectAsStateWithLifecycle()
@@ -41,6 +42,11 @@ fun ListenScreen(
     val voices by viewModel.voices.collectAsStateWithLifecycle()
     val selectedVoice by viewModel.selectedVoice.collectAsStateWithLifecycle()
     val voicesRefreshing by viewModel.voicesRefreshing.collectAsStateWithLifecycle()
+    // HttpTts 已启用源列表，用来在引擎选择 chip 后面追加自定义源
+    val httpTtsList by viewModel.httpTtsList.collectAsStateWithLifecycle()
+    // Bug 4：TTS 硬错误持久化提示，替代旧的 Toast 路径
+    val ttsErrorBanner by viewModel.ttsErrorBanner.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     val isActive = playback.bookTitle.isNotBlank()
     val progress = if (playback.totalParagraphs > 0)
@@ -77,6 +83,62 @@ fun ListenScreen(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
         )
+
+        // Bug 4：TTS 硬错误持久化 banner —— 仅在 canOpenSettings=true 的事件后显示。
+        // 让位给系统 Toast（更权威，可点）后，UI 现场用这个 banner 兜底，避免用户错过提示。
+        ttsErrorBanner?.let { msg ->
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                modifier = Modifier
+                    .padding(horizontal = 24.dp)
+                    .fillMaxWidth(),
+                color = MaterialTheme.colorScheme.errorContainer,
+                shape = MaterialTheme.shapes.medium,
+                tonalElevation = 1.dp,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Warning,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    TextButton(
+                        onClick = {
+                            // 跳转系统 TTS 设置；TtsSystemSettings.open 内部已带 fallback
+                            // (TTS_SETTINGS → VOICE_INPUT_SETTINGS → 应用详情页)
+                            TtsSystemSettings.open(context)
+                            viewModel.dismissTtsErrorBanner()
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) { Text("去设置", style = MaterialTheme.typography.labelMedium) }
+                    IconButton(
+                        onClick = { viewModel.dismissTtsErrorBanner() },
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "关闭提示",
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+        }
 
         Spacer(Modifier.height(28.dp))
 
@@ -179,20 +241,44 @@ fun ListenScreen(
 
         // Engine selection
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-            Text("TTS 引擎", style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onBackground)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "TTS 引擎",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.weight(1f),
+                )
+                // HttpTts 自定义朗读源管理入口。这里不再单独写"添加源"——配合管理屏
+                // 内的导入/新建对话框，所有 HttpTts CRUD 都集中在该屏完成。
+                TextButton(
+                    onClick = onNavigateHttpTtsManage,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Settings,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("自定义朗读源", style = MaterialTheme.typography.labelSmall)
+                }
+            }
             Spacer(Modifier.height(8.dp))
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 data class EngineOpt(val id: String, val label: String)
-                val engines = listOf(
-                    EngineOpt("edge", "Edge TTS"),
-                    EngineOpt("system", "系统 TTS"),
-                    EngineOpt("openai", "OpenAI"),
-                    EngineOpt("custom", "自定义 API"),
-                )
+                // 内置两个引擎 + 用户配置的所有 HttpTts 源（仅 enabled）。
+                // 之前的占位 "OpenAI" / "自定义 API" chip 删掉——选了不响应反而误导。
+                val engines = buildList {
+                    add(EngineOpt("edge", "Edge TTS"))
+                    add(EngineOpt("system", "系统 TTS"))
+                    httpTtsList.filter { it.enabled }.forEach { tts ->
+                        add(EngineOpt("http_${tts.id}", tts.name.ifBlank { "自定义源" }))
+                    }
+                }
                 engines.forEach { eng ->
                     val isSelected = selectedEngine == eng.id
                     Surface(
@@ -284,9 +370,11 @@ fun ListenScreen(
                         onSelect = { pkg ->
                             viewModel.selectSystemEnginePackage(pkg)
                             showEnginePicker = false
+                            // ViewModel 会通过 RebindSystemEngine command 即时换 host 引擎；
+                            // 提示文案不再说"重启阅读器后生效"。
                             android.widget.Toast.makeText(
                                 context,
-                                "已切换 TTS 引擎，重启阅读器后生效",
+                                "已切换 TTS 引擎",
                                 android.widget.Toast.LENGTH_SHORT,
                             ).show()
                         },

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AppWidgetProviderInfo for ContinueReadingWidget.
+
+  - 默认 4×2，可水平/垂直拉伸到 4×3
+  - SizeMode.Responsive 在 Glance 端切换 4×1 紧凑布局 vs 4×2 完整布局
+  - updatePeriodMillis = 0：禁用系统轮询。刷新由 ReaderViewModel.onCleared
+    主动 updateAll 推送，零耗电。
+  - widgetCategory = home_screen：不挂锁屏（API 21~25 的旧 keyguard 入口已废弃）
+  - configure 缺省：用户拖到桌面后立刻可用，不弹配置 Activity
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="60dp"
+    android:maxResizeWidth="320dp"
+    android:maxResizeHeight="200dp"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_preview"
+    android:description="@string/widget_continue_reading_desc" />

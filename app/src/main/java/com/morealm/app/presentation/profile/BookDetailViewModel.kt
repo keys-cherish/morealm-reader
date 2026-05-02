@@ -79,6 +79,12 @@ class BookDetailViewModel @Inject constructor(
             }
             // 老化清理：每次进入详情页捎带做一次，开销可忽略。
             changeSource.pruneStaleCache()
+            // Smart router 把 web 书的"打开"导到详情页，所以"已经看到这本书"的徽章清除
+            // 也得在这里发生，否则用户看完 N 新章节再退出，红字徽章还在。
+            // failure-tolerant：DB 异常不影响详情页其它信息。
+            if (bookId.isNotBlank()) {
+                runCatching { bookRepo.clearLastCheckCount(bookId) }
+            }
         }
     }
 

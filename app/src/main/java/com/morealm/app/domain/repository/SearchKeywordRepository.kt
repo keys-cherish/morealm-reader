@@ -92,6 +92,28 @@ class SearchKeywordRepository @Inject constructor(
     }
 
     /**
+     * 批量恢复历史。配合 UI 「清空 + Snackbar 撤销」用：UI 在清空前 snapshot 当前
+     * 列表，用户点撤销 → 调本方法把整张表的内容写回去。
+     *
+     * 不复用 [record]：record 会改 lastUseTime / 累加 usage，撤销应当原样还原（包括
+     * 计数和时间戳），所以走 dao.upsert 直接 REPLACE。upsert 失败的条目静默跳过 —
+     * 撤销是 best-effort，丢一两条历史比抛异常打断 UI 流程更合适。
+     */
+    suspend fun restoreAll(keywords: List<SearchKeyword>) {
+        if (keywords.isEmpty()) return
+        var ok = 0
+        keywords.forEach { kw ->
+            try {
+                dao.upsert(kw)
+                ok++
+            } catch (e: Exception) {
+                AppLog.warn("SearchKeyword", "restore one failed: ${e.message}")
+            }
+        }
+        AppLog.info("SearchKeyword", "restored $ok / ${keywords.size} entries")
+    }
+
+    /**
      * 超量裁剪 —— 实现策略简单粗暴：把所有历史按 (usage DESC, lastUseTime DESC) 排好，
      * 取出 maxHistorySize 之外的全部 deleteByWord。
      *

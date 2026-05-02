@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
+import com.morealm.app.core.log.AppLog
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -41,6 +42,28 @@ class AppPreferences @Inject constructor(
         val TTS_SYSTEM_ENGINE_PACKAGE = stringPreferencesKey("tts_system_engine_package")
         val TTS_SPEED = floatPreferencesKey("tts_speed")
         val TTS_PITCH = floatPreferencesKey("tts_pitch")
+        /**
+         * 是否在 TTS 播放期间持有 PARTIAL_WAKE_LOCK，强制让 CPU 不进 doze。
+         *
+         * 默认 **false**——和 Legado 默认对齐。Android 的 audio playback 本身在持有
+         * 音频焦点时已经能避免 CPU 进 deep sleep；额外抢 wakelock 在大多数设备上
+         * 是浪费电（夜读 8h 估计高 15-25%）。
+         *
+         * 个别国产 ROM（小米/华为某些版本）下锁屏后会偶发断声——遇到这种情况
+         * 用户可以在「设置 → 朗读」里把这个开关打开，用更激进的保活策略换稳定性。
+         */
+        val TTS_KEEP_CPU_AWAKE = booleanPreferencesKey("tts_keep_cpu_awake")
+        /**
+         * 朗读时是否自动跟随翻页 —— 默认 true。
+         *
+         * 行为（由阅读器外层订阅 [com.morealm.app.service.TtsPlaybackState.paragraphRange] 实现）：
+         *  - true：朗读越界当前页时，阅读器自动 gotoPage 到包含 chapterPosition 的页
+         *  - false：用户必须点 "回到朗读位置" FAB 才回去
+         *
+         * 反向兜底：用户主动翻页后 `pauseAutoFollowUntil = now + 8s`，期间不自动跟随
+         * （否则用户手指还在翻页就被自动拽回去）。这部分逻辑在 ReaderViewModel 而非偏好层。
+         */
+        val TTS_AUTO_FOLLOW_PAGE = booleanPreferencesKey("tts_auto_follow_page")
         val WEBDAV_URL = stringPreferencesKey("webdav_url")
         val WEBDAV_USER = stringPreferencesKey("webdav_user")
         val WEBDAV_PASS = stringPreferencesKey("webdav_pass")
@@ -90,6 +113,11 @@ class AppPreferences @Inject constructor(
         val SHOW_STATUS_BAR = booleanPreferencesKey("show_status_bar")
         val SHOW_CHAPTER_NAME = booleanPreferencesKey("show_chapter_name")
         val SHOW_TIME_BATTERY = booleanPreferencesKey("show_time_battery")
+        /**
+         * 章节标题对齐方式。0=左对齐 / 1=居中 / 2=右对齐。
+         * 全局生效，不区分阅读样式预设；ReaderStyle.titleMode 仅保留隐藏 (==2) 语义。
+         */
+        val TITLE_ALIGN = intPreferencesKey("title_align")
         val PARAGRAPH_SPACING = floatPreferencesKey("paragraph_spacing")
         val MARGIN_TOP = intPreferencesKey("margin_top")
         val MARGIN_BOTTOM = intPreferencesKey("margin_bottom")
@@ -232,6 +260,14 @@ class AppPreferences @Inject constructor(
     val ttsSpeed: Flow<Float> = context.dataStore.data
         .map { it[Keys.TTS_SPEED] ?: 1.0f }
 
+    /** 见 [Keys.TTS_KEEP_CPU_AWAKE] —— 默认 false。 */
+    val ttsKeepCpuAwake: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.TTS_KEEP_CPU_AWAKE] ?: false }
+
+    /** 见 [Keys.TTS_AUTO_FOLLOW_PAGE] —— 默认 true（朗读时自动跟随翻页）。 */
+    val ttsAutoFollowPage: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.TTS_AUTO_FOLLOW_PAGE] ?: true }
+
     val shelfViewMode: Flow<String> = context.dataStore.data
         .map { it[Keys.SHELF_VIEW_MODE] ?: "grid" }
 
@@ -336,6 +372,14 @@ class AppPreferences @Inject constructor(
 
     val showTimeBattery: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.SHOW_TIME_BATTERY] ?: true }
+
+    /**
+     * 章节标题对齐：0=左 / 1=中 / 2=右。默认 0。
+     * 排版引擎 [com.morealm.app.domain.render.ChapterProvider] 在画标题时按此值
+     * 计算 startXOffset（左=0；中=(W-w)/2；右=W-w）。
+     */
+    val titleAlign: Flow<Int> = context.dataStore.data
+        .map { it[Keys.TITLE_ALIGN] ?: 0 }
 
     val paragraphSpacing: Flow<Float> = context.dataStore.data
         .map { it[Keys.PARAGRAPH_SPACING] ?: 1.4f }
@@ -485,6 +529,9 @@ class AppPreferences @Inject constructor(
     /** 设置系统 TTS 引擎包；传空字符串恢复"跟系统默认"。 */
     suspend fun setTtsSystemEnginePackage(pkg: String) = update(Keys.TTS_SYSTEM_ENGINE_PACKAGE, pkg)
     suspend fun setTtsSpeed(speed: Float) = update(Keys.TTS_SPEED, speed)
+
+    suspend fun setTtsKeepCpuAwake(enabled: Boolean) = update(Keys.TTS_KEEP_CPU_AWAKE, enabled)
+    suspend fun setTtsAutoFollowPage(enabled: Boolean) = update(Keys.TTS_AUTO_FOLLOW_PAGE, enabled)
     suspend fun setShelfViewMode(mode: String) = update(Keys.SHELF_VIEW_MODE, mode)
     /** 写入新的书源分组模式；调用方负责传入 [Keys.SOURCE_GROUP_MODE] 注释里列出的字符串。 */
     suspend fun setSourceGroupMode(mode: String) = update(Keys.SOURCE_GROUP_MODE, mode)
@@ -524,18 +571,41 @@ class AppPreferences @Inject constructor(
      * 旧 URI 替换时会主动 release 防止权限表无限膨胀。
      */
     suspend fun setFontFolderUri(uri: String) {
-        val flag = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-        // 释放旧的（如果有）
+        val readFlag = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+        val rwFlag = readFlag or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        // 1) 释放旧的（如果有）。同一个进程里只能保留一条字体文件夹授权——
+        //    用户切换文件夹的语义就是"丢掉旧的、用新的"。
+        //    分别 release READ + READ|WRITE：极少数 OEM SAF 实现会用 RW 持久化，
+        //    只 release READ 会留下死记录在权限表里，下次启动 OS 仍试访问。
         runCatching {
             val old = context.dataStore.data.first()[Keys.FONT_FOLDER_URI].orEmpty()
             if (old.isNotBlank() && old != uri) {
-                context.contentResolver.releasePersistableUriPermission(android.net.Uri.parse(old), flag)
+                val oldUri = android.net.Uri.parse(old)
+                runCatching {
+                    context.contentResolver.releasePersistableUriPermission(oldUri, readFlag)
+                }.onFailure {
+                    AppLog.warn(
+                        "FontFolder",
+                        "release(READ) old=$old failed: ${it.message}",
+                    )
+                }
+                runCatching {
+                    context.contentResolver.releasePersistableUriPermission(oldUri, rwFlag)
+                }
+                AppLog.info("FontFolder", "released old folder uri=$old")
             }
         }
-        // 授予新的
+        // 2) 取新的。`takePersistableUriPermission` 只能在 SAF 授权当前活跃时
+        //    调用成功（这就是为什么必须从 launcher 回调里同步 launch 进来）。
         if (uri.isNotBlank()) {
             runCatching {
-                context.contentResolver.takePersistableUriPermission(android.net.Uri.parse(uri), flag)
+                context.contentResolver.takePersistableUriPermission(android.net.Uri.parse(uri), readFlag)
+                AppLog.info("FontFolder", "took persistable READ on new uri=$uri")
+            }.onFailure {
+                AppLog.warn(
+                    "FontFolder",
+                    "takePersistable failed for $uri: ${it.message} —— UI 仍记录该 uri，但可能下次启动失效",
+                )
             }
         }
         update(Keys.FONT_FOLDER_URI, uri)
@@ -553,6 +623,9 @@ class AppPreferences @Inject constructor(
     suspend fun setShowStatusBar(show: Boolean) = update(Keys.SHOW_STATUS_BAR, show)
     suspend fun setShowChapterName(show: Boolean) = update(Keys.SHOW_CHAPTER_NAME, show)
     suspend fun setShowTimeBattery(show: Boolean) = update(Keys.SHOW_TIME_BATTERY, show)
+    /** 章节标题对齐：0=左/1=中/2=右。其他值会被 coerce 到 0。 */
+    suspend fun setTitleAlign(align: Int) =
+        update(Keys.TITLE_ALIGN, align.coerceIn(0, 2))
     suspend fun setParagraphSpacing(spacing: Float) = update(Keys.PARAGRAPH_SPACING, spacing)
     suspend fun setMarginTop(margin: Int) = update(Keys.MARGIN_TOP, margin)
     suspend fun setMarginBottom(margin: Int) = update(Keys.MARGIN_BOTTOM, margin)

@@ -162,7 +162,7 @@ fun BookGridItem(
             .padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Cover
+        // Cover — customCoverUrl 优先于 coverUrl（空时退回）
         Box(
             modifier = Modifier
                 .aspectRatio(0.7f)
@@ -170,11 +170,12 @@ fun BookGridItem(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center,
         ) {
-            if (book.coverUrl != null) {
+            val displayCover = book.customCoverUrl?.takeIf { it.isNotBlank() } ?: book.coverUrl
+            if (displayCover != null) {
                 val context = LocalContext.current
-                val imageRequest = remember(context, book.coverUrl) {
+                val imageRequest = remember(context, displayCover) {
                     ImageRequest.Builder(context)
-                        .data(resolveCoverData(book.coverUrl))
+                        .data(resolveCoverData(displayCover))
                         .size(240, 340)
                         .crossfade(80)
                         .memoryCachePolicy(CachePolicy.ENABLED)
@@ -431,6 +432,11 @@ fun FolderListItem(
     name: String,
     bookCount: Int,
     coverUrl: String? = null,
+    /**
+     * 分组内任意书 lastCheckCount > 0 时为 true — UI 在右上角画一颗 8dp 红点。
+     * 颜色统一走 colorScheme.error 保证暗色 / 浅色都明显。
+     */
+    hasUpdate: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -481,6 +487,19 @@ fun FolderListItem(
                     modifier = Modifier.size(32.dp),
                 )
             }
+            // 红点：分组内任意书有"待读新章节"。8dp 圆点 + 1dp 浅色描边，
+            // 在浅 / 深封面上都能看清；右上角 4dp 内距，不挡封面信息。
+            if (hasUpdate) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .size(10.dp)
+                        .background(MaterialTheme.colorScheme.surface, CircleShape)
+                        .padding(1.dp)
+                        .background(MaterialTheme.colorScheme.error, CircleShape),
+                )
+            }
         }
 
         Spacer(Modifier.width(14.dp))
@@ -517,6 +536,13 @@ fun FolderCard(
     name: String,
     bookCount: Int,
     coverUrls: List<String?> = emptyList(),
+    /**
+     * 用户自定义分组封面（file:// URI）。非空时**完全覆盖** mosaic，单图全格显示。
+     * 这样：1) 用户体感"我设置了它就显示我的"；2) 不需要把单张图塞进九宫格让它变小。
+     */
+    customCoverUrl: String? = null,
+    /** 分组内任意书 lastCheckCount > 0 时为 true — 与 [FolderListItem] 同款 8dp 红点。 */
+    hasUpdate: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -538,6 +564,22 @@ fun FolderCard(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center,
         ) {
+            // 自定义封面优先级最高 — 跳过 mosaic 路径直接画单图
+            if (!customCoverUrl.isNullOrBlank()) {
+                val req = remember(context, customCoverUrl) {
+                    ImageRequest.Builder(context)
+                        .data(resolveCoverData(customCoverUrl)).size(360, 510).crossfade(80)
+                        .memoryCachePolicy(CachePolicy.ENABLED).diskCachePolicy(CachePolicy.ENABLED)
+                        .allowHardware(true).build()
+                }
+                AsyncImage(
+                    model = req,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // 数量徽章下沉到 Column 末尾，逻辑统一保持
+            } else {
             val validCovers = coverUrls.filterNotNull().take(4)
             if (validCovers.isNotEmpty()) {
                 // Show cover mosaic: 1 cover = full, 2 = side by side, 3-4 = 2x2 grid
@@ -679,6 +721,21 @@ fun FolderCard(
                     )
                 }
             }
+            } // end else（非自定义封面分支）
+            // 红点：与 FolderListItem 一致。Box scope 是 FolderCard 顶层封面 Box，
+            // 所以 align(TopEnd) 落在分组卡封面右上角；customCoverUrl 路径也覆盖到，
+            // 因为这一段在 customCoverUrl if/else 之外。
+            if (hasUpdate) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(12.dp)
+                        .background(MaterialTheme.colorScheme.surface, CircleShape)
+                        .padding(1.5.dp)
+                        .background(MaterialTheme.colorScheme.error, CircleShape),
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
         Text(
@@ -783,6 +840,27 @@ fun BookListItem(
                     Icon(Icons.Default.Check, null,
                         tint = MaterialTheme.colorScheme.surface,
                         modifier = Modifier.size(12.dp))
+                }
+            } else if (book.lastCheckCount > 0) {
+                // 与 BookGridItem 一致的 "N 新" 徽章 — 列表视图也得有，否则用户切到列表
+                // 视图就看不到更新提示了。size 比 grid 略小，因为列表里封面就 60×84。
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(3.dp)
+                        .background(
+                            MaterialTheme.colorScheme.error,
+                            RoundedCornerShape(6.dp),
+                        )
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (book.lastCheckCount > 99) "99+" else "${book.lastCheckCount} 新",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                        color = MaterialTheme.colorScheme.onError,
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
             }
         }
