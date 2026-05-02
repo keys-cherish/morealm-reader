@@ -86,6 +86,8 @@ fun ReaderScreen(
      * 接收 ruleId；导航到 replace_rules?editId=$ruleId 自动弹编辑框。
      */
     onNavigateToReplaceRule: (ruleId: String) -> Unit = {},
+    /** 跳转到字体管理页（设置面板「字体管理…」按钮）。 */
+    onNavigateToFontManager: () -> Unit = {},
     themeViewModel: ThemeViewModel? = null,
     viewModel: ReaderViewModel = hiltViewModel(),
 ) {
@@ -112,6 +114,7 @@ fun ReaderScreen(
     var pageTurnCommand by remember { mutableStateOf<ReaderPageDirection?>(null) }
     val customFontUri by viewModel.settings.customFontUri.collectAsStateWithLifecycle()
     val customFontName by viewModel.settings.customFontName.collectAsStateWithLifecycle()
+    val readerTypeface by viewModel.settings.currentTypeface.collectAsStateWithLifecycle()
     val volumeKeyPage by viewModel.settings.volumeKeyPage.collectAsStateWithLifecycle()
     val volumeKeyReverse by viewModel.settings.volumeKeyReverse.collectAsStateWithLifecycle()
     val headsetButtonPage by viewModel.settings.headsetButtonPage.collectAsStateWithLifecycle()
@@ -485,6 +488,7 @@ fun ReaderScreen(
                 isNight = isNight,
                 fontSize = readerFontSize,
                 lineHeight = readerLineHeight,
+                typeface = readerTypeface,
                 paddingHorizontal = marginHorizontal,
                 paddingVertical = marginTopVal,
                 bgImageUri = readerBgImage,
@@ -716,6 +720,7 @@ fun ReaderScreen(
                 customFontName = customFontName,
                 onImportFont = { uri, name -> viewModel.settings.importCustomFont(uri, name) },
                 onClearCustomFont = viewModel.settings::clearCustomFont,
+                onOpenFontManager = onNavigateToFontManager,
                 allThemes = allThemes.ifEmpty { BuiltinThemes.all() },
                 activeThemeId = activeTheme?.id ?: "",
                 onThemeChange = { id -> themeViewModel?.switchTheme(id) },

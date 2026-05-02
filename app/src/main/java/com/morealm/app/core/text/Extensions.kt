@@ -62,6 +62,39 @@ fun String.stripHtml(): String {
  */
 fun String.stripHtmlTags(): String = replace(AppPattern.htmlTagRegex, "")
 
+/**
+ * 把章节正文规整成「与渲染层 stringBuilder 大致同坐标系」的形式，专给 TTS 用。
+ *
+ * 背景：ChapterProvider 渲染时遇到 `<img src="...">` 会调 `setTypeImage`，
+ * 在 stringBuilder 里只占 1 个空格；但 jsoup 在没有可用 src 时 `removeAttr("src")`
+ * 留下的裸 `<img>`（无属性）不匹配 `imgSrcPattern`（要求 src），ChapterProvider
+ * 兜底走 `setTypeText`，把 `<img>` 当 5 字节文本压进 stringBuilder。结果：
+ *   - 渲染 paragraphPositions 视裸 `<img>` 为 5 字节
+ *   - chapter.chapterContent.value 仍是原始 HTML，含完整 `<img>` 标签
+ *   - TtsEngineHost.paragraphsFromPositions 用 paragraphPositions 切原始内容，
+ *     就有概率切到 `<img>` 标签中间，留下 `<img` 这种 4 字节 HTML 碎片，所有
+ *     `htmlImgRegex` / `htmlTagRegex` 都需要 `>` 收尾才匹配 → 漏过 → 当文本读
+ *
+ * 这个函数把完整的 `<img...>` 替换成单空格，让 TTS 内容最大程度贴近渲染层
+ * stringBuilder 的字节布局；剩余的 `<svg>`、`<br>`、`<div>` 等也按渲染同款顺序
+ * 处理。注意：`paragraphPositions` 仍在渲染层坐标系里，本函数只能减小漂移、
+ * 不能消除（裸 `<img>` 渲染走文本路径仍然占 5 字节，本函数会在这里也只占 1 个
+ * 空格 —— 这是已知偏差，由调用侧的兜底（slice 内残留 `<` 碎片裁断）兜住）。
+ */
+fun String.cleanContentForTts(): String {
+    return this
+        .replace(AppPattern.htmlImgRegex, " ")
+        .replace(AppPattern.htmlSvgRegex, " ")
+        .replace(AppPattern.htmlDivCloseRegex, "\n")
+        .replace(AppPattern.htmlBrRegex, "\n")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+}
+
 fun Long.toReadableDuration(): String {
     val hours = this / 3600000
     val minutes = (this % 3600000) / 60000

@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.morealm.app.core.text.cleanContentForTts
 import javax.inject.Inject
 
 /**
@@ -71,6 +72,7 @@ class ReaderViewModel @Inject constructor(
     private val styleRepo: com.morealm.app.domain.repository.ReaderStyleRepository,
     private val sourceRepo: SourceRepository,
     private val progressSync: com.morealm.app.domain.sync.WebDavBookProgressSync,
+    private val fontRepo: com.morealm.app.domain.font.FontRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -78,7 +80,7 @@ class ReaderViewModel @Inject constructor(
 
     // ── Delegates (existing) ──
     val tts = ReaderTtsController(context, prefs, viewModelScope)
-    val settings = ReaderSettingsController(prefs, viewModelScope, context, styleRepo)
+    val settings = ReaderSettingsController(prefs, viewModelScope, context, styleRepo, fontRepo)
 
     // ── Extracted Controllers ──
     val chapter = ReaderChapterController(
@@ -266,7 +268,7 @@ class ReaderViewModel @Inject constructor(
                 "startPos=${visibleReadAloudChapterPosition}",
         )
         tts.ttsPlayPause(
-            displayedContent = content,
+            displayedContent = content.cleanContentForTts(),
             bookTitle = chapter.book.value?.title ?: "",
             chapterTitle = title,
             coverUrl = chapter.book.value?.coverUrl,
@@ -356,7 +358,7 @@ class ReaderViewModel @Inject constructor(
 
     fun readAloudFromPosition(chapterPosition: Int) {
         tts.readAloudFrom(
-            displayedContent = chapter.chapterContent.value,
+            displayedContent = chapter.chapterContent.value.cleanContentForTts(),
             bookTitle = chapter.book.value?.title ?: "",
             chapterTitle = chapter.chapters.value.getOrNull(chapter.currentChapterIndex.value)?.title ?: "",
             startChapterPosition = chapterPosition.coerceAtLeast(0),
@@ -450,7 +452,7 @@ class ReaderViewModel @Inject constructor(
                 if (pendingTtsResumeOnNewChapter && text.isNotBlank() && !isEmptyContentPlaceholder(text)) {
                     pendingTtsResumeOnNewChapter = false
                     tts.ttsPlay(
-                        displayedContent = text,
+                        displayedContent = text.cleanContentForTts(),
                         bookTitle = chapter.book.value?.title ?: "",
                         chapterTitle = chapter.chapters.value
                             .getOrNull(chapter.currentChapterIndex.value)?.title ?: "",

@@ -125,6 +125,59 @@ class WebDavClient(
         }
     }
 
+    /**
+     * Legado-style auth probe — does a Depth-0 PROPFIND on the root path the
+     * client was constructed with and reports a clean result. Used by
+     * `WebDavInit.upConfig` to decide if a saved credential is still valid
+     * before kicking off backup / restore (so the user gets "认证失败" on the
+     * config screen instead of a more confusing failure half-way through an
+     * upload).
+     *
+     * Differences vs [exists]:
+     *  - `exists("")` returns true on 207 *and* swallows 401 (returns false
+     *    with no message). [check] re-throws WebDavException on 401 so the
+     *    UI can distinguish "wrong password" from "directory absent".
+     *  - [check] tolerates 404 specifically as "the dir hasn't been created
+     *    yet but the auth was accepted" — that's a valid first-run state.
+     */
+    suspend fun check(): Boolean = withContext(Dispatchers.IO) {
+        val xml = """<?xml version="1.0" encoding="utf-8"?>
+            <D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/></D:prop></D:propfind>"""
+        val response = client.newCall(Request.Builder().url(resolveUrl(""))
+            .method("PROPFIND", xml.toRequestBody("application/xml".toMediaType()))
+            .header("Depth", "0").build()).execute()
+        response.use {
+            when {
+                it.isSuccessful || it.code == 207 -> true
+                // 404 = root URL valid, dir not yet created — auth still accepted.
+                it.code == 404 -> true
+                // 401 / 403 / 5xx — re-throw so caller can surface a real error.
+                else -> throw WebDavException(describeError(it, "Auth check"))
+            }
+        }
+    }
+
+    /**
+     * Idempotent MKCOL — MoRealm's existing [mkdir] silently ignores any
+     * non-2xx; this variant returns a Boolean so the caller can know whether
+     * the directory pre-existed (which a "201 Created" vs "405 Method Not
+     * Allowed" round-trip distinguishes). Used by upConfig to log the
+     * one-time directory tree creation.
+     *
+     * Returns:
+     *  - `true`  : MKCOL succeeded (201) or the path already existed (405)
+     *  - `false` : auth failed or other unexpected status (the caller should
+     *              treat this as a hard error and stop the init flow)
+     */
+    suspend fun makeAsDir(remotePath: String): Boolean = withContext(Dispatchers.IO) {
+        val response = client.newCall(Request.Builder().url(resolveUrl(remotePath))
+            .method("MKCOL", null).build()).execute()
+        response.use {
+            // 201 = created; 405 = already exists; 301/302 = some servers redirect.
+            it.code == 201 || it.code == 405 || it.code in 200..207 || it.code == 301 || it.code == 302
+        }
+    }
+
     private fun parsePropfindResponse(xml: String, requestUrl: String): List<DavFile> {
         val doc = Jsoup.parse(xml, "", org.jsoup.parser.Parser.xmlParser())
         val files = mutableListOf<DavFile>()

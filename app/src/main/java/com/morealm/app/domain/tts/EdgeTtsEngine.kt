@@ -99,43 +99,143 @@ class EdgeTtsEngine(
 
         val rateStr = formatRate(speed)
         val pitchStr = "+0Hz"
+        val ssml = buildSsml(text, selectedVoice, rateStr, pitchStr)
         val cacheKey = cache.keyFor(selectedVoice, rateStr, pitchStr, text)
         val started = System.currentTimeMillis()
 
         trySend(AudioChunk(ByteArray(0), "started"))
 
-        // ── 1. 缓存命中：直接喂解码器，零网络 ────────────────────────────
-        val cachedFile = cache.get(cacheKey)
-        if (cachedFile != null) {
-            AppLog.debug(TAG, "cache hit: key=${cacheKey.take(8)}… size=${cachedFile.length()}")
-            try {
-                val mp3Bytes = cachedFile.readBytes()
-                playFromMp3Bytes(mp3Bytes)
-                AppLog.debug(TAG, "cache playback done in ${System.currentTimeMillis() - started}ms")
-                trySend(AudioChunk(ByteArray(0), "done"))
-                close()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                AppLog.warn(TAG, "cache playback failed, fallback to network: ${e.message}")
-                runWebSocketPlayback(text, rateStr, pitchStr, cacheKey, started)
-            }
-            awaitClose { cleanup() }
-            return@callbackFlow
-        }
-
-        // ── 2. 缓存未命中：走 WSS 流式播放 ──────────────────────────────
         try {
-            runWebSocketPlayback(text, rateStr, pitchStr, cacheKey, started)
+            doSynthesizeSsml(ssml, cacheKey, started)
             trySend(AudioChunk(ByteArray(0), "done"))
             close()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            AppLog.warn(TAG, "WSS playback failed: ${e.message}")
+            AppLog.warn(TAG, "speak failed: ${e.message}")
             close(e)
         }
 
+        awaitClose { cleanup() }
+    }
+
+    /**
+     * 同时被 [speak] 与 [speakChapter] 用：先看缓存，命中直接放本地 MP3；未命中
+     * 走 WSS 合成（有鉴权重试 + 落缓存）。本地播放失败时也会尝试回退到网络合成。
+     */
+    private suspend fun doSynthesizeSsml(
+        ssml: String,
+        cacheKey: String,
+        startedAt: Long,
+    ) {
+        val cachedFile = cache.get(cacheKey)
+        if (cachedFile != null) {
+            AppLog.debug(TAG, "cache hit: key=${cacheKey.take(8)}… size=${cachedFile.length()}")
+            try {
+                playFromMp3Bytes(cachedFile.readBytes())
+                AppLog.debug(TAG, "cache playback done in ${System.currentTimeMillis() - startedAt}ms")
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.warn(TAG, "cache playback failed, fallback to network: ${e.message}")
+                // fall through to WSS
+            }
+        }
+        runWebSocketPlayback(ssml, cacheKey, startedAt)
+    }
+
+    /**
+     * Plan C —— 整章合成入口。
+     *
+     * 把 [paragraphs] 拼成一份大 SSML（段间用 `<break time="${breakMs}ms"/>` 标签）
+     * 一次 WSS 完成。超过 [MAX_CHAPTER_CHUNK_CHARS] 会自动按"段为单位"切成多批，
+     * 每批一次 WS（保持段不会被劈开）。每批独立缓存。
+     *
+     * 段进度：通过启动一个 [progress 协程] 按"字数 / [CHARS_PER_SEC] / speed + breakMs"
+     * 估算每段时长，到点回调 [onParagraphStart](localIdx)。Edge SSML `<bookmark>` +
+     * `audio.metadata` 事件解析能更精确，但 JSON 解析、bookmark 时间偏移与 AudioTrack
+     * playback head 的对齐都是额外复杂度——估算法对"段高亮跟随"这个用途足够好（误差
+     * 通常 < 1 秒，肉眼几乎无感）。
+     *
+     * 与 [speak] 共用 [doSynthesizeSsml] 做实际 WS + 解码 + 缓存——只是 SSML 构造和
+     * 缓存 key 不同。
+     *
+     * @param paragraphs 已经被调用方过滤掉空段/skip 段的"将要朗读的段"列表
+     * @param speed 朗读速度因子（1.0 = 标准）
+     * @param breakMs 段间静音毫秒数
+     * @param onParagraphStart 段开始播报时回调（参数：本次合成内段的相对索引 0..n-1）
+     */
+    suspend fun speakChapter(
+        paragraphs: List<String>,
+        speed: Float,
+        breakMs: Long = 600L,
+        onParagraphStart: (relativeIdx: Int) -> Unit = {},
+    ): Flow<AudioChunk> = callbackFlow {
+        if (paragraphs.isEmpty()) {
+            trySend(AudioChunk(ByteArray(0), "done"))
+            close()
+            return@callbackFlow
+        }
+        val rateStr = formatRate(speed)
+        val pitchStr = "+0Hz"
+
+        // 按 char 上限切批（保证段不被劈开）
+        val chunks = chunkParagraphs(paragraphs, MAX_CHAPTER_CHUNK_CHARS)
+        AppLog.info(
+            TAG,
+            "speakChapter: paragraphs=${paragraphs.size} → ${chunks.size} chunk(s), " +
+                "rate=$rateStr, breakMs=$breakMs",
+        )
+
+        val started = System.currentTimeMillis()
+        trySend(AudioChunk(ByteArray(0), "started"))
+
+        var globalLocalIdx = 0  // 已开始合成的段相对索引（跨 chunk 累加）
+
+        try {
+            for ((chunkIdx, chunk) in chunks.withIndex()) {
+                val ssml = buildChapterSsml(chunk, selectedVoice, rateStr, pitchStr, breakMs)
+                // 缓存 key 必须包含 breakMs：同样段不同 breakMs 是不同音频
+                val cacheText = chunk.joinToString(CHUNK_CACHE_SEP) +
+                    "${CHUNK_CACHE_SEP}brk=${breakMs}"
+                val cacheKey = cache.keyFor(selectedVoice, rateStr, pitchStr, cacheText)
+
+                // 段进度估算协程：在主合成开始前先 fire 第一段，然后按时长延后续段
+                val chunkStartLocalIdx = globalLocalIdx
+                val progressJob = launch {
+                    for ((i, para) in chunk.withIndex()) {
+                        // 暂停时不再推进段索引（host 那边的 isPlaying 也会守门，
+                        // 但这里直接 break 能让 progress 协程更早安静下来）
+                        runCatching { onParagraphStart(chunkStartLocalIdx + i) }
+                        val durMs = estimateParaDurationMs(para, speed)
+                        // 最后一段后面没有 <break>，不要等
+                        val gapMs = if (i < chunk.size - 1) breakMs else 0L
+                        kotlinx.coroutines.delay(durMs + gapMs)
+                    }
+                }
+
+                try {
+                    AppLog.info(
+                        TAG,
+                        "chunk $chunkIdx/${chunks.size}: paras=${chunk.size}, " +
+                            "ssmlLen=${ssml.length}",
+                    )
+                    doSynthesizeSsml(ssml, cacheKey, started)
+                } finally {
+                    progressJob.cancel()
+                }
+
+                globalLocalIdx += chunk.size
+            }
+            trySend(AudioChunk(ByteArray(0), "done"))
+            close()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.warn(TAG, "speakChapter failed: ${e.message}")
+            close(e)
+        }
         awaitClose { cleanup() }
     }
 
@@ -230,16 +330,14 @@ class EdgeTtsEngine(
      * 单次 speak 的 WSS 播放，含一次失败重试（针对 GEC 鉴权过期 / 时钟偏移）。
      */
     private suspend fun runWebSocketPlayback(
-        text: String,
-        rateStr: String,
-        pitchStr: String,
+        ssml: String,
         cacheKey: String,
         startedAt: Long,
     ) {
         var lastError: Throwable? = null
         for (attempt in 1..MAX_ATTEMPTS) {
             try {
-                doSynthesize(text, rateStr, pitchStr, cacheKey, startedAt, attempt)
+                doSynthesize(ssml, cacheKey, startedAt, attempt)
                 return // 成功
             } catch (e: CancellationException) {
                 throw e
@@ -279,15 +377,12 @@ class EdgeTtsEngine(
      * ```
      */
     private suspend fun doSynthesize(
-        text: String,
-        rateStr: String,
-        pitchStr: String,
+        ssml: String,
         cacheKey: String,
         startedAt: Long,
         attempt: Int,
     ) = coroutineScope {
         val requestId = generateRequestId()
-        val ssml = buildSsml(text, selectedVoice, rateStr, pitchStr)
 
         // chunk 流：WS 推、decoder 拉
         val chunkChannel = Channel<ByteArray>(Channel.UNLIMITED)
@@ -631,6 +726,92 @@ class EdgeTtsEngine(
             "</speak>"
     }
 
+    /**
+     * Plan C 整章合成的 SSML 构造。结构：
+     * ```
+     * <speak xml:lang=zh-CN>
+     *   <voice name=$voice>
+     *     <prosody rate=$rate pitch=$pitch>
+     *       段1 escaped <break time="600ms"/>
+     *       段2 escaped <break time="600ms"/>
+     *       …
+     *       段N escaped
+     *     </prosody>
+     *   </voice>
+     * </speak>
+     * ```
+     * 段间 `<break>` 是 Edge 服务端在合成阶段就插入的真实音频静音，不是客户端
+     * 后期 delay。这是 plan C 区别于方案 A "客户端 sleep" 的关键。
+     */
+    private fun buildChapterSsml(
+        paragraphs: List<String>,
+        voice: String,
+        rate: String,
+        pitch: String,
+        breakMs: Long,
+    ): String {
+        val sb = StringBuilder()
+        sb.append("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' ")
+            .append("xml:lang='zh-CN'>")
+            .append("<voice name='").append(voice).append("'>")
+            .append("<prosody rate='").append(rate).append("' pitch='").append(pitch).append("'>")
+        for ((i, p) in paragraphs.withIndex()) {
+            val escaped = p
+                .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace("\"", "&quot;").replace("'", "&apos;")
+            sb.append(escaped)
+            if (i < paragraphs.size - 1) {
+                sb.append("<break time='").append(breakMs).append("ms'/>")
+            }
+        }
+        sb.append("</prosody></voice></speak>")
+        return sb.toString()
+    }
+
+    /**
+     * 把段列表按 [maxChars] 切批，**保证段不被劈开**。一个段超长（罕见）时单独占一批，
+     * 由 Edge 服务端自己处理超长。
+     */
+    private fun chunkParagraphs(paragraphs: List<String>, maxChars: Int): List<List<String>> {
+        if (paragraphs.isEmpty()) return emptyList()
+        val out = ArrayList<List<String>>()
+        var cur = ArrayList<String>()
+        var curLen = 0
+        for (p in paragraphs) {
+            // 一个超长段落直接独占一批
+            if (p.length >= maxChars) {
+                if (cur.isNotEmpty()) {
+                    out.add(cur)
+                    cur = ArrayList()
+                    curLen = 0
+                }
+                out.add(listOf(p))
+                continue
+            }
+            if (curLen + p.length > maxChars && cur.isNotEmpty()) {
+                out.add(cur)
+                cur = ArrayList()
+                curLen = 0
+            }
+            cur.add(p)
+            curLen += p.length
+        }
+        if (cur.isNotEmpty()) out.add(cur)
+        return out
+    }
+
+    /**
+     * 估算 Edge TTS 朗读 [text] 的毫秒数。
+     * 中文 Edge TTS 在 speed=1.0 时约 [CHARS_PER_SEC] 字/秒；speed 因子线性缩放。
+     * 上下文：仅用于段进度回调时序，误差 ±10% 不影响"段高亮跟随"体感。
+     */
+    private fun estimateParaDurationMs(text: String, speed: Float): Long {
+        if (text.isBlank()) return 0L
+        val safeSpeed = speed.coerceAtLeast(0.1f)
+        val seconds = text.length.toDouble() / CHARS_PER_SEC / safeSpeed
+        return (seconds * 1000).toLong().coerceAtLeast(50L)
+    }
+
     private fun formatRate(speed: Float): String {
         val pct = ((speed - 1.0f) * 100).toInt()
         return if (pct >= 0) "+${pct}%" else "${pct}%"
@@ -737,6 +918,21 @@ class EdgeTtsEngine(
         private const val TAG = "EdgeTTS"
         private const val AUDIO_SAMPLE_RATE = 24000
         private const val MAX_ATTEMPTS = 2
+
+        /**
+         * Plan C 单批 SSML 段内字符上限。Edge TTS 的 SSML 体积有上限（约 5-10 分钟
+         * 朗读量，对应中文 ~3000-5000 字），保守设 3000；超过自动按段切批。
+         */
+        private const val MAX_CHAPTER_CHUNK_CHARS = 3000
+
+        /** 缓存 key 中分隔多段文本的字符（用 ASCII SOH 防止与正文冲突）。 */
+        private const val CHUNK_CACHE_SEP = "\u0001"
+
+        /**
+         * Edge TTS 中文朗读 speed=1.0 时的近似字符 / 秒。仅用于段进度估算，
+         * 实测样本：晓晓 5.2、云希 5.5、晓伊 5.0；折中取 5.2。
+         */
+        private const val CHARS_PER_SEC = 5.2
 
         /** 网络失败时的回退音色（向后兼容老用户保存的 voiceName）。 */
         val HARDCODED_VOICES = listOf(

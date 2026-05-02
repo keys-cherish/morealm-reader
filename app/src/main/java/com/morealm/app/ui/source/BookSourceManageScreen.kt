@@ -35,6 +35,8 @@ import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.webbook.CheckSource
 import com.morealm.app.presentation.source.BookSourceManageViewModel
+import com.morealm.app.presentation.source.SourceSortKey
+import com.morealm.app.presentation.source.sortedBySourceKey
 import com.morealm.app.ui.theme.LocalMoRealmColors
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -43,6 +45,8 @@ fun BookSourceManageScreen(
     onBack: () -> Unit,
     viewModel: BookSourceManageViewModel = hiltViewModel(),
     loginViewModel: com.morealm.app.presentation.source.SourceLoginViewModel = hiltViewModel(),
+    /** 登录 dialog "查看日志"菜单项触发；null 时菜单项隐藏。 */
+    onNavigateToLog: (() -> Unit)? = null,
 ) {
     val moColors = LocalMoRealmColors.current
     val context = LocalContext.current
@@ -60,6 +64,12 @@ fun BookSourceManageScreen(
     val loginStatusMap by loginViewModel.loginStatusMap.collectAsStateWithLifecycle()
     LaunchedEffect(sources) {
         if (sources.isNotEmpty()) loginViewModel.refreshLoginStatuses(sources)
+    }
+    // 监听 action JS 一次性事件（button / toggle / select 触发后回显结果）
+    LaunchedEffect(loginViewModel) {
+        loginViewModel.toast.collect { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
     }
     var showImportDialog by remember { mutableStateOf(false) }
     var importUrl by remember { mutableStateOf("") }
@@ -104,13 +114,25 @@ fun BookSourceManageScreen(
         }
     }
 
+    // ── 排序（持久化字符串 → 强类型 enum + 升降序） ───────────────────
+    // 排序在过滤之后、分组之前；这样：
+    //  - 搜索仍按原始 customOrder 命中（用户键入精准词最快收敛），
+    //  - 排好后再分组，每组内部就直接是用户期望顺序，无需 group header 内再排一次。
+    // 排序结果用 remember 让 sources/sortBy/asc 任一变化才重算，否则重组不动。
+    val sortByStr by viewModel.sortBy.collectAsStateWithLifecycle()
+    val sortAsc by viewModel.sortAscending.collectAsStateWithLifecycle()
+    val sortKey = SourceSortKey.fromKey(sortByStr)
+    val sortedSources = remember(filteredSources, sortKey, sortAsc) {
+        filteredSources.sortedBySourceKey(sortKey, sortAsc)
+    }
+
     // ── 分组模式（持久化字符串 → 强类型 enum） ─────────────────────────
     // 字符串容错：未知值 fromKey 落到 NONE，旧版本写脏值或用户手改 DataStore 不会崩。
     val groupModeStr by viewModel.groupMode.collectAsStateWithLifecycle()
     val groupMode = SourceGroupMode.fromKey(groupModeStr)
     // 分组结果只在源/搜索/模式变化时重算一次，避免每次重组遍历整个 source 列表。
-    val grouped = remember(filteredSources, groupMode) {
-        groupSources(filteredSources, groupMode)
+    val grouped = remember(sortedSources, groupMode) {
+        groupSources(sortedSources, groupMode)
     }
     // 折叠组的 key 集合：rememberSaveable 让旋转 / 进程死亡也能保留状态。
     // 切换分组方式时 key 含义变了（比如从域名切到类型），旧 key 全部失效，主动清空。
@@ -132,6 +154,57 @@ fun BookSourceManageScreen(
                     }
                 },
                 actions = {
+                    // Sort menu — 五维度 + 升降反转。当前选中维度前缀✓ ；
+                    // 点同一维度切升降，点不同维度只换 sort key 保留方向。
+                    var sortMenuExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { sortMenuExpanded = true }) {
+                            Icon(Icons.Default.Sort, "排序")
+                        }
+                        DropdownMenu(
+                            expanded = sortMenuExpanded,
+                            onDismissRequest = { sortMenuExpanded = false },
+                        ) {
+                            // Header — "升序 / 降序" 切换条目，独立于维度选择，避免每次反向都要再点一次维度。
+                            DropdownMenuItem(
+                                text = {
+                                    Text(if (sortAsc) "当前：升序（点切降序）" else "当前：降序（点切升序）")
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (sortAsc) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                                        null, modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                                onClick = {
+                                    viewModel.setSortAscending(!sortAsc)
+                                    sortMenuExpanded = false
+                                },
+                            )
+                            HorizontalDivider()
+                            for (k in SourceSortKey.entries) {
+                                val isSelected = k == sortKey
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            (if (isSelected) "✓ " else "  ") + k.label,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary
+                                                    else MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    },
+                                    onClick = {
+                                        // 点同一维度 = 翻方向；点新维度 = 切到该维度，方向保留。
+                                        if (isSelected) {
+                                            viewModel.setSortAscending(!sortAsc)
+                                        } else {
+                                            viewModel.setSortBy(k.key)
+                                        }
+                                        sortMenuExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
                     // Check sources button
                     IconButton(onClick = {
                         if (isChecking) viewModel.cancelCheckSources()
@@ -476,11 +549,17 @@ fun BookSourceManageScreen(
         is com.morealm.app.presentation.source.LoginUiState.ShowDialog -> {
             SourceLoginDialog(
                 source = state.source,
-                fields = state.fields,
+                fields = state.rows,
                 onDismiss = { loginViewModel.dismissDialog() },
                 onLogin = { fieldValues ->
                     loginViewModel.login(state.source, fieldValues)
                 },
+                onActionJs = { actionJs, currentValues ->
+                    loginViewModel.runActionJs(state.source, actionJs, currentValues)
+                },
+                onNavigateToLog = onNavigateToLog,
+                uiPatchFlow = loginViewModel.uiPatch,
+                uiRebuildFlow = loginViewModel.uiRebuild,
             )
         }
         is com.morealm.app.presentation.source.LoginUiState.ShowWebView -> {

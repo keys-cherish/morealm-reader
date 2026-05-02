@@ -48,11 +48,15 @@ fun CacheBookScreen(
     val multiSelectMode by viewModel.multiSelectMode.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedBookIds.collectAsStateWithLifecycle()
     val oneShotToast by viewModel.oneShotToast.collectAsStateWithLifecycle()
+    // Stage A 范围导出对话框需要的章节预览数据。
+    val chaptersForRange by viewModel.chaptersForRange.collectAsStateWithLifecycle()
 
     /** ⋮ 菜单展开状态（顶栏）。 */
     var showTopMenu by remember { mutableStateOf(false) }
     /** 「全部清空」二次确认对话框。 */
     var showClearAllConfirm by remember { mutableStateOf(false) }
+    /** Stage A 范围导出对话框（顶部菜单触发）。 */
+    var showRangeDialog by remember { mutableStateOf(false) }
 
     // 一次性 toast 消费
     LaunchedEffect(oneShotToast) {
@@ -68,13 +72,62 @@ fun CacheBookScreen(
         contract = ActivityResultContracts.CreateDocument("text/plain"),
     ) { uri ->
         val bookId = viewModel.pendingExportBookId
+        val startIdx = viewModel.pendingExportStartIndex
+        val endIdx = viewModel.pendingExportEndIndex
         viewModel.pendingExportBookId = null
+        viewModel.pendingExportStartIndex = 0
+        viewModel.pendingExportEndIndex = -1
         if (uri != null && bookId != null) {
             val book = webBooks.firstOrNull { it.id == bookId }
             if (book != null) {
-                viewModel.exportTxt(book, uri)
+                viewModel.exportTxt(book, uri, startIdx, endIdx)
             }
         }
+    }
+
+    // Stage B SAF launcher for EPUB. 跟 TXT 走分开的 launcher 因为 MIME 类型固定，
+    // 又不希望每次提示用户「请选择导出格式」拖慢节奏 —— Per-book 菜单里两个入口
+    // 各自直达。文件名后缀也分别决定（.txt / .epub）。
+    val epubLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/epub+zip"),
+    ) { uri ->
+        val bookId = viewModel.pendingExportBookId
+        val startIdx = viewModel.pendingExportStartIndex
+        val endIdx = viewModel.pendingExportEndIndex
+        viewModel.pendingExportBookId = null
+        viewModel.pendingExportStartIndex = 0
+        viewModel.pendingExportEndIndex = -1
+        if (uri != null && bookId != null) {
+            val book = webBooks.firstOrNull { it.id == bookId }
+            if (book != null) {
+                viewModel.exportEpub(book, uri, startIdx, endIdx)
+            }
+        }
+    }
+
+    // Stage C：EPUB 多卷文件夹 launcher。对话框里用户选了 EPUB + 分卷大小 > 0 时
+    // 触发 —— 用户选一次目录，ViewModel 在该目录下批量建多个 .epub 卷文件。比起
+    // 让用户手点 N 次 CreateDocument，这是 Legado 早期就用的体验。
+    //
+    // 取了 takePersistableUriPermission 让回调期间 ContentResolver 不丢权限；这条
+    // 权限不长期持有（用完即弃，不污染用户的"应用持久授权列表"），所以没在退出
+    // 时显式 release —— 系统进程清理或下次设备重启会自然回收。
+    val epubFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree(),
+    ) { treeUri ->
+        if (treeUri == null) {
+            // 用户取消：丢弃 pending 状态。
+            viewModel.pendingMultiVolume = null
+            return@rememberLauncherForActivityResult
+        }
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                treeUri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        viewModel.exportEpubMultiVolume(treeUri)
     }
 
     // Refresh stats when download completes
@@ -145,6 +198,14 @@ fun CacheBookScreen(
                                         onClick = {
                                             showTopMenu = false
                                             viewModel.enterMultiSelect()
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("按范围导出") },
+                                        leadingIcon = { Icon(Icons.Default.FilterList, null) },
+                                        onClick = {
+                                            showTopMenu = false
+                                            showRangeDialog = true
                                         },
                                     )
                                     DropdownMenuItem(
@@ -313,6 +374,21 @@ fun CacheBookScreen(
                                     .take(80) + ".txt"
                                 exportLauncher.launch(safeName)
                             },
+                            onExportEpub = {
+                                if (stat == null || stat.cachedChapters == 0) {
+                                    Toast.makeText(
+                                        context,
+                                        "请先缓存章节再导出",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    return@CacheBookItem
+                                }
+                                viewModel.pendingExportBookId = book.id
+                                val safeName = "${book.title}_${book.author.ifBlank { "未知" }}"
+                                    .replace(Regex("""[\\/:*?"<>|]"""), "_")
+                                    .take(80) + ".epub"
+                                epubLauncher.launch(safeName)
+                            },
                         )
                     }
                 }
@@ -341,6 +417,54 @@ fun CacheBookScreen(
             },
         )
     }
+
+    // Stage A/C 范围导出 — 顶部菜单触发后弹出，选书 + 选范围 + 选格式 + (EPUB 时)
+    // 选分卷大小 → 启动对应 SAF + 调 ViewModel：
+    //   TXT                     → exportLauncher       → exportTxt
+    //   EPUB 单文件 (size == 0) → epubLauncher         → exportEpub
+    //   EPUB 多卷  (size  > 0)  → epubFolderLauncher   → exportEpubMultiVolume
+    if (showRangeDialog) {
+        RangeExportDialog(
+            books = webBooks,
+            cacheStats = cacheStats,
+            chaptersByBook = chaptersForRange,
+            onLoadChapters = { viewModel.loadChaptersForRange(it) },
+            onDismiss = { showRangeDialog = false },
+            onConfirm = { book, fromIdx, toIdx, format, epubSize ->
+                showRangeDialog = false
+                // 文件名带范围标识，方便用户日后辨识。FAT/exFAT 禁字符同步过滤。
+                val safeTitle = book.title
+                    .replace(Regex("""[\\/:*?"<>|]"""), "_")
+                    .take(60)
+                val rangeTag = "_第${fromIdx + 1}-${toIdx + 1}章"
+                when {
+                    format == ExportFormat.TXT -> {
+                        viewModel.pendingExportBookId = book.id
+                        viewModel.pendingExportStartIndex = fromIdx
+                        viewModel.pendingExportEndIndex = toIdx
+                        exportLauncher.launch("$safeTitle$rangeTag.txt")
+                    }
+                    format == ExportFormat.EPUB && epubSize <= 0 -> {
+                        viewModel.pendingExportBookId = book.id
+                        viewModel.pendingExportStartIndex = fromIdx
+                        viewModel.pendingExportEndIndex = toIdx
+                        epubLauncher.launch("$safeTitle$rangeTag.epub")
+                    }
+                    else -> {
+                        // EPUB 多卷：先存待办，让用户挑一个目录；ViewModel 在该目录下
+                        // 建多个卷文件。OpenDocumentTree 的 input URI 用 null 表示"任选"。
+                        viewModel.pendingMultiVolume = CacheBookViewModel.PendingMultiVolume(
+                            bookId = book.id,
+                            startIndex = fromIdx,
+                            endIndex = toIdx,
+                            volumeSize = epubSize,
+                        )
+                        epubFolderLauncher.launch(null)
+                    }
+                }
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -362,6 +486,7 @@ private fun CacheBookItem(
     onDownloadFromCurrent: () -> Unit,
     onClearCache: () -> Unit,
     onExportTxt: () -> Unit = {},
+    onExportEpub: () -> Unit = {},
 ) {
     /** 操作菜单展开状态（普通模式下右侧 ⋮ 按钮触发）。 */
     var menuExpanded by remember { mutableStateOf(false) }
@@ -524,6 +649,14 @@ private fun CacheBookItem(
                                         tint = MaterialTheme.colorScheme.tertiary)
                                 },
                                 onClick = { menuExpanded = false; onExportTxt() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("导出 EPUB") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.MenuBook, null,
+                                        tint = MaterialTheme.colorScheme.tertiary)
+                                },
+                                onClick = { menuExpanded = false; onExportEpub() },
                             )
                             DropdownMenuItem(
                                 text = { Text("清除", color = MaterialTheme.colorScheme.error) },

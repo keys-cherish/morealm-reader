@@ -1,11 +1,7 @@
 package com.morealm.app.ui.listen
 
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -248,6 +244,58 @@ fun ListenScreen(
                 )
             }
 
+            // 系统 TTS 引擎包绑定 —— 仅在选了 "system" 引擎时显示。
+            // 解决 multiTTS / 讯飞 / 三星 TTS 装了却被默认引擎路径漏识别的问题；
+            // 直接绑指定包 → TextToSpeech(ctx, listener, engineName) 路径。
+            // 改动后需重启阅读器，TtsEngineHost 的 systemTtsEngine 是 lazy。
+            if (selectedEngine == "system") {
+                val systemEngines by viewModel.systemEngines.collectAsStateWithLifecycle()
+                val selectedPkg by viewModel.selectedSystemEnginePackage.collectAsStateWithLifecycle()
+                var showEnginePicker by remember { mutableStateOf(false) }
+
+                LaunchedEffect(showEnginePicker) {
+                    // 打开 picker 时主动拉一次最新引擎列表，刚装新引擎也能立刻看见
+                    if (showEnginePicker) viewModel.refreshSystemEngineList()
+                }
+
+                Spacer(Modifier.height(4.dp))
+                TextButton(
+                    onClick = { showEnginePicker = true },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) {
+                    Icon(
+                        Icons.Default.RecordVoiceOver,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "系统 TTS 引擎包: ${
+                            selectedPkg.ifBlank { "跟随系统默认" }
+                        }",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+
+                if (showEnginePicker) {
+                    SystemEnginePickerDialog(
+                        engines = systemEngines,
+                        selected = selectedPkg,
+                        onSelect = { pkg ->
+                            viewModel.selectSystemEnginePackage(pkg)
+                            showEnginePicker = false
+                            android.widget.Toast.makeText(
+                                context,
+                                "已切换 TTS 引擎，重启阅读器后生效",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                        onDismiss = { showEnginePicker = false },
+                    )
+                }
+            }
+
             Spacer(Modifier.height(14.dp))
 
             TtsVoiceSelector(
@@ -429,42 +477,28 @@ private fun TtsVoiceSelector(
     }
 }
 
-/** Large circular cover with pulse glow animation — matches HTML tts-cover */
+/**
+ * Large circular cover. 之前用 infiniteTransition 让 size 在 1.0~1.06 之间缓动
+ * （类似呼吸效果），但视觉上是封面"上下浮动 / 缩放缓动"，长时间盯着会不舒服，
+ * 用户反馈后去掉。保留静态外发光圈和阴影，仍能体现"在播"的氛围。
+ */
 @Composable
 private fun TtsCoverCircle(isPlaying: Boolean) {
     val accent = MaterialTheme.colorScheme.primary
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = if (isPlaying) 1.06f else 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "pulseScale",
-    )
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.08f,
-        targetValue = if (isPlaying) 0.04f else 0.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "glowAlpha",
-    )
+    val glowAlpha = 0.08f
 
     Box(contentAlignment = Alignment.Center) {
         // Outer glow ring
         Box(
             Modifier
-                .size((180 * pulseScale + 16).dp)
+                .size(196.dp)
                 .clip(CircleShape)
                 .background(accent.copy(alpha = glowAlpha))
         )
         // Cover circle
         Box(
             modifier = Modifier
-                .size((180 * pulseScale).dp)
+                .size(180.dp)
                 .shadow(24.dp, CircleShape, ambientColor = accent.copy(alpha = 0.35f))
                 .clip(CircleShape)
                 .background(
@@ -478,6 +512,97 @@ private fun TtsCoverCircle(isPlaying: Boolean) {
             contentAlignment = Alignment.Center,
         ) {
             Text("📖", fontSize = 56.sp)
+        }
+    }
+}
+
+/**
+ * 弹层让用户在已安装的系统 TTS 引擎里选一个绑定。空列表时提示去系统设置安装；
+ * 永远附"跟随系统默认"作为第一项，让用户能撤销。
+ */
+@Composable
+private fun SystemEnginePickerDialog(
+    engines: List<com.morealm.app.domain.tts.SystemTtsEngine.EngineInfo>,
+    selected: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择系统 TTS 引擎") },
+        text = {
+            Column {
+                Text(
+                    "改动后需重启阅读器生效。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+                Spacer(Modifier.height(12.dp))
+                // 跟系统默认项
+                EngineRow(
+                    label = "跟随系统默认",
+                    pkg = "",
+                    selected = selected.isBlank(),
+                    onClick = { onSelect("") },
+                )
+                if (engines.isEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "未检测到任何 TTS 引擎，请先到系统设置安装",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else {
+                    engines.forEach { eng ->
+                        EngineRow(
+                            label = eng.label.ifBlank { eng.name },
+                            pkg = eng.name,
+                            selected = selected == eng.name,
+                            onClick = { onSelect(eng.name) },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        },
+    )
+}
+
+@Composable
+private fun EngineRow(
+    label: String,
+    pkg: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        color = if (selected)
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+        else
+            androidx.compose.ui.graphics.Color.Transparent,
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+            )
+            if (pkg.isNotBlank()) {
+                Text(
+                    pkg,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                )
+            }
         }
     }
 }

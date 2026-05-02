@@ -70,13 +70,14 @@ class WebDavBookProgressSync @Inject constructor(
     suspend fun upload(book: Book, progress: ReadProgress) {
         val client = createClient() ?: return
         val dir = currentDir()
+        val progressDir = WebDavLayout.subPath(dir, WebDavLayout.SUBDIR_BOOK_PROGRESS)
         uploadMutex.withLock {
             try {
-                client.mkdir("$dir/bookProgress")
+                client.mkdir(progressDir)
                 val payload = BookProgress.from(book, progress)
                 val bytes = json.encodeToString(payload).toByteArray()
                 client.upload(
-                    "$dir/bookProgress/${book.id}.json",
+                    "$progressDir/${book.id}.json",
                     bytes,
                     "application/json",
                 )
@@ -98,8 +99,9 @@ class WebDavBookProgressSync @Inject constructor(
         if (!prefs.syncBookProgress.first()) return 0
         val client = createClient() ?: return 0
         val dir = currentDir()
+        val progressDir = WebDavLayout.subPath(dir, WebDavLayout.SUBDIR_BOOK_PROGRESS)
         val files = try {
-            client.listFiles("$dir/bookProgress")
+            client.listFiles(progressDir)
         } catch (e: Exception) {
             AppLog.warn("WebDAV", "list bookProgress failed: ${e.message}")
             return 0
@@ -108,7 +110,7 @@ class WebDavBookProgressSync @Inject constructor(
         for (file in files) {
             if (file.isDirectory || !file.name.endsWith(".json")) continue
             try {
-                val raw = client.download("$dir/bookProgress/${file.name}")
+                val raw = client.download("$progressDir/${file.name}")
                 if (raw.isEmpty()) continue
                 val remote = json.decodeFromString<BookProgress>(String(raw))
                 val local = bookRepo.getById(remote.bookId) ?: continue
@@ -155,5 +157,5 @@ class WebDavBookProgressSync @Inject constructor(
     }
 
     private suspend fun currentDir(): String =
-        prefs.webDavDir.first().ifBlank { "MoRealm" }.trim('/')
+        WebDavLayout.normalizeDir(prefs.webDavDir.first())
 }

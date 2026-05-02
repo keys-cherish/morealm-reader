@@ -15,6 +15,7 @@ import com.morealm.app.domain.entity.rule.TocRule
 import com.morealm.app.domain.analyzeRule.JsExtensions
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.CookieStore
+import kotlinx.serialization.builtins.serializer
 import com.script.ScriptBindings
 import com.script.rhino.RhinoScriptEngine
 import kotlinx.serialization.builtins.nullable
@@ -189,25 +190,62 @@ data class BookSource(
     }
 
     /**
-     * 获取用户登录信息
+     * 获取用户登录信息（明文 JSON 字符串）。
+     * 兼容旧数据：若缓存值不带 AES 魔数，按明文返回；新数据自动解密。
+     * 与 Legado [BaseSource.getLoginInfo] 行为对齐（解密失败兜底）。
      */
     fun getLoginInfo(): String? {
-        return CacheManager.get("userInfo_${getKey()}")
+        val raw = CacheManager.get("userInfo_${getKey()}") ?: return null
+        return com.morealm.app.domain.source.LoginCrypto.tryDecrypt(raw) ?: raw
     }
 
     fun getLoginInfoMap(): Map<String, String>? {
-        val info = getLoginInfo() ?: return null
+        // 缓存命中：直接 decode
+        val info = getLoginInfo()
+        if (info != null) {
+            return try {
+                jsonParser.decodeFromString<Map<String, String>>(info)
+            } catch (_: Exception) { null }
+        }
+        // 缓存未命中 → 用 loginUi 默认值兜底初始化（移植 Legado BaseSource:187-215）。
+        // 仅在 loginUi 是普通 JSON（非 @js: / <js> 前缀）时直接生效；JS 前缀场景由
+        // SourceLoginViewModel.parseLoginUi 在打开对话框时统一处理，避免在 entity 层
+        // 拉起脚本引擎（线程 / 错误处理都更适合放 ViewModel）。
+        val ui = loginUi
+        if (ui.isNullOrBlank() || ui.startsWith("@js:") || ui.startsWith("<js>")) return null
         return try {
-            jsonParser.decodeFromString<Map<String, String>>(info)
+            // 复用 jsonParser 解析 RowUi-like 数组，仅取 name + default，过滤 button
+            val rowsJson = jsonParser.parseToJsonElement(ui)
+            val list = rowsJson as? kotlinx.serialization.json.JsonArray ?: return null
+            val initial = mutableMapOf<String, String>()
+            for (el in list) {
+                val obj = el as? kotlinx.serialization.json.JsonObject ?: continue
+                val name = (obj["name"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: continue
+                val type = (obj["type"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "text"
+                if (type == "button") continue
+                val default = (obj["default"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: ""
+                initial[name] = default
+            }
+            if (initial.isEmpty()) return null
+            // 把默认值持久化到缓存，下次直接命中（与 Legado 行为一致）
+            putLoginInfo(jsonParser.encodeToString(
+                kotlinx.serialization.builtins.MapSerializer(
+                    String.serializer(),
+                    String.serializer(),
+                ),
+                initial,
+            ))
+            initial
         } catch (_: Exception) { null }
     }
 
     /**
-     * 保存用户登录信息
+     * 保存用户登录信息（始终写入加密形式）。
+     * 旧明文用户升级后**首次写入时**自动迁移为密文。
      */
     fun putLoginInfo(info: String): Boolean {
         return try {
-            CacheManager.put("userInfo_${getKey()}", info)
+            CacheManager.put("userInfo_${getKey()}", com.morealm.app.domain.source.LoginCrypto.encrypt(info))
             true
         } catch (_: Exception) { false }
     }
