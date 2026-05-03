@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -664,32 +665,31 @@ private fun EngineRow(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    Surface(
-        onClick = onClick,
-        color = if (selected)
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-        else
-            androidx.compose.ui.graphics.Color.Transparent,
-        shape = MaterialTheme.shapes.small,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-        ) {
+    // ListItem 三槽位：leading 用 RadioButton 显示选中态，headline = 引擎名，
+    // supporting = 包名（pkg 为空时整个 supporting 不渲染）。
+    // 选中态的浅主题色背景由 ListItem.colors.containerColor 提供；点击效果由
+    // Modifier.clickable 接收，与原 Surface(onClick=) 等价。
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        headlineContent = {
             Text(
                 label,
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (selected) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurface,
+                else MaterialTheme.colorScheme.onSurface,
             )
-            if (pkg.isNotBlank()) {
-                Text(
-                    pkg,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                )
-            }
-        }
-    }
+        },
+        supportingContent = pkg.takeIf { it.isNotBlank() }?.let {
+            { Text(it, style = MaterialTheme.typography.labelSmall) }
+        },
+        leadingContent = {
+            RadioButton(selected = selected, onClick = null)
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = if (selected)
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+            else
+                androidx.compose.ui.graphics.Color.Transparent,
+        ),
+    )
 }

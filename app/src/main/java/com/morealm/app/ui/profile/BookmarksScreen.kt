@@ -19,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,8 +55,10 @@ fun BookmarksScreen(
     val filter by viewModel.filter.collectAsStateWithLifecycle()
     val groupByBook by viewModel.groupByBook.collectAsStateWithLifecycle()
     var menuExpanded by remember { mutableStateOf(false) }
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
                 title = { Text("书签 (${items.size})") },
@@ -92,6 +95,7 @@ fun BookmarksScreen(
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                 ),
+                scrollBehavior = scrollBehavior,
             )
         },
     ) { padding ->

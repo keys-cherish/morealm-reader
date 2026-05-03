@@ -3,7 +3,6 @@
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.animation.core.Animatable
@@ -141,6 +140,7 @@ fun MoRealmNavHost(
                 val onNavAppearance = remember { { navController.safeNavigate("appearance") } }
                 val onNavSourceManage = remember { { navController.safeNavigate("source_manage") } }
                 val onNavReadingSettings = remember { { navController.safeNavigate("reading_settings") } }
+                val onNavSearchSettings = remember { { navController.safeNavigate("search_settings") } }
                 val onNavReplaceRules = remember { { navController.safeNavigate("replace_rules") } }
                 val onNavAutoGroupRules = remember { { navController.safeNavigate("auto_group_rules") } }
                 val onNavAppLog = remember { { navController.safeNavigate("app_log") } }
@@ -217,15 +217,24 @@ fun MoRealmNavHost(
                             else -> 0f
                         }
                         key(tab) {
+                            // Bug 修复：原本 invisible 时切到 Modifier.size(0.dp)，会让 cached tab 的
+                            // 父节点处于"未 placed"状态。OutlinedTextField 等内部使用 BringIntoViewRequester
+                            // 的组件在 IME 收起 / focus 离开时排队的回调，会因父节点 size=0 抛
+                            // IllegalStateException 并把 Compose 渲染管线打断，遗留 layer/绘制残影
+                            // 在状态栏下方（即用户看到的橘色矩形 / 弧形）。
+                            //
+                            // 改为：始终 fillMaxSize，用 graphicsLayer.alpha 控制可见性。zIndex 保证
+                            // selectedTab 在最上层接事件；不可见 tab 平铺在底但 alpha=0 看不见也不
+                            // 受 size 切换影响。代价：cached tab 总参与 layout，但本来 cachedTabs 就
+                            // 持久缓存，多一次 measure 可以接受。
                             Box(
-                                modifier = if (visible) {
-                                    Modifier
-                                        .fillMaxSize()
-                                        .zIndex(if (page == selectedTab) 1f else 0f)
-                                        .graphicsLayer { translationX = offsetX }
-                                } else {
-                                    Modifier.size(0.dp)
-                                }
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (page == selectedTab) 1f else 0f)
+                                    .graphicsLayer {
+                                        alpha = if (visible) 1f else 0f
+                                        translationX = if (visible) offsetX else 0f
+                                    }
                             ) {
                                 when (tab) {
                         BottomTab.Shelf -> {
@@ -260,6 +269,7 @@ fun MoRealmNavHost(
                             onNavigateAbout = onNavAbout,
                             onNavigateSourceManage = onNavSourceManage,
                             onNavigateReadingSettings = onNavReadingSettings,
+                            onNavigateSearchSettings = onNavSearchSettings,
                             onNavigateReplaceRules = onNavReplaceRules,
                             onNavigateAutoGroupRules = onNavAutoGroupRules,
                             onNavigateAppLog = onNavAppLog,
@@ -333,6 +343,12 @@ fun MoRealmNavHost(
 
             composable("reading_settings") {
                 ReadingSettingsScreen(onBack = { navController.safePopBackStack() })
+            }
+
+            composable("search_settings") {
+                com.morealm.app.ui.settings.SearchSettingsScreen(
+                    onBack = { navController.safePopBackStack() },
+                )
             }
 
             composable("font_manager") {

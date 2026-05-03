@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -25,10 +26,14 @@ import androidx.compose.ui.unit.sp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChangelogScreen(onBack: () -> Unit) {
+    // enterAlwaysScrollBehavior：往下滚顶栏隐藏，反向（往上滚）一指就立刻浮出。
+    // 长内容页（更新日志条目多）拿到这个交互后竖屏空间能多还原一行。
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .nestedScroll(scrollBehavior.nestedScrollConnection)
     ) {
         TopAppBar(
             title = { Text("更新日志", fontWeight = FontWeight.Bold) },
@@ -40,6 +45,7 @@ fun ChangelogScreen(onBack: () -> Unit) {
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.background,
             ),
+            scrollBehavior = scrollBehavior,
         )
 
         LazyColumn(

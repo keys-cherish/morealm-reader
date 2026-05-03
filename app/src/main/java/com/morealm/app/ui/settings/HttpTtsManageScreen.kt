@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,8 +59,10 @@ fun HttpTtsManageScreen(
     var editing by remember { mutableStateOf<HttpTts?>(null) }
     var showImport by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<HttpTts?>(null) }
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
                 title = { Text("自定义朗读源") },
@@ -76,6 +79,7 @@ fun HttpTtsManageScreen(
                         Icon(Icons.Default.Add, contentDescription = "新建")
                     }
                 },
+                scrollBehavior = scrollBehavior,
             )
         },
         snackbarHost = { SnackbarHost(snackbarHost) },

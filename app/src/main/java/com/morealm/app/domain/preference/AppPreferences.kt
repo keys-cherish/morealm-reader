@@ -199,6 +199,25 @@ class AppPreferences @Inject constructor(
         // kind/category/description 全空），是否允许 source 标签升级为兜底文件夹。
         // 默认 true —— 用户预期「立即整理」之后没有书停留在根目录看不到。
         val ALLOW_SOURCE_FALLBACK = booleanPreferencesKey("allow_source_fallback")
+        // ── 搜索 / 换源 网络层调度参数 ────────────────────────────────────────
+        //
+        // 这两个值从 SearchViewModel / ChangeSourceController 之前的硬编码常量
+        // (8 / 30s) 升级而来。提到 prefs 的动机：
+        //  1. 用户网络/设备差异巨大 — 4G + 千元机用户跑 16 并发可能爆 socket，
+        //     高速 Wi-Fi + 旗舰用户 32 并发也吃得消，硬编码服侍不了所有人。
+        //  2. 部分书源对短时高频请求会临时拉黑 IP — 用户能调小并发来缓解。
+        //  3. 单源超时调长，让弱网用户能拿到结果而不是一律「超时」。
+        //
+        // 默认值选择：
+        //  - parallelism = 16 (旧默认 8 的两倍) — 与 legado-MD3 报告对齐；
+        //    OkHttp 全局 dispatcher.maxRequests=64、per-host=5，16 并发不会撞上限。
+        //  - timeoutSec = 30 — 维持旧行为，不主动让搜索体感变慢。
+        //
+        // 取值范围（在读侧 coerceIn 兜底）：
+        //  - parallelism: 1..32  — 1 = 强行串行；32 = OkHttp 上限留余量
+        //  - timeoutSec : 5..120 — 5s 是最低有效值；120s 是用户能接受的等待上限
+        val SEARCH_PARALLELISM = intPreferencesKey("search_parallelism")
+        val SOURCE_SEARCH_TIMEOUT_SEC = intPreferencesKey("source_search_timeout_sec")
     }
 
     /**
@@ -686,6 +705,38 @@ class AppPreferences @Inject constructor(
         context.dataStore.edit { prefs ->
             prefs[Keys.ALLOW_SOURCE_FALLBACK] = value
         }
+    }
+
+    // ── 搜索 / 换源 调度参数 ─────────────────────────────────────────────
+    //
+    // 三种暴露方式各有用：
+    //  - Flow         : SearchSettingsScreen 实时绑定 Slider 和文案
+    //  - suspend get  : SearchViewModel.search() 入口一次性快照（搜索期间值不变）
+    //  - setter       : 设置页落库；coerceIn 兜底防越界
+    //
+    // 不暴露同步阻塞读 — 搜索路径已经在 IO dispatcher 里 suspend，走 Flow.first()
+    // 比额外维护一份 SharedPreferences 镜像更简单。
+
+    /** 默认 16；合法范围 1..32（详见 [Keys.SEARCH_PARALLELISM] 注释）。 */
+    val searchParallelism: Flow<Int> = context.dataStore.data
+        .map { (it[Keys.SEARCH_PARALLELISM] ?: 16).coerceIn(1, 32) }
+
+    /** 一次性取值，用于搜索入口构造 Semaphore — 搜索过程中不响应配置变更。 */
+    suspend fun getSearchParallelism(): Int = searchParallelism.first()
+
+    suspend fun setSearchParallelism(value: Int) {
+        update(Keys.SEARCH_PARALLELISM, value.coerceIn(1, 32))
+    }
+
+    /** 默认 30；合法范围 5..120 秒（详见 [Keys.SOURCE_SEARCH_TIMEOUT_SEC] 注释）。 */
+    val sourceSearchTimeoutSec: Flow<Int> = context.dataStore.data
+        .map { (it[Keys.SOURCE_SEARCH_TIMEOUT_SEC] ?: 30).coerceIn(5, 120) }
+
+    /** 一次性取值，单位 ms — withTimeout 直接消费。 */
+    suspend fun getSourceSearchTimeoutMs(): Long = sourceSearchTimeoutSec.first() * 1000L
+
+    suspend fun setSourceSearchTimeoutSec(value: Int) {
+        update(Keys.SOURCE_SEARCH_TIMEOUT_SEC, value.coerceIn(5, 120))
     }
 
     // ── 备份 / 恢复用：DataStore 全量 raw 读写 ────────────────────────────

@@ -49,6 +49,7 @@ fun LegadoImportScreen(
     val preview by viewModel.preview.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val importing by viewModel.importing.collectAsStateWithLifecycle()
+    val progress by viewModel.progress.collectAsStateWithLifecycle()
     val result by viewModel.result.collectAsStateWithLifecycle()
     val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     val conflictStrategy by viewModel.conflictStrategy.collectAsStateWithLifecycle()
@@ -116,8 +117,16 @@ fun LegadoImportScreen(
                     onChange = viewModel::setConflictStrategy,
                     hasConflicts = pv.bookConflicts + pv.bookSourceConflicts +
                         pv.bookGroupConflicts + pv.replaceRuleConflicts +
-                        pv.httpTtsConflicts > 0,
+                        pv.httpTtsConflicts + pv.searchHistoryConflicts > 0,
                 )
+
+                // ── 实时进度卡（仅 importing 时显示）──
+                // 把进度 UI 放在按钮上方，不挤压"开始导入"按钮的视觉重量。
+                // step 切换时进度条从 100% → 0% 的"翻页感"是预期，告诉用户进入下一段。
+                if (importing) {
+                    Spacer(Modifier.height(16.dp))
+                    ImportProgressCard(progress)
+                }
 
                 Spacer(Modifier.height(20.dp))
                 Button(
@@ -186,7 +195,7 @@ private fun HeroCard() {
                 "选择 Legado 应用导出的 .zip 备份，自动迁移：\n" +
                     "• 书架（含阅读进度）\n" +
                     "• 书源 + 替换规则 + 自定义朗读引擎\n" +
-                    "• 书签 + 分组",
+                    "• 书签 + 分组 + 搜索历史",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
                 lineHeight = MaterialTheme.typography.bodyMedium.lineHeight,
@@ -271,6 +280,7 @@ private fun PreviewCard(pv: LegadoImporter.Preview) {
             PreviewRow("分组", pv.bookGroupCount, pv.bookGroupConflicts)
             PreviewRow("替换规则", pv.replaceRuleCount, pv.replaceRuleConflicts)
             PreviewRow("朗读引擎", pv.httpTtsCount, pv.httpTtsConflicts)
+            PreviewRow("搜索历史", pv.searchHistoryCount, pv.searchHistoryConflicts)
 
             if (pv.warnings.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
@@ -380,6 +390,82 @@ private fun ConflictStrategyCard(
                             else LegadoImporter.ConflictStrategy.SKIP
                         )
                     },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 导入进行中的进度卡片。屏幕只在 importing=true 时挂这块。
+ *
+ * - progress=null：刚启动还没收到第一条 emit（解 zip 阶段非常短，通常一帧），
+ *   显示 indeterminate 进度条 + 默认文案"准备中…"。
+ * - total=0：zip 解析阶段（明确 indeterminate），文案显示 step。
+ * - total>0：determinate，进度条 = current / total，文案显示 "正在导入{step}  current / total"。
+ */
+@Composable
+private fun ImportProgressCard(progress: LegadoImporter.Progress?) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+        ),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            val stepText: String
+            val countText: String
+            val determinateValue: Float?
+
+            when {
+                progress == null -> {
+                    stepText = "准备中…"
+                    countText = ""
+                    determinateValue = null
+                }
+                progress.total <= 0 -> {
+                    stepText = progress.step
+                    countText = ""
+                    determinateValue = null
+                }
+                else -> {
+                    stepText = "正在导入${progress.step}"
+                    countText = "${progress.current} / ${progress.total}"
+                    determinateValue = (progress.current.toFloat() / progress.total).coerceIn(0f, 1f)
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stepText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.weight(1f),
+                )
+                if (countText.isNotEmpty()) {
+                    Text(
+                        countText,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f),
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            if (determinateValue != null) {
+                LinearProgressIndicator(
+                    progress = { determinateValue },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                )
+            } else {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
                 )
             }
         }

@@ -10,6 +10,7 @@ import com.morealm.app.domain.entity.Bookmark
 import com.morealm.app.domain.entity.HttpTts
 import com.morealm.app.domain.entity.ReadProgress
 import com.morealm.app.domain.entity.ReplaceRule
+import com.morealm.app.domain.entity.SearchKeyword
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -39,10 +40,13 @@ import java.util.zip.ZipInputStream
  *  5. **replaceRule.json** → `ReplaceRule`
  *  6. **httpTTS.json** → `HttpTts`
  *  7. **(派生) ReadProgress** —— 从 bookshelf.json 的 durChapterIndex/durChapterPos 提取
+ *  8. **searchHistory.json** → `SearchKeyword` —— 1:1 映射（word/usage/lastUseTime
+ *     字段名一致）；冲突按 [ConflictStrategy] 处理（OVERWRITE 用 Legado 那条覆盖
+ *     usage/time，SKIP 留本机原值不动）
  *
  * 暂未覆盖（[ImportResult.skippedSections] 会列出来，下一轮做）：
  *  - rssSources / rssStar / sourceSub / dictRule / keyboardAssists / servers /
- *    txtTocRule / searchHistory（MoRealm 无对应能力或较低优先）
+ *    txtTocRule（MoRealm 无对应能力或较低优先）
  *  - readConfig.json / themeConfig.json（要做样式 + 主题映射，工作量单独再做一轮）
  *  - config.xml（SharedPreferences 白名单映射，下一轮做）
  *
@@ -68,6 +72,22 @@ object LegadoImporter {
         explicitNulls = false
     }
 
+    /**
+     * 导入过程中的进度反馈。每个 section 开始 / 结束 + per-item forEach 内 emit。
+     *
+     * - [step] 用户可读的中文 step 名（如 "书源"、"书架"），用于 UI "正在导入书源"
+     * - [current] 当前 step 已处理条目数；section 结束时 = total
+     * - [total] 当前 step 总条目数；为 0 表示该 step 没数据可导
+     *
+     * 注意只反映"段内"进度，不做跨段加权 —— 各 section 体量差异大（500 个书源 vs
+     * 5 个分组），加权 overall 反而误导用户。UI 用 step 切换 + 进度条重置体现"翻页感"。
+     */
+    data class Progress(
+        val step: String,
+        val current: Int,
+        val total: Int,
+    )
+
     /** 主键冲突策略。 */
     enum class ConflictStrategy {
         /** 主键命中时覆盖（Legado 默认行为）。 */
@@ -86,6 +106,8 @@ object LegadoImporter {
         val includeBookGroups: Boolean = true,
         val includeReplaceRules: Boolean = true,
         val includeHttpTts: Boolean = true,
+        /** Legado searchHistory.json → SearchKeyword 表。 */
+        val includeSearchHistory: Boolean = true,
         /** 从 Book.durChapterIndex/durChapterPos 派生 ReadProgress（不需要单独读 readRecord.json）。 */
         val includeReadProgress: Boolean = true,
         val conflictStrategy: ConflictStrategy = ConflictStrategy.SKIP,
@@ -102,11 +124,13 @@ object LegadoImporter {
         val bookGroupCount: Int,
         val replaceRuleCount: Int,
         val httpTtsCount: Int,
+        val searchHistoryCount: Int,
         val bookConflicts: Int,
         val bookSourceConflicts: Int,
         val bookGroupConflicts: Int,
         val replaceRuleConflicts: Int,
         val httpTtsConflicts: Int,
+        val searchHistoryConflicts: Int,
         val skippedFiles: List<String>,
         val warnings: List<String>,
     )
@@ -125,6 +149,8 @@ object LegadoImporter {
         val replaceRulesSkipped: Int,
         val httpTtsInserted: Int,
         val httpTtsSkipped: Int,
+        val searchHistoryInserted: Int,
+        val searchHistorySkipped: Int,
         val readProgressInserted: Int,
         val skippedSections: List<String>,
         val errors: List<String>,
@@ -136,6 +162,7 @@ object LegadoImporter {
             if (bookGroupsInserted + bookGroupsSkipped > 0) appendLine("分组：导入 $bookGroupsInserted，跳过 $bookGroupsSkipped")
             if (replaceRulesInserted + replaceRulesSkipped > 0) appendLine("替换规则：导入 $replaceRulesInserted，跳过 $replaceRulesSkipped")
             if (httpTtsInserted + httpTtsSkipped > 0) appendLine("朗读引擎：导入 $httpTtsInserted，跳过 $httpTtsSkipped")
+            if (searchHistoryInserted + searchHistorySkipped > 0) appendLine("搜索历史：导入 $searchHistoryInserted，跳过 $searchHistorySkipped")
             if (readProgressInserted > 0) appendLine("阅读进度：从书架派生 $readProgressInserted 条")
             if (skippedSections.isNotEmpty()) appendLine("未支持：${skippedSections.joinToString("、")}")
         }.trim()
@@ -165,12 +192,18 @@ object LegadoImporter {
         val existingGroupIds = db.bookGroupDao().getAllGroupsSync().map { it.id }.toHashSet()
         val existingReplaceIds = db.replaceRuleDao().getAllSync().map { it.id }.toHashSet()
         val existingHttpTtsIds = db.httpTtsDao().getEnabled().map { it.id }.toHashSet()
+        // 搜索历史用 word 主键查重，与 SearchKeywordDao 的 SKIP 行为一致。
+        // 走 topAllSync(Int.MAX_VALUE) 拉全表 —— 历史最大 200 条（见 SearchKeywordRepository.maxHistorySize），
+        // 一次性进内存做哈希表完全没成本。
+        val existingHistoryWords = db.searchKeywordDao().topAllSync(Int.MAX_VALUE)
+            .map { it.word }.toHashSet()
 
         val bookConflicts = parsed.books.count { it.bookUrl in existingBookUrls }
         val sourceConflicts = parsed.bookSources.count { it.bookSourceUrl in existingSourceUrls }
         val groupConflicts = parsed.bookGroups.count { it.groupId.toString() in existingGroupIds }
         val replaceConflicts = parsed.replaceRules.count { it.id.toString() in existingReplaceIds }
         val httpTtsConflicts = parsed.httpTts.count { it.id in existingHttpTtsIds }
+        val historyConflicts = parsed.searchHistory.count { it.word.trim() in existingHistoryWords }
 
         if (parsed.bookmarks.isNotEmpty() && parsed.books.isEmpty()) {
             warnings += "检测到书签但没有书架数据，书签会落不到本机书 → 大量孤立"
@@ -186,11 +219,13 @@ object LegadoImporter {
             bookGroupCount = parsed.bookGroups.size,
             replaceRuleCount = parsed.replaceRules.size,
             httpTtsCount = parsed.httpTts.size,
+            searchHistoryCount = parsed.searchHistory.size,
             bookConflicts = bookConflicts,
             bookSourceConflicts = sourceConflicts,
             bookGroupConflicts = groupConflicts,
             replaceRuleConflicts = replaceConflicts,
             httpTtsConflicts = httpTtsConflicts,
+            searchHistoryConflicts = historyConflicts,
             skippedFiles = parsed.skippedFiles,
             warnings = warnings,
         )
@@ -206,7 +241,11 @@ object LegadoImporter {
         zipBytes: ByteArray,
         db: AppDatabase,
         opts: ImportOptions = ImportOptions(),
+        onProgress: (Progress) -> Unit = {},
     ): ImportResult = withContext(Dispatchers.IO) {
+        // 解 zip 阶段：单独打一个 step，避免用户看着 UI 卡几百毫秒不知道发生什么。
+        // total=0 让 UI 显示 indeterminate（未知进度），到第一个真实 section 后切到确定值。
+        onProgress(Progress(step = "解析备份文件", current = 0, total = 0))
         val parsed = parseZip(zipBytes)
         val errors = mutableListOf<String>()
 
@@ -214,6 +253,9 @@ object LegadoImporter {
         var sourcesInserted = 0
         var sourcesSkipped = 0
         if (opts.includeBookSources && parsed.bookSources.isNotEmpty()) {
+            // 书源走 insertAll 批量入库 —— 没法在 SQL 层面分条 emit 进度。
+            // 折中：开始时 emit (0, total)，结束时 emit (total, total)；批量很快，不会卡。
+            onProgress(Progress("书源", 0, parsed.bookSources.size))
             runCatching {
                 val existing = db.bookSourceDao().getEnabledSourcesList()
                     .map { it.bookSourceUrl }.toHashSet()
@@ -232,12 +274,14 @@ object LegadoImporter {
                 errors += "书源导入失败：${it.message}"
                 AppLog.error(TAG, "bookSource insert failed", it)
             }
+            onProgress(Progress("书源", parsed.bookSources.size, parsed.bookSources.size))
         }
 
         // BookGroup ──
         var groupsInserted = 0
         var groupsSkipped = 0
         if (opts.includeBookGroups && parsed.bookGroups.isNotEmpty()) {
+            onProgress(Progress("分组", 0, parsed.bookGroups.size))
             runCatching {
                 val existing = db.bookGroupDao().getAllGroupsSync().map { it.id }.toHashSet()
                 val mapped = parsed.bookGroups.map(::mapBookGroup)
@@ -248,12 +292,17 @@ object LegadoImporter {
                     }
                 }
                 groupsSkipped = mapped.size - toInsert.size
-                toInsert.forEach { db.bookGroupDao().insert(it) }
+                toInsert.forEachIndexed { idx, group ->
+                    db.bookGroupDao().insert(group)
+                    // 分组每条都 emit；分组体量小（<20）所以不限频。
+                    onProgress(Progress("分组", idx + 1, parsed.bookGroups.size))
+                }
                 groupsInserted = toInsert.size
             }.onFailure {
                 errors += "分组导入失败：${it.message}"
                 AppLog.error(TAG, "bookGroup insert failed", it)
             }
+            onProgress(Progress("分组", parsed.bookGroups.size, parsed.bookGroups.size))
         }
 
         // Book ──（先写 Book，因为 Bookmark 后续要按 bookName+author 反查它的 id）
@@ -261,6 +310,7 @@ object LegadoImporter {
         var booksSkipped = 0
         var progressInserted = 0
         if (opts.includeBooks && parsed.books.isNotEmpty()) {
+            onProgress(Progress("书架", 0, parsed.books.size))
             runCatching {
                 val existing = db.bookDao().getAllBooksSync().map { it.id }.toHashSet()
                 val mapped = parsed.books.map(::mapBook)
@@ -278,15 +328,23 @@ object LegadoImporter {
 
                 // ReadProgress 从同一批 Book 派生（Legado 把进度内嵌在 Book 里）
                 if (opts.includeReadProgress) {
-                    parsed.books.forEach { dto ->
+                    onProgress(Progress("阅读进度", 0, parsed.books.size))
+                    parsed.books.forEachIndexed { idx, dto ->
                         // 只为本次成功 insert 的 book 写 progress（避免覆盖用户已有进度）
                         val bookId = dto.bookUrl
                         if (opts.conflictStrategy == ConflictStrategy.SKIP && bookId in existing) {
-                            return@forEach
+                            // emit 但不写库 —— 这条算"已处理"以便进度连续推进
+                            if ((idx + 1) % 10 == 0 || idx == parsed.books.lastIndex) {
+                                onProgress(Progress("阅读进度", idx + 1, parsed.books.size))
+                            }
+                            return@forEachIndexed
                         }
                         if (dto.durChapterIndex == 0 && dto.durChapterPos == 0) {
                             // 0/0 视为没读过 — 跳过避免污染本机 read_progress 表
-                            return@forEach
+                            if ((idx + 1) % 10 == 0 || idx == parsed.books.lastIndex) {
+                                onProgress(Progress("阅读进度", idx + 1, parsed.books.size))
+                            }
+                            return@forEachIndexed
                         }
                         val progress = ReadProgress(
                             bookId = bookId,
@@ -300,6 +358,10 @@ object LegadoImporter {
                         )
                         db.readProgressDao().save(progress)
                         progressInserted++
+                        // 阅读进度按每 10 条 emit 一次，避免书架上千本时频繁刷 UI。
+                        if ((idx + 1) % 10 == 0 || idx == parsed.books.lastIndex) {
+                            onProgress(Progress("阅读进度", idx + 1, parsed.books.size))
+                        }
                     }
                 }
             }.onFailure {
@@ -307,12 +369,14 @@ object LegadoImporter {
                 AppLog.error(TAG, "book insert failed", it)
                 // Books 失败属于关键错误，但不再 throw — UI 能看到 errors 就好
             }
+            onProgress(Progress("书架", parsed.books.size, parsed.books.size))
         }
 
         // Bookmark ──（书写完后再写，需要 bookName+author 反查 bookId）
         var bookmarksInserted = 0
         var bookmarksOrphaned = 0
         if (opts.includeBookmarks && parsed.bookmarks.isNotEmpty()) {
+            onProgress(Progress("书签", 0, parsed.bookmarks.size))
             runCatching {
                 // 反查：bookName+author → bookId（书架里 title 字段对应 Legado.name）
                 val books = db.bookDao().getAllBooksSync()
@@ -320,42 +384,48 @@ object LegadoImporter {
                     keySelector = { "${it.title}\u0000${it.author}" },
                     valueTransform = { it.id },
                 )
-                parsed.bookmarks.forEach { dto ->
+                parsed.bookmarks.forEachIndexed { idx, dto ->
                     val key = "${dto.bookName}\u0000${dto.bookAuthor}"
                     val bookId = keyToId[key]
                     if (bookId == null) {
                         bookmarksOrphaned++
-                        return@forEach
+                    } else {
+                        val bm = Bookmark(
+                            id = "legado_${dto.time}",
+                            bookId = bookId,
+                            chapterIndex = dto.chapterIndex,
+                            chapterTitle = dto.chapterName,
+                            // Legado 把摘录 (bookText) 和笔记 (content) 分开存；MoRealm Bookmark
+                            // 只有一个 content 字段。优先取 bookText（用户划的原文片段），笔记
+                            // 拼在后面用 " — " 分隔，最大限度保留信息
+                            content = listOfNotNull(
+                                dto.bookText.takeIf { it.isNotBlank() },
+                                dto.content.takeIf { it.isNotBlank() },
+                            ).joinToString(separator = " — "),
+                            chapterPos = dto.chapterPos,
+                            scrollProgress = 0,
+                            createdAt = dto.time,
+                        )
+                        db.bookmarkDao().insert(bm)
+                        bookmarksInserted++
                     }
-                    val bm = Bookmark(
-                        id = "legado_${dto.time}",
-                        bookId = bookId,
-                        chapterIndex = dto.chapterIndex,
-                        chapterTitle = dto.chapterName,
-                        // Legado 把摘录 (bookText) 和笔记 (content) 分开存；MoRealm Bookmark
-                        // 只有一个 content 字段。优先取 bookText（用户划的原文片段），笔记
-                        // 拼在后面用 " — " 分隔，最大限度保留信息
-                        content = listOfNotNull(
-                            dto.bookText.takeIf { it.isNotBlank() },
-                            dto.content.takeIf { it.isNotBlank() },
-                        ).joinToString(separator = " — "),
-                        chapterPos = dto.chapterPos,
-                        scrollProgress = 0,
-                        createdAt = dto.time,
-                    )
-                    db.bookmarkDao().insert(bm)
-                    bookmarksInserted++
+                    // 书签每 10 条 emit 一次，跟阅读进度同样的限频策略。
+                    if ((idx + 1) % 10 == 0 || idx == parsed.bookmarks.lastIndex) {
+                        onProgress(Progress("书签", idx + 1, parsed.bookmarks.size))
+                    }
                 }
             }.onFailure {
                 errors += "书签导入失败：${it.message}"
                 AppLog.error(TAG, "bookmark insert failed", it)
             }
+            onProgress(Progress("书签", parsed.bookmarks.size, parsed.bookmarks.size))
         }
 
         // ReplaceRule ──
         var replaceInserted = 0
         var replaceSkipped = 0
         if (opts.includeReplaceRules && parsed.replaceRules.isNotEmpty()) {
+            onProgress(Progress("替换规则", 0, parsed.replaceRules.size))
             runCatching {
                 val existing = db.replaceRuleDao().getAllSync().map { it.id }.toHashSet()
                 val mapped = parsed.replaceRules.map(::mapReplaceRule)
@@ -366,18 +436,24 @@ object LegadoImporter {
                     }
                 }
                 replaceSkipped = mapped.size - toInsert.size
-                toInsert.forEach { db.replaceRuleDao().insert(it) }
+                toInsert.forEachIndexed { idx, rule ->
+                    db.replaceRuleDao().insert(rule)
+                    // 替换规则一般不超过几十条，每条 emit
+                    onProgress(Progress("替换规则", idx + 1, parsed.replaceRules.size))
+                }
                 replaceInserted = toInsert.size
             }.onFailure {
                 errors += "替换规则导入失败：${it.message}"
                 AppLog.error(TAG, "replaceRule insert failed", it)
             }
+            onProgress(Progress("替换规则", parsed.replaceRules.size, parsed.replaceRules.size))
         }
 
         // HttpTts ──
         var httpTtsInserted = 0
         var httpTtsSkipped = 0
         if (opts.includeHttpTts && parsed.httpTts.isNotEmpty()) {
+            onProgress(Progress("朗读引擎", 0, parsed.httpTts.size))
             runCatching {
                 val existing = db.httpTtsDao().getEnabled().map { it.id }.toHashSet()
                 val mapped = parsed.httpTts.map(::mapHttpTts)
@@ -388,20 +464,68 @@ object LegadoImporter {
                     }
                 }
                 httpTtsSkipped = mapped.size - toInsert.size
-                toInsert.forEach { db.httpTtsDao().upsert(it) }
+                toInsert.forEachIndexed { idx, tts ->
+                    db.httpTtsDao().upsert(tts)
+                    onProgress(Progress("朗读引擎", idx + 1, parsed.httpTts.size))
+                }
                 httpTtsInserted = toInsert.size
             }.onFailure {
                 errors += "朗读引擎导入失败：${it.message}"
                 AppLog.error(TAG, "httpTts insert failed", it)
             }
+            onProgress(Progress("朗读引擎", parsed.httpTts.size, parsed.httpTts.size))
+        }
+
+        // SearchKeyword ──
+        // 走 dao.upsert（OnConflictStrategy.REPLACE）。SKIP 模式靠预先反查 word 集合，
+        // OVERWRITE 模式让 REPLACE 自然覆盖（usage / lastUseTime 都用 Legado 那条）。
+        // 这里不复用 SearchKeywordRepository.record —— 那个会做 trim / 计数累加 / 历史裁剪，
+        // 都不是搬家想要的语义（搬家应当忠实还原 Legado 的 usage 数和时间戳）。
+        var historyInserted = 0
+        var historySkipped = 0
+        if (opts.includeSearchHistory && parsed.searchHistory.isNotEmpty()) {
+            onProgress(Progress("搜索历史", 0, parsed.searchHistory.size))
+            runCatching {
+                val existing = db.searchKeywordDao().topAllSync(Int.MAX_VALUE)
+                    .map { it.word }.toHashSet()
+                parsed.searchHistory.forEachIndexed { idx, dto ->
+                    val word = dto.word.trim()
+                    if (word.isEmpty()) {
+                        // 异常空 word（Legado 早期版本零星数据）— 静默丢弃，不算 skip 也不算 insert
+                        if ((idx + 1) % 20 == 0 || idx == parsed.searchHistory.lastIndex) {
+                            onProgress(Progress("搜索历史", idx + 1, parsed.searchHistory.size))
+                        }
+                        return@forEachIndexed
+                    }
+                    val skip = opts.conflictStrategy == ConflictStrategy.SKIP &&
+                        word in existing
+                    if (skip) {
+                        historySkipped++
+                    } else {
+                        db.searchKeywordDao().upsert(mapSearchKeyword(dto.copy(word = word)))
+                        historyInserted++
+                    }
+                    // 搜索历史一般 < 200 条；按 20 条一批 emit 已足够顺滑，避免每条刷 UI。
+                    if ((idx + 1) % 20 == 0 || idx == parsed.searchHistory.lastIndex) {
+                        onProgress(Progress("搜索历史", idx + 1, parsed.searchHistory.size))
+                    }
+                }
+            }.onFailure {
+                errors += "搜索历史导入失败：${it.message}"
+                AppLog.error(TAG, "searchHistory insert failed", it)
+            }
+            onProgress(Progress("搜索历史", parsed.searchHistory.size, parsed.searchHistory.size))
         }
 
         AppLog.info(
             TAG,
             "Import done: books=$booksInserted/${booksSkipped} sources=$sourcesInserted/${sourcesSkipped} " +
                 "bookmarks=$bookmarksInserted(orphan=$bookmarksOrphaned) groups=$groupsInserted " +
-                "rules=$replaceInserted httpTts=$httpTtsInserted progress=$progressInserted",
+                "rules=$replaceInserted httpTts=$httpTtsInserted history=$historyInserted progress=$progressInserted",
         )
+
+        // 全部完成 —— UI 用这条收尾把进度条推到 100%。
+        onProgress(Progress("完成", 1, 1))
 
         ImportResult(
             booksInserted = booksInserted,
@@ -416,6 +540,8 @@ object LegadoImporter {
             replaceRulesSkipped = replaceSkipped,
             httpTtsInserted = httpTtsInserted,
             httpTtsSkipped = httpTtsSkipped,
+            searchHistoryInserted = historyInserted,
+            searchHistorySkipped = historySkipped,
             readProgressInserted = progressInserted,
             skippedSections = parsed.skippedFiles,
             errors = errors,
@@ -436,6 +562,7 @@ object LegadoImporter {
         val bookGroups: List<LegadoBookGroupDto>,
         val replaceRules: List<LegadoReplaceRuleDto>,
         val httpTts: List<LegadoHttpTtsDto>,
+        val searchHistory: List<LegadoSearchKeywordDto>,
         val skippedFiles: List<String>,
     )
 
@@ -451,6 +578,7 @@ object LegadoImporter {
         var groups: List<LegadoBookGroupDto> = emptyList()
         var replaceRules: List<LegadoReplaceRuleDto> = emptyList()
         var httpTts: List<LegadoHttpTtsDto> = emptyList()
+        var searchHistory: List<LegadoSearchKeywordDto> = emptyList()
         val skipped = mutableListOf<String>()
 
         ByteArrayInputStream(zipBytes).use { bais ->
@@ -471,10 +599,11 @@ object LegadoImporter {
                         "bookGroup.json" -> groups = decodeListOrEmpty(text, name)
                         "replaceRule.json" -> replaceRules = decodeListOrEmpty(text, name)
                         "httpTTS.json" -> httpTts = decodeListOrEmpty(text, name)
+                        "searchHistory.json" -> searchHistory = decodeListOrEmpty(text, name)
                         // 已知但暂未支持的 entry — 记到 skipped 让 UI 展示给用户
                         "rssSources.json", "rssStar.json", "sourceSub.json",
                         "dictRule.json", "keyboardAssists.json", "servers.json",
-                        "txtTocRule.json", "searchHistory.json",
+                        "txtTocRule.json",
                         "readConfig.json", "shareConfig.json",
                         "themeConfig.json", "coverConfig.json",
                         "shareRule.json",
@@ -490,7 +619,7 @@ object LegadoImporter {
             }
         }
 
-        return ParsedBackup(books, sources, bookmarks, groups, replaceRules, httpTts, skipped.toList())
+        return ParsedBackup(books, sources, bookmarks, groups, replaceRules, httpTts, searchHistory, skipped.toList())
     }
 
     /** 解 List<T>；失败返回空 list 仅 log，不阻断其它 section。 */
@@ -658,6 +787,21 @@ object LegadoImporter {
         concurrentRate = dto.concurrentRate,
     )
 
+    /**
+     * Legado.SearchKeyword → MoRealm.SearchKeyword。
+     *
+     * Legado entity (`io.legado.app.data.entities.SearchKeyword`) 与 MoRealm
+     * 实体字段名 / 类型完全相同（word / usage / lastUseTime），1:1 直搬。
+     *
+     * 唯一处理：word 在调用方就 trim 过；这里只把 usage 兜底为 ≥1（Legado 老数据
+     * 偶有 0，进库后会因 `usage DESC` 排序消失在最底，不友好）。
+     */
+    internal fun mapSearchKeyword(dto: LegadoSearchKeywordDto): SearchKeyword = SearchKeyword(
+        word = dto.word,
+        usage = dto.usage.coerceAtLeast(1),
+        lastUseTime = dto.lastUseTime.takeIf { it > 0 } ?: System.currentTimeMillis(),
+    )
+
     // ────────────────────────────────────────────────────────────────────────
     // Internal: DTOs (Legado JSON shape)
     // ────────────────────────────────────────────────────────────────────────
@@ -764,5 +908,16 @@ object LegadoImporter {
         val header: String? = null,
         val loginCheckJs: String? = null,
         val lastUpdateTime: Long = 0,
+    )
+
+    /**
+     * Legado.SearchKeyword 的 JSON 形态。Legado entity 字段名为 word/usage/lastUseTime，
+     * GSON 默认按 Kotlin 字段名输出 JSON key —— 直接对齐即可。
+     */
+    @Serializable
+    internal data class LegadoSearchKeywordDto(
+        val word: String = "",
+        val usage: Int = 1,
+        val lastUseTime: Long = 0,
     )
 }

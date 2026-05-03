@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoFixHigh
-import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -24,6 +23,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -46,12 +46,9 @@ import com.morealm.app.core.log.LogRecord
 import com.morealm.app.core.log.LogTagCatalog
 import kotlinx.coroutines.launch
 import java.io.File
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -222,10 +219,6 @@ fun AppLogScreen(onBack: () -> Unit) {
                                 }
                             },
                             onOpenTagCatalog = { tagCatalogOpen = true },
-                            onEnterSelection = {
-                                selectionMode = true
-                                selectedIds = emptySet()
-                            },
                             onCopyAll = {
                                 val label = if (tagFilter != null) "tag=$tagFilter" else "全部"
                                 copyToClipboard(
@@ -233,7 +226,7 @@ fun AppLogScreen(onBack: () -> Unit) {
                                     successMsg = "已复制 ${filteredLogs.size} 条（$label）",
                                 )
                             },
-                            onShareZip = { shareLogZip(context) },
+                            onExportTxt = { exportLogTxt(context, filteredLogs, tagFilter) },
                             onClear = { AppLog.clear() },
                         )
                     }
@@ -568,14 +561,13 @@ private fun NormalModeActions(
     searchActive: Boolean,
     onToggleSearch: () -> Unit,
     onOpenTagCatalog: () -> Unit,
-    onEnterSelection: () -> Unit,
     onCopyAll: () -> Unit,
-    @Suppress("UNUSED_PARAMETER") onShareZip: () -> Unit,
+    onExportTxt: () -> Unit,
     onClear: () -> Unit,
 ) {
-    // 顶栏按钮顺序：搜索 / tag 速查 / 多选 / 复制全部 / 清空。
-    // 「分享日志」被移除——按钮太多挤掉了 TopAppBar 标题。仍保留导出能力，
-    // 但走「多选 → 复制」或者「复制全部」走剪贴板，可由用户手动粘贴到任何地方。
+    // 顶栏按钮顺序：搜索 / tag 速查 / 复制全部 / 导出 TXT / 清空。
+    // 多选按钮被移除——长按列表项即可进入多选（LogListTab onLongClick 处理）；
+    // 顶栏按钮太多挤掉了 TopAppBar 标题，去掉常用度最低的入口。
     if (tabIsLogs) {
         IconButton(onClick = onToggleSearch) {
             Icon(
@@ -591,13 +583,17 @@ private fun NormalModeActions(
         }
     }
     if (tabIsLogs && filteredLogs.isNotEmpty()) {
-        IconButton(onClick = onEnterSelection) {
-            Icon(Icons.Default.Checklist, "多选")
-        }
         // 复制全部当前过滤结果（配合上面的 tag chip 用 —— 选 PageTurnFlicker
         // 后点这个就能一键把整段诊断发我）。
         IconButton(onClick = onCopyAll) {
             Icon(Icons.Default.ContentCopy, "复制全部")
+        }
+        // 导出 TXT：把当前过滤后的日志 + 设备头（型号/分辨率/Android 版本/
+        // 应用版本/堆/ABI 等）写到一个 .txt 文件，走系统分享面板让用户保存
+        // 或发给开发者。复制粘贴在大体量日志（>1MB）下经常被剪贴板截断 / Toast
+        // 假成功，文件分享路径绕过这个坑。
+        IconButton(onClick = onExportTxt) {
+            Icon(Icons.Default.SaveAlt, "导出 TXT")
         }
     }
     if (tabIsLogs) {
@@ -795,41 +791,75 @@ private fun CrashFilesTab(
 }
 
 /**
- * Zip all log + crash files and share via system share sheet.
+ * 把当前过滤后的日志导出为带设备头的 TXT，走系统分享面板交给用户。
+ *
+ * 文件格式：
+ *   ```
+ *   === MoRealm Log Export ===
+ *   Exported: 2026-05-03 14:21:08
+ *   Filter: tag=PageTurnFlicker (search: "speak")    // 没过滤就省略
+ *   Entries: 312
+ *
+ *   --- Device ---
+ *   Manufacturer: ...                                 // AppLog.deviceInfo 全量
+ *   Resolution: 1080x2400 px
+ *   Density: 3.0 (480 dpi)
+ *   ...
+ *
+ *   --- Logs ---
+ *   [HH:mm:ss.SSS] L/Tag [thread]: message
+ *   ...
+ *   ```
+ *
+ * 设计选择：
+ *   - 文件而不是剪贴板：大体量日志（数千条）会突破剪贴板 Binder 单次事务上
+ *     限，触发静默丢包；走 FileProvider + ACTION_SEND 没有这个问题。
+ *   - 写入 cacheDir/log_export/：FileProvider 已配的可分享目录之一；OS 会按
+ *     需清理，不需要主动 GC。
+ *   - 失败时打 ERROR 日志 + Toast；不静默吞异常，否则用户不知道为什么没弹分享。
  */
-private fun shareLogZip(context: android.content.Context) {
+private fun exportLogTxt(
+    context: android.content.Context,
+    records: List<LogRecord>,
+    tagFilter: String?,
+) {
     try {
-        val logDir = AppLog.getLogDir() ?: return
         val cacheDir = File(context.cacheDir, "log_export").apply { mkdirs() }
-        val ts = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
-        val zipFile = File(cacheDir, "MoRealm_logs_$ts.zip")
+        val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val txtFile = File(cacheDir, "MoRealm_log_$ts.txt")
 
-        ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
-            logDir.listFiles()?.forEach { file ->
-                if (file.isFile && file.length() > 0) {
-                    zos.putNextEntry(ZipEntry(file.name))
-                    file.inputStream().use { it.copyTo(zos) }
-                    zos.closeEntry()
-                }
-            }
-            // Also include in-memory logs
-            val memText = AppLog.getLogText()
-            if (memText.isNotBlank()) {
-                zos.putNextEntry(ZipEntry("memory_logs.txt"))
-                zos.write(memText.toByteArray())
-                zos.closeEntry()
-            }
+        val expFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+        val content = buildString {
+            appendLine("=== MoRealm Log Export ===")
+            appendLine("Exported: ${expFmt.format(Date())}")
+            if (tagFilter != null) appendLine("Filter: tag=$tagFilter")
+            appendLine("Entries: ${records.size}")
+            appendLine()
+            appendLine("--- Device ---")
+            // AppLog.getDeviceInfo() 已经以 key:value 平铺、末尾自带换行；
+            // 直接 append（而不是 appendLine）避免多出一个空行。
+            append(AppLog.getDeviceInfo())
+            appendLine()
+            appendLine("--- Logs ---")
+            if (records.isEmpty()) appendLine("(empty)")
+            else appendLine(joinRecordsText(records))
         }
 
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", zipFile)
+        txtFile.writeText(content)
+
+        val uri = FileProvider.getUriForFile(
+            context, "${context.packageName}.fileprovider", txtFile,
+        )
         val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "application/zip"
+            type = "text/plain"
             putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, "MoRealm log $ts")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, "导出日志"))
+        context.startActivity(Intent.createChooser(intent, "导出日志 TXT"))
     } catch (e: Exception) {
-        AppLog.error("LogExport", "Failed to export logs", e)
+        AppLog.error("LogExport", "Failed to export TXT", e)
+        Toast.makeText(context, "导出失败：${e.message ?: "未知错误"}", Toast.LENGTH_SHORT).show()
     }
 }
 

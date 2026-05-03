@@ -340,6 +340,57 @@ class LegadoImporterTest {
         assertEquals(3, parsed.bookmarks[0].chapterPos)
     }
 
+    // ── mapper: SearchKeyword ────────────────────────────────────────────────
+
+    @Test
+    fun `parseZip should decode searchHistory entries 1to1`() {
+        val json = """
+            [
+              {"word":"三体","usage":12,"lastUseTime":1700000000000},
+              {"word":"凡人修仙","usage":3,"lastUseTime":1700001000000}
+            ]
+        """.trimIndent()
+        val parsed = LegadoImporter.parseZip(makeZip(mapOf("searchHistory.json" to json)))
+        assertEquals(2, parsed.searchHistory.size)
+        assertEquals("三体", parsed.searchHistory[0].word)
+        assertEquals(12, parsed.searchHistory[0].usage)
+        assertEquals(1700000000000L, parsed.searchHistory[0].lastUseTime)
+        // searchHistory.json 之前在 skipped 名单里；现在不应再出现在 skippedFiles
+        assertFalse(parsed.skippedFiles.contains("searchHistory.json"))
+    }
+
+    @Test
+    fun `mapSearchKeyword should preserve word, usage, lastUseTime`() {
+        val dto = LegadoImporter.LegadoSearchKeywordDto(
+            word = "斗破苍穹",
+            usage = 7,
+            lastUseTime = 1700002000000L,
+        )
+        val kw = LegadoImporter.mapSearchKeyword(dto)
+        assertEquals("斗破苍穹", kw.word)
+        assertEquals(7, kw.usage)
+        assertEquals(1700002000000L, kw.lastUseTime)
+    }
+
+    @Test
+    fun `mapSearchKeyword should clamp usage to at least 1`() {
+        // Legado 老数据偶有 usage=0；按 SearchKeyword 表的排序约定要 ≥1
+        val kw = LegadoImporter.mapSearchKeyword(
+            LegadoImporter.LegadoSearchKeywordDto(word = "x", usage = 0, lastUseTime = 1L)
+        )
+        assertEquals(1, kw.usage)
+    }
+
+    @Test
+    fun `mapSearchKeyword should fallback lastUseTime when source is 0`() {
+        val before = System.currentTimeMillis()
+        val kw = LegadoImporter.mapSearchKeyword(
+            LegadoImporter.LegadoSearchKeywordDto(word = "y", usage = 1, lastUseTime = 0L)
+        )
+        val after = System.currentTimeMillis()
+        assertTrue(kw.lastUseTime in before..after)
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /** 在内存里构造 zip 字节，每个 entry name → 文本内容。 */

@@ -26,3 +26,9 @@ local.properties
 
 # Kotlin compiler diagnostic dumps (auto-generated, machine-specific)
 .kotlin/
+
+# AI / IDE 工具产物（机器本地的 skills 安装与锁文件）
+.agents/
+.continue/
+.junie/
+skills-lock.json
