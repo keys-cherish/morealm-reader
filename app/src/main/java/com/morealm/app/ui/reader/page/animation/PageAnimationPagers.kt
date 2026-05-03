@@ -1,4 +1,4 @@
-package com.morealm.app.ui.reader.renderer
+package com.morealm.app.ui.reader.page.animation
 
 import android.graphics.Bitmap
 import android.text.TextPaint
@@ -28,6 +28,10 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.TextPage
+import com.morealm.app.ui.reader.renderer.PageInfoOverlaySpec
+import com.morealm.app.ui.reader.renderer.ReaderPageDirection
+import com.morealm.app.ui.reader.renderer.SimulationReadView
+import com.morealm.app.ui.reader.renderer.renderPageToBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch

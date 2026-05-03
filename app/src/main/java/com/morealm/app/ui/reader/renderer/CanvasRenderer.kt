@@ -44,6 +44,9 @@ import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.render.*
 import com.morealm.app.presentation.reader.ReaderSearchController
+import com.morealm.app.ui.reader.page.animation.AnimatedPageReader
+import com.morealm.app.ui.reader.page.animation.PageAnimType
+import com.morealm.app.ui.reader.page.animation.SimulationParams
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.TextPage
+import com.morealm.app.ui.reader.page.animation.PageAnimType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 

@@ -168,6 +168,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         initPhoneStateListener()
         listenForCommands()
         observeKeepCpuAwakePref()
+        observeMediaButtonPerChapterPref()
         AppLog.info("TtsService", "Service created (host-based architecture)")
     }
 
@@ -179,6 +180,24 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
     private fun observeKeepCpuAwakePref() {
         serviceScope.launch {
             prefs.ttsKeepCpuAwake.collect { keepCpuAwakePref = it }
+        }
+    }
+
+    /**
+     * 持续把 [AppPreferences.ttsMediaButtonPerChapter] 同步到 [TtsPlayer]。
+     *
+     * 写入端在 IO 线程（DataStore），读取端 [TtsPlayer.handleSeek] 在 main looper —— 字段
+     * 用 `@Volatile` 保证可见性。如果 mediaSession 还没建好（onCreate 早期），collect
+     * 落空一次没关系，下一次 emit（包括用户改设置）会再次触发。
+     *
+     * 注意：collect 会马上拿到 DataStore 的初始值（默认 false），所以 player 一旦初始化
+     * 完毕就能拿到正确状态，不需要在 player 构造时手动塞一遍。
+     */
+    private fun observeMediaButtonPerChapterPref() {
+        serviceScope.launch {
+            prefs.ttsMediaButtonPerChapter.collect { perChapter ->
+                (mediaSession?.player as? TtsPlayer)?.setMediaButtonPerChapter(perChapter)
+            }
         }
     }
 
