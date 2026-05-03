@@ -173,61 +173,174 @@ class ReaderChapterController(
      * 同步指针腾挪 NEXT 路径：prev = cur; cur = next; next = null。
      *
      * 对齐 Legado [io.legado.app.model.ReadBook.moveToNextChapter] 的精神——在调用栈
-     * 内完成三个赋值，下一帧 Compose 重组立即看到新章节，**不存在异步窗口**。
+     * 内完成所有相关 StateFlow 的赋值，下一帧 Compose 重组立即看到新章节，
+     * **不存在异步窗口**。
      *
-     * **无缝性论证**：
-     *   - ScrollRenderer.onChapterCommit(NEXT, newOffset) 触发
-     *   - → ViewModel/Screen 层调用本方法
-     *   - → 同步：_prevTextChapter ← _curTextChapter（旧 cur 沉为 prev，
+     * **原子同步腾挪的 StateFlow 集合**（缺一不可）：
+     *   1. `_prevTextChapter` ← 旧 `_curTextChapter`（旧 cur 沉为 prev，
      *      ScrollRenderer 下一帧 viewport 顶部用旧 cur 的 last page 填充）
-     *   - → 同步：_curTextChapter ← _nextTextChapter（新 cur 是已经排好版的预下章）
-     *   - → 同步：_currentChapterIndex.value++
-     *   - → 异步：preloadNextChapter(newCurIdx + 1) 重新填 _nextTextChapter
-     *   - 三个 flow 的同步赋值在主线程当帧完成，Compose 重组看到一致快照，
-     *     上 70% / 下 30% 渐变区视觉等价于「同一张连续画布」。
+     *   2. `_curTextChapter` ← 旧 `_nextTextChapter`（已排好版的预下章瞬间转为 cur）
+     *   3. `_nextTextChapter` ← null（异步重填新 next）
+     *   4. `_currentChapterIndex` ← curIdx + 1
+     *   5. `_chapterContent` ← 缓存的 nextContent（**关键**：CanvasRenderer 接 content
+     *      prop 同源驱动 layoutChapterAsync；若 _chapterContent 不同步，CanvasRenderer
+     *      重组时会发现 content/chapterIndex 不匹配，触发不必要的重排，丢弃已就绪的 next 排版）
+     *   6. `_renderedChapter` ← 新章节 metadata（携带 restoreToken=nanoTime 供 CanvasRenderer
+     *      progress 恢复路径感知）
+     *   7. `_prevPreloadedChapter` ← (curIdx, oldCurTitle, oldCurContent)：让
+     *      CanvasRenderer.prevChapterTitle/Content 派生的 prelayoutCache cacheKey 命中
+     *      已有 prev TextChapter
+     *   8. `_nextPreloadedChapter` ← null：旧 next 已转 cur，等异步预加载新 next
      *
-     * @return true 腾挪成功；false 表示 _nextTextChapter 未就绪或越界，
-     *   调用方应回退到老路径（loadChapter 异步加载）。
+     * **前置条件**：`_nextTextChapter` 已就绪（prelayout 完成）+ next 章节 content
+     * 已缓存（nextChapterCache 或 _nextPreloadedChapter）。任一缺失则返回 false，
+     * 调用方回退到老 [loadChapter] 异步路径。
+     *
+     * **调用线程**：必须在主线程调用，所有 StateFlow.value = ... 同帧生效。
+     *
+     * @return true 腾挪成功；false 表示前置条件不满足，调用方回退老路径。
      */
     fun commitChapterShiftNext(): Boolean {
         val curIdx = _currentChapterIndex.value
-        if (curIdx + 1 >= _chapters.value.size) {
-            AppLog.debug("ReadBook", "commitChapterShiftNext REJECT: at last chapter $curIdx/${_chapters.value.size}")
+        val nextIdx = curIdx + 1
+        val chapterList = _chapters.value
+        if (nextIdx >= chapterList.size) {
+            AppLog.debug("ReadBook", "commitChapterShiftNext REJECT at last chapter $curIdx/${chapterList.size}")
             return false
         }
-        val nextCh = _nextTextChapter.value
-        if (nextCh == null) {
-            AppLog.warn("ReadBook", "commitChapterShiftNext REJECT: _nextTextChapter not ready (cur=$curIdx)")
+        val nextCh = _nextTextChapter.value ?: run {
+            AppLog.warn("ReadBook", "commitChapterShiftNext REJECT _nextTextChapter not ready (cur=$curIdx)")
             return false
         }
-        AppLog.info("ReadBook", "commitChapterShiftNext $curIdx → ${curIdx + 1}")
+        // next content 必须可取到——否则 _chapterContent 同步无源。
+        // 优先从 _nextPreloadedChapter（公开 StateFlow）取，其次 nextChapterCache（@Volatile）。
+        val nextPreloaded = _nextPreloadedChapter.value
+        val nextContent: String = when {
+            nextPreloaded != null && nextPreloaded.index == nextIdx -> nextPreloaded.content
+            nextChapterCache != null -> nextChapterCache!!
+            else -> {
+                AppLog.warn("ReadBook", "commitChapterShiftNext REJECT next content not cached (cur=$curIdx)")
+                return false
+            }
+        }
+        // 保存旧 cur 信息——同步赋值会覆盖 _chapterContent，必须先快照。
+        val oldCurContent = _chapterContent.value
+        val oldCurTitle = chapterList[curIdx].title
+
+        AppLog.info("ReadBook", "commitChapterShiftNext $curIdx → $nextIdx | sync moveToNextChapter")
+
+        // ── 原子同步腾挪（主线程当帧）——以下 8 个赋值视为「单帧不可分」 ──
         _prevTextChapter.value = _curTextChapter.value
         _curTextChapter.value = nextCh
         _nextTextChapter.value = null
-        _currentChapterIndex.value = curIdx + 1
+        _currentChapterIndex.value = nextIdx
+        _chapterContent.value = nextContent
+        _renderedChapter.value = RenderedReaderChapter(
+            index = nextIdx,
+            title = chapterList[nextIdx].title,
+            content = nextContent,
+            initialProgress = 0,
+            initialChapterPosition = 0,
+            restoreToken = System.nanoTime(),
+        )
+        _prevPreloadedChapter.value = PreloadedReaderChapter(curIdx, oldCurTitle, oldCurContent)
+        prevChapterCache = oldCurContent
+        _nextPreloadedChapter.value = null
+        nextChapterCache = null
+        // visible state 同步——避免 progress controller 看到 stale chapterIndex 导致进度错配
+        if (::scrollProgressState.isInitialized) scrollProgressState.value = 0
+        if (::visiblePageState.isInitialized) {
+            visiblePageState.value = visiblePageState.value.copy(
+                chapterIndex = nextIdx,
+                title = chapterList[nextIdx].title,
+                chapterPosition = 0,
+            )
+        }
+        if (::navigateDirectionState.isInitialized) navigateDirectionState.value = 1
+        clearHitTracking()
+
+        // 异步预加载新 next（curIdx+2），不阻塞返回
+        scope.launch(Dispatchers.IO) {
+            preloadNextChapter(nextIdx + 1)
+        }
+        // 异步保存进度
+        onChapterLoaded()
         return true
     }
 
     /**
      * 同步指针腾挪 PREV 路径：next = cur; cur = prev; prev = null。
-     * 对齐 Legado ReadBook.moveToPrevChapter。
+     * 对齐 Legado [io.legado.app.model.ReadBook.moveToPrevChapter]。
+     *
+     * 同步腾挪集合与 [commitChapterShiftNext] 对称：
+     *   - `_nextTextChapter` ← 旧 `_curTextChapter`
+     *   - `_curTextChapter` ← 旧 `_prevTextChapter`
+     *   - `_prevTextChapter` ← null（异步重填）
+     *   - `_currentChapterIndex` ← curIdx - 1
+     *   - `_chapterContent` ← prevContent（来自 _prevPreloadedChapter / prevChapterCache）
+     *   - `_renderedChapter` ← 新章 metadata，**initialChapterPosition = 末尾**让
+     *     CanvasRenderer 启动到末页（PREV 跨章对齐 Legado moveToPrevChapter 行为）
+     *   - `_nextPreloadedChapter` ← (curIdx, oldCurTitle, oldCurContent)
+     *   - `_prevPreloadedChapter` ← null
      */
     fun commitChapterShiftPrev(): Boolean {
         val curIdx = _currentChapterIndex.value
-        if (curIdx <= 0) {
-            AppLog.debug("ReadBook", "commitChapterShiftPrev REJECT: at first chapter")
+        val prevIdx = curIdx - 1
+        val chapterList = _chapters.value
+        if (prevIdx < 0) {
+            AppLog.debug("ReadBook", "commitChapterShiftPrev REJECT at first chapter")
             return false
         }
-        val prevCh = _prevTextChapter.value
-        if (prevCh == null) {
-            AppLog.warn("ReadBook", "commitChapterShiftPrev REJECT: _prevTextChapter not ready (cur=$curIdx)")
+        val prevCh = _prevTextChapter.value ?: run {
+            AppLog.warn("ReadBook", "commitChapterShiftPrev REJECT _prevTextChapter not ready (cur=$curIdx)")
             return false
         }
-        AppLog.info("ReadBook", "commitChapterShiftPrev $curIdx → ${curIdx - 1}")
+        val prevPreloaded = _prevPreloadedChapter.value
+        val prevContent: String = when {
+            prevPreloaded != null && prevPreloaded.index == prevIdx -> prevPreloaded.content
+            prevChapterCache != null -> prevChapterCache!!
+            else -> {
+                AppLog.warn("ReadBook", "commitChapterShiftPrev REJECT prev content not cached (cur=$curIdx)")
+                return false
+            }
+        }
+        val oldCurContent = _chapterContent.value
+        val oldCurTitle = chapterList[curIdx].title
+
+        AppLog.info("ReadBook", "commitChapterShiftPrev $curIdx → $prevIdx | sync moveToPrevChapter")
+
         _nextTextChapter.value = _curTextChapter.value
         _curTextChapter.value = prevCh
         _prevTextChapter.value = null
-        _currentChapterIndex.value = curIdx - 1
+        _currentChapterIndex.value = prevIdx
+        _chapterContent.value = prevContent
+        _renderedChapter.value = RenderedReaderChapter(
+            index = prevIdx,
+            title = chapterList[prevIdx].title,
+            content = prevContent,
+            initialProgress = 100,
+            initialChapterPosition = 0,
+            restoreToken = System.nanoTime(),
+        )
+        _nextPreloadedChapter.value = PreloadedReaderChapter(curIdx, oldCurTitle, oldCurContent)
+        nextChapterCache = oldCurContent
+        _prevPreloadedChapter.value = null
+        prevChapterCache = null
+        if (::scrollProgressState.isInitialized) scrollProgressState.value = 100
+        if (::visiblePageState.isInitialized) {
+            visiblePageState.value = visiblePageState.value.copy(
+                chapterIndex = prevIdx,
+                title = chapterList[prevIdx].title,
+                chapterPosition = 0,
+            )
+        }
+        if (::navigateDirectionState.isInitialized) navigateDirectionState.value = -1
+        clearHitTracking()
+
+        scope.launch(Dispatchers.IO) {
+            preloadPrevChapter(prevIdx - 1)
+        }
+        onChapterLoaded()
         return true
     }
 

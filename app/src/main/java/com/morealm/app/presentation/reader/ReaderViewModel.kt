@@ -342,6 +342,34 @@ class ReaderViewModel @Inject constructor(
 
     fun nextChapter() = navigation.nextChapter()
     fun prevChapter() = navigation.prevChapter()
+
+    /**
+     * Phase 2 MD3 同步腾挪入口 — 由 ReaderScreen 在 onChapterCommit 调用。
+     *
+     * 优先尝试 [ReaderChapterController.commitChapterShiftNext]（同步路径）；
+     * 失败（next 未就绪 / content 未缓存）回退到老路径 [navigation.nextChapter]
+     * （loadChapter 异步加载）。返回值供调用方决定是否继续触发 onNextChapter。
+     *
+     * @return true 走了同步路径；false 已回退到异步 nextChapter()
+     */
+    fun commitChapterShiftNext(): Boolean {
+        val ok = chapter.commitChapterShiftNext()
+        if (!ok) {
+            AppLog.debug("ReadBook", "commitChapterShiftNext fallback to async nextChapter()")
+            navigation.nextChapter()
+        }
+        return ok
+    }
+
+    /** 同 [commitChapterShiftNext] 但走 PREV 路径。 */
+    fun commitChapterShiftPrev(): Boolean {
+        val ok = chapter.commitChapterShiftPrev()
+        if (!ok) {
+            AppLog.debug("ReadBook", "commitChapterShiftPrev fallback to async prevChapter()")
+            navigation.prevChapter()
+        }
+        return ok
+    }
     fun clearNavigateDirection() { navigation._navigateDirection.value = 0 }
     fun openNextLinkedBook() = navigation.openNextLinkedBook()
     fun dismissNextBookPrompt() = navigation.dismissNextBookPrompt()
