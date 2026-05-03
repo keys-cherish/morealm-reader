@@ -1123,93 +1123,36 @@ fun CanvasRenderer(
         hasBgImage = bgBitmap != null,
     )
 
-    // SimulationParams for bezier page curl
-    val simulationParams = remember(
-        pages,
-        titlePaint,
-        contentPaint,
-        bgArgb,
-        bgBitmap,
-        bgMeanColor,
-        pageInfoOverlaySpec,
-        pageFactory,
-        chapterIndex,
-    ) {
-        if (pageAnimType == PageAnimType.SIMULATION && pages.isNotEmpty()) {
-            SimulationParams(
-                pages = pages,
-                titlePaint = titlePaint,
-                contentPaint = contentPaint,
-                chapterNumPaint = chapterNumPaint,
-                bgColor = bgArgb,
-                bgBitmap = bgBitmap,
-                bgMeanColor = bgMeanColor,
-                pageInfoOverlay = pageInfoOverlaySpec,
-                pageForTurn = { displayIndex, relativePos ->
-                    pageFactory.pageForTurn(displayIndex, relativePos)
-                },
-                currentDisplayIndex = {
-                    coordinator.lastSettledDisplayPage.coerceIn(0, (renderPageCount - 1).coerceAtLeast(0))
-                },
-                canTurn = { displayIndex, direction ->
-                    when (direction) {
-                        ReaderPageDirection.PREV -> pageFactory.hasPrev(displayIndex)
-                        ReaderPageDirection.NEXT -> pageFactory.hasNext(displayIndex)
-                        ReaderPageDirection.NONE -> false
-                    }
-                },
-                onPageChanged = { displayIndex ->
-                    val page = pages.getOrNull(displayIndex) ?: return@SimulationParams
-                    if (page.chapterIndex == chapterIndex) {
-                        onProgress(if (pageCount > 1) (page.index * 100) / (pageCount - 1) else 100)
-                    }
-                    // 仿真翻页：页面变化时清掉残留选区
-                    if (selectionState.isActive) {
-                        selectionState.clear()
-                    }
-                    highlightActionTarget = null
-                },
-                onFillPage = { displayIndex, direction ->
-                    coordinator.commitPageTurn(displayIndex, direction) { readerPageIndex = it }
-                },
-                onTapCenter = onTapCenter,
-                onSingleTap = if (chapterHighlights.isEmpty()) null else { offset ->
-                    val page = coordinator.getPageAt(coordinator.lastSettledDisplayPage)
-                    val pos = chapterPositionAt(page, offset.x, offset.y)
-                    val hit = pos?.let { p ->
-                        chapterHighlights.firstOrNull { p in it.startChapterPos until it.endChapterPos }
-                    }
-                    if (hit != null) {
-                        highlightActionTarget = hit
-                        highlightActionOffset = offset
-                        true
-                    } else false
-                },
-                onLongPress = { offset ->
-                    val page = coordinator.getPageAt(coordinator.lastSettledDisplayPage)
-                    val col = hitTestColumn(page, offset.x, offset.y)
-                    if (col is ImageColumn) { onImageClick(col.src); return@SimulationParams }
-                    val pos = hitTestPage(page, offset.x, offset.y)
-                    if (pos != null) {
-                        val wordRange = findWordRange(page, pos)
-                        selectedTextPage = page
-                        selectionState.setSelection(wordRange.first, wordRange.second)
-                        toolbarOffset = offset
-                        // Diagnostic: SIMULATION-only long-press path. Note this uses the
-                        // SimulationView-supplied `page` directly (not pagerState.currentPage),
-                        // so the page mismatch we'd otherwise see in NORMAL longPress is
-                        // avoided here. Useful to compare with NORMAL/SCROLL traces.
-                        AppLog.info(
-                            "CursorHandleTrace",
-                            "SIM longPress setSelection" +
-                                " | tap=$pos -> word(${wordRange.first}..${wordRange.second})" +
-                                " | page.lines.size=${page.lines.size} chPos=${page.chapterPosition}",
-                        )
-                    }
-                },
-            )
-        } else null
-    }
+    // SimulationParams for bezier page curl —— Phase 2 后期重构：抽到独立模块。
+    // 详见 [com.morealm.app.ui.reader.page.animation.rememberSimulationParams]。
+    // 这里只透传 CanvasRenderer 内部状态，仿真细节（pageForTurn / canTurn /
+    // onLongPress 等）已经搬到独立文件，CanvasRenderer 不再关心仿真路径的实现。
+    val simulationParams = com.morealm.app.ui.reader.page.animation.rememberSimulationParams(
+        pageAnimType = pageAnimType,
+        pages = pages,
+        titlePaint = titlePaint,
+        contentPaint = contentPaint,
+        chapterNumPaint = chapterNumPaint,
+        bgArgb = bgArgb,
+        bgBitmap = bgBitmap,
+        bgMeanColor = bgMeanColor,
+        pageInfoOverlaySpec = pageInfoOverlaySpec,
+        pageFactory = pageFactory,
+        chapterIndex = chapterIndex,
+        pageCount = pageCount,
+        renderPageCount = renderPageCount,
+        coordinator = coordinator,
+        selectionState = selectionState,
+        chapterHighlights = chapterHighlights,
+        onProgress = onProgress,
+        onTapCenter = onTapCenter,
+        onImageClick = onImageClick,
+        setHighlightActionTarget = { highlightActionTarget = it },
+        setHighlightActionOffset = { highlightActionOffset = it },
+        setSelectedTextPage = { selectedTextPage = it },
+        setToolbarOffset = { toolbarOffset = it },
+        setReaderPageIndex = { readerPageIndex = it },
+    )
 
     Box(
         modifier = modifier
