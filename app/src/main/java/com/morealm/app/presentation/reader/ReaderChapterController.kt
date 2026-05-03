@@ -621,6 +621,14 @@ class ReaderChapterController(
         chapterLoadJob?.cancel()
         val loadToken = ++chapterLoadToken
         _loading.value = true
+        // Phase 2 一致性防线：loadChapter 是「跳跃式」加载（任意 index，可能与同步
+        // 腾挪状态不连贯）。重置三个真值流，避免后续 commitChapterShift 看到错章节
+        // 的残留 _prev/_nextTextChapter 误判为已就绪，污染 cur 渲染。
+        // _curTextChapter 会被本次 layoutChapterAsync 完成后 publishCurTextChapter
+        // 重新填充；_prev/_nextTextChapter 等 prelayoutCache 完成后 publishPrev/Next 重填。
+        _prevTextChapter.value = null
+        _curTextChapter.value = null
+        _nextTextChapter.value = null
         // EffectiveReplacesDialog: hit tracking is per-chapter, reset before this chapter starts processing.
         if (prevIndex != index) clearHitTracking()
         val targetProgress = restoreProgress.coerceIn(0, 100)
