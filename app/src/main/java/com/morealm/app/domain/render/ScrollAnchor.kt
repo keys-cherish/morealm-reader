@@ -176,3 +176,39 @@ fun ScrollAnchor.toBookmark(paragraphs: List<ScrollParagraph>): Pair<Int, Int> {
     val line = target.lines.getOrNull(lineIdxInParagraph) ?: target.lines.firstOrNull()
     return chapterIndex to (line?.chapterPosition ?: target.firstChapterPosition)
 }
+
+/**
+ * 启动 / 章节切换时给 [androidx.compose.foundation.lazy.rememberLazyListState] 用的初始
+ * 锚点参数。
+ *
+ * ── 为什么需要这个 helper ──
+ *
+ * 老路径用 `LaunchedEffect + scrollToItem(idx, offset)` 是「事后纠偏」：
+ *   1. LazyColumn 首帧已经画在顶部
+ *   2. effect 触发，scrollToItem 跳到锚点
+ *   3. 用户视觉上看到「顶部 → 锚点」的瞬移
+ *
+ * 新路径用 `rememberLazyListState(initialFirstVisibleItemIndex = idx,
+ * initialFirstVisibleItemScrollOffset = offsetPx)` 是「首帧正确」：
+ *   1. 锚点参数随 listState 一起在 paragraphs 就绪后才构造（caller 用 paragraphsReady
+ *      gating + key(ready) 保证）
+ *   2. LazyColumn **首帧就在锚点处**，零瞬移
+ *
+ * **注意**：[androidx.compose.foundation.lazy.LazyListState] 一旦构造，初始位置就被
+ * 锁定。caller 必须在 paragraphs 包含锚点章后才构造它（用 [findAnchorIndex] 校验），
+ * 否则 LazyColumn 会回落到顶部。
+ *
+ * @param paragraphs 已扁平的段落窗口（含锚点章；调用前需校验）
+ * @param anchor 目标锚点
+ * @return Pair(initialFirstVisibleItemIndex, initialFirstVisibleItemScrollOffset)。
+ *         若锚点不在窗口内，返回 (0, 0) ——caller 应避免到这一步（用 paragraphsReady gating）。
+ */
+fun calcInitialListStateParams(
+    paragraphs: List<ScrollParagraph>,
+    anchor: ScrollAnchor,
+): Pair<Int, Int> {
+    val idx = findAnchorIndex(paragraphs, anchor)
+    if (idx < 0) return 0 to 0
+    val offset = calcAnchorScrollOffsetPx(paragraphs[idx], anchor)
+    return idx to offset
+}
