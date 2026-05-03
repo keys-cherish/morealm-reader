@@ -31,6 +31,30 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
     private var playing = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * 蓝牙/有线耳机/Android Auto 上 prev/next 按键映射目标。
+     *
+     * - false（默认，对齐 Legado）：段级 —— PrevParagraph / NextParagraph
+     * - true：章级 —— PrevChapter / NextChapter
+     *
+     * `@Volatile` 因为：写入端在 TtsService 收 DataStore Flow 的协程里（IO 线程），
+     * 读取端在 [handleSeek]（Media3 调用，Looper 主线程）。无锁单字段读写，volatile
+     * 足够保证可见性，省去 AtomicBoolean 开销。锁屏自定义按钮永远走章级，跟这个字段无关。
+     */
+    @Volatile
+    private var mediaButtonPerChapter: Boolean = false
+
+    /** 由 TtsService 在偏好变化时调用。 */
+    fun setMediaButtonPerChapter(perChapter: Boolean) {
+        if (mediaButtonPerChapter != perChapter) {
+            AppLog.debug(
+                "TtsPlayer",
+                "setMediaButtonPerChapter: $mediaButtonPerChapter → $perChapter",
+            )
+        }
+        mediaButtonPerChapter = perChapter
+    }
+
     // Exposed for TtsNotificationProvider to read
     var bookTitle = ""
         private set
@@ -195,13 +219,23 @@ class TtsPlayer(private val context: Context) : SimpleBasePlayer(Looper.getMainL
         positionMs: Long,
         seekCommand: Int,
     ): ListenableFuture<*> {
-        // Default seek = paragraph navigation; chapter is reachable via custom commands.
+        // 蓝牙/有线/Android Auto 上 prev/next 按键的映射目标由 [mediaButtonPerChapter]
+        // 决定（用户偏好），默认段级（对齐 Legado）。锁屏通知里的「上一章/下一章」按钮
+        // 走 TtsNotificationProvider 的自定义 SessionCommand，不会进入 handleSeek，
+        // 所以那条永远是章级 —— 与本分支无关。
+        val perChapter = mediaButtonPerChapter
         when (seekCommand) {
             Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
-                TtsEventBus.sendCommand(TtsEventBus.Command.NextParagraph)
+                TtsEventBus.sendCommand(
+                    if (perChapter) TtsEventBus.Command.NextChapter
+                    else TtsEventBus.Command.NextParagraph
+                )
             }
             Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
-                TtsEventBus.sendCommand(TtsEventBus.Command.PrevParagraph)
+                TtsEventBus.sendCommand(
+                    if (perChapter) TtsEventBus.Command.PrevChapter
+                    else TtsEventBus.Command.PrevParagraph
+                )
             }
         }
         return Futures.immediateVoidFuture()
