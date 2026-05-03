@@ -13,6 +13,7 @@ import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.SearchRepository
 import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.domain.parser.EpubMetadataWriter
+import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.presentation.source.ChangeSourceCandidate
 import com.morealm.app.presentation.source.ChangeSourceController
 import com.morealm.app.presentation.source.ChangeSourceProgress
@@ -40,6 +41,7 @@ class BookDetailViewModel @Inject constructor(
     private val searchBookCacheDao: SearchBookCacheDao,
     private val chapterDao: ChapterDao,
     private val autoGroupClassifier: AutoGroupClassifier,
+    private val prefs: AppPreferences,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -64,6 +66,7 @@ class BookDetailViewModel @Inject constructor(
         searchRepo = searchRepo,
         searchBookCacheDao = searchBookCacheDao,
         chapterDao = chapterDao,
+        prefs = prefs,
     )
 
     val showSourcePicker: StateFlow<Boolean> = changeSource.showPicker

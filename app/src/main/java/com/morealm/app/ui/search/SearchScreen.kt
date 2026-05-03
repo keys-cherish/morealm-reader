@@ -32,6 +32,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +67,34 @@ fun SearchScreen(
     // 这里直接在 Box 里手动放 SnackbarHost，避免大改原有 Column 布局。
     val snackbarHost = remember { SnackbarHostState() }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    // 「加入书架」反馈 —— 订阅 ViewModel 的 ShelfAddedEvent。
+    //
+    // 时间戳过滤：SharedFlow.replay=1 让用户从阅读器返回时仍能看到上次反馈，
+    // 但跨过 [SHELF_ADDED_REPLAY_MAX_MS] 的陈旧事件（用户半小时后回来）应被忽略，
+    // 避免 Snackbar 突兀地出现。距 emit < 60s 才弹 Snackbar。
+    //
+    // 撤销窗口（用户点"撤销"）→ vm.undoAddToShelf 删除该书 + 必要时 stopDownload。
+    LaunchedEffect(viewModel) {
+        viewModel.shelfAddedEvents.collect { event ->
+            val ageMs = System.currentTimeMillis() - event.timestamp
+            if (ageMs > 60_000L) return@collect
+            val msg = if (event.withDownload) {
+                "已加入书架并开始缓存·《${event.title}》"
+            } else {
+                "已加入书架·《${event.title}》"
+            }
+            val result = snackbarHost.showSnackbar(
+                message = msg,
+                actionLabel = "撤销",
+                duration = SnackbarDuration.Short,
+                withDismissAction = true,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                viewModel.undoAddToShelf(event.bookId, stopDownload = event.withDownload)
+            }
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
     Column(
@@ -101,7 +131,20 @@ fun SearchScreen(
         // Search box: input + button
         // UX-3: 进入搜索页自动 focus + 弹出软键盘，省一次「点输入框」交互。
         val focusRequester = remember { FocusRequester() }
+        val focusManager = LocalFocusManager.current
+        val keyboardController = LocalSoftwareKeyboardController.current
         LaunchedEffect(Unit) { focusRequester.requestFocus() }
+        // Bug 修复：搜索 tab 切换离开时（被 AppNavHost cached 但不可见）若 OutlinedTextField
+        // 仍持有焦点，Compose 内部的 BringIntoViewRequester 会试图 scroll 进可见区，但此时父
+        // 节点（switched-away tab）尚未 placed，触发：
+        //   IllegalStateException: Expected BringIntoViewRequester to not be used before parents are placed.
+        // 离场时主动 clearFocus + hide IME，让 BringInto 队列在父节点失效前清空。
+        DisposableEffect(Unit) {
+            onDispose {
+                keyboardController?.hide()
+                focusManager.clearFocus(force = true)
+            }
+        }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -259,8 +302,10 @@ fun SearchScreen(
                             },
                             onDownload = {
                                 if (result.sourceType == 0) {
+                                    // 加书 + 启动下载——Snackbar 反馈由 LaunchedEffect
+                                    // 监听 vm.shelfAddedEvents 弹出，文案带「并开始缓存」，
+                                    // 撤销时同步 stopDownload。这里不再 Toast，避免双重反馈。
                                     viewModel.addToShelfAndDownload(result)
-                                    Toast.makeText(ctx, "开始缓存: ${result.title}", Toast.LENGTH_SHORT).show()
                                 } else {
                                     Toast.makeText(ctx, "非文本书源暂不能缓存", Toast.LENGTH_SHORT).show()
                                 }

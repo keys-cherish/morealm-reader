@@ -1,5 +1,9 @@
 package com.morealm.app.ui.profile
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -12,14 +16,33 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.morealm.app.BuildConfig
 import com.morealm.app.ui.theme.LocalMoRealmColors
+
+/**
+ * QQ 交流群群号。**绝不**直接出现在源码 / commit 历史中。
+ *
+ * 实际值由 Gradle 在编译期注入到 [BuildConfig.QQ_GROUP_ID]，注入源（按优先级）：
+ *   1. `-PqqGroupId=xxx` 命令行 / gradle.properties
+ *   2. local.properties 的 `qqGroupId` 或 `qq.group.id`（local.properties 已 gitignore）
+ *   3. 环境变量 `QQ_GROUP_ID`（CI/CD 用 GitHub Actions secrets 注入）
+ *
+ * 任何人 fork 公开仓库自己编译，看到的是空字符串 → UI 自动 fallback 到 "请联系作者获取"。
+ * 维护者打 release 前在 local.properties 写一行 `qqGroupId=...` 即可。
+ */
+private val QQ_GROUP_ID: String = BuildConfig.QQ_GROUP_ID
+
+/** UI 上是否显示具体群号；为空表示构建未配置群号。 */
+private val hasGroupId: Boolean get() = QQ_GROUP_ID.isNotEmpty()
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -28,6 +51,28 @@ fun AboutScreen(
     onNavigateChangelog: () -> Unit = {},
 ) {
     val moColors = LocalMoRealmColors.current
+    val context = LocalContext.current
+    // 复用同一个 lambda 避免每次重组重建（Card.onClick 接受稳定 lambda 体验更顺）。
+    // 当群号未配置（开源 fork 编译场景）时点击仅 Toast 提示，不动剪贴板。
+    val onCopyGroupId: () -> Unit = remember(context) {
+        {
+            if (hasGroupId) {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                if (cm != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("QQ 群号", QQ_GROUP_ID))
+                    Toast.makeText(context, "群号已复制，请打开 QQ 加群", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "复制失败，请手动记下群号 $QQ_GROUP_ID", Toast.LENGTH_LONG).show()
+                }
+            } else {
+                Toast.makeText(
+                    context,
+                    "本构建未配置群号，请联系作者或前往项目主页查看最新联系方式",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -158,6 +203,50 @@ fun AboutScreen(
             }
         }
 
+        Spacer(Modifier.height(16.dp))
+
+        // Contact us entry —— QQ 交流群入口。
+        // 整张 Card 可点击 = 复制群号到剪贴板。群号文本上故意"显示明文"是面向用户的，
+        // 公开仓库的隐私防护点在源码层 (QQ_GROUP_ID 数组拼装) 而非运行时显示。
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+            onClick = onCopyGroupId,
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.Forum,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "联系我们",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        if (hasGroupId) "QQ 交流群 $QQ_GROUP_ID · 点击复制群号"
+                        else "请联系作者获取最新群号",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                }
+                Icon(
+                    if (hasGroupId) Icons.Default.ContentCopy else Icons.Default.Info,
+                    null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+
         Spacer(Modifier.height(24.dp))
 
         Text(
@@ -178,17 +267,22 @@ private fun FeatureRow(
     title: String,
     desc: String,
 ) {
-    val moColors = LocalMoRealmColors.current
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(12.dp))
-        Column {
+    // 纯展示 ListItem —— containerColor=Transparent 因为外层卡片已经提供背景，
+    // 不能再叠一层 surface 否则颜色会"过实"。
+    ListItem(
+        headlineContent = {
             Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            Text(desc, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-        }
-    }
+        },
+        supportingContent = {
+            Text(desc, style = MaterialTheme.typography.bodySmall)
+        },
+        leadingContent = {
+            Icon(
+                icon, null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+        },
+        colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+    )
 }

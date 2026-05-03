@@ -38,6 +38,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -78,6 +79,7 @@ fun ProfileScreen(
     onNavigateAbout: () -> Unit = {},
     onNavigateSourceManage: () -> Unit = {},
     onNavigateReadingSettings: () -> Unit = {},
+    onNavigateSearchSettings: () -> Unit = {},
     onNavigateReplaceRules: () -> Unit = {},
     onNavigateAutoGroupRules: () -> Unit = {},
     onNavigateAppLog: () -> Unit = {},
@@ -335,6 +337,8 @@ fun ProfileScreen(
 
         SettingsCard(Icons.Default.Extension, "书源管理",
             "导入、启用、删除书源，支持 URL 订阅和 JSON 导入", onClick = onNavigateSourceManage)
+        SettingsCard(Icons.Default.Search, "搜索设置",
+            "并发搜索数量、单源超时，根据网络情况调节", onClick = onNavigateSearchSettings)
         SettingsCard(Icons.Default.Bookmark, "我的书签",
             "跨书查看、按时间过滤、按书分组", onClick = onNavigateBookmarks)
         SettingsCard(Icons.Default.CloudDownload, "离线缓存",
@@ -497,9 +501,13 @@ fun ThemeGridItem(
         ),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
+        // Bug 1 修复：原本 Column 没 fillMaxWidth + horizontalAlignment=CenterHorizontally，
+        // 导致 Column 宽度被最宽子节点决定 —— "墨境/纸上" 等 2 字主题文字 ≤ 28dp 圆点，圆点
+        // 视觉贴左；而 "赛博朋克" 4 字撑宽 Column，圆点 CenterHorizontally 居中于"文字宽度"
+        // 而非"卡片宽度"，导致它和其他卡片不对齐。改 fillMaxWidth + Start 后所有圆点都贴左。
         Column(
-            Modifier.padding(10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            Modifier.padding(10.dp).fillMaxWidth(),
+            horizontalAlignment = Alignment.Start,
         ) {
             Box(Modifier.size(28.dp).clip(CircleShape).background(bgColor), contentAlignment = Alignment.Center) {
                 Box(Modifier.size(12.dp).clip(CircleShape).background(accentColor))
@@ -558,23 +566,47 @@ fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) 
     Spacer(Modifier.height(16.dp))
 }
 
+/**
+ * 设置项行 —— Material 3 [ListItem] 三槽位封装。
+ *
+ * 三槽位语义对应：
+ *   - leading  → 主题色 icon
+ *   - headline → 标题
+ *   - supporting → 副标题（可选）
+ *   - trailing → 「>」箭头（统一引导用户「这是个可点的入口」）
+ *
+ * 为什么用 ListItem 而不是手写 Row：
+ *   - 主题色 / 间距 / 文本对齐自动跟随 Material 3 token，不再写散落的硬编码 dp
+ *   - 触摸热区由 ListItem 给出（M3 默认 56-72dp），无障碍触达更稳
+ *   - 升级 material3 时新增的 token（如 fixed container roles）会自动生效
+ *
+ * containerColor 显式 transparent —— 调用方通常包在 [SettingsSection] 的 Card 里，
+ * Card 已经提供 surfaceContainerHigh 背景，ListItem 不能再叠一层 surface 否则双重底色。
+ */
 @Composable
 fun SettingsItem(icon: ImageVector, title: String, subtitle: String? = null, onClick: () -> Unit = {}) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = if (subtitle != null) 12.dp else 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-            if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-        }
-        Icon(Icons.Default.ChevronRight, null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.size(20.dp))
-    }
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        headlineContent = { Text(title, style = MaterialTheme.typography.bodyMedium) },
+        supportingContent = subtitle?.let {
+            { Text(it, style = MaterialTheme.typography.bodySmall) }
+        },
+        leadingContent = {
+            Icon(
+                icon, null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+        },
+        trailingContent = {
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight, null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.size(20.dp),
+            )
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+    )
 }
 
 

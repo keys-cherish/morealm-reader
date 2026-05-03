@@ -57,6 +57,16 @@ class LegadoImportViewModel @Inject constructor(
     private val _result = MutableStateFlow<LegadoImporter.ImportResult?>(null)
     val result: StateFlow<LegadoImporter.ImportResult?> = _result.asStateFlow()
 
+    /**
+     * 实时进度反馈。null = 未在导入；非 null = 当前 step 文案 + 数值。UI 用 step.total 是否 > 0
+     * 决定 LinearProgressIndicator 是 determinate 还是 indeterminate（解析 zip 阶段 total=0）。
+     *
+     * 故意暴露最简结构：UI 不需要知道有多少 section，只渲染当前那一段进度即可。
+     * 进度条在每次 step 切换时会从 100% 跳回 0%，这是预期行为，体现"在做下一段"。
+     */
+    private val _progress = MutableStateFlow<LegadoImporter.Progress?>(null)
+    val progress: StateFlow<LegadoImporter.Progress?> = _progress.asStateFlow()
+
     /** 解析或导入失败的错误信息；null = 没错。 */
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
@@ -95,7 +105,7 @@ class LegadoImportViewModel @Inject constructor(
                 cachedZipBytes = bytes
                 val pv = LegadoImporter.previewZip(bytes, db)
                 if (pv.bookCount + pv.bookSourceCount + pv.bookmarkCount + pv.bookGroupCount +
-                    pv.replaceRuleCount + pv.httpTtsCount == 0
+                    pv.replaceRuleCount + pv.httpTtsCount + pv.searchHistoryCount == 0
                 ) {
                     _errorMessage.value = "未在 zip 中识别到任何 Legado 数据，请确认这是 Legado 备份文件"
                     cachedZipBytes = null
@@ -121,6 +131,7 @@ class LegadoImportViewModel @Inject constructor(
         }
         _importing.value = true
         _errorMessage.value = null
+        _progress.value = null
         viewModelScope.launch {
             try {
                 val r = LegadoImporter.import(
@@ -129,6 +140,10 @@ class LegadoImportViewModel @Inject constructor(
                     opts = LegadoImporter.ImportOptions(
                         conflictStrategy = _conflictStrategy.value,
                     ),
+                    // onProgress 在 IO dispatcher 上调用；StateFlow 的 setter 是线程安全的，
+                    // 无需 withContext(Dispatchers.Main) — Compose 端 collectAsStateWithLifecycle
+                    // 会自动切到主线程消费。
+                    onProgress = { p -> _progress.value = p },
                 )
                 _result.value = r
                 AppLog.info("LegadoImport", "Done: ${r.summarize()}")
@@ -137,6 +152,8 @@ class LegadoImportViewModel @Inject constructor(
                 _errorMessage.value = "导入失败：${e.message ?: e.javaClass.simpleName}"
             } finally {
                 _importing.value = false
+                // 清掉进度，避免下次复用页面时残留上次的 step 文案
+                _progress.value = null
             }
         }
     }
@@ -147,6 +164,7 @@ class LegadoImportViewModel @Inject constructor(
         _preview.value = null
         _result.value = null
         _errorMessage.value = null
+        _progress.value = null
         cachedZipBytes = null
     }
 }

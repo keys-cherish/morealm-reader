@@ -884,6 +884,28 @@ fun CanvasRenderer(
             // 需要非首页但布局还没好 → 等下一轮 renderPageCount 变化再重进
             return@LaunchedEffect
         }
+        // 等 pageFactory 缓存追平 chapter.pageSize 才恢复。
+        //
+        // 背景：
+        //   - `pageCount` 是 chapter.pageSize（layoutChapterAsync 流式 push，实时增长）
+        //   - `renderPageCount` 是 pageFactory.pages.size（pageFactory 构造时 snapshotPages() 一次镜像）
+        //   - layoutChapterAsync 一次性 push 多页时，pageCount 已经 = 15 但 pageFactory
+        //     上一次重建时只 snapshot 到 10。下面 line 919 用 `renderPageCount - 1`
+        //     做钳制 → target=13 被夹到 9，触发一次错的 JUMP；7 ms 后 pageFactory 再
+        //     重建一次缓存到 15，第二次 LaunchedEffect 又跑一遍 JUMP 到 13。
+        //     视觉表现：用户看到「page 9 → page 13」跳一下；副作用：page 9 的
+        //     reportProgress 写脏一次 DB（position=2345 scroll=100%）。
+        //
+        //   修：要求 renderPageCount >= pageCount 才执行；否则直接 return 等下一轮
+        //   （keys 里包含 renderPageCount 和 pageCount，下一帧 pageFactory 重建追上
+        //   后会自动重进）。
+        if (renderPageCount < pageCount) {
+            AppLog.debug(
+                "CanvasRenderer",
+                "restoreProgress WAIT pageFactory snapshot stale | renderPC=$renderPageCount < pc=$pageCount token=$restoreToken",
+            )
+            return@LaunchedEffect
+        }
         // BookmarkDebug: 诊断书签跳转后是否回到正确页
         val pageFromCharIndex = if (initialChapterPosition > 0) {
             chapter.getPageIndexByCharIndex(initialChapterPosition).coerceIn(0, pageCount - 1)

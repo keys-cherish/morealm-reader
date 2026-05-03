@@ -32,6 +32,22 @@ val hasReleaseSigning = listOf(
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
 
+/**
+ * QQ 交流群群号 —— 故意 NOT 写在源码中。注入顺序：
+ *   1. -PqqGroupId=xxx 命令行 / gradle.properties (可在 ~/.gradle/gradle.properties，不入仓)
+ *   2. local.properties 的 qq.group.id / qqGroupId（local.properties 已被 .gitignore）
+ *   3. 环境变量 QQ_GROUP_ID（CI/CD 通过 GitHub Actions secrets 注入）
+ *   4. 缺省 = 空字符串；运行时 UI 显示 "请联系作者获取群号"
+ *
+ * 这样开源仓库 + commit 历史里都看不到群号，社工/恶意爬虫拿不到联系方式。
+ * 维护者只需在自己机器的 local.properties 加一行 `qqGroupId=...` 即可正常打包带群号的 release。
+ */
+val qqGroupId: String = providers.gradleProperty("qqGroupId").orNull
+    ?: localSigningProperties.getProperty("qqGroupId")
+    ?: localSigningProperties.getProperty("qq.group.id")
+    ?: providers.environmentVariable("QQ_GROUP_ID").orNull
+    ?: ""
+
 android {
     namespace = "com.morealm.app"
     compileSdk = 35
@@ -52,6 +68,10 @@ android {
         ksp {
             arg("room.schemaLocation", "$projectDir/schemas")
         }
+
+        // QQ 群号注入到 BuildConfig.QQ_GROUP_ID。
+        // 注意 escape：BuildConfig 字符串字面量要包含双引号，外层 Kotlin 字符串再 escape 一次。
+        buildConfigField("String", "QQ_GROUP_ID", "\"${qqGroupId}\"")
     }
 
     signingConfigs {
