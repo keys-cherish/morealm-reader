@@ -250,23 +250,32 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                 stopSelfAndRelease()
                 return START_NOT_STICKY
             }
+            // 通知栏按钮一律走 sendCommand（不走 sendEvent）。
+            // sendEvent(Event.{Prev,Next}Chapter / PlayPause) 历史上依赖
+            // ReaderViewModel.viewModelScope 收事件再回发 Command；用户退出
+            // 阅读器后 viewModelScope 取消 → 事件落进无人订阅的 SharedFlow buffer
+            // → 通知按钮全部失效。改走 Command 后 TtsService.listenForCommands /
+            // TtsEngineHost.handleCommand 在 service scope 上常驻，host 自带
+            // chapterContentLoader 上下文，能直接切章/暂停/续播。
             ACTION_PREV -> {
-                TtsEventBus.sendEvent(TtsEventBus.Event.PrevChapter)
+                TtsEventBus.sendCommand(TtsEventBus.Command.PrevChapter)
                 return START_NOT_STICKY
             }
             ACTION_NEXT -> {
-                TtsEventBus.sendEvent(TtsEventBus.Event.NextChapter)
+                TtsEventBus.sendCommand(TtsEventBus.Command.NextChapter)
                 return START_NOT_STICKY
             }
             ACTION_PAUSE -> {
-                TtsEventBus.sendEvent(TtsEventBus.Event.PlayPause)
+                TtsEventBus.sendCommand(TtsEventBus.Command.Pause)
                 return START_NOT_STICKY
             }
             ACTION_RESUME -> {
-                TtsEventBus.sendEvent(TtsEventBus.Event.PlayPause)
+                TtsEventBus.sendCommand(TtsEventBus.Command.Play)
                 return START_NOT_STICKY
             }
             ACTION_ADD_TIMER -> {
+                // sleep timer 累加在 ReaderViewModel / ListenViewModel 各自的
+                // controller 里，host 没有「+10 增量」概念；保留 Event 路由。
                 TtsEventBus.sendEvent(TtsEventBus.Event.AddTimer)
                 return START_NOT_STICKY
             }
@@ -611,14 +620,17 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
+            // MediaController（Android Auto / 蓝牙耳机深控 / 外部 app）发的自定义
+            // 命令，和通知栏按钮同源问题：sendEvent 路径依赖 reader VM 在线；改走
+            // sendCommand 让 host 自加载新章节，UI 死活不影响。
             when (customCommand.customAction) {
                 CMD_PREV_CHAPTER -> {
-                    AppLog.info("TtsService", "Prev chapter from notification")
-                    TtsEventBus.sendEvent(TtsEventBus.Event.PrevChapter)
+                    AppLog.info("TtsService", "Prev chapter from MediaController")
+                    TtsEventBus.sendCommand(TtsEventBus.Command.PrevChapter)
                 }
                 CMD_NEXT_CHAPTER -> {
-                    AppLog.info("TtsService", "Next chapter from notification")
-                    TtsEventBus.sendEvent(TtsEventBus.Event.NextChapter)
+                    AppLog.info("TtsService", "Next chapter from MediaController")
+                    TtsEventBus.sendCommand(TtsEventBus.Command.NextChapter)
                 }
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))

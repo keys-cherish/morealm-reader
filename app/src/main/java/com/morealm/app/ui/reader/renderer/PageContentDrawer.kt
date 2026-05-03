@@ -676,7 +676,7 @@ internal fun drawBgBitmap(
     canvas.drawBitmap(bgBitmap, sharedSrcRect, sharedDstRectF, null)
 }
 
-private fun drawImageColumn(
+internal fun drawImageColumn(
     canvas: android.graphics.Canvas,
     col: ImageColumn,
     line: TextLine,

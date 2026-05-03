@@ -38,10 +38,26 @@ import com.morealm.app.domain.render.TextPos
 import com.morealm.app.domain.render.canvasrecorder.recordIfNeeded
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/**
+ * 跨章 commit 决策值 —— [ScrollRenderer] 内部用 [androidx.compose.runtime.derivedStateOf]
+ * 派生 `CrossChapterCommit?`：null 表示当前 viewport 没有跨章 commit 条件；non-null
+ * 表示某方向的阈值已达，可以发起 [onChapterCommit]。
+ *
+ * 派生为离散值后，下游 LaunchedEffect 仅在「null ↔ commit」或方向变化时重启一次，
+ * 取代旧版每帧 keyed 于 pageOffset 的 LaunchedEffect。
+ */
+private data class CrossChapterCommit(
+    val direction: ReaderPageDirection,
+    val newOffset: Float,
+)
 
 /**
  * Continuous vertical scroll renderer — ported from Legado's ScrollPageDelegate + ContentTextView.
@@ -458,37 +474,84 @@ fun ScrollRenderer(
         return true
     }
 
-    LaunchedEffect(currentPageIndex, pageOffset, pendingRestore, layoutCompleted) {
-        if (!pendingRestore && layoutCompleted && pageCount > 0) {
-            val visiblePageIndex = getCurVisiblePageIndex()
-            val curPageHeight = pageHeight(visiblePageIndex)
-            val visiblePageOffset = relativeOffsetFor(visiblePageIndex)
+    // ── derivedStateOf 派生：可见页 idx / 进度百分比 / 朗读高亮可见行 ──
+    //
+    // 历史问题：原 3 个 LaunchedEffect 把高频变化的 [pageOffset] 直接做 key —— fling
+    // 期间每帧 (~60-120 次/秒) 重启 effect、重算可见页并触发回调，纯属浪费。
+    //
+    // 改造：先把语义离散值（Int / VisibleReadAloudLine? data class）通过 derivedStateOf
+    // 派生出来 —— Compose 仅在派生值真正变化时让下游 invalidate，fling 期间像素级
+    // pageOffset 微变会被自动归并到「同一个派生值」从而不传播。再用 snapshotFlow 把
+    // 这些 State 转成长驻协程流，借 distinctUntilChanged 兜底相邻相同值，filter 做
+    // 「pendingRestore + layoutCompleted」门控，避免恢复期内中间值上报。
+    //
+    // remember(pages) —— pages 列表换引用时（章节追加 / 重布局）重新建立派生关系，
+    // 保证派生函数读到的是最新 pages。
+    val visiblePageIndexState by remember(pages) {
+        derivedStateOf {
+            if (pageCount <= 0 || viewHeight <= 0) -1 else getCurVisiblePageIndex()
+        }
+    }
+
+    val progressState by remember(pages) {
+        derivedStateOf {
+            if (pageCount <= 0 || viewHeight <= 0) return@derivedStateOf -1
+            val pageIdx = getCurVisiblePageIndex()
+            val curPageHeight = pageHeight(pageIdx)
+            val visiblePageOffset = relativeOffsetFor(pageIdx)
             val visiblePageFraction = if (curPageHeight > 0) (-visiblePageOffset / curPageHeight).coerceIn(0f, 1f) else 0f
-            val currentPage = pages.getOrNull(visiblePageIndex)
+            val currentPage = pages.getOrNull(pageIdx)
             val chapterPageSize = currentPage?.pageSize?.takeIf { it > 1 }
-            val chapterPageIndex = currentPage?.index ?: visiblePageIndex
-            val progress = if (chapterPageSize != null) {
+            val chapterPageIndex = currentPage?.index ?: pageIdx
+            val raw = if (chapterPageSize != null) {
                 ((chapterPageIndex + visiblePageFraction) * 100f / (chapterPageSize - 1)).roundToInt()
             } else if (pageCount > 1) {
-                ((visiblePageIndex + visiblePageFraction) * 100f / (pageCount - 1)).roundToInt()
+                ((pageIdx + visiblePageFraction) * 100f / (pageCount - 1)).roundToInt()
             } else 100
-            onScrollProgress(progress.coerceIn(0, 100))
+            raw.coerceIn(0, 100)
         }
     }
 
-    LaunchedEffect(currentPageIndex, pageOffset, pendingRestore, layoutCompleted) {
-        if (!pendingRestore && layoutCompleted && pageCount > 0) {
-            val visiblePageIndex = getCurVisiblePageIndex()
-            pages.getOrNull(visiblePageIndex)?.let { page ->
-                onScrollPageChanged(visiblePageIndex, page)
+    // VisibleReadAloudLine 是 data class，data 类的 equals 基于 (pageIndex, page, line)
+    // 的结构相等。fling 期间像素级 pageOffset 变化只要没让朗读行跨视口边沿，派生值
+    // 结构相等 → 不 invalidate 下游。
+    val readAloudVisibleState by remember(pages) {
+        derivedStateOf {
+            if (pageCount <= 0 || viewHeight <= 0) null else getReadAloudPos()
+        }
+    }
+
+    // ── snapshotFlow 上报：单一长驻协程 + flow 操作符链 ──
+    //
+    // 用 LaunchedEffect(pages) 让 pages 换引用时（不仅仅是内容追加而是 List 实例换）
+    // 重启上报协程，捕获新 pages 闭包。其它情况下协程长驻不重启 —— 比 LaunchedEffect
+    // (派生值, ...) 在每次派生值变化时重启外层协程更省事。
+    LaunchedEffect(pages) {
+        snapshotFlow { Triple(progressState, pendingRestore, layoutCompleted) }
+            .filter { (p, pending, completed) -> !pending && completed && p >= 0 }
+            .map { it.first }
+            .distinctUntilChanged()
+            .collect { onScrollProgress(it) }
+    }
+
+    LaunchedEffect(pages) {
+        snapshotFlow { Triple(visiblePageIndexState, pendingRestore, layoutCompleted) }
+            .filter { (idx, pending, completed) -> !pending && completed && idx >= 0 }
+            .map { it.first }
+            .distinctUntilChanged()
+            .collect { idx ->
+                pages.getOrNull(idx)?.let { page -> onScrollPageChanged(idx, page) }
             }
-        }
     }
 
-    LaunchedEffect(currentPageIndex, pageOffset, pendingRestore, layoutCompleted, pages) {
-        if (!pendingRestore && layoutCompleted && pageCount > 0) {
-            getReadAloudPos()?.let { onReadAloudVisiblePosition(it.page, it.line) }
-        }
+    LaunchedEffect(pages) {
+        snapshotFlow { Triple(readAloudVisibleState, pendingRestore, layoutCompleted) }
+            .filter { (_, pending, completed) -> !pending && completed }
+            .map { it.first }
+            .distinctUntilChanged()
+            .collect { aloud ->
+                aloud?.let { onReadAloudVisiblePosition(it.page, it.line) }
+            }
     }
 
     // Pre-append near the bottom. This remains keyed by pageCount so very short
@@ -504,78 +567,85 @@ fun ScrollRenderer(
         }
     }
 
-    // Cross-chapter commit detection: when the viewport majority shows adjacent
-    // chapter content, commit the chapter shift so the ViewModel advances.
-    LaunchedEffect(currentPageIndex, pageOffset, pendingRestore, layoutCompleted, nextChapterPages.size, prevChapterPages.size) {
-        if (pendingRestore || !layoutCompleted || pageCount <= 0 || viewHeight <= 0) return@LaunchedEffect
-        // Ghost-wall guard: cross-chapter commit must require a real user scroll. Without
-        // this, a PREV boundary turn that lands on a short last page (height < 30% of
-        // viewport) would immediately satisfy the forward-commit condition and bounce
-        // back to the next chapter, then the next chapter's pre-layout would re-trigger
-        // PREV again, producing an infinite loop with progress oscillating. This mirrors
-        // the guard already present on submitBoundaryTurn callers (clampAt*/moveTo*).
-        if (!hasUserScrolled) {
-            // 诊断：当 guard 拦下了一个本来会触发的 commit 时打日志，便于验证修复是否生效。
-            // 下次复现日志中如果出现 "GhostWall guard SKIP" 行 + 没有紧随 commit NEXT/PREV，
-            // 说明 guard 命中并阻止了无意义跳章；如果还是看到 commit NEXT 0/* hasUserScrolled=false
-            // 说明 guard 路径没走到，需要换 Option 2 收紧 pageOffset 判定。
-            val wouldCommitNext = currentPageIndex >= pageCount - 1 && nextChapterPages.isNotEmpty() &&
-                (pageOffset + pageHeight(currentPageIndex)) < viewHeight * 0.3f
-            val wouldCommitPrev = currentPageIndex == 0 && prevChapterPages.isNotEmpty() && pageOffset > 0 &&
-                pageOffset > viewHeight * 0.7f
-            if (wouldCommitNext || wouldCommitPrev) {
-                AppLog.debug(
-                    "Scroll",
-                    "GhostWall guard SKIP" +
-                        " | wouldCommit=${if (wouldCommitNext) "NEXT" else "PREV"}" +
-                        " | page=$currentPageIndex/$pageCount | offset=$pageOffset" +
-                        " | hasUserScrolled=false | nextCh=${nextChapterPages.size} prevCh=${prevChapterPages.size}",
-                )
+    // ── 跨章 commit 决策（derivedStateOf）──
+    //
+    // 旧实现把 [pageOffset] 当 LaunchedEffect key，每帧重启 + 在体内做一组阈值判断；
+    // 用户即使没接近边界，fling 期间也每帧 launch / cancel 一次 effect 协程。
+    //
+    // 改造：把「该不该 commit + commit 朝哪 + 新 pageOffset 落在哪」打包成
+    // [CrossChapterCommit?] 派生值。Compose 仅在派生值跨阈值（null ↔ commit）或方向
+    // 变化时让下游 invalidate；fling 期间 pageOffset 像素级抖动不到达阈值 → 派生值
+    // 始终为 null → 下游 LaunchedEffect 不重启。
+    //
+    // 派生函数保持纯函数 —— 不打日志、不调回调，所有副作用集中在下游 LaunchedEffect。
+    // hasUserScrolled 不进派生函数：原意是「是否允许触发 commit」，那是策略不是派生
+    // 状态；放在下游 effect 里做门控更清晰。
+    val crossChapterCommit by remember(pages, nextChapterPages, prevChapterPages) {
+        derivedStateOf<CrossChapterCommit?> {
+            if (pageCount <= 0 || viewHeight <= 0) return@derivedStateOf null
+            // Forward commit: 当 last page 底部已滑过 viewport 70% 处（即 lastPageBottom <
+            // viewHeight * 0.3）时触发跨章 commit。该阈值保证视觉重叠区 = viewport 中段
+            // 30%-70%：上半 70% 仍是当前章 last page，下半 30% 是 nextChapterPages 预览。
+            //
+            // 无缝性靠 Phase 2 [ReadBookHolder.moveToNextChapter] 的「同步指针腾挪」保证：
+            // commit 触发的同一调用栈内 cur=next, prev=cur，下一帧重组 viewport 顶部 70%
+            // 由新 prev（即旧 cur）填，下半 30% 由新 cur 首页填，视觉等价于「同一张连续画布」。
+            //
+            // 历史教训：单纯把阈值收紧到 < 0f 不能保证无缝——它把视觉切换瞬间从「中段
+            // 30%-70% 渐变区」推迟到「viewport 顶端 0%」，意味着 viewport 整段都必须由
+            // nextChapterPages 异步就绪，反而扩大了 next 未到位时的空白窗口。
+            if (currentPageIndex >= pageCount - 1 && nextChapterPages.isNotEmpty()) {
+                val lastPageBottom = pageOffset + pageHeight(currentPageIndex)
+                if (lastPageBottom < viewHeight * 0.3f) {
+                    return@derivedStateOf CrossChapterCommit(ReaderPageDirection.NEXT, lastPageBottom)
+                }
             }
+            // Backward commit: 上一章预览滑入 viewport 超过 70% 处即触发。新 pageOffset =
+            // scrollIntoPrev - lastPageHeight：
+            //   - lastPageHeight > scrollIntoPrev：新 pageOffset 负值（合理，新 last page
+            //     已被滑过部分），上方由再上一章 prev 预览填充——靠 holder 同步腾挪即可。
+            //   - lastPageHeight < scrollIntoPrev：新 pageOffset 正值（短 last page 在中
+            //     段），上方留白同样靠 holder 腾挪后的 prev（即旧 cur）填充。
+            if (currentPageIndex == 0 && prevChapterPages.isNotEmpty() && pageOffset > 0) {
+                val totalPrevHeight = prevChapterPages.sumOf { it.height.toDouble() }.toFloat()
+                val scrollIntoPrev = pageOffset
+                if (scrollIntoPrev > viewHeight * 0.7f && scrollIntoPrev < totalPrevHeight) {
+                    val lastPageHeight = prevChapterPages.last().height
+                    return@derivedStateOf CrossChapterCommit(
+                        ReaderPageDirection.PREV,
+                        scrollIntoPrev - lastPageHeight,
+                    )
+                }
+            }
+            null
+        }
+    }
+
+    // 下游 effect：派生值跨阈值时触发一次 commit。
+    //
+    // Ghost-wall guard: 跨章 commit 必须有真实用户滚动。命中 commit 决策但 hasUserScrolled
+    // 仍 false 时（例如 PREV 边界翻章 settle 余波），打诊断日志后吞掉，避免 PREV→NEXT
+    // 鬼打墙。详见旧实现的「短 last page 立刻触发 commit NEXT」死循环说明。
+    LaunchedEffect(crossChapterCommit, pendingRestore, layoutCompleted, hasUserScrolled) {
+        val commit = crossChapterCommit ?: return@LaunchedEffect
+        if (pendingRestore || !layoutCompleted) return@LaunchedEffect
+        if (!hasUserScrolled) {
+            AppLog.debug(
+                "Scroll",
+                "GhostWall guard SKIP" +
+                    " | wouldCommit=${commit.direction}" +
+                    " | page=$currentPageIndex/$pageCount | offset=$pageOffset" +
+                    " | hasUserScrolled=false | nextCh=${nextChapterPages.size} prevCh=${prevChapterPages.size}",
+            )
             return@LaunchedEffect
         }
-        // Forward commit: 当 last page 底部已滑过 viewport 70% 处（即 lastPageBottom <
-        // viewHeight * 0.3）时触发跨章 commit。该阈值保证视觉重叠区 = viewport 中段
-        // 30%-70%：上半 70% 仍是当前章 last page，下半 30% 是 nextChapterPages 预览。
-        //
-        // 无缝性靠 Phase 2 [ReadBookHolder.moveToNextChapter] 的「同步指针腾挪」保证：
-        // commit 触发的同一调用栈内 cur=next, prev=cur，下一帧重组 viewport 顶部 70%
-        // 由新 prev（即旧 cur）填，下半 30% 由新 cur 首页填，视觉等价于「同一张连续画布」。
-        //
-        // 历史教训：单纯把阈值收紧到 < 0f 不能保证无缝——它把视觉切换瞬间从「中段
-        // 30%-70% 渐变区」推迟到「viewport 顶端 0%」，意味着 viewport 整段都必须由
-        // nextChapterPages 异步就绪，反而扩大了 next 未到位时的空白窗口。
-        if (currentPageIndex >= pageCount - 1 && nextChapterPages.isNotEmpty()) {
-            val lastPageBottom = pageOffset + pageHeight(currentPageIndex)
-            if (lastPageBottom < viewHeight * 0.3f) {
-                AppLog.debug(
-                    "Scroll",
-                    "Scroll cross-chapter commit NEXT | page=$currentPageIndex/$pageCount | newPageOffset=$lastPageBottom" +
-                        " | pendingBoundaryTurn=$pendingBoundaryTurn | hasUserScrolled=$hasUserScrolled",
-                )
-                onChapterCommit(ReaderPageDirection.NEXT, lastPageBottom)
-            }
-        }
-        // Backward commit: 上一章预览滑入 viewport 超过 70% 处即触发。新 pageOffset =
-        // scrollIntoPrev - lastPageHeight：
-        //   - lastPageHeight > scrollIntoPrev：新 pageOffset 负值（合理，新 last page
-        //     已被滑过部分），上方由再上一章 prev 预览填充——靠 holder 同步腾挪即可。
-        //   - lastPageHeight < scrollIntoPrev：新 pageOffset 正值（短 last page 在中
-        //     段），上方留白同样靠 holder 腾挪后的 prev（即旧 cur）填充。
-        if (currentPageIndex == 0 && prevChapterPages.isNotEmpty() && pageOffset > 0) {
-            val totalPrevHeight = prevChapterPages.sumOf { it.height.toDouble() }.toFloat()
-            val scrollIntoPrev = pageOffset
-            if (scrollIntoPrev > viewHeight * 0.7f && scrollIntoPrev < totalPrevHeight) {
-                val lastPageHeight = prevChapterPages.last().height
-                val newPageOffset = scrollIntoPrev - lastPageHeight
-                AppLog.debug(
-                    "Scroll",
-                    "Scroll cross-chapter commit PREV | page=$currentPageIndex/$pageCount | newPageOffset=$newPageOffset" +
-                        " | pendingBoundaryTurn=$pendingBoundaryTurn | hasUserScrolled=$hasUserScrolled",
-                )
-                onChapterCommit(ReaderPageDirection.PREV, newPageOffset)
-            }
-        }
+        AppLog.debug(
+            "Scroll",
+            "Scroll cross-chapter commit ${commit.direction}" +
+                " | page=$currentPageIndex/$pageCount | newPageOffset=${commit.newOffset}" +
+                " | pendingBoundaryTurn=$pendingBoundaryTurn | hasUserScrolled=$hasUserScrolled",
+        )
+        onChapterCommit(commit.direction, commit.newOffset)
     }
 
     /**
