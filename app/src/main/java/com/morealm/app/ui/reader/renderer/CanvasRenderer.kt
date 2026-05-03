@@ -242,6 +242,13 @@ fun CanvasRenderer(
      * 接通前的兼容。
      */
     onChapterCommitShift: (ReaderPageDirection) -> Boolean = { _ -> false },
+    /**
+     * 滚动模式渲染引擎切换 —— true 走 [LazyScrollRenderer]（段落级 LazyColumn 瀑布流），
+     * false 走老 [ScrollRenderer]（单 Canvas 手写状态机）。默认 false 保持兼容。
+     *
+     * 仅在 [pageAnimType] = SCROLL 时生效。其它翻页模式不受影响。
+     */
+    useLazyScrollRenderer: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1126,18 +1133,44 @@ fun CanvasRenderer(
         hasBgImage = bgBitmap != null,
     )
 
+    // ── 渲染主题（5 件套 paint + 背景）注入 ──
+    //
+    // 旧链路把 titlePaint/contentPaint/chapterNumPaint/bgArgb/bgBitmap 当作 5 个独立
+    // 入参分别透传给 [rememberSimulationParams] / [LazyScrollRenderer] / [ScrollRenderer]，
+    // caller 只要漏一个字段就静默渲染异常（譬如忘了传 bgBitmap → 自定义背景图丢失）。
+    //
+    // Phase 2 起统一打包成 [ReaderRenderTheme] 一次性注入 [LocalReaderRenderTheme]，
+    // 让 SimulationDelegate / LazyScrollRenderer 等下游组件直接 .current 取，少传一组
+    // 字段、少一份「漏字段」风险。
+    //
+    // remember key 用 5 件套本体：用户改字号 → titlePaint 换引用 → readerTheme 重建 →
+    // 下游 SimulationParams remember 失效 → renderPageToBitmap 用新 paint 出图。
+    val readerTheme = remember(titlePaint, contentPaint, chapterNumPaint, bgArgb, bgBitmap) {
+        ReaderRenderTheme(
+            titlePaint = titlePaint,
+            contentPaint = contentPaint,
+            chapterNumPaint = chapterNumPaint,
+            bgArgb = bgArgb,
+            bgBitmap = bgBitmap,
+        )
+    }
+
+    // 把整段「params 构建 + UI 树」放在 LocalReaderRenderTheme 作用域内 —— 注意作用
+    // 域跨度大（约 660 行，到 CanvasRenderer 主体结束），但 CompositionLocalProvider
+    // 是纯值注入，不引入额外重组开销；为保留 git diff 的可读性，下方代码块缩进维持
+    // 不变。
+    CompositionLocalProvider(LocalReaderRenderTheme provides readerTheme) {
+
     // SimulationParams for bezier page curl —— Phase 2 后期重构：抽到独立模块。
     // 详见 [com.morealm.app.ui.reader.page.animation.rememberSimulationParams]。
     // 这里只透传 CanvasRenderer 内部状态，仿真细节（pageForTurn / canTurn /
     // onLongPress 等）已经搬到独立文件，CanvasRenderer 不再关心仿真路径的实现。
+    //
+    // 5 件套 paint 已迁到 LocalReaderRenderTheme，rememberSimulationParams 自取，
+    // 这里不再重复传。
     val simulationParams = com.morealm.app.ui.reader.page.animation.rememberSimulationParams(
         pageAnimType = pageAnimType,
         pages = pages,
-        titlePaint = titlePaint,
-        contentPaint = contentPaint,
-        chapterNumPaint = chapterNumPaint,
-        bgArgb = bgArgb,
-        bgBitmap = bgBitmap,
         bgMeanColor = bgMeanColor,
         pageInfoOverlaySpec = pageInfoOverlaySpec,
         pageFactory = pageFactory,
@@ -1370,7 +1403,93 @@ fun CanvasRenderer(
             )
     ) {
         if (pageAnimType == PageAnimType.SCROLL) {
-            ScrollRenderer(
+            if (useLazyScrollRenderer) {
+                // ── 实验：LazyColumn 段落级瀑布流引擎 ──
+                //
+                // 现场把 prev + cur + next 三章的段落扁平拼成 paragraphs 列表喂给 LazyScrollRenderer。
+                // 跨章无缝衔接靠两条机制：
+                //   1. 列表 prepend/append（caller 加载邻章 → toScrollParagraphs 拼到列表头/尾）
+                //   2. prepend 锚定补偿（这里跟踪 firstKey 变化算 prependedCount）
+                //
+                // ReaderRenderTheme 通过 CompositionLocalProvider 注入，避免向 LazyScrollRenderer
+                // 层层传 paint/bg —— 这是新组件的现代实践示范。
+                val paragraphs = remember(prevTextChapter, chapter, nextTextChapter) {
+                    buildList {
+                        prevTextChapter?.let { addAll(it.toScrollParagraphs()) }
+                        (chapter ?: placeholderChapter()).let { addAll(it.toScrollParagraphs()) }
+                        nextTextChapter?.let { addAll(it.toScrollParagraphs()) }
+                    }
+                }
+
+                // 进度计算需要每章字符总数 —— 现场建小 map 缓存（窗口仅 3 章，零开销）
+                val chapterCharSizes = remember(prevTextChapter, chapter, nextTextChapter) {
+                    buildMap {
+                        prevTextChapter?.let { put(it.chapterIndex, it.getContent().length.coerceAtLeast(1)) }
+                        chapter?.let { put(it.chapterIndex, it.getContent().length.coerceAtLeast(1)) }
+                        nextTextChapter?.let { put(it.chapterIndex, it.getContent().length.coerceAtLeast(1)) }
+                    }
+                }
+
+                // ── prepend 锚定补偿 ──
+                //
+                // 跟踪 paragraphs.firstKey 变化：旧 firstKey 在新列表里的 idx 就是 prepend 数。
+                // 用 token = System.nanoTime() 做幂等 key，让连续 prepend 能逐次触发。
+                var lastFirstKey by remember { mutableStateOf<String?>(null) }
+                var prependedCount by remember { mutableIntStateOf(0) }
+                var prependToken by remember { mutableLongStateOf(0L) }
+                LaunchedEffect(paragraphs) {
+                    val newFirstKey = paragraphs.firstOrNull()?.key
+                    val oldFirstKey = lastFirstKey
+                    if (oldFirstKey != null && newFirstKey != null && oldFirstKey != newFirstKey) {
+                        val newPos = paragraphs.indexOfFirst { it.key == oldFirstKey }
+                        if (newPos > 0) {
+                            prependedCount = newPos
+                            prependToken = System.nanoTime()
+                            AppLog.debug("LazyScroll", "detected prepend: $newPos paragraphs added at top")
+                        }
+                    }
+                    lastFirstKey = newFirstKey
+                }
+
+                // ── 锚点恢复 ──
+                //
+                // 启动 / 章节切换时：用 (chapterIndex, initialChapterPosition) 转 ScrollAnchor。
+                // 同章窗口扩展（prepend/append）时不重启此 effect —— LazyScrollRenderer 内部
+                // 用 anchor signature 幂等，不会 double-restore。
+                val initialAnchor = remember(chapterIndex, initialChapterPosition, paragraphs.size) {
+                    if (paragraphs.isEmpty()) null
+                    else bookmarkToAnchor(chapterIndex, initialChapterPosition, paragraphs)
+                        ?: ScrollAnchor.atChapterStart(chapterIndex)
+                }
+
+                // readerTheme 已由外层 CompositionLocalProvider（L~1136 处）提供，
+                // 这里直接走 LazyScrollRenderer，不再二次构造主题/嵌套 provider。
+                LazyScrollRenderer(
+                    paragraphs = paragraphs,
+                    initialAnchor = initialAnchor,
+                    prependedCount = prependedCount,
+                    prependToken = prependToken,
+                    onNearTop = onPrevChapter,
+                    onNearBottom = onNextChapter,
+                    onChapterProgress = { _, prog ->
+                        if (chapter?.isCompleted == true) onProgress(prog)
+                    },
+                    onVisibleParagraphChanged = { p, _ ->
+                        // 通知 ReaderScreen 顶栏：章 idx + 章首段 chapterPosition
+                        val titleForCh = when (p.chapterIndex) {
+                            chapter?.chapterIndex -> chapterTitle
+                            prevTextChapter?.chapterIndex -> prevChapterTitle
+                            nextTextChapter?.chapterIndex -> nextChapterTitle
+                            else -> ""
+                        }
+                        onVisiblePageChanged(p.chapterIndex, titleForCh, "", p.firstChapterPosition)
+                    },
+                    onTapCenter = onTapCenter,
+                    chapterCharSizeProvider = { chIdx -> chapterCharSizes[chIdx] ?: 1 },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                ScrollRenderer(
                 pages = currentChapterPages,
                 nextChapterPages = nextTextChapter?.pages.orEmpty(),
                 prevChapterPages = prevTextChapter?.pages.orEmpty(),
@@ -1477,6 +1596,7 @@ fun CanvasRenderer(
                 footerRight = footerRight,
                 hasBgImage = bgBitmap != null,
             )
+            }
         } else {
             // Diagnostic — pairs with [2] coordinator REBUILD and [3p]
             // SimulationPager COMPOSE so we can see the chain:
@@ -1700,6 +1820,7 @@ fun CanvasRenderer(
             )
         }
     }
+    } // ← 关闭 L~1136 处由 readerTheme 注入打开的 CompositionLocalProvider 作用域
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -468,8 +468,19 @@ class ReaderViewModel @Inject constructor(
                         }
                     }
                     is TtsEventBus.Event.PrevChapter -> {
-                        if (tts.ttsPlaying.value) pendingTtsResumeOnNewChapter = true
-                        _readAloudPageTurn.tryEmit(-1)
+                        if (event.loadedByHost) {
+                            // host 已经在 service 端 sendCommand(LoadAndPlay) 了——
+                            // UI 仅 page-turn 同步，不要再 sendCommand 触发二次加载。
+                            // pendingTtsResumeOnNewChapter 保持 false，chapterContent
+                            // observer 收到新内容时只走 reader 自身的渲染路径。
+                            _readAloudPageTurn.tryEmit(-1)
+                        } else {
+                            // host 没拿到 bookId 上下文（oneShot / Listen Tab 起播 /
+                            // 旧路径），退回 ViewModel 驱动：page-turn + observer 推
+                            // LoadAndPlay。
+                            if (tts.ttsPlaying.value) pendingTtsResumeOnNewChapter = true
+                            _readAloudPageTurn.tryEmit(-1)
+                        }
                     }
                     is TtsEventBus.Event.PrevChapterToLast -> {
                         // 段级跨章触发：用户在章首按"上一段"，期望切上一章 + 续读末段。
@@ -483,8 +494,12 @@ class ReaderViewModel @Inject constructor(
                         _readAloudPageTurn.tryEmit(-1)
                     }
                     is TtsEventBus.Event.NextChapter -> {
-                        if (tts.ttsPlaying.value) pendingTtsResumeOnNewChapter = true
-                        _readAloudPageTurn.tryEmit(1)
+                        if (event.loadedByHost) {
+                            _readAloudPageTurn.tryEmit(1)
+                        } else {
+                            if (tts.ttsPlaying.value) pendingTtsResumeOnNewChapter = true
+                            _readAloudPageTurn.tryEmit(1)
+                        }
                     }
                     is TtsEventBus.Event.ChapterFinished -> {
                         // Host finished the current chapter — let the UI advance and the

@@ -66,6 +66,20 @@ class AppPreferences @Inject constructor(
          */
         val TTS_MEDIA_BUTTON_PER_CHAPTER = booleanPreferencesKey("tts_media_button_per_chapter")
         /**
+         * 滚动模式渲染引擎开关 —— 默认 false（走 [com.morealm.app.ui.reader.renderer.ScrollRenderer]
+         * 老路径）；true 切换到 [com.morealm.app.ui.reader.renderer.LazyScrollRenderer]
+         * 段落级 LazyColumn 瀑布流引擎。
+         *
+         * **实验阶段**：新引擎主打跨章无缝衔接 + 现代 Compose 实践（CompositionLocal /
+         * snapshotFlow / derivedStateOf / contentType 复用）。验证稳定后切默认 true，
+         * 老引擎保留 1-2 版本观察期再删除。
+         *
+         * **何时建议开启**：长章节阅读、跨章频繁、希望"段落瀑布流"视觉体验的用户。
+         * **何时建议保留 false**：极速 fling + 千元机硬件 + 段碎到极致的临界场景，
+         * 老引擎单 Canvas 一次绘制的性能上限更高。
+         */
+        val USE_LAZY_SCROLL_RENDERER = booleanPreferencesKey("use_lazy_scroll_renderer")
+        /**
          * 朗读时是否自动跟随翻页 —— 默认 true。
          *
          * 行为（由阅读器外层订阅 [com.morealm.app.service.TtsPlaybackState.paragraphRange] 实现）：
@@ -298,6 +312,10 @@ class AppPreferences @Inject constructor(
     /** 见 [Keys.TTS_MEDIA_BUTTON_PER_CHAPTER] —— 默认 false（段级）。 */
     val ttsMediaButtonPerChapter: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.TTS_MEDIA_BUTTON_PER_CHAPTER] ?: false }
+
+    /** 见 [Keys.USE_LAZY_SCROLL_RENDERER] —— 默认 **true**（直接走 LazyScrollRenderer 瀑布流）。 */
+    val useLazyScrollRenderer: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.USE_LAZY_SCROLL_RENDERER] ?: true }
 
     /** 见 [Keys.TTS_AUTO_FOLLOW_PAGE] —— 默认 true（朗读时自动跟随翻页）。 */
     val ttsAutoFollowPage: Flow<Boolean> = context.dataStore.data
@@ -568,6 +586,9 @@ class AppPreferences @Inject constructor(
     suspend fun setTtsKeepCpuAwake(enabled: Boolean) = update(Keys.TTS_KEEP_CPU_AWAKE, enabled)
     suspend fun setTtsMediaButtonPerChapter(enabled: Boolean) =
         update(Keys.TTS_MEDIA_BUTTON_PER_CHAPTER, enabled)
+
+    suspend fun setUseLazyScrollRenderer(enabled: Boolean) =
+        update(Keys.USE_LAZY_SCROLL_RENDERER, enabled)
     suspend fun setTtsAutoFollowPage(enabled: Boolean) = update(Keys.TTS_AUTO_FOLLOW_PAGE, enabled)
     suspend fun setShelfViewMode(mode: String) = update(Keys.SHELF_VIEW_MODE, mode)
     /** 写入新的书源分组模式；调用方负责传入 [Keys.SOURCE_GROUP_MODE] 注释里列出的字符串。 */

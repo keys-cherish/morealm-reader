@@ -1,7 +1,5 @@
 package com.morealm.app.ui.reader.page.animation
 
-import android.graphics.Bitmap
-import android.text.TextPaint
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
@@ -10,6 +8,7 @@ import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.render.ImageColumn
 import com.morealm.app.domain.render.TextPage
+import com.morealm.app.ui.reader.renderer.LocalReaderRenderTheme
 import com.morealm.app.ui.reader.renderer.PageInfoOverlaySpec
 import com.morealm.app.ui.reader.renderer.PageTurnCoordinator
 import com.morealm.app.ui.reader.renderer.ReaderPageDirection
@@ -65,11 +64,6 @@ import com.morealm.app.ui.reader.renderer.hitTestPage
 internal fun rememberSimulationParams(
     pageAnimType: PageAnimType,
     pages: List<TextPage>,
-    titlePaint: TextPaint,
-    contentPaint: TextPaint,
-    chapterNumPaint: TextPaint?,
-    bgArgb: Int,
-    bgBitmap: Bitmap?,
     bgMeanColor: Int,
     pageInfoOverlaySpec: PageInfoOverlaySpec?,
     pageFactory: ReaderPageFactory,
@@ -93,6 +87,23 @@ internal fun rememberSimulationParams(
     /** readerPageIndex 写回（PageTurnCoordinator commit 后落到新 page index） */
     setReaderPageIndex: (Int) -> Unit,
 ): SimulationParams? {
+    // ── paint / 背景 5 件套：通过 [LocalReaderRenderTheme] 取，不再走入参 ──
+    //
+    // 历史：caller (CanvasRenderer) 显式传入 titlePaint/contentPaint/chapterNumPaint/
+    // bgArgb/bgBitmap。Phase 2 起 caller 已用 CompositionLocalProvider 注入主题，
+    // 这里直接 .current 取 —— 既减少入参又减少 caller 跨多个翻页路径手传时漏一两个
+    // 字段的低级 bug 概率。
+    //
+    // 注意：theme 字段变化会让本函数重组，进而让 remember 的 SimulationParams 重建。
+    // 这正是期望行为：用户改字号 → titlePaint 换引用 → SimulationParams 重建 → 仿真
+    // pager 拿到带新 paint 的 params → 下一帧 renderPageToBitmap 用新 paint 出图。
+    val theme = LocalReaderRenderTheme.current
+    val titlePaint = theme.titlePaint
+    val contentPaint = theme.contentPaint
+    val chapterNumPaint = theme.chapterNumPaint
+    val bgArgb = theme.bgArgb
+    val bgBitmap = theme.bgBitmap
+
     return remember(
         pages,
         titlePaint,

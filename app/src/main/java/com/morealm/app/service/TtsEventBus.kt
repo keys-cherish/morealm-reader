@@ -52,8 +52,22 @@ data class TtsPlaybackState(
 object TtsEventBus {
     /** Service → ViewModel */
     sealed class Event {
-        data object PrevChapter : Event()
-        data object NextChapter : Event()
+        /**
+         * 切上一章请求 / 完成。
+         *
+         * @param loadedByHost true 表示 [TtsEngineHost] 已经在 service 端用
+         *  [com.morealm.app.domain.reader.ChapterContentLoader.loadForTts] 把新章节
+         *  内容加载并自发了 LoadAndPlay；ReaderViewModel 收到只需把 UI 翻到对应页，
+         *  **不要再 sendCommand(LoadAndPlay)**，否则会触发二次加载（host 已在播）。
+         *
+         *  false 表示 host 未持有 bookId 上下文（oneShot / 听书 Tab 未填 bookId 等），
+         *  退回旧路径：ReaderViewModel 翻页 + chapterContent observer 推 LoadAndPlay。
+         *
+         *  这是「通知栏按钮在 ReaderViewModel 死掉后仍能切章」的核心机制——
+         *  Service / Host 直接驱动 + 旗标标记 UI 同步责任。
+         */
+        data class PrevChapter(val loadedByHost: Boolean = false) : Event()
+        data class NextChapter(val loadedByHost: Boolean = false) : Event()
 
         /**
          * 段级跳转触发的"切上一章"语义 —— 与 [PrevChapter]（用户主动按"上一章"按钮，

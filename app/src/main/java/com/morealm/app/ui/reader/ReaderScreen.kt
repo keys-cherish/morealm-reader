@@ -108,6 +108,7 @@ fun ReaderScreen(
     val showSettings by viewModel.showSettingsPanel.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
+    val useLazyScrollRendererSetting by viewModel.settings.useLazyScrollRenderer.collectAsStateWithLifecycle()
     val fontFamily by viewModel.settings.fontFamily.collectAsStateWithLifecycle()
     val fontSize by viewModel.settings.fontSize.collectAsStateWithLifecycle()
     val lineHeight by viewModel.settings.lineHeight.collectAsStateWithLifecycle()
@@ -640,6 +641,7 @@ fun ReaderScreen(
                         else -> false
                     }
                 },
+                useLazyScrollRenderer = useLazyScrollRendererSetting,
                 modifier = Modifier.fillMaxSize(),
             )
         }

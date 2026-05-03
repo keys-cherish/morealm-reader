@@ -87,12 +87,34 @@ class ScrollParagraph(
      */
     val paddingTop: Float,
     /**
-     * 段总高度（含 [paddingTop]）。
+     * 段总高度（含 [paddingTop] 与 [paragraphSpacingAfter] 的尾部段间距）。
      *
      * LazyColumn item 用此值作为固定高度（`Modifier.height(totalHeight.toDp())`），
      * 测量阶段 O(1)，不会成为快速滚动瓶颈。
+     *
+     * **关键**：包含 [paragraphSpacingAfter] —— 否则段与段在 LazyColumn 里紧贴，
+     * 视觉上「段内多行被错画成多段」（段间无空白，段内 line-spacing-extra
+     * 的 0.2H 间隙反而看起来像段落分隔）。Legado 老 [ScrollRenderer]
+     * 把整页一次画下来时，page 内 durY 自带 paragraphSpacing 的 0.8H 间距，
+     * 段级 LazyColumn 必须显式补回去。
      */
     val totalHeight: Float,
+    /**
+     * 段尾段间距（已计入 [totalHeight]，单独保留此字段供调试/进度精细计算用）。
+     *
+     * 来源（按优先级）：
+     * 1. 下一段同页：等于 `next.firstLine.lineTop - this.lastLine.lineBottom`
+     *    （即 [ChapterProvider] `durY` 累积出来的
+     *    `(lineSpacingExtra-1+paragraphSpacing/10) × textHeight`）。Legado
+     *    默认配置 lineSpacingExtra=1.2 + paragraphSpacing=8 → 段尾间距
+     *    = 1.0 × textHeight，正是用户「连续阅读视觉节奏」的核心。
+     * 2. 下一段跨页（同章）：page-local 坐标已断，用 `lastLineHeight ×
+     *    CROSS_PAGE_PARAGRAPH_GAP_FACTOR` 兜底（典型 Legado 默认值）。
+     * 3. 章末段（无下一段）：0f。下一章首段的 [paddingTop] = `firstPagePaddingTop`
+     *    本身就提供了章间视觉留白；章末若再补 tail 会和下一章 paddingTop 叠加，
+     *    肉眼看到一道异常长的空白。
+     */
+    val paragraphSpacingAfter: Float,
     /** 段首字符在章内位置（[TextLine.chapterPosition]）。进度/书签换算用。 */
     val firstChapterPosition: Int,
     /** 段总字符数（含段末换行符）。 */
@@ -174,17 +196,50 @@ fun TextChapter.toScrollParagraphs(): List<ScrollParagraph> {
     if (grouped.isEmpty()) return emptyList()
 
     val firstPagePaddingTop = pageSnapshot.first().paddingTop.toFloat()
-    val result = ArrayList<ScrollParagraph>(grouped.size)
+
+    // ── Pass 1：先把每段的「不带尾部间距」基础布局算好 ──
+    //
+    // 把 paragraphSpacingAfter 算进 totalHeight 需要看下一段的首行位置，所以这里
+    // 先收集一份 raw 数据再到 Pass 2 统一计算尾间距。两次遍历都是纯计算，可以在
+    // [kotlinx.coroutines.Dispatchers.Default] 跑（caller 已在后台调用）。
+    class RawParagraph(
+        val paragraphNum: Int,
+        val paraLines: List<TextLine>,
+        val firstLine: TextLine,
+        val lastLine: TextLine,
+        val firstPageIdx: Int,
+        val lastPageIdx: Int,
+        val paddingTop: Float,
+        val linePositions: FloatArray,
+        val baseHeight: Float, // 不含尾部段间距，覆盖到 lastLine.lineBottom
+        val lastLineHeight: Float, // 跨页兜底用
+        /**
+         * 该段内首次出现的同页同段「相邻行间空隙」(line.lineTop - prevLineBottom)。
+         *
+         * 用途：Pass 2 计算段间距时做「最小段间距 = intraLineGap × MIN_RATIO」兜底，
+         * 保证段间间距至少是段内行间距的 [PARAGRAPH_GAP_MIN_RATIO_TO_LINE_GAP] 倍，
+         * 视觉上段与段才能真正拉开。
+         *
+         * 单行段（无法算出段内间距）：取 0f；Pass 2 会回落到「整章首个能算出的
+         * intraLineGap」做兜底，不会因为单行段就丢失段间补偿。
+         */
+        val intraLineGap: Float,
+        val contentType: ScrollParagraphType,
+        val charSize: Int,
+    )
+
+    val raws = ArrayList<RawParagraph>(grouped.size)
     var seenChapterFirst = false
 
     for ((paragraphNum, entries) in grouped) {
         val paraLines = entries.map { it.second }
         val firstLine = paraLines.first()
+        val lastLine = paraLines.last()
         val isChapterStart = !seenChapterFirst
         seenChapterFirst = true
         val paddingTop = if (isChapterStart) firstPagePaddingTop else 0f
 
-        // 第 2 步：预计算 linePositions（段内绝对 top），同时累加 totalHeight。
+        // 第 1.a 步：预计算 linePositions（段内绝对 top），同时累加 baseHeight。
         //
         // 算法：以 paddingTop 为起点游标 cursor。
         //   - 同页相邻行：保留 page 内自然行间距 = (line.lineTop - prevLineBottom)
@@ -195,13 +250,16 @@ fun TextChapter.toScrollParagraphs(): List<ScrollParagraph> {
         var cursor = paddingTop
         var prevPageIdx = -1
         var prevLineBottom = 0f
+        var firstIntraGap = 0f // 段内首次同页相邻行间隙；用于 Pass 2 兜底
         for ((i, entry) in entries.withIndex()) {
             val (pageIdx, line) = entry
             if (pageIdx == prevPageIdx) {
                 // 同页：补回行间距（lineTop - prevLineBottom 可能是负值——
                 // Legado 排版偶尔会用「lineTop = lineBottom」来表示零间距，
                 // 这里 coerceAtLeast(0f) 防止段长被错误压缩）。
-                cursor += (line.lineTop - prevLineBottom).coerceAtLeast(0f)
+                val gap = (line.lineTop - prevLineBottom).coerceAtLeast(0f)
+                cursor += gap
+                if (firstIntraGap <= 0f && gap > 0f) firstIntraGap = gap
             }
             // 跨页：cursor 不补间距，直接接在上一行底部。
             linePositions[i] = cursor
@@ -209,9 +267,10 @@ fun TextChapter.toScrollParagraphs(): List<ScrollParagraph> {
             prevPageIdx = pageIdx
             prevLineBottom = line.lineBottom
         }
-        val totalHeight = cursor
+        val baseHeight = cursor
+        val lastLineHeight = (lastLine.lineBottom - lastLine.lineTop).coerceAtLeast(0f)
 
-        // 第 3 步：判定 contentType。优先级：CHAPTER_TITLE > IMAGE > NORMAL。
+        // 第 1.b 步：判定 contentType。优先级：CHAPTER_TITLE > IMAGE > NORMAL。
         // 章首段 + 含标题/章号 line → CHAPTER_TITLE；
         // 任意 line 含 ImageColumn → IMAGE；
         // 否则 NORMAL。
@@ -231,23 +290,139 @@ fun TextChapter.toScrollParagraphs(): List<ScrollParagraph> {
             if (line.isParagraphEnd) charSize += 1
         }
 
+        raws.add(
+            RawParagraph(
+                paragraphNum = paragraphNum,
+                paraLines = paraLines,
+                firstLine = firstLine,
+                lastLine = lastLine,
+                firstPageIdx = entries.first().first,
+                lastPageIdx = entries.last().first,
+                paddingTop = paddingTop,
+                linePositions = linePositions,
+                baseHeight = baseHeight,
+                lastLineHeight = lastLineHeight,
+                intraLineGap = firstIntraGap,
+                contentType = contentType,
+                charSize = charSize,
+            ),
+        )
+    }
+
+    // ── Pass 2：用「下一段首行 page-local lineTop」减「本段末行 page-local lineBottom」
+    //   推出段尾间距（paragraphSpacingAfter），再补进 totalHeight ──
+    //
+    // 为什么不能在 Pass 1 直接算？因为 paragraphSpacingAfter 是「相邻两段之间」的
+    // 关系，必须先把每段最后一行的 page-local lineBottom 收齐才能跨段查询。
+    //
+    // 同页相邻：差值就是 [ChapterProvider] 内 `durY += textHeight*lineSpacingExtra`
+    //   后又 `+= textHeight*paragraphSpacing/10f` 累计出来的真实间距。Legado
+    //   默认 lineSpacingExtra=1.2 + paragraphSpacing=8 → 间距 = 1.0×textHeight，
+    //   正好是用户「段与段之间留一行」的视觉节奏。
+    //
+    // 跨页相邻（同章）：page 已经断了，page-local 坐标无法直接相减；用末行高度
+    //   * [CROSS_PAGE_PARAGRAPH_GAP_FACTOR] 兜底，等价 Legado 默认配置下的目标值。
+    //
+    // 章末段（next == null）：tailSpacing = 0f。下一章的首段会用
+    //   [ScrollParagraph.paddingTop] = firstPagePaddingTop 提供章首留白，章末再补
+    //   tail 会和下一章 paddingTop 叠加，肉眼看到一道异常长的空白。
+    //
+    // ── 「最小段间距」兜底 ──
+    //
+    // ChapterProvider 在 lineSpacingExtra 较大时会让段间几何间距 = 段内行间距 +
+    // paragraphSpacing/10×textHeight，比例只有 1.x 倍，肉眼难以区分「段内换行」
+    // 和「段尾换段」。瀑布流模式段不再被 page break 隔开，必须显著拉开比例。
+    //
+    // 兜底规则：tailSpacing ≥ effectiveIntraGap × [PARAGRAPH_GAP_MIN_RATIO_TO_LINE_GAP]
+    //   - 当前段算出 intraLineGap > 0：用本段值（精准）
+    //   - 单行段（intraLineGap == 0）：回落到整章首个能算出的 intraLineGap
+    //   - 整章都是单行段：跳过兜底（保持原算法值）
+    //
+    // 这条兜底只在「原算法的段间太小」时生效——若用户配置已经让段间足够明显
+    // （如 Legado 默认 1.2 + 8 → 段间 1.0H 段内 0.2H = 5×），不会被改动。
+    val chapterFallbackIntraGap = raws.firstOrNull { it.intraLineGap > 0f }?.intraLineGap ?: 0f
+    val result = ArrayList<ScrollParagraph>(raws.size)
+    for (i in raws.indices) {
+        val curr = raws[i]
+        val next = raws.getOrNull(i + 1)
+        val rawTail: Float = when {
+            next == null -> 0f
+            next.firstPageIdx == curr.lastPageIdx -> {
+                (next.firstLine.lineTop - curr.lastLine.lineBottom).coerceAtLeast(0f)
+            }
+            else -> curr.lastLineHeight * CROSS_PAGE_PARAGRAPH_GAP_FACTOR
+        }
+        // 章末段（next==null）保留 0f 不兜底——避免和下一章 paddingTop 叠加造成
+        // 异常长空白；其它段用 intraLineGap 兜底拉开段间比例。
+        val effectiveIntraGap = if (curr.intraLineGap > 0f) curr.intraLineGap else chapterFallbackIntraGap
+        val tailSpacing: Float = if (next == null || effectiveIntraGap <= 0f) {
+            rawTail
+        } else {
+            maxOf(rawTail, effectiveIntraGap * PARAGRAPH_GAP_MIN_RATIO_TO_LINE_GAP)
+        }
+
         result.add(
             ScrollParagraph(
-                key = "$chapterIndex-$paragraphNum",
-                contentType = contentType,
+                key = "$chapterIndex-${curr.paragraphNum}",
+                contentType = curr.contentType,
                 chapterIndex = chapterIndex,
-                paragraphNum = paragraphNum,
-                lines = paraLines,
-                linePositions = linePositions,
-                paddingTop = paddingTop,
-                totalHeight = totalHeight,
-                firstChapterPosition = firstLine.chapterPosition,
-                charSize = charSize,
+                paragraphNum = curr.paragraphNum,
+                lines = curr.paraLines,
+                linePositions = curr.linePositions,
+                paddingTop = curr.paddingTop,
+                totalHeight = curr.baseHeight + tailSpacing,
+                paragraphSpacingAfter = tailSpacing,
+                firstChapterPosition = curr.firstLine.chapterPosition,
+                charSize = curr.charSize,
             ),
         )
     }
     return result
 }
+
+/**
+ * 跨页 / 章末段的「段尾间距」兜底因子（× lastLineHeight）。
+ *
+ * 等价于 Legado 默认 `lineSpacingExtra=1.2 + paragraphSpacing=8` 配置下，
+ * 段尾视觉间距 = `(lineSpacingExtra - 1 + paragraphSpacing/10) × textHeight`
+ *            = `(0.2 + 0.8) × textHeight`
+ *            = `1.0 × textHeight`。
+ *
+ * 用户改了排版偏好（如缩小行距）时，同页相邻段会按真实差值算（更准确），
+ * 这个兜底只在 page-break 处生效，误差可接受。
+ */
+private const val CROSS_PAGE_PARAGRAPH_GAP_FACTOR = 1.0f
+
+/**
+ * 段间距「相对于段内行间距」的最小倍率。
+ *
+ * ── 为什么需要这个常量 ──
+ *
+ * MoRealm 默认排版 (lineSpacingExtra=2.0, paragraphSpacing=8) 下，
+ * ChapterProvider 给出的几何间距：
+ *   - 段内行间距 = (lineSpacingExtra - 1) × textHeight = 1.0 × textHeight
+ *   - 段间间距 = (lineSpacingExtra - 1 + paragraphSpacing/10) × textHeight
+ *             = 1.8 × textHeight
+ * 比例只有 **1.8×** —— 在瀑布流连续滚动场景，肉眼很难区分「段内换行」和
+ * 「段尾换段」，每行都像独立段。
+ *
+ * 解决办法：让段间至少是段内行间距的 [PARAGRAPH_GAP_MIN_RATIO_TO_LINE_GAP] 倍。
+ *
+ * ── 为什么取 2.0f ──
+ *
+ * 中文阅读体验研究：段间留白 ≥ 行间空白 × 2 时，段落分界感清晰，但又不至于
+ * 让长文章看起来「碎片化」。取整数 2.0 与排版界一般共识对齐
+ * （CSS 默认 `<p>` margin-block-start ≈ 1em，相当于行间距的 ≈2x）。
+ *
+ * ── 对其他配置的影响 ──
+ *
+ * - Legado 默认 (1.2, 8)：段内 0.2H 段间 1.0H = **5×** → 已远超 2×，**不触发**兜底
+ * - MoRealm 默认 (2.0, 8)：段内 1.0H 段间 1.8H = 1.8× → 兜底拉到 2.0H = **2×**
+ * - 用户调小段距 (1.2, 0)：段内 0.2H 段间 0.2H = 1× → 兜底拉到 0.4H = 2×
+ *
+ * 兜底只在「原配置段间不够分明」时生效，对偏好已经良好的用户零干扰。
+ */
+private const val PARAGRAPH_GAP_MIN_RATIO_TO_LINE_GAP = 2.0f
 
 /**
  * 构造一个 LOADING 占位段 —— 用户快速下滑撞到章末、下一章还在加载时，
@@ -272,6 +447,9 @@ fun loadingScrollParagraph(
     linePositions = FloatArray(0),
     paddingTop = 0f,
     totalHeight = placeholderHeight,
+    // LOADING 段是占位 —— 不需要再补段尾间距（占位本身就是「占位」），totalHeight
+    // 全部是占位高度，0 留给真实段替换占位时由各自的 paragraphSpacingAfter 接管。
+    paragraphSpacingAfter = 0f,
     firstChapterPosition = 0,
     charSize = 0,
 )
