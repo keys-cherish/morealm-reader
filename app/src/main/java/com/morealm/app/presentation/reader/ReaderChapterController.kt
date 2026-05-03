@@ -97,7 +97,28 @@ class ReaderChapterController(
     private val _prevPreloadedChapter = MutableStateFlow<PreloadedReaderChapter?>(null)
     val prevPreloadedChapter: StateFlow<PreloadedReaderChapter?> = _prevPreloadedChapter.asStateFlow()
 
-    // ── Three-chapter cache (Legado-style) ──
+    // ── Three-chapter cache (Legado MD3 ReadBook 模型对齐) ──
+    //
+    // 对齐参考: legado-with-MD3 io.legado.app.model.ReadBook
+    //   var prevTextChapter: TextChapter? = null
+    //   var curTextChapter: TextChapter? = null
+    //   var nextTextChapter: TextChapter? = null
+    //   fun moveToNextChapter(upContent: Boolean): Boolean {
+    //     prevTextChapter = curTextChapter
+    //     curTextChapter = nextTextChapter
+    //     nextTextChapter = null
+    //     ...
+    //   }
+    //
+    // MoRealm 采用 StateFlow 而非 var：StateFlow.value = newValue 在主线程同步生效，
+    // 与 Legado 的同步赋值语义等价；Compose collectAsState 会在下一帧触发重组。
+    //
+    // 三个 flow 的赋值路径：
+    //   - publishCurTextChapter / Prev / Next：CanvasRenderer 在 layoutChapterAsync
+    //     完成时回调（onTextChapterReady prop）→ 把已排版的 TextChapter 推回这里。
+    //     idx 校验保证错章节的排版结果不会污染 cur（用户快速跨章时的迟到回调）。
+    //   - commitChapterShiftNext / Prev：ScrollRenderer onChapterCommit 触发，
+    //     在调用栈内同步腾挪三个 flow，**这是无缝跨章的核心**。
     private val _prevTextChapter = MutableStateFlow<com.morealm.app.domain.render.TextChapter?>(null)
     val prevTextChapter: StateFlow<com.morealm.app.domain.render.TextChapter?> = _prevTextChapter.asStateFlow()
 
@@ -106,6 +127,109 @@ class ReaderChapterController(
 
     private val _nextTextChapter = MutableStateFlow<com.morealm.app.domain.render.TextChapter?>(null)
     val nextTextChapter: StateFlow<com.morealm.app.domain.render.TextChapter?> = _nextTextChapter.asStateFlow()
+
+    /**
+     * 由 CanvasRenderer 在 layoutChapterAsync.onCompleted (或 onPageReady index=0)
+     * 回调时调用。idx 必须等于当前 currentChapterIndex 才覆写，否则丢弃——
+     * 防止用户快速跨章后旧章节的迟到 layout 结果污染新 cur。
+     *
+     * 对齐 Legado: ReadBook.contentLoadFinish 中 `curTextChapter = textChapter`。
+     */
+    fun publishCurTextChapter(idx: Int, ch: com.morealm.app.domain.render.TextChapter) {
+        if (idx == _currentChapterIndex.value) {
+            _curTextChapter.value = ch
+            AppLog.debug("ReadBook", "publishCurTextChapter idx=$idx pages=${ch.pageSize} completed=${ch.isCompleted}")
+        } else {
+            AppLog.debug(
+                "ReadBook",
+                "publishCurTextChapter REJECT stale: requested idx=$idx but cur=${_currentChapterIndex.value}",
+            )
+        }
+    }
+
+    /**
+     * prev 章节预排版完成后由 CanvasRenderer 调用。idx 校验为 cur-1。
+     * 对齐 Legado: ReadBook.contentLoadFinish 中 prevTextChapter 赋值。
+     */
+    fun publishPrevTextChapter(idx: Int, ch: com.morealm.app.domain.render.TextChapter) {
+        if (idx == _currentChapterIndex.value - 1) {
+            _prevTextChapter.value = ch
+            AppLog.debug("ReadBook", "publishPrevTextChapter idx=$idx pages=${ch.pageSize}")
+        }
+    }
+
+    /**
+     * next 章节预排版完成后由 CanvasRenderer 调用。idx 校验为 cur+1。
+     * 对齐 Legado: ReadBook.contentLoadFinish 中 nextTextChapter 赋值。
+     */
+    fun publishNextTextChapter(idx: Int, ch: com.morealm.app.domain.render.TextChapter) {
+        if (idx == _currentChapterIndex.value + 1) {
+            _nextTextChapter.value = ch
+            AppLog.debug("ReadBook", "publishNextTextChapter idx=$idx pages=${ch.pageSize}")
+        }
+    }
+
+    /**
+     * 同步指针腾挪 NEXT 路径：prev = cur; cur = next; next = null。
+     *
+     * 对齐 Legado [io.legado.app.model.ReadBook.moveToNextChapter] 的精神——在调用栈
+     * 内完成三个赋值，下一帧 Compose 重组立即看到新章节，**不存在异步窗口**。
+     *
+     * **无缝性论证**：
+     *   - ScrollRenderer.onChapterCommit(NEXT, newOffset) 触发
+     *   - → ViewModel/Screen 层调用本方法
+     *   - → 同步：_prevTextChapter ← _curTextChapter（旧 cur 沉为 prev，
+     *      ScrollRenderer 下一帧 viewport 顶部用旧 cur 的 last page 填充）
+     *   - → 同步：_curTextChapter ← _nextTextChapter（新 cur 是已经排好版的预下章）
+     *   - → 同步：_currentChapterIndex.value++
+     *   - → 异步：preloadNextChapter(newCurIdx + 1) 重新填 _nextTextChapter
+     *   - 三个 flow 的同步赋值在主线程当帧完成，Compose 重组看到一致快照，
+     *     上 70% / 下 30% 渐变区视觉等价于「同一张连续画布」。
+     *
+     * @return true 腾挪成功；false 表示 _nextTextChapter 未就绪或越界，
+     *   调用方应回退到老路径（loadChapter 异步加载）。
+     */
+    fun commitChapterShiftNext(): Boolean {
+        val curIdx = _currentChapterIndex.value
+        if (curIdx + 1 >= _chapters.value.size) {
+            AppLog.debug("ReadBook", "commitChapterShiftNext REJECT: at last chapter $curIdx/${_chapters.value.size}")
+            return false
+        }
+        val nextCh = _nextTextChapter.value
+        if (nextCh == null) {
+            AppLog.warn("ReadBook", "commitChapterShiftNext REJECT: _nextTextChapter not ready (cur=$curIdx)")
+            return false
+        }
+        AppLog.info("ReadBook", "commitChapterShiftNext $curIdx → ${curIdx + 1}")
+        _prevTextChapter.value = _curTextChapter.value
+        _curTextChapter.value = nextCh
+        _nextTextChapter.value = null
+        _currentChapterIndex.value = curIdx + 1
+        return true
+    }
+
+    /**
+     * 同步指针腾挪 PREV 路径：next = cur; cur = prev; prev = null。
+     * 对齐 Legado ReadBook.moveToPrevChapter。
+     */
+    fun commitChapterShiftPrev(): Boolean {
+        val curIdx = _currentChapterIndex.value
+        if (curIdx <= 0) {
+            AppLog.debug("ReadBook", "commitChapterShiftPrev REJECT: at first chapter")
+            return false
+        }
+        val prevCh = _prevTextChapter.value
+        if (prevCh == null) {
+            AppLog.warn("ReadBook", "commitChapterShiftPrev REJECT: _prevTextChapter not ready (cur=$curIdx)")
+            return false
+        }
+        AppLog.info("ReadBook", "commitChapterShiftPrev $curIdx → ${curIdx - 1}")
+        _nextTextChapter.value = _curTextChapter.value
+        _curTextChapter.value = prevCh
+        _prevTextChapter.value = null
+        _currentChapterIndex.value = curIdx - 1
+        return true
+    }
 
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()

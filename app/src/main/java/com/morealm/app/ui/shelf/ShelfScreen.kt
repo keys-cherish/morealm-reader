@@ -90,9 +90,8 @@ fun ShelfScreen(
     var isListView by rememberSaveable { mutableStateOf(false) }
     // Folder navigation state: null = root (show all groups + ungrouped)
     var currentFolderId by rememberSaveable { mutableStateOf<String?>(null) }
+
     // Inline search
-    var showSearch by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<Book>>(emptyList()) }
     var showDeleteFolderConfirm by remember { mutableStateOf<String?>(null) }
     /**
@@ -103,6 +102,25 @@ fun ShelfScreen(
     // Batch selection mode
     var batchMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    // Inline search overlay：showSearch 控制顶部搜索栏可见性，searchQuery 是
+    // 当前输入值。声明于此（早于下面 navigateToFolder LaunchedEffect 引用它们的
+    // 闭包），避免 Kotlin 向前引用错误。
+    var showSearch by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    // 外层（如 PillNavigationBar 长按"书架" tab 弹分组菜单）通过 ViewModel 的
+    // navigateToFolder SharedFlow 请求切到指定分组；这里订阅后直接写回
+    // currentFolderId。同时把 batchMode / showSearch 等"妨碍跳转可见性"的状态
+    // 重置，让用户立刻看到目标分组的内容而不是上次的批量选中残留。
+    LaunchedEffect(viewModel) {
+        viewModel.navigateToFolder.collect { targetFolderId ->
+            currentFolderId = targetFolderId
+            batchMode = false
+            selectedIds = emptySet()
+            showSearch = false
+            searchQuery = ""
+        }
+    }
     // UX-1: showBatchDeleteConfirm 已下线 — 删除改为「立即删 + Snackbar 撤销」内联到 onClick。
     // Group management
     var showCreateGroupDialog by remember { mutableStateOf(false) }

@@ -510,7 +510,19 @@ class TtsEngineHost(
                     paragraphPositions = buildSequentialPositions(paragraphs)
                     sliceMode = "parseParagraphs"
                 }
-                paragraphIndex = paragraphIndexForPosition(cmd.startChapterPosition)
+                paragraphIndex = if (cmd.startAtLastParagraph) {
+                    // 段级跨章触发的"上一章接末段读"：从末段往前找第一个有内容的段，
+                    // 跳过"末段恰好是空白/标点"的情况（章末有 ───、^_^ 这类装饰行很常见）。
+                    // 整章无内容兜底到 0，让 speakLoop 自己结束转下一章。
+                    var idx = paragraphs.size - 1
+                    while (idx > 0 && paragraphs[idx].matches(AppPattern.notReadAloudRegex)) {
+                        idx--
+                    }
+                    AppLog.info("TtsHost", "LoadAndPlay startAtLastParagraph → paragraphIndex=$idx")
+                    idx
+                } else {
+                    paragraphIndexForPosition(cmd.startChapterPosition)
+                }
                 paragraphStartPos = 0 // 新章节加载，句中位置归零
                 waitingForNextChapter = false
                 // Phase D：缓存 bookId / chapterIndex 以便章末自动续章。null 时
@@ -631,13 +643,28 @@ class TtsEngineHost(
             AppLog.warn("TtsHost", "prevParagraph: paragraphs empty, ignored")
             return
         }
-        val newIdx = (paragraphIndex - 1).coerceAtLeast(0)
+        // 边界场景：当前已经在章首段（且不是从更后段一脚踩到首段），需要跨章。
+        // 发 Event.PrevChapterToLast 让 ReaderViewModel 切上一章 + 续接到末段读。
+        // 用户体验对齐 Legado：在章首按"上一段"不会再卡死。
+        if (paragraphIndex == 0 && paragraphStartPos == 0) {
+            AppLog.info("TtsHost", "prevParagraph: at chapter head → emit PrevChapterToLast")
+            TtsEventBus.sendEvent(TtsEventBus.Event.PrevChapterToLast)
+            return
+        }
+        // 跳过"全标点/空白/符号段"——按一次"上一段"应该落在真正有内容的段上，
+        // 而不是停在 ─── / *** / 等装饰段让用户以为按了没反应。仿 Legado prevP 的
+        // do-while 循环。最坏情况整章都是无声段（不太可能），止于 0 不无限退。
+        var newIdx = paragraphIndex - 1
+        while (newIdx >= 0 && paragraphs[newIdx].matches(AppPattern.notReadAloudRegex)) {
+            newIdx--
+        }
+        val resolvedIdx = newIdx.coerceAtLeast(0)
         AppLog.info(
             "TtsHost",
-            "prevParagraph: $paragraphIndex → $newIdx (startPos $paragraphStartPos → 0)",
+            "prevParagraph: $paragraphIndex → $resolvedIdx (startPos $paragraphStartPos → 0)",
         )
-        if (newIdx == paragraphIndex && !TtsEventBus.playbackState.value.isPlaying) return
-        paragraphIndex = newIdx
+        if (resolvedIdx == paragraphIndex && !TtsEventBus.playbackState.value.isPlaying) return
+        paragraphIndex = resolvedIdx
         paragraphStartPos = 0 // 用户主动切段，断点信息作废
         if (TtsEventBus.playbackState.value.isPlaying) {
             // restart loop at new index
@@ -658,13 +685,25 @@ class TtsEngineHost(
             AppLog.warn("TtsHost", "nextParagraph: paragraphs empty, ignored")
             return
         }
-        val newIdx = (paragraphIndex + 1).coerceAtMost(paragraphs.size - 1)
+        // 边界场景：当前已经在章末段，需要跨章。发 Event.NextChapter（已有事件）
+        // 让 ReaderViewModel 切下一章 + 续接从首段读。Legado 行为对齐。
+        if (paragraphIndex >= paragraphs.size - 1) {
+            AppLog.info("TtsHost", "nextParagraph: at chapter tail → emit NextChapter")
+            TtsEventBus.sendEvent(TtsEventBus.Event.NextChapter)
+            return
+        }
+        // 同 prevParagraph：跳过纯无声段直到落在内容段。止于 size-1。
+        var newIdx = paragraphIndex + 1
+        while (newIdx <= paragraphs.size - 1 && paragraphs[newIdx].matches(AppPattern.notReadAloudRegex)) {
+            newIdx++
+        }
+        val resolvedIdx = newIdx.coerceAtMost(paragraphs.size - 1)
         AppLog.info(
             "TtsHost",
-            "nextParagraph: $paragraphIndex → $newIdx (startPos $paragraphStartPos → 0)",
+            "nextParagraph: $paragraphIndex → $resolvedIdx (startPos $paragraphStartPos → 0)",
         )
-        if (newIdx == paragraphIndex && !TtsEventBus.playbackState.value.isPlaying) return
-        paragraphIndex = newIdx
+        if (resolvedIdx == paragraphIndex && !TtsEventBus.playbackState.value.isPlaying) return
+        paragraphIndex = resolvedIdx
         paragraphStartPos = 0
         if (TtsEventBus.playbackState.value.isPlaying) {
             scope.launch {

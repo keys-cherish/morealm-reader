@@ -534,30 +534,20 @@ fun ScrollRenderer(
             }
             return@LaunchedEffect
         }
-        // Forward commit: at last page, scrolled past 70% of it into next chapter
+        // Forward commit: 当 last page 底部已滑过 viewport 70% 处（即 lastPageBottom <
+        // viewHeight * 0.3）时触发跨章 commit。该阈值保证视觉重叠区 = viewport 中段
+        // 30%-70%：上半 70% 仍是当前章 last page，下半 30% 是 nextChapterPages 预览。
+        //
+        // 无缝性靠 Phase 2 [ReadBookHolder.moveToNextChapter] 的「同步指针腾挪」保证：
+        // commit 触发的同一调用栈内 cur=next, prev=cur，下一帧重组 viewport 顶部 70%
+        // 由新 prev（即旧 cur）填，下半 30% 由新 cur 首页填，视觉等价于「同一张连续画布」。
+        //
+        // 历史教训：单纯把阈值收紧到 < 0f 不能保证无缝——它把视觉切换瞬间从「中段
+        // 30%-70% 渐变区」推迟到「viewport 顶端 0%」，意味着 viewport 整段都必须由
+        // nextChapterPages 异步就绪，反而扩大了 next 未到位时的空白窗口。
         if (currentPageIndex >= pageCount - 1 && nextChapterPages.isNotEmpty()) {
             val lastPageBottom = pageOffset + pageHeight(currentPageIndex)
             if (lastPageBottom < viewHeight * 0.3f) {
-                // 无缝跨章关键：传「下一章 page 0 应当被设到的 pageOffset」，
-                // 等于「下一章 page 0 顶部当前在 viewport 中的 y 坐标」
-                // = 当前 last page 底部的 y 坐标
-                // = pageOffset + pageHeight(currentPageIndex)
-                // = lastPageBottom（已计算）
-                //
-                // commit 时 lastPageBottom < viewHeight*0.3，所以这个值很小，
-                // 可能是正小数（last page 底还在 viewport 内）或负数（last page 已
-                // 完全滑出 viewport 顶）。无论正负，作为新章节 page 0 的 pageOffset
-                // 都能让画面无缝衔接：
-                //   - lastPageBottom > 0：新 page 0 顶部在 viewport y=lastPageBottom
-                //     处，上方留白由 prevChapterPages（即旧当前章节）填充
-                //   - lastPageBottom < 0：新 page 0 已被滑过 |lastPageBottom| 像素，
-                //     视觉上等价于「在新章节内向下读了一段」
-                //
-                // 历史 bug：之前传 `-(pageOffset + pageHeight)` 然后 coerceAtLeast(0f)
-                //   - 符号反了一道
-                //   - coerceAtLeast 把负值丢失，恢复时强制 pageOffset=0
-                // 双重错误叠加，新章节直接 reset 到 page 0 顶部，用户视觉上跳了
-                // |lastPageBottom| 像素 ≈ 半屏多。这就是用户反馈的「章节末尾明显跳感」。
                 AppLog.debug(
                     "Scroll",
                     "Scroll cross-chapter commit NEXT | page=$currentPageIndex/$pageCount | newPageOffset=$lastPageBottom" +
@@ -566,28 +556,16 @@ fun ScrollRenderer(
                 onChapterCommit(ReaderPageDirection.NEXT, lastPageBottom)
             }
         }
-        // Backward commit: at first page, scrolled up past 70% into prev chapter
+        // Backward commit: 上一章预览滑入 viewport 超过 70% 处即触发。新 pageOffset =
+        // scrollIntoPrev - lastPageHeight：
+        //   - lastPageHeight > scrollIntoPrev：新 pageOffset 负值（合理，新 last page
+        //     已被滑过部分），上方由再上一章 prev 预览填充——靠 holder 同步腾挪即可。
+        //   - lastPageHeight < scrollIntoPrev：新 pageOffset 正值（短 last page 在中
+        //     段），上方留白同样靠 holder 腾挪后的 prev（即旧 cur）填充。
         if (currentPageIndex == 0 && prevChapterPages.isNotEmpty() && pageOffset > 0) {
             val totalPrevHeight = prevChapterPages.sumOf { it.height.toDouble() }.toFloat()
             val scrollIntoPrev = pageOffset
             if (scrollIntoPrev > viewHeight * 0.7f && scrollIntoPrev < totalPrevHeight) {
-                // 无缝跨章 PREV：新章节落 last page (pageCount-1)，pageOffset 应该让
-                // 该 last page 的视觉位置与 commit 瞬间一致。
-                //
-                // 当前视觉：
-                //   - 旧当前章节 page 0 顶部在 viewport y=scrollIntoPrev (positive)
-                //   - 旧 prev 章节（即将成为新当前章节）的 last page 底部贴 viewport y=scrollIntoPrev
-                //   - 即 last page 底 y 坐标 = scrollIntoPrev
-                //   - 即 last page 顶 y 坐标 = scrollIntoPrev - lastPageHeight
-                //
-                // 切换后 currentPageIndex = pageCount-1（last page），pageOffset 是该
-                // last page 的位移（顶部相对 viewport top 的 y）。
-                // 所以新 pageOffset = scrollIntoPrev - lastPageHeight。
-                //
-                // 历史 bug：传 `-offsetInPrev = scrollIntoPrev - totalPrevHeight`，
-                // 用了整个上一章的高度而不是 last page 的高度。totalPrevHeight 远
-                // 大于 lastPageHeight 时，新 pageOffset 是个深度负数 → last page 被
-                // 强行推到 viewport 上方千百像素 → 用户看到一个空白屏 + 章末某处。
                 val lastPageHeight = prevChapterPages.last().height
                 val newPageOffset = scrollIntoPrev - lastPageHeight
                 AppLog.debug(

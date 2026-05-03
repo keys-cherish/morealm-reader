@@ -191,6 +191,29 @@ fun CanvasRenderer(
      * 落 1，渲染层据此替换该范围内字符的 paint.color 而不是画背景色块。
      */
     onAddTextColor: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
+    /**
+     * Layout-publish callbacks — Phase 2 MD3-aligned 同步腾挪基础。
+     *
+     * 对齐 Legado [io.legado.app.model.ReadBook.contentLoadFinish] 的精神：当排版完成
+     * 后把 [com.morealm.app.domain.render.TextChapter] 推回 ViewModel 层（具体是
+     * [com.morealm.app.presentation.reader.ReaderChapterController] 的三个 publish*
+     * setter），让 ScrollRenderer 能从 _curTextChapter / _prev / _next 三个 StateFlow
+     * 读到统一真值，并在 onChapterCommit 触发时同步腾挪。
+     *
+     * 调用时机：
+     *   - [onCurTextChapterReady]：layoutChapterAsync 的 onCompleted 时触发（也在
+     *     onPageReady index=0 时触发首次以最早建立 cur 引用，避免长章排版未完成时
+     *     ScrollRenderer 看到 null cur）
+     *   - [onPrevTextChapterReady] / [onNextTextChapterReady]：prelayoutCache 完成
+     *     prev/next 章节预排版时触发
+     *
+     * 默认空函数 → 旧调用方零迁移成本；ReaderScreen 接通后 ScrollRenderer 才能走
+     * 同步腾挪路径。idx 参数让 ChapterController 自己做"是否当前章"的校验
+     * （防止快速跨章后旧章排版迟到回调污染）。
+     */
+    onCurTextChapterReady: (idx: Int, ch: com.morealm.app.domain.render.TextChapter) -> Unit = { _, _ -> },
+    onPrevTextChapterReady: (idx: Int, ch: com.morealm.app.domain.render.TextChapter) -> Unit = { _, _ -> },
+    onNextTextChapterReady: (idx: Int, ch: com.morealm.app.domain.render.TextChapter) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -432,6 +455,13 @@ fun CanvasRenderer(
                     chapter
                 }
                 prelayoutPut(key, chapter)
+                // Phase 2b: 推回 ChapterController 让 _prev/_nextTextChapter 与
+                // CanvasRenderer 内部 prelayoutCache 同步真值。idx 校验由 publish 端做。
+                if (index == chapterIndex + 1) {
+                    onNextTextChapterReady(index, chapter)
+                } else if (index == chapterIndex - 1) {
+                    onPrevTextChapterReady(index, chapter)
+                }
             }
         }
     }
@@ -442,6 +472,9 @@ fun CanvasRenderer(
         if (cachedChapter != null) {
             textChapter = cachedChapter
             pageCount = cachedChapter.pageSize.coerceAtLeast(1)
+            // Phase 2b: cache 命中也要推回 cur — 通常发生在 next/prev 转 cur 后，
+            // 此时 ChapterController 的 _curTextChapter 应该指向这章。idx 校验在 publish 端。
+            onCurTextChapterReady(chapterIndex, cachedChapter)
             return@LaunchedEffect
         }
         // Cache miss: 节流一帧（16ms）。拖动 padding 滑块时 key 高频变化，
@@ -471,6 +504,10 @@ fun CanvasRenderer(
                 onPageReady = { index, _ ->
                     if (index == 0) {
                         textChapter = handle?.textChapter
+                        // Phase 2b: 第一页就绪时立刻推回 cur，让 ScrollRenderer 尽早
+                        // 拿到 cur reference（哪怕 isCompleted=false，pages 仍可访问已就绪部分）。
+                        // 对齐 Legado 流式排版思路：边排边可见。
+                        handle?.textChapter?.let { onCurTextChapterReady(chapterIndex, it) }
                     }
                     pageCount = handle?.textChapter?.pageSize?.coerceAtLeast(1) ?: 1
                 },
@@ -478,7 +515,12 @@ fun CanvasRenderer(
                     textChapter = handle?.textChapter
                     pageCount = handle?.textChapter?.pageSize?.coerceAtLeast(1) ?: 1
                     // 把当前章节最终布局也存入 LRU：来回拖到相同 padding 值时秒回。
-                    handle?.textChapter?.let { prelayoutPut(currentChapterKey, it) }
+                    handle?.textChapter?.let {
+                        prelayoutPut(currentChapterKey, it)
+                        // Phase 2b: 排版完成（isCompleted=true）后再推回一次，
+                        // 让 _curTextChapter 指向 final 状态（含完整 pageSize / 末页等信息）。
+                        onCurTextChapterReady(chapterIndex, it)
+                    }
                 },
             )
         }

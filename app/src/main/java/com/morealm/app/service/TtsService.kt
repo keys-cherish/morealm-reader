@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
@@ -277,10 +278,12 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
                         player?.updateMetadata(cmd.bookTitle, cmd.chapterTitle, cmd.coverUrl)
                         requestAudioFocus()
                         acquireWakeLocks()
+                        playSilentSound()
                     }
                     is TtsEventBus.Command.Play -> {
                         requestAudioFocus()
                         acquireWakeLocks()
+                        playSilentSound()
                     }
                     is TtsEventBus.Command.Pause -> {
                         releaseWakeLocks()
@@ -405,6 +408,30 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         if (!::engineHost.isInitialized) return false
         val id = engineHost.currentEngineId
         return id == "edge" || id.startsWith("http_")
+    }
+
+    /**
+     * "Stupid Android 8 Oreo hack" —— 移植自 Legado-MD3 的 [MediaHelp.playSilentSound]。
+     *
+     * 在朗读启动瞬间播一段无声 mp3，让系统把 media button 路由（蓝牙耳机按键 / 有线耳机
+     * 中键 / Android Auto 控制）锁定到本应用的 MediaSession。如果没有这一步，激进 ROM
+     * （部分小米 / 华为旧版本）在 TTS 长时间合成时可能把进程当成"无媒体活动"挂起，导致
+     * 暂停/继续按键失灵。
+     *
+     * 失败不抛 —— 资源缺失或 MediaPlayer 创建失败时只 warn，不影响朗读主流程。
+     */
+    private fun playSilentSound() {
+        runCatching {
+            val mp = MediaPlayer.create(this, com.morealm.app.R.raw.silent_sound)
+                ?: run {
+                    AppLog.warn("TtsService", "playSilentSound: MediaPlayer.create returned null")
+                    return
+                }
+            mp.setOnCompletionListener { it.release() }
+            mp.start()
+        }.onFailure {
+            AppLog.warn("TtsService", "playSilentSound failed: ${it.message}")
+        }
     }
 
     private fun stopSelfAndRelease() {

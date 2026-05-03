@@ -25,9 +25,12 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -153,6 +156,31 @@ class ShelfViewModel @Inject constructor(
             }
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    /**
+     * 跨页面"切到指定文件夹"事件 —— ShelfScreen 内部的 `currentFolderId` 是
+     * rememberSaveable 状态而非 ViewModel 字段，外层组件（AppNavHost 的"长按
+     * 书架 tab → 选分组"快捷菜单）无法直接控制。这条 SharedFlow 让 ViewModel
+     * 充当中间人：外层调 [requestNavigateToFolder]，ShelfScreen 订阅后写回
+     * `currentFolderId`。
+     *
+     * replay = 0：只对"在场的"订阅者派发，避免冷启动时把过期请求重放。
+     * extraBufferCapacity = 1 + DROP_OLDEST：连续触发只保留最后一次（用户连点
+     * 两个不同分组只跳到最后那个）。
+     *
+     * 传 null 表示回到根目录（"全部"）。
+     */
+    private val _navigateToFolder = MutableSharedFlow<String?>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
+    val navigateToFolder: SharedFlow<String?> = _navigateToFolder.asSharedFlow()
+
+    /** 由 AppNavHost / 其他外层调用，请求 ShelfScreen 切到指定分组（null = 根目录）。 */
+    fun requestNavigateToFolder(folderId: String?) {
+        viewModelScope.launch { _navigateToFolder.emit(folderId) }
+    }
 
     private val _sortMode = MutableStateFlow("title")
     val sortMode: StateFlow<String> = _sortMode.asStateFlow()

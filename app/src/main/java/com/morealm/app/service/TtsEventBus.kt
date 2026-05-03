@@ -54,6 +54,18 @@ object TtsEventBus {
     sealed class Event {
         data object PrevChapter : Event()
         data object NextChapter : Event()
+
+        /**
+         * 段级跳转触发的"切上一章"语义 —— 与 [PrevChapter]（用户主动按"上一章"按钮，
+         * 切完从首段读）不同：用户在章首按了"上一段"，应该把朗读位置带到上一章的
+         * **末段**，等同于"读完上一章末段后再继续往前"的自然延伸。
+         *
+         * ReaderViewModel 收到这个事件应该：
+         *   1. 翻页到上一章
+         *   2. 等章节内容到达时调 ttsPlay 时带 startAtLastParagraph=true，
+         *      让 host 把 paragraphIndex 落在末段（再向前找第一个有内容段）。
+         */
+        data object PrevChapterToLast : Event()
         /** User toggled play/pause from notification or media button. */
         data object PlayPause : Event()
         data class AudioFocusLoss(val resumeOnGain: Boolean) : Event()
@@ -112,6 +124,14 @@ object TtsEventBus {
             val startChapterPosition: Int,
             val bookId: String? = null,
             val chapterIndex: Int? = null,
+            /**
+             * 仅当本次 LoadAndPlay 是"段级跳转触发的跨章节延伸"（[Event.PrevChapterToLast]
+             * 之后续接）时为 true：host 解析 paragraphs 后把 paragraphIndex 设到 lastIndex，
+             * 再调 [TtsEngineHost] 的"向前找第一个有内容段"算法（避开末段是空白/标点的情况）。
+             *
+             * 默认 false 保持向后兼容：所有其他场景都从 paragraph 0 开始读。
+             */
+            val startAtLastParagraph: Boolean = false,
         ) : Command()
 
         /** Resume playback from current paragraph (no content reload). */

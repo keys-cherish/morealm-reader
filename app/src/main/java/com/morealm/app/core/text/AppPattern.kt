@@ -39,4 +39,13 @@ object AppPattern {
 
     // ── Number extraction (for natural sort) ──
     val numberRegex = Regex("(\\d+)")
+
+    // ── TTS：纯无声段判定 ──
+    //
+    // 一段如果整段只由：空白(\s) / 控制符(\p{C}) / 标点(\p{P}) / 分隔符(\p{Z}) /
+    // 符号(\p{S}) 组成，朗读出来不是"什么都不读"就是"读出 '破折号 破折号'" 这种
+    // 让人困惑的字符名 —— 都不是用户想要的。段级跳转时遇到这种段直接跳过。
+    //
+    // 规则原样移植自 Legado AppPattern.notReadAloudRegex（同款 Unicode 类）。
+    val notReadAloudRegex = Regex("^(\\s|\\p{C}|\\p{P}|\\p{Z}|\\p{S})+$")
 }
