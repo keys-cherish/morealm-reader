@@ -276,6 +276,14 @@ class ReaderViewModel @Inject constructor(
      */
     private var pendingTtsResumeOnNewChapter: Boolean = false
 
+    /**
+     * 段级跨章触发的"切上一章续读末段"标记。在收到 [TtsEventBus.Event.PrevChapterToLast]
+     * 时与 [pendingTtsResumeOnNewChapter] 一并置 true；在 chapterContent observer 调
+     * [tts.ttsPlay] 时透传给 [TtsEventBus.Command.LoadAndPlay.startAtLastParagraph]，让
+     * host 把朗读位置落在末段而非首段。次性标志，消费后立即归零。
+     */
+    private var pendingTtsStartAtLastParagraph: Boolean = false
+
     // ── Cross-controller coordination ──
 
     fun ttsPlayPause() {
@@ -435,6 +443,17 @@ class ReaderViewModel @Inject constructor(
                         if (tts.ttsPlaying.value) pendingTtsResumeOnNewChapter = true
                         _readAloudPageTurn.tryEmit(-1)
                     }
+                    is TtsEventBus.Event.PrevChapterToLast -> {
+                        // 段级跨章触发：用户在章首按"上一段"，期望切上一章 + 续读末段。
+                        // 跟 PrevChapter 比多一个 startAtLastParagraph 旗标，由 chapterContent
+                        // observer 在调 ttsPlay 时透传给 host。pendingTtsResumeOnNewChapter
+                        // 保持 true 让续播逻辑接管。
+                        if (tts.ttsPlaying.value) {
+                            pendingTtsResumeOnNewChapter = true
+                            pendingTtsStartAtLastParagraph = true
+                        }
+                        _readAloudPageTurn.tryEmit(-1)
+                    }
                     is TtsEventBus.Event.NextChapter -> {
                         if (tts.ttsPlaying.value) pendingTtsResumeOnNewChapter = true
                         _readAloudPageTurn.tryEmit(1)
@@ -478,6 +497,8 @@ class ReaderViewModel @Inject constructor(
                 // so playback continues from paragraph 0.
                 if (pendingTtsResumeOnNewChapter && text.isNotBlank() && !isEmptyContentPlaceholder(text)) {
                     pendingTtsResumeOnNewChapter = false
+                    val startAtLast = pendingTtsStartAtLastParagraph
+                    pendingTtsStartAtLastParagraph = false
                     tts.ttsPlay(
                         displayedContent = text.cleanContentForTts(),
                         bookTitle = chapter.book.value?.title ?: "",
@@ -488,6 +509,7 @@ class ReaderViewModel @Inject constructor(
                         paragraphPositions = readAloudParagraphPositions,
                         bookId = chapter.book.value?.id,
                         chapterIndex = chapter.currentChapterIndex.value,
+                        startAtLastParagraph = startAtLast,
                         onChapterFinished = null,
                     )
                 }

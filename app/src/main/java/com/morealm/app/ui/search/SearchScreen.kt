@@ -8,6 +8,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -94,6 +95,27 @@ fun SearchScreen(
                 viewModel.undoAddToShelf(event.bookId, stopDownload = event.withDownload)
             }
         }
+    }
+
+    // 长按搜索结果弹的「加入书架」预览对话框（Legado-MD3 复刻）。
+    // null = 不显示；非 null 表示当前预览这本书。dialog 三按钮分别走
+    // addToShelf / addToShelfAndRead / 关闭，与短按路径共用 ShelfAddedEvent 反馈链。
+    var addToShelfDialogTarget by remember { mutableStateOf<SearchResult?>(null) }
+    addToShelfDialogTarget?.let { target ->
+        AddToShelfDialog(
+            result = target,
+            onDismiss = { addToShelfDialogTarget = null },
+            onConfirm = {
+                viewModel.addToShelf(target)
+                addToShelfDialogTarget = null
+            },
+            onConfirmAndRead = {
+                viewModel.addToShelfAndRead(target) { bookId ->
+                    onNavigateReader(bookId)
+                }
+                addToShelfDialogTarget = null
+            },
+        )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -296,6 +318,16 @@ fun SearchScreen(
                                     viewModel.addToShelfAndRead(result) { bookId ->
                                         onNavigateReader(bookId)
                                     }
+                                } else {
+                                    Toast.makeText(ctx, "非文本书源暂不能阅读", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onLongClick = {
+                                // 长按 → 弹「加入书架」预览 dialog（含书名/作者/来源/简介
+                                // 三按钮：取消/仅加入/加入并阅读）。短按仍走"立刻加书+
+                                // 跳阅读器"的快路径。两条路径共用 ShelfAddedEvent 反馈链。
+                                if (result.sourceType == 0) {
+                                    addToShelfDialogTarget = result
                                 } else {
                                     Toast.makeText(ctx, "非文本书源暂不能阅读", Toast.LENGTH_SHORT).show()
                                 }
@@ -577,17 +609,23 @@ private fun MoreSourceTag(count: Int) {
  *
  * 非文本源（音频/图片等）：禁用点击，底栏显示红色"非文本源"标记。
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun OnlineResultItem(
     result: SearchResult,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     onDownload: () -> Unit,
 ) {
     val isTextSource = result.sourceType == 0
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = isTextSource, onClick = onClick),
+            .combinedClickable(
+                enabled = isTextSource,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            ),
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isTextSource) 0.3f else 0.16f),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),

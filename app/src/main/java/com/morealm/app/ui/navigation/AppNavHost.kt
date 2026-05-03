@@ -18,8 +18,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -452,11 +454,70 @@ fun MoRealmNavHost(
         }
         // Floating pill navigation — overlays content, not in Scaffold.bottomBar
         if (!isFullscreen && isOnMainTab) {
+            // 长按"书架" tab 弹分组菜单（Legado-MD3 复刻）。
+            //
+            // 拿 ShelfViewModel 走 main_tabs 的 backstack entry —— 这样和 ShelfScreen
+            // 内部 hiltViewModel() 是同一个 store / 同一份 instance，emit 的
+            // navigateToFolder 事件 ShelfScreen 能直接收到。getBackStackEntry 在
+            // startDestination 创建后立即可用，主屏可见时永远不会失败。
+            val mainEntry = remember(navController) {
+                runCatching { navController.getBackStackEntry("main_tabs") }.getOrNull()
+            }
+            val shelfViewModel: com.morealm.app.presentation.shelf.ShelfViewModel? = mainEntry?.let {
+                hiltViewModel(it)
+            }
+            val groupsForMenu by (
+                shelfViewModel?.allGroups
+                    ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList<com.morealm.app.domain.entity.BookGroup>()) }
+                ).collectAsStateWithLifecycle()
+            var shelfMenuExpanded by remember { mutableStateOf(false) }
+
             PillNavigationBar(
                 tabs = tabs,
                 selectedIndex = selectedTab,
                 onTabClick = { switchTab(it) },
+                onTabLongClick = { idx ->
+                    // 仅在"书架" tab 长按时弹菜单；其他 tab 长按目前 noop（保留扩展点
+                    // 未来如果想给"听书"长按弹"最近朗读"等也走这里）。
+                    if (idx in tabs.indices && tabs[idx] == BottomTab.Shelf) {
+                        shelfMenuExpanded = true
+                    }
+                },
                 modifier = Modifier.align(Alignment.BottomCenter),
+                tabExtras = { idx ->
+                    if (idx in tabs.indices && tabs[idx] == BottomTab.Shelf) {
+                        DropdownMenu(
+                            expanded = shelfMenuExpanded,
+                            onDismissRequest = { shelfMenuExpanded = false },
+                            // 默认 anchor 是 tab Box 左上角；offset 往上抬一点，避免菜单
+                            // 第一项被 tab icon 盖住（DropdownMenu 在底部空间不够时会
+                            // 自动 flip 向上展开，offset 仅影响起点位置）。
+                            offset = DpOffset(x = 0.dp, y = (-8).dp),
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("全部") },
+                                onClick = {
+                                    if (selectedTab != 0) switchTab(0)
+                                    shelfViewModel?.requestNavigateToFolder(null)
+                                    shelfMenuExpanded = false
+                                },
+                            )
+                            if (groupsForMenu.isNotEmpty()) {
+                                HorizontalDivider()
+                            }
+                            groupsForMenu.forEach { group ->
+                                DropdownMenuItem(
+                                    text = { Text(group.name) },
+                                    onClick = {
+                                        if (selectedTab != 0) switchTab(0)
+                                        shelfViewModel?.requestNavigateToFolder(group.id)
+                                        shelfMenuExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                },
             )
         }
         } // Box
