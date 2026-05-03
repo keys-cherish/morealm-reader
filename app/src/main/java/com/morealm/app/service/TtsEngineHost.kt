@@ -439,12 +439,14 @@ class TtsEngineHost(
             is TtsEventBus.Command.Pause -> pause()
             is TtsEventBus.Command.PrevParagraph -> prevParagraph()
             is TtsEventBus.Command.NextParagraph -> nextParagraph()
-            // host 不持有章节列表 → 只是把 Command 透传成对应 Event，
-            // 让 ReaderViewModel 的 Event.PrevChapter/NextChapter 处理分支接管真正的章节切换。
-            is TtsEventBus.Command.PrevChapter ->
-                TtsEventBus.sendEvent(TtsEventBus.Event.PrevChapter)
-            is TtsEventBus.Command.NextChapter ->
-                TtsEventBus.sendEvent(TtsEventBus.Event.NextChapter)
+            // 通知栏按钮 / 听书 Tab 按下「上/下一章」走这里。host 自己持有
+            // bookId / chapterIndex 上下文时，直接用 chapterContentLoader 加载新
+            // 章节并自发 LoadAndPlay——这是「ReaderViewModel 死后通知栏按钮仍能
+            // 切章」的核心。host 加载成功后再发 Event 通知 UI 翻页同步
+            // (loadedByHost = true)；加载失败 / 无 bookId 时退回旧路径，事件由
+            // ReaderViewModel 的 PrevChapter/NextChapter 处理分支接管真正切章。
+            is TtsEventBus.Command.PrevChapter -> handleChapterSwitchCommand(direction = -1)
+            is TtsEventBus.Command.NextChapter -> handleChapterSwitchCommand(direction = +1)
             is TtsEventBus.Command.SetSpeed -> setSpeed(cmd.speed)
             is TtsEventBus.Command.SetEngine -> setEngine(cmd.engine)
             is TtsEventBus.Command.SetVoice -> setVoice(cmd.voiceName)
@@ -685,11 +687,12 @@ class TtsEngineHost(
             AppLog.warn("TtsHost", "nextParagraph: paragraphs empty, ignored")
             return
         }
-        // 边界场景：当前已经在章末段，需要跨章。发 Event.NextChapter（已有事件）
-        // 让 ReaderViewModel 切下一章 + 续接从首段读。Legado 行为对齐。
+        // 边界场景：当前已经在章末段，需要跨章。和通知栏「下一章」走同一路径——
+        // 优先 host 直接加载，失败再退回 ReaderViewModel。loadedByHost 旗标在
+        // handleChapterSwitchCommand 里按实际加载结果填充。
         if (paragraphIndex >= paragraphs.size - 1) {
-            AppLog.info("TtsHost", "nextParagraph: at chapter tail → emit NextChapter")
-            TtsEventBus.sendEvent(TtsEventBus.Event.NextChapter)
+            AppLog.info("TtsHost", "nextParagraph: at chapter tail → handleChapterSwitchCommand(+1)")
+            scope.launch { handleChapterSwitchCommand(direction = +1) }
             return
         }
         // 同 prevParagraph：跳过纯无声段直到落在内容段。止于 size-1。
@@ -1090,25 +1093,42 @@ class TtsEngineHost(
     /**
      * 尝试用 [chapterContentLoader] 加载下一章并自发 LoadAndPlay 续播。
      *
+     * 仅 ChapterFinished 兜底路径用，调用方依赖「下一章」语义。其他场景（通知栏
+     * 按下/听书 Tab 按下/章末段按下一段）走 [tryHostSwitchChapter]。
+     *
      * @return true 表示已成功提交下一章 LoadAndPlay 命令；false 表示无 bookId 上下文
      *         / 已是最后一章 / 加载失败 / 内容为空，调用方应停止播放。
      */
-    private suspend fun tryAutoAdvanceChapter(): Boolean {
+    private suspend fun tryAutoAdvanceChapter(): Boolean = tryHostSwitchChapter(direction = +1)
+
+    /**
+     * 尝试用 [chapterContentLoader] 加载 [currentChapterIndex] + [direction] 的章节
+     * 并自发 LoadAndPlay。direction = +1 (下一章) / -1 (上一章)。
+     *
+     * 这是「Service / Host 直接驱动切章，不依赖 ReaderViewModel 在线」的核心实现，
+     * 被 [Command.PrevChapter] / [Command.NextChapter] / [tryAutoAdvanceChapter] /
+     * [nextParagraph] 章末路径共享。
+     *
+     * @return true = 已 sendCommand(LoadAndPlay)，host 即将切到新章；
+     *         false = 无 bookId / 越界 / 加载失败 / 内容空，调用方按需退回旧路径。
+     */
+    private suspend fun tryHostSwitchChapter(direction: Int): Boolean {
         val bookId = currentBookId ?: return false
         val curIdx = currentChapterIndex
         if (curIdx < 0) return false
-        val nextIdx = curIdx + 1
-        AppLog.info("TtsHost", "autoAdvance: bookId=$bookId nextIdx=$nextIdx (host 接管续章)")
-        val loaded = chapterContentLoader.loadForTts(bookId, nextIdx)
+        val targetIdx = curIdx + direction
+        if (targetIdx < 0) return false
+        AppLog.info("TtsHost", "hostSwitchChapter: bookId=$bookId target=$targetIdx (dir=$direction)")
+        val loaded = chapterContentLoader.loadForTts(bookId, targetIdx)
         if (loaded == null) {
             AppLog.warn(
                 "TtsHost",
-                "autoAdvance: loader returned null (book/章节不存在或已到末章)",
+                "hostSwitchChapter: loader returned null (book/章节不存在或越界)",
             )
             return false
         }
         if (loaded.content.isBlank()) {
-            AppLog.warn("TtsHost", "autoAdvance: content blank, treating as end-of-book")
+            AppLog.warn("TtsHost", "hostSwitchChapter: content blank")
             return false
         }
         // 通过 EventBus 把命令送回自己——走和 reader 完全相同的入口，保持单一路径
@@ -1121,10 +1141,29 @@ class TtsEngineHost(
                 paragraphPositions = null,
                 startChapterPosition = 0,
                 bookId = bookId,
-                chapterIndex = nextIdx,
+                chapterIndex = targetIdx,
             )
         )
         return true
+    }
+
+    /**
+     * 处理 [Command.PrevChapter] / [Command.NextChapter] —— 通知栏按钮 / 听书 Tab /
+     * 章末段越界全走这里。优先 host 自加载，成功后发 Event.{Prev,Next}Chapter
+     * (loadedByHost = true) 通知 UI 翻页同步；失败时发 (loadedByHost = false)
+     * 让 ReaderViewModel 接管旧路径——这能保证用户从听书 Tab 起播（无 bookId 上下文）
+     * 时按下一章仍由 reader VM 处理。
+     */
+    private fun handleChapterSwitchCommand(direction: Int) {
+        scope.launch {
+            val ok = tryHostSwitchChapter(direction)
+            val event = if (direction < 0) {
+                TtsEventBus.Event.PrevChapter(loadedByHost = ok)
+            } else {
+                TtsEventBus.Event.NextChapter(loadedByHost = ok)
+            }
+            TtsEventBus.sendEvent(event)
+        }
     }
 
     /**
