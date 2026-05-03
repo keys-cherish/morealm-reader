@@ -39,6 +39,13 @@ class ReaderNavigationController(
         AppLog.debug("Nav", "nextChapter | from=${chapter.currentChapterIndex.value} | to=$nextIdx | total=${chapter.chapters.value.size}")
         if (nextIdx < chapter.chapters.value.size) {
             _navigateDirection.value = 1
+            // Phase 2 一致性修复：所有跨章入口（按钮 / 长按按键 / 滚动 commit）统一
+            // 优先走同步腾挪。若不走这条路径，老 loadChapter 不腾挪 _prev/_cur/
+            // _nextTextChapter 三个真值流，会导致后续滚动 commit 永久 REJECT。
+            if (chapter.commitChapterShiftNext()) {
+                AppLog.debug("Nav", "nextChapter via sync moveToNextChapter")
+                return
+            }
             chapter.loadChapter(nextIdx, restoreProgress = 0)
         } else {
             val linked = _linkedBooks.value
@@ -60,6 +67,11 @@ class ReaderNavigationController(
         AppLog.debug("Nav", "prevChapter | from=${chapter.currentChapterIndex.value} | to=$prevIdx")
         if (prevIdx >= 0) {
             _navigateDirection.value = -1
+            // 同 [nextChapter] 的 Phase 2 一致性修复路径
+            if (chapter.commitChapterShiftPrev()) {
+                AppLog.debug("Nav", "prevChapter via sync moveToPrevChapter")
+                return
+            }
             chapter.loadChapter(prevIdx, restoreProgress = 100)
         }
     }
