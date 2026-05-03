@@ -441,6 +441,19 @@ fun CanvasRenderer(
 
     // Layout pages — 预排版 LRU 缓存（容量 8）。
     // 装：当前章 + 上下章 + ~5 个历史 padding/字号配置。
+    //
+    // ## Phase 2 后语义变化
+    // 本 cache 在 Phase 2 MD3 同步腾挪接通前是 ScrollRenderer 跨章预览的**主源**——
+    // prev/nextTextChapter 由它根据 (idx, title, content) cacheKey 派生。Phase 2e 之后
+    // syncPrev/NextTextChapter 优先级更高（来自 ChapterController 同步腾挪后的真值流），
+    // 本 cache 在滚动模式下退化为：
+    //   1. **首次进入 / 切书时的兜底**：sync 流为 null 时回落到此 cache 派生
+    //   2. **padding/字号配置 LRU 加速**：拖动设置滑块来回切回相同值时秒回（仍由本 cache 命中）
+    //   3. **prelayoutPut 推回 onPrev/NextTextChapterReady**：让 ChapterController
+    //      的 _prev/_nextTextChapter 与本 cache 同源
+    // 即在滚动模式跨章无缝路径上，本 cache 不再是关键路径——但仍保留作兜底 +
+    // padding LRU。SLIDE/SIMULATION 翻页路径仍依赖本 cache 的 cacheKey 派生
+    // （它们没接同步腾挪），不动。
     // 与原版关键差异：
     //   1) 不再在 padding 变化时 clear() —— 旧条目自然 LRU 淘汰，反复在几个 padding 值
     //      之间切换时仍能命中（拖动结束、下次再调到相同值秒回）。
