@@ -10,10 +10,16 @@ import kotlinx.coroutines.withContext
 /**
  * 网络书籍章节内容缓存 — 离线阅读核心
  *
- * 缓存策略：
+ * 缓存策略（双层 L1 + L2，L3 = 网络由 [WebBook] 接手）：
+ * - **L1 内存**：[ChapterMemoryCache]（50 MB LRU），命中 0.x ms
+ * - **L2 磁盘**：CacheDao（SQLite），命中 ~10-50 ms
  * - key = "chapter_content_{sourceUrl}_{chapterUrl}"
  * - 无过期时间（章节内容不变）
  * - 预加载：当前章节加载后自动缓存前后各N章
+ *
+ * 写入路径同时落 L1 + L2；读取路径优先 L1，miss 再查 L2 并回填 L1。
+ * 这样连续阅读会话内来回切前后章基本都在内存命中，DB 只负责"跨会话/重启后"的
+ * 持久化。L1 满了由 LRU 自动淘汰最久未访问的章节（详见 [ChapterMemoryCache]）。
  */
 object CacheBook {
 
@@ -27,39 +33,59 @@ object CacheBook {
         "chapter_content_${sourceUrl}_$chapterUrl"
 
     /**
-     * 获取缓存的章节内容
+     * 获取缓存的章节内容。L1 内存命中 → 直接返回；L1 miss → 查 L2 磁盘 → 命中后
+     * 回填 L1，下次同章访问就走内存。
      */
-    suspend fun getContent(sourceUrl: String, chapterUrl: String): String? =
-        withContext(Dispatchers.IO) {
+    suspend fun getContent(sourceUrl: String, chapterUrl: String): String? {
+        // L1: 同步读，命中即走 — 不需要进入 IO dispatcher 切线程开销
+        ChapterMemoryCache.get(sourceUrl, chapterUrl)?.let { return it }
+        // L2: 切到 IO 跑 SQLite
+        return withContext(Dispatchers.IO) {
             try {
-                cacheDao.get(chapterKey(sourceUrl, chapterUrl))?.value
+                val raw = cacheDao.get(chapterKey(sourceUrl, chapterUrl))?.value
+                if (raw != null) {
+                    // 回填 L1，让后续同章访问走内存。空串不写（与 putContent 行为一致）。
+                    ChapterMemoryCache.put(sourceUrl, chapterUrl, raw)
+                }
+                raw
             } catch (_: Exception) { null }
         }
+    }
 
     /**
-     * 缓存章节内容
+     * 缓存章节内容。同时写 L1 内存（同步、零延迟）+ L2 磁盘（IO）。
+     * 若磁盘写失败，内存仍持有 — 当前会话仍能命中，下次冷启动会走网络重抓，
+     * 与"完全没缓存"的行为对齐。
      */
-    suspend fun putContent(sourceUrl: String, chapterUrl: String, content: String) =
+    suspend fun putContent(sourceUrl: String, chapterUrl: String, content: String) {
+        // L1 同步写
+        ChapterMemoryCache.put(sourceUrl, chapterUrl, content)
         withContext(Dispatchers.IO) {
             try {
                 cacheDao.insert(Cache(chapterKey(sourceUrl, chapterUrl), content, 0L))
             } catch (_: Exception) {}
         }
+    }
 
     /**
-     * 检查章节是否已缓存
+     * 检查章节是否已缓存。优先 L1 内存查（避免一次 SQLite IO），miss 再过 DB。
+     * 不回填 L1：仅"是否存在"语义，没拿到 value，下次 getContent 仍会走完整路径。
      */
-    suspend fun isCached(sourceUrl: String, chapterUrl: String): Boolean =
-        withContext(Dispatchers.IO) {
+    suspend fun isCached(sourceUrl: String, chapterUrl: String): Boolean {
+        if (ChapterMemoryCache.get(sourceUrl, chapterUrl) != null) return true
+        return withContext(Dispatchers.IO) {
             try {
                 cacheDao.get(chapterKey(sourceUrl, chapterUrl)) != null
             } catch (_: Exception) { false }
         }
+    }
 
     /**
-     * 删除指定书源的所有章节缓存
+     * 删除指定书源的所有章节缓存（L1 + L2 同步清）。
      */
     suspend fun clearBook(sourceUrl: String) = withContext(Dispatchers.IO) {
+        // L1 内存清前缀匹配（同步），再清 L2 磁盘
+        ChapterMemoryCache.clearBook(sourceUrl)
         try {
             cacheDao.deleteByPrefix("chapter_content_${sourceUrl}_")
         } catch (_: Exception) {}

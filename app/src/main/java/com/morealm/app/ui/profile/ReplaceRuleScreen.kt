@@ -19,6 +19,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -79,7 +80,10 @@ fun ReplaceRuleScreen(
         }
     }
 
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
                 title = { Text("正文替换净化") },
@@ -110,6 +114,7 @@ fun ReplaceRuleScreen(
                         Icon(Icons.Default.Add, "添加规则", tint = MaterialTheme.colorScheme.primary)
                     }
                 },
+                scrollBehavior = scrollBehavior,
             )
         },
     ) { padding ->

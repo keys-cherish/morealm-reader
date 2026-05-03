@@ -937,7 +937,10 @@ fun ImageViewerDialog(
                         .target(photoView)
                         .crossfade(true)
                         .build()
-                    coil.ImageLoader(photoView.context).enqueue(request)
+                    // 走全局 ImageLoader（MoRealmApp.newImageLoader 提供），
+                    // 自动复用磁盘 + 内存缓存。比之前 `coil.ImageLoader(ctx)`
+                    // 临时 new 实例每次都从网络重下要省得多。
+                    coil.Coil.imageLoader(photoView.context).enqueue(request)
                 },
                 modifier = Modifier.fillMaxSize(),
             )

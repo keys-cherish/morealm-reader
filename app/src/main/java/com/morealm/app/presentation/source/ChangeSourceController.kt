@@ -8,6 +8,7 @@ import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.SearchBook
 import com.morealm.app.domain.entity.SearchBookCache
+import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.SearchRepository
 import com.morealm.app.domain.repository.SourceRepository
@@ -32,9 +33,9 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.ConcurrentHashMap
 
-private const val SOURCE_SEARCH_TIMEOUT_MS = 30_000L
-private const val SEARCH_PARALLELISM = 8
 private const val TEXT_BOOK_SOURCE_TYPE = 0
+// SOURCE_SEARCH_TIMEOUT_MS / SEARCH_PARALLELISM 已迁移到 AppPreferences —
+// 详情见 SearchViewModel 顶部注释。
 /** 缓存老化阈值：7 天前的换源候选缓存清掉，避免库无限增长。 */
 private const val SEARCH_CACHE_TTL_MS = 7L * 24 * 3600 * 1000
 
@@ -84,6 +85,7 @@ class ChangeSourceController(
     private val searchRepo: SearchRepository,
     private val searchBookCacheDao: SearchBookCacheDao,
     private val chapterDao: ChapterDao,
+    private val prefs: AppPreferences,
 ) {
     // ── Public state ──────────────────────────────────────────────────────
 
@@ -179,7 +181,7 @@ class ChangeSourceController(
             // Step 2: 拉/复用新 toc。
             val cacheKey = candidate.sourceUrl + "|" + sb.bookUrl
             val newToc: List<ChapterResult> = try {
-                tocCache[cacheKey] ?: withTimeout(SOURCE_SEARCH_TIMEOUT_MS) {
+                tocCache[cacheKey] ?: withTimeout(prefs.getSourceSearchTimeoutMs()) {
                     WebBook.getChapterListAwait(newSource, sb.bookUrl, tocUrl)
                 }.also { tocCache[cacheKey] = it }
             } catch (e: Exception) {
@@ -301,12 +303,14 @@ class ChangeSourceController(
                         status = SearchStatus.WAITING,
                     )
                 }
-                val semaphore = Semaphore(SEARCH_PARALLELISM.coerceAtMost(sources.size).coerceAtLeast(1))
+                val parallelism = prefs.getSearchParallelism()
+                val timeoutMs = prefs.getSourceSearchTimeoutMs()
+                val semaphore = Semaphore(parallelism.coerceAtMost(sources.size).coerceAtLeast(1))
                 supervisorScope {
                     val jobs = sources.map { source ->
                         launch {
                             semaphore.withPermit {
-                                searchOne(source, keyword, book)
+                                searchOne(source, keyword, book, timeoutMs)
                             }
                         }
                     }
@@ -319,11 +323,11 @@ class ChangeSourceController(
         }
     }
 
-    private suspend fun searchOne(source: BookSource, keyword: String, book: Book) {
+    private suspend fun searchOne(source: BookSource, keyword: String, book: Book, timeoutMs: Long) {
         updateProgress(source.bookSourceUrl, SearchStatus.SEARCHING)
         val startTime = System.currentTimeMillis()
         try {
-            val results = withTimeout(SOURCE_SEARCH_TIMEOUT_MS) {
+            val results = withTimeout(timeoutMs) {
                 searchRepo.searchOnlineSource(source, keyword)
             }
             val elapsed = System.currentTimeMillis() - startTime

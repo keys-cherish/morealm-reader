@@ -938,16 +938,45 @@ object AppLog {
 
     // ── Util ──
 
+    /**
+     * 设备 / 系统 / 应用 / 显示 等元信息，单行 key:value 平铺，不带分节标题——
+     * 调用方（崩溃报告 / 日志 TXT 导出）会按需自己加 "--- Device ---" 之类
+     * 的二级标题，避免内嵌一层造成嵌套混乱。
+     *
+     * 含分辨率 / 密度：用户报 bug 时分辨率 + 密度直接关系到 reader 排版、
+     * 翻页阴影尺寸、TopAppBar 偏移等问题，必须带上。
+     */
     private fun collectDeviceInfo(context: Context): String = buildString {
-        appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
+        appendLine("Manufacturer: ${Build.MANUFACTURER}")
+        appendLine("Brand: ${Build.BRAND}")
+        appendLine("Model: ${Build.MODEL}")
+        appendLine("Device: ${Build.DEVICE}")
+        appendLine("Product: ${Build.PRODUCT}")
+        appendLine("Hardware: ${Build.HARDWARE}")
         appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
         appendLine("ABI: ${Build.SUPPORTED_ABIS.joinToString()}")
+        appendLine("Locale: ${Locale.getDefault()}")
+        try {
+            val dm = context.resources.displayMetrics
+            appendLine("Resolution: ${dm.widthPixels}x${dm.heightPixels} px")
+            appendLine("Density: ${dm.density} (${dm.densityDpi} dpi)")
+            appendLine("ScaledDensity: ${dm.scaledDensity}")
+        } catch (_: Exception) {}
         try {
             val p = context.packageManager.getPackageInfo(context.packageName, 0)
             appendLine("App: ${p.versionName} (${p.longVersionCode})")
+            appendLine("Package: ${context.packageName}")
         } catch (_: Exception) {}
         appendLine("Heap: ${Runtime.getRuntime().maxMemory() / 1024 / 1024}MB")
+        appendLine("Cores: ${Runtime.getRuntime().availableProcessors()}")
     }
+
+    /**
+     * 暴露 [deviceInfo] 给 UI 层（日志 TXT 导出会写到文件头），不希望调用方
+     * 直接访问私有字段；这里给个稳定的只读入口。在 [init] 之前调用会拿到空
+     * 串——理论上不可能发生，因为 UI 路径上 init 必然先于 Composable 渲染。
+     */
+    fun getDeviceInfo(): String = deviceInfo
 
     private fun throwableToString(t: Throwable): String {
         val sw = StringWriter()

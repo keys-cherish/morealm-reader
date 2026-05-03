@@ -68,6 +68,10 @@ class TtsEngineHost(
      * 程主线程）调用，且 prefs.first() 是同进程 DataStore 读取，毫秒级。
      */
     private fun ensureSystemTtsEngine(): SystemTtsEngine {
+        // 任何会用到 engine 的入口都视为"用户回来了"，取消空闲释放计时。
+        // 放在最顶端而非"engine == null 才取消"——这样 60s 内 pause→resume→pause
+        // 的来回会刷新计时器，避免边界情况下被错误释放。
+        cancelIdleRelease()
         systemTtsEngine?.let { return it }
         val pkg = runCatching {
             kotlinx.coroutines.runBlocking { prefs.ttsSystemEnginePackage.first() }
@@ -175,6 +179,24 @@ class TtsEngineHost(
     private var pendingSpeedRestartJob: Job? = null
     /** 心跳 watchdog job——isPlaying=true 期间每 [HEARTBEAT_INTERVAL_MS] 打一行摘要日志。 */
     private var heartbeatJob: Job? = null
+    /**
+     * 空闲释放 job。pause / stopPlayback 后开始计时 [IDLE_RELEASE_MS]，到点
+     * 主动 shutdown 系统 TTS 引擎释放 binder、置 [systemTtsEngine] = null。
+     *
+     * 动机：Android TextToSpeech 持有跨进程 binder（绑定到具体 TTS 服务进程，
+     * 如 Google TTS / MultiTTS），即便 host 暂停播放，binder + 引擎进程仍持续
+     * 占用资源。低端机 / 低内存设备上 OS 会优先 LMK 这种"空闲但持引用"的服务，
+     * 表现就是用户暂停 TTS 几分钟后回来发现通知栏服务被杀。
+     *
+     * 设计取舍：60s 是经验阈值——足够覆盖"用户读到一半接电话/暂时切走"的场景，
+     * 又足够短让长时间空闲的引擎及时归还内存。重新播放时 [ensureSystemTtsEngine]
+     * 会自动按需重建（按需 init 路径已经存在），用户感知到的代价是首段多 ~500ms
+     * 的 TextToSpeech 初始化。
+     *
+     * 仅释放 system 引擎；edge / http 引擎的资源占用由各自实例管理（OkHttp 自带
+     * 空闲连接回收、ExoPlayer pause 状态资源占用本就远低于 binder）。
+     */
+    private var idleReleaseJob: Job? = null
     /**
      * HttpTts 章节预下载 job。在 [runHttpChapterPlayback] 进入章末时启动，把下一章
      * 前 N 段提前拉到磁盘缓存，让翻章时段间停顿尽量短。每章只跑一次；切章/切引擎/
@@ -339,11 +361,61 @@ class TtsEngineHost(
         preloadNextChapterJob?.cancel()
         pendingSpeedRestartJob?.cancel()
         heartbeatJob?.cancel()
+        idleReleaseJob?.cancel()
         runCatching { systemTtsEngine?.stop(); systemTtsEngine?.shutdown() }
         runCatching { edgeTtsEngine.stop() }
         // HttpTts 引擎缓存：每个 entry 持有 ExoPlayer，必须显式 release 防泄漏
         httpTtsEngineCache.values.forEach { runCatching { it.release() } }
         httpTtsEngineCache.clear()
+    }
+
+    // ── Idle release helpers ─────────────────────────────────────────────────
+    //
+    // 这两个方法是任务"TTS 60s 空闲释放"的核心。pause/stopPlayback 调
+    // [scheduleIdleRelease] 启动 60s 单发计时；任何重新使用 engine 的入口走
+    // [ensureSystemTtsEngine] 时调 [cancelIdleRelease]。
+
+    /**
+     * 启动 60s 空闲计时。已有 pending job 时 cancel 重置（"再次暂停"应当
+     * 重新开始计时，而不是延续上次）。
+     */
+    private fun scheduleIdleRelease() {
+        idleReleaseJob?.cancel()
+        idleReleaseJob = scope.launch {
+            delay(IDLE_RELEASE_MS)
+            // 双重检查：60s 内用户重新播放时 cancelIdleRelease 应已取消该 job；
+            // 但保险起见再校验一次播放状态——竞态下被恢复为 isPlaying=true 时
+            // 不应该误杀引擎。
+            if (TtsEventBus.playbackState.value.isPlaying) {
+                AppLog.debug("TtsHost", "idleRelease: state.isPlaying flipped, abort")
+                return@launch
+            }
+            if (engineId != "system") {
+                // 当前用的是 edge / http_*：systemTtsEngine 此时即便存在也是
+                // 上次切引擎前残留，可以放心释放。但更稳健的做法是 noop——
+                // 等 release() 接手。这里直接 noop 与 idleRelease 的语义对齐：
+                // "释放的是 system 引擎用户没在用 system 时不需触发"。
+                return@launch
+            }
+            val engine = systemTtsEngine ?: return@launch
+            AppLog.info(
+                "TtsHost",
+                "idleRelease: ${IDLE_RELEASE_MS / 1000}s idle, releasing systemTtsEngine to free binder",
+            )
+            // 清 batchCallback 防止 listener 持有已 shutdown 的 engine 引用。
+            // 不主动 setBatchCallback(null) 也无害——重新 init 时旧 listener 不会再
+            // 被触发——但显式清掉读起来更明确。
+            runCatching { engine.setBatchCallback(null) }
+            runCatching { engine.stop() }
+            runCatching { engine.shutdown() }
+            systemTtsEngine = null
+        }
+    }
+
+    /** 取消空闲计时。任何重新使用 engine 的入口都会调它。 */
+    private fun cancelIdleRelease() {
+        idleReleaseJob?.cancel()
+        idleReleaseJob = null
     }
 
     /** Entry point for all [TtsEventBus.Command]s; called by [TtsService.listenForCommands]. */
@@ -514,6 +586,10 @@ class TtsEngineHost(
                 runCatching { currentEngine().stop() }
                 publishState(playing = false)
             }
+            // 暂停后启动空闲计时——60s 内若没人 resume / 切引擎 / 调 voice，
+            // 主动释放 systemTtsEngine 让 binder 归还。controlMutex 外调度，
+            // 避免与 pause 自身的 cancelAndJoin 串行化。
+            scheduleIdleRelease()
         }
     }
 
@@ -543,6 +619,10 @@ class TtsEngineHost(
                     )
                 }
             }
+            // 与 pause() 同理：stopPlayback 通常紧跟 StopService Cmd，service
+            // 销毁会触发 release() 接手；但若 service 因外部原因延迟销毁
+            // (比如另一个 client 还粘着 binding)，60s 计时器会兜底释放引擎。
+            scheduleIdleRelease()
         }
     }
 
@@ -1845,6 +1925,21 @@ class TtsEngineHost(
 
         /** 心跳日志间隔。播放态期间每隔这么久打一行 TtsHB；非播放态自动退出循环。 */
         private const val HEARTBEAT_INTERVAL_MS = 15_000L
+
+        /**
+         * 空闲释放阈值——pause / stopPlayback 后多久 shutdown 系统 TTS 引擎。
+         *
+         * 60s 是 trade-off：
+         *  - 太短（10-30s）：用户接电话 / 临时切走又快速回来时，第一段会看到
+         *    init 重建的延迟，破坏连贯性；
+         *  - 太长（5min+）：低端机 LMK 会优先杀这种"空闲但持 binder"的进程，
+         *    用户回来发现通知栏 TTS 不见了（前台服务被回收）。
+         *
+         * 60s 覆盖了"接电话"这种典型场景（响铃 + 接听通常在 30-45s 内），
+         * 又能在用户真的不打算继续读时及时归还 binder。详见
+         * [scheduleIdleRelease] 注释。
+         */
+        private const val IDLE_RELEASE_MS = 60_000L
 
         /**
          * 批量播放 watchdog：enqueue 后如果 [BATCH_WATCHDOG_TIMEOUT_MS] 内没有收到

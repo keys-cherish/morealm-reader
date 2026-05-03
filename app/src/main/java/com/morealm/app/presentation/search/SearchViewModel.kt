@@ -17,6 +17,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -32,8 +33,9 @@ import javax.inject.Inject
 import java.io.IOException
 
 private const val TEXT_BOOK_SOURCE_TYPE = 0
-private const val SOURCE_SEARCH_TIMEOUT_MS = 30_000L
-private const val SEARCH_PARALLELISM = 8
+// SOURCE_SEARCH_TIMEOUT_MS / SEARCH_PARALLELISM 已迁移到 AppPreferences —
+// 用户可在「设置 → 搜索设置」里调。搜索入口处通过 prefs.getSearchParallelism()
+// 一次性快照，搜索期间不响应配置变更。
 
 data class SearchResult(
     val title: String,
@@ -58,6 +60,24 @@ data class SourceSearchProgress(
 )
 
 enum class SourceStatus { WAITING, SEARCHING, DONE, FAILED }
+
+/**
+ * 「加入书架」事件 — 由 [SearchViewModel.addToShelfAndRead] /
+ * [SearchViewModel.addToShelfAndDownload] 在 [bookRepo] 写入成功后发射；
+ * UI 端订阅后弹 Snackbar「已加入书架·《title》[撤销]」。
+ *
+ * 设计点：
+ *  - SharedFlow.replay = 1 让用户从阅读器返回 SearchScreen 时能补看上一次反馈；
+ *    UI 用 [timestamp] 做 60s 过滤，避免 replay 出"半小时前的"陈旧 Snackbar。
+ *  - 已经存在的书重复点击不 emit —— Snackbar 只在「真正新加」时弹。
+ *  - [withDownload] 区分文案 / 撤销时是否同步 stopDownload。
+ */
+data class ShelfAddedEvent(
+    val bookId: String,
+    val title: String,
+    val withDownload: Boolean,
+    val timestamp: Long = System.currentTimeMillis(),
+)
 
 @HiltViewModel
 class SearchViewModel @Inject constructor(
@@ -91,6 +111,17 @@ class SearchViewModel @Inject constructor(
 
     private val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+
+    /**
+     * 加书事件流 —— UI 订阅后用 Snackbar 反馈。replay=1 让用户跳到阅读器再返回时
+     * 仍能看到（UI 自己用 timestamp 过滤陈旧事件）。详见 [ShelfAddedEvent]。
+     */
+    private val _shelfAddedEvents = MutableSharedFlow<ShelfAddedEvent>(
+        replay = 1,
+        extraBufferCapacity = 0,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val shelfAddedEvents: SharedFlow<ShelfAddedEvent> = _shelfAddedEvents.asSharedFlow()
 
     private var searchJob: Job? = null
     private val searchGeneration = AtomicInteger(0)
@@ -191,12 +222,14 @@ class SearchViewModel @Inject constructor(
                 }
                 AppLog.info("Search", "Searching '$keyword' across ${sources.size} sources")
 
-                val semaphore = Semaphore(SEARCH_PARALLELISM.coerceAtMost(sources.size).coerceAtLeast(1))
+                val parallelism = prefs.getSearchParallelism()
+                val timeoutMs = prefs.getSourceSearchTimeoutMs()
+                val semaphore = Semaphore(parallelism.coerceAtMost(sources.size).coerceAtLeast(1))
                 supervisorScope {
                     val sourceJobs = sources.map { source ->
                         launch {
                             semaphore.withPermit {
-                                searchSingleSource(searchId, source, keyword)
+                                searchSingleSource(searchId, source, keyword, timeoutMs)
                             }
                         }
                     }
@@ -216,11 +249,11 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    private suspend fun searchSingleSource(searchId: Int, source: BookSource, keyword: String) {
+    private suspend fun searchSingleSource(searchId: Int, source: BookSource, keyword: String, timeoutMs: Long) {
         if (!isCurrentSearch(searchId)) return
         updateSourceStatus(searchId, source.bookSourceUrl, SourceStatus.SEARCHING)
         try {
-            val searchBooks = withTimeout(SOURCE_SEARCH_TIMEOUT_MS) {
+            val searchBooks = withTimeout(timeoutMs) {
                 searchRepo.searchOnlineSource(source, keyword)
             }
             if (!isCurrentSearch(searchId)) return
@@ -344,8 +377,40 @@ class SearchViewModel @Inject constructor(
      * Add an online search result to the local shelf as a web book.
      * If the book already exists (same bookUrl + sourceUrl), return its id.
      * Returns the bookId via callback for immediate navigation.
+     *
+     * 仅在「真正新加」时通过 [_shelfAddedEvents] 发射事件 —— 已在书架的书第二次
+     * 点击不弹 Snackbar，避免误以为加了第二次。withDownload=false 表示这是
+     * "点搜索结果直接进阅读器"路径，UI 决定 Snackbar 文案。
      */
     fun addToShelfAndRead(result: SearchResult, onBookReady: (String) -> Unit) {
+        addToShelfInternal(result, withDownload = false, onBookReady = onBookReady)
+    }
+
+    fun addToShelf(result: SearchResult) {
+        addToShelfAndRead(result) { /* no-op navigation */ }
+    }
+
+    /**
+     * Add to shelf and immediately start downloading all chapters.
+     * 与 [addToShelfAndRead] 调同一私有实现，但传 withDownload=true 让 Snackbar
+     * 显示「已加入书架并开始缓存」文案；撤销时同步停止下载。
+     */
+    fun addToShelfAndDownload(result: SearchResult) {
+        addToShelfInternal(result, withDownload = true) { bookId ->
+            cacheRepo.startDownload(bookId, result.sourceUrl)
+        }
+    }
+
+    /**
+     * 加书核心逻辑。三个公开入口（[addToShelfAndRead] / [addToShelf] /
+     * [addToShelfAndDownload]）都委托到这里，确保 ShelfAddedEvent 的发射时机
+     * 单一可控（仅在 [bookRepo.insert] 成功后、回调之前）。
+     */
+    private fun addToShelfInternal(
+        result: SearchResult,
+        withDownload: Boolean,
+        onBookReady: (String) -> Unit,
+    ) {
         if (result.sourceType != TEXT_BOOK_SOURCE_TYPE) {
             AppLog.warn("Search", "Blocked non-text source result: ${result.title} from ${result.sourceName}")
             return
@@ -379,6 +444,16 @@ class SearchViewModel @Inject constructor(
                 val book = rawBook.copy(folderId = autoGroupClassifier.classify(rawBook))
                 bookRepo.insert(book)
                 AppLog.info("Search", "Added to shelf: ${result.title} from ${result.sourceName}")
+                // 加书事件 — UI 端订阅后弹 Snackbar 反馈+撤销。emit 在 onBookReady
+                // 之前，让 SearchScreen 在用户被 navigate 走之前就先收到事件
+                // （加上 SharedFlow.replay=1 + UI 时间戳过滤，跨 navigate 也能补显示）。
+                _shelfAddedEvents.emit(
+                    ShelfAddedEvent(
+                        bookId = bookId,
+                        title = result.title,
+                        withDownload = withDownload,
+                    )
+                )
                 // 实时同步 toc：触发后台单本刷新，让 totalChapters / lastChapter 字段立即落库。
                 // ShelfRefreshController.refreshOne 在 oldTotal == 0 时跳过 lastCheckCount 写入，
                 // 所以新书首屏不会蹦出"N 新"红字徽章。
@@ -390,16 +465,26 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    fun addToShelf(result: SearchResult) {
-        addToShelfAndRead(result) { /* no-op navigation */ }
-    }
-
     /**
-     * Add to shelf and immediately start downloading all chapters.
+     * 撤销加书。删除 [bookId] 对应记录；若 [stopDownload]=true 同步停止当前缓存
+     * 任务（CacheBookService 是单例，stopDownload 没有 bookId 维度，简单粗暴
+     * stop 当前下载即可——撤销动作发生在加书后短时间内，命中率高，误伤其他下载
+     * 的概率低）。
+     *
+     * 删除走 [bookRepo.deleteById]，由 Repository 内部级联清理章节 / 缓存等
+     * 关联数据。失败不抛 — UI 已经 dismiss Snackbar，再弹错也意义不大；日志兜底。
      */
-    fun addToShelfAndDownload(result: SearchResult) {
-        addToShelfAndRead(result) { bookId ->
-            cacheRepo.startDownload(bookId, result.sourceUrl)
+    fun undoAddToShelf(bookId: String, stopDownload: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (stopDownload) {
+                    runCatching { cacheRepo.stopDownload() }
+                }
+                bookRepo.deleteById(bookId)
+                AppLog.info("Search", "Undo addToShelf: removed bookId=$bookId")
+            } catch (e: Exception) {
+                AppLog.warn("Search", "Undo addToShelf failed: ${e.message}", e)
+            }
         }
     }
 

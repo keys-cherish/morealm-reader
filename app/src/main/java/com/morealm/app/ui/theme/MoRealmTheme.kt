@@ -202,7 +202,7 @@ fun MoRealmTheme(
     val inverseSurface by transition.animateColor(transitionSpec = { spec }, label = "inverseSurface") { it.inverseSurface }
     val inverseOnSurface by transition.animateColor(transitionSpec = { spec }, label = "inverseOnSurface") { it.inverseOnSurface }
     val inversePrimary by transition.animateColor(transitionSpec = { spec }, label = "inversePrimary") { it.inversePrimary }
-    // Use a single ColorScheme constructor â€?no dark/light split needed since all values are explicit
+    // Use a single ColorScheme constructor ï¿½?no dark/light split needed since all values are explicit
     val colorScheme = ColorScheme(
         primary = primary,
         onPrimary = onPrimary,

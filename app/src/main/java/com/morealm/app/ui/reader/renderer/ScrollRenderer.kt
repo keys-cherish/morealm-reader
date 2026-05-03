@@ -232,7 +232,13 @@ fun ScrollRenderer(
             initialProgress > 0 -> ((initialProgress / 100f) * (pageCount - 1)).roundToInt().coerceIn(0, pageCount - 1)
             else -> 0
         }
-        pageOffset = if (initialPageOffset != 0f) initialPageOffset else 0f
+        // initialPageOffset 来自 ReaderScrollState.consumeScrollOffset()：
+        //   - 跨章 commit 路径会传具体的衔接偏移（无缝接续上一帧视觉位置）
+        //   - 普通 loadChapter / 书签跳转默认 0f
+        // 直接赋值，不要再做 `!= 0f else 0f` 的浮点判等——0f 本身就是合法值，
+        // 且跨章衔接可能恰好是 0（如「last page 底刚好对齐 viewport 顶」），
+        // 用 if 判等会绕一圈但结果一致，多余还增加阅读负担。
+        pageOffset = initialPageOffset
         lastNearBottomRequestPageCount = 0
         lastNearBottomPageCount = 0
         pendingRestore = false
@@ -502,21 +508,62 @@ fun ScrollRenderer(
     // chapter content, commit the chapter shift so the ViewModel advances.
     LaunchedEffect(currentPageIndex, pageOffset, pendingRestore, layoutCompleted, nextChapterPages.size, prevChapterPages.size) {
         if (pendingRestore || !layoutCompleted || pageCount <= 0 || viewHeight <= 0) return@LaunchedEffect
+        // Ghost-wall guard: cross-chapter commit must require a real user scroll. Without
+        // this, a PREV boundary turn that lands on a short last page (height < 30% of
+        // viewport) would immediately satisfy the forward-commit condition and bounce
+        // back to the next chapter, then the next chapter's pre-layout would re-trigger
+        // PREV again, producing an infinite loop with progress oscillating. This mirrors
+        // the guard already present on submitBoundaryTurn callers (clampAt*/moveTo*).
+        if (!hasUserScrolled) {
+            // 诊断：当 guard 拦下了一个本来会触发的 commit 时打日志，便于验证修复是否生效。
+            // 下次复现日志中如果出现 "GhostWall guard SKIP" 行 + 没有紧随 commit NEXT/PREV，
+            // 说明 guard 命中并阻止了无意义跳章；如果还是看到 commit NEXT 0/* hasUserScrolled=false
+            // 说明 guard 路径没走到，需要换 Option 2 收紧 pageOffset 判定。
+            val wouldCommitNext = currentPageIndex >= pageCount - 1 && nextChapterPages.isNotEmpty() &&
+                (pageOffset + pageHeight(currentPageIndex)) < viewHeight * 0.3f
+            val wouldCommitPrev = currentPageIndex == 0 && prevChapterPages.isNotEmpty() && pageOffset > 0 &&
+                pageOffset > viewHeight * 0.7f
+            if (wouldCommitNext || wouldCommitPrev) {
+                AppLog.debug(
+                    "Scroll",
+                    "GhostWall guard SKIP" +
+                        " | wouldCommit=${if (wouldCommitNext) "NEXT" else "PREV"}" +
+                        " | page=$currentPageIndex/$pageCount | offset=$pageOffset" +
+                        " | hasUserScrolled=false | nextCh=${nextChapterPages.size} prevCh=${prevChapterPages.size}",
+                )
+            }
+            return@LaunchedEffect
+        }
         // Forward commit: at last page, scrolled past 70% of it into next chapter
         if (currentPageIndex >= pageCount - 1 && nextChapterPages.isNotEmpty()) {
             val lastPageBottom = pageOffset + pageHeight(currentPageIndex)
             if (lastPageBottom < viewHeight * 0.3f) {
-                val scrollInto = -(pageOffset + pageHeight(currentPageIndex))
-                // Diagnostic: include pendingBoundaryTurn + hasUserScrolled so we can
-                // see when a NEXT commit fires while a PREV submit is still pending —
-                // i.e. the two state machines are out of sync. See log.txt symptom
-                // where 100+ "pending=PREV" SKIPPED lines preceded a commit NEXT.
+                // 无缝跨章关键：传「下一章 page 0 应当被设到的 pageOffset」，
+                // 等于「下一章 page 0 顶部当前在 viewport 中的 y 坐标」
+                // = 当前 last page 底部的 y 坐标
+                // = pageOffset + pageHeight(currentPageIndex)
+                // = lastPageBottom（已计算）
+                //
+                // commit 时 lastPageBottom < viewHeight*0.3，所以这个值很小，
+                // 可能是正小数（last page 底还在 viewport 内）或负数（last page 已
+                // 完全滑出 viewport 顶）。无论正负，作为新章节 page 0 的 pageOffset
+                // 都能让画面无缝衔接：
+                //   - lastPageBottom > 0：新 page 0 顶部在 viewport y=lastPageBottom
+                //     处，上方留白由 prevChapterPages（即旧当前章节）填充
+                //   - lastPageBottom < 0：新 page 0 已被滑过 |lastPageBottom| 像素，
+                //     视觉上等价于「在新章节内向下读了一段」
+                //
+                // 历史 bug：之前传 `-(pageOffset + pageHeight)` 然后 coerceAtLeast(0f)
+                //   - 符号反了一道
+                //   - coerceAtLeast 把负值丢失，恢复时强制 pageOffset=0
+                // 双重错误叠加，新章节直接 reset 到 page 0 顶部，用户视觉上跳了
+                // |lastPageBottom| 像素 ≈ 半屏多。这就是用户反馈的「章节末尾明显跳感」。
                 AppLog.debug(
                     "Scroll",
-                    "Scroll cross-chapter commit NEXT | page=$currentPageIndex/$pageCount | scrollInto=$scrollInto" +
+                    "Scroll cross-chapter commit NEXT | page=$currentPageIndex/$pageCount | newPageOffset=$lastPageBottom" +
                         " | pendingBoundaryTurn=$pendingBoundaryTurn | hasUserScrolled=$hasUserScrolled",
                 )
-                onChapterCommit(ReaderPageDirection.NEXT, scrollInto.coerceAtLeast(0f))
+                onChapterCommit(ReaderPageDirection.NEXT, lastPageBottom)
             }
         }
         // Backward commit: at first page, scrolled up past 70% into prev chapter
@@ -524,13 +571,31 @@ fun ScrollRenderer(
             val totalPrevHeight = prevChapterPages.sumOf { it.height.toDouble() }.toFloat()
             val scrollIntoPrev = pageOffset
             if (scrollIntoPrev > viewHeight * 0.7f && scrollIntoPrev < totalPrevHeight) {
-                val offsetInPrev = totalPrevHeight - scrollIntoPrev
+                // 无缝跨章 PREV：新章节落 last page (pageCount-1)，pageOffset 应该让
+                // 该 last page 的视觉位置与 commit 瞬间一致。
+                //
+                // 当前视觉：
+                //   - 旧当前章节 page 0 顶部在 viewport y=scrollIntoPrev (positive)
+                //   - 旧 prev 章节（即将成为新当前章节）的 last page 底部贴 viewport y=scrollIntoPrev
+                //   - 即 last page 底 y 坐标 = scrollIntoPrev
+                //   - 即 last page 顶 y 坐标 = scrollIntoPrev - lastPageHeight
+                //
+                // 切换后 currentPageIndex = pageCount-1（last page），pageOffset 是该
+                // last page 的位移（顶部相对 viewport top 的 y）。
+                // 所以新 pageOffset = scrollIntoPrev - lastPageHeight。
+                //
+                // 历史 bug：传 `-offsetInPrev = scrollIntoPrev - totalPrevHeight`，
+                // 用了整个上一章的高度而不是 last page 的高度。totalPrevHeight 远
+                // 大于 lastPageHeight 时，新 pageOffset 是个深度负数 → last page 被
+                // 强行推到 viewport 上方千百像素 → 用户看到一个空白屏 + 章末某处。
+                val lastPageHeight = prevChapterPages.last().height
+                val newPageOffset = scrollIntoPrev - lastPageHeight
                 AppLog.debug(
                     "Scroll",
-                    "Scroll cross-chapter commit PREV | page=$currentPageIndex/$pageCount | offsetInPrev=$offsetInPrev" +
+                    "Scroll cross-chapter commit PREV | page=$currentPageIndex/$pageCount | newPageOffset=$newPageOffset" +
                         " | pendingBoundaryTurn=$pendingBoundaryTurn | hasUserScrolled=$hasUserScrolled",
                 )
-                onChapterCommit(ReaderPageDirection.PREV, -offsetInPrev)
+                onChapterCommit(ReaderPageDirection.PREV, newPageOffset)
             }
         }
     }
@@ -543,7 +608,34 @@ fun ScrollRenderer(
      */
     fun applyScroll(delta: Float) {
         if (pageCount == 0 || viewHeight <= 0) return
-        if (abs(delta) > 0.5f) {
+        // hasUserScrolled flip 阈值：必须超过 viewport 3% 才视为「用户主动滑动」，
+        // 而不是 fling settle 期间几像素余波 / 手指无意识微抖动 / inset 重排导致的
+        // 单帧 delta。
+        //
+        // 历史 bug 回顾：阈值之前是 0.5f（接近 0），实测 fling 结束后还会有
+        // delta=-8px 这种 settle 抖动 → flip 掉 hasUserScrolled，配合「短 last page
+        // 立刻触发 commit NEXT」的判定，构成 PREV→NEXT 鬼打墙：
+        //   1) 用户在第 N+1 章首页向上滚 → PREV 跨章加载第 N 章
+        //   2) 第 N 章在末页（pageCount-1）落地，hasUserScrolled 因 resetKey 变化清零
+        //   3) settle 余波让 hasUserScrolled flip 回 true
+        //   4) currentPageIndex >= pageCount-1 + last page 高度 < 30% viewport
+        //      → 立刻 commit NEXT 回到第 N+1 章
+        //   5) 用户感觉「往下滚一直回到第二节开头」
+        //
+        // 3% 阈值物理意义：1080p 设备 viewHeight≈2400px → 阈值≈72px，介于
+        // settle 余波（<10px）和最轻量手指滑动（>150px）之间，能精准筛掉前者。
+        val flipThreshold = viewHeight * 0.03f
+        if (abs(delta) > flipThreshold) {
+            // 诊断：仅记录 hasUserScrolled 第一次翻 true 的时机 + delta 大小，便于
+            // 排查"用户没滚动但 flag 被 setter 路径误置"的可能。后续滚动不再打日志，
+            // 避免 fling 期间一秒几十条噪声。
+            if (!hasUserScrolled) {
+                AppLog.debug(
+                    "Scroll",
+                    "hasUserScrolled FLIP true | delta=$delta | thresh=$flipThreshold | page=$currentPageIndex/$pageCount" +
+                        " | offset=$pageOffset | resetKey=$resetKey restoreToken=$restoreToken",
+                )
+            }
             hasUserScrolled = true
         }
 
