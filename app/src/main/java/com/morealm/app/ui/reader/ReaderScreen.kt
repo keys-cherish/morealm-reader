@@ -99,6 +99,10 @@ fun ReaderScreen(
     val visiblePage by viewModel.visiblePage.collectAsStateWithLifecycle()
     val nextPreloadedChapter by viewModel.nextPreloadedChapter.collectAsStateWithLifecycle()
     val prevPreloadedChapter by viewModel.prevPreloadedChapter.collectAsStateWithLifecycle()
+    // Phase 2 MD3 同步腾挪源 — 由 ChapterController.commitChapterShiftNext/Prev 在主线程
+    // 当帧重写。CanvasRenderer 的 syncPrev/NextTextChapter prop 优先于 prelayoutCache 派生。
+    val syncPrevTextChapterValue by viewModel.chapter.prevTextChapter.collectAsStateWithLifecycle()
+    val syncNextTextChapterValue by viewModel.chapter.nextTextChapter.collectAsStateWithLifecycle()
     val showControls by viewModel.showControls.collectAsStateWithLifecycle()
     val showTtsPanel by viewModel.showTtsPanel.collectAsStateWithLifecycle()
     val showSettings by viewModel.showSettingsPanel.collectAsStateWithLifecycle()
@@ -615,6 +619,27 @@ fun ReaderScreen(
                 footerCenter = ftrCenter,
                 footerRight = ftrRight,
                 selectionMenuConfig = selectionMenuConfig,
+                // ── Phase 2 MD3 同步腾挪接通 ──
+                // 三个 publish callback 让 CanvasRenderer 把 layoutChapterAsync 完成的
+                // TextChapter 推回 ChapterController 的 _prev/_cur/_nextTextChapter，
+                // sync 流让 ScrollRenderer 直接读真值（绕开 prelayoutCache 异步派生）。
+                onCurTextChapterReady = { idx, ch -> viewModel.chapter.publishCurTextChapter(idx, ch) },
+                onPrevTextChapterReady = { idx, ch -> viewModel.chapter.publishPrevTextChapter(idx, ch) },
+                onNextTextChapterReady = { idx, ch -> viewModel.chapter.publishNextTextChapter(idx, ch) },
+                syncPrevTextChapter = syncPrevTextChapterValue,
+                syncNextTextChapter = syncNextTextChapterValue,
+                // Phase 2e: 滚动模式跨章 commit 优先走同步腾挪——成功则 ChapterController
+                // 当帧已更新所有相关 StateFlow，CanvasRenderer 跳过 onNextChapter()/onPrevChapter()
+                // 避免老 loadChapter 异步路径覆盖。返回 false 时回退老路径。
+                onChapterCommitShift = { direction ->
+                    when (direction) {
+                        com.morealm.app.ui.reader.renderer.ReaderPageDirection.NEXT ->
+                            viewModel.commitChapterShiftNext()
+                        com.morealm.app.ui.reader.renderer.ReaderPageDirection.PREV ->
+                            viewModel.commitChapterShiftPrev()
+                        else -> false
+                    }
+                },
                 modifier = Modifier.fillMaxSize(),
             )
         }

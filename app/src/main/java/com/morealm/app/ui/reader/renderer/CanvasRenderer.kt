@@ -214,6 +214,31 @@ fun CanvasRenderer(
     onCurTextChapterReady: (idx: Int, ch: com.morealm.app.domain.render.TextChapter) -> Unit = { _, _ -> },
     onPrevTextChapterReady: (idx: Int, ch: com.morealm.app.domain.render.TextChapter) -> Unit = { _, _ -> },
     onNextTextChapterReady: (idx: Int, ch: com.morealm.app.domain.render.TextChapter) -> Unit = { _, _ -> },
+    /**
+     * Phase 2 MD3 同步腾挪源 — 由 ReaderScreen 从
+     * [com.morealm.app.presentation.reader.ReaderChapterController.prevTextChapter] /
+     * [com.morealm.app.presentation.reader.ReaderChapterController.nextTextChapter]
+     * collectAsState 派生传入。**非 null 时优先于 prelayoutCache 派生**，让
+     * ScrollRenderer 的 prev/nextChapterPages 直接读 ChapterController 同步腾挪后的真值，
+     * 绕开 prelayoutCache→cacheKey(title, content) 的异步派生窗口。
+     *
+     * 跨章 commit 时 [ReaderChapterController.commitChapterShiftNext] / Prev 在主线程
+     * 当帧重写这两个 StateFlow，下一帧 Compose 重组立即生效——视觉无缝的物理基础。
+     *
+     * 默认 null 时回落到旧 prelayoutCache 派生路径，保证 ReaderScreen 接通前的兼容性。
+     */
+    syncPrevTextChapter: com.morealm.app.domain.render.TextChapter? = null,
+    syncNextTextChapter: com.morealm.app.domain.render.TextChapter? = null,
+    /**
+     * Phase 2 MD3 同步腾挪 commit 入口 — 由 ScrollRenderer 在 onChapterCommit
+     * 触发时调用。返回 true 表示同步腾挪成功（ChapterController 当帧已更新三个真值），
+     * 此时 CanvasRenderer 跳过老 [onNextChapter] / [onPrevChapter] 回调（避免 loadChapter
+     * 异步重排丢弃已就绪的 next）；返回 false 退回老路径。
+     *
+     * 默认返回 false → 老路径 = 异步 nextChapter()/prevChapter()，保证 ReaderScreen
+     * 接通前的兼容。
+     */
+    onChapterCommitShift: (ReaderPageDirection) -> Boolean = { _ -> false },
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -535,12 +560,25 @@ fun CanvasRenderer(
     }
     val currentChapterPages = chapter?.pages?.takeIf { it.isNotEmpty() }
         ?: lastRenderablePages.ifEmpty { placeholderChapter().pages }
-    val prevTextChapter = if (prevChapterTitle.isNotBlank() && prevChapterContent.isNotBlank()) {
-        prelayoutCache[chapterCacheKey(chapterIndex - 1, prevChapterTitle, prevChapterContent)]
-    } else null
-    val nextTextChapter = if (nextChapterTitle.isNotBlank() && nextChapterContent.isNotBlank()) {
-        prelayoutCache[chapterCacheKey(chapterIndex + 1, nextChapterTitle, nextChapterContent)]
-    } else null
+    // Phase 2e: prev/next TextChapter 派生 — 优先用 ChapterController 同步腾挪后的真值
+    // [syncPrevTextChapter] / [syncNextTextChapter]，回落 prelayoutCache 派生。
+    //
+    // 跨章 commit 后的关键路径：
+    //   - 同步路径生效（syncPrev/NextTextChapter 非 null 且 ReaderScreen 接通）：
+    //     ChapterController.commitChapterShiftNext 当帧已经把 _prevTextChapter 设为
+    //     旧 cur、_nextTextChapter 清空。Compose 下一帧重组时这里直接拿到新真值，
+    //     ScrollRenderer 的 prev/nextChapterPages 当帧切换无窗口。
+    //   - 兼容路径（sync 流为 null）：回落到 prelayoutCache 派生（旧逻辑），cacheKey
+    //     依赖 prevChapterTitle/Content props 重组到位，存在异步窗口——这是 phase 2e
+    //     接通前的临时退化路径，仅在 ReaderScreen 还没传 sync 流时启用。
+    val prevTextChapter = syncPrevTextChapter
+        ?: if (prevChapterTitle.isNotBlank() && prevChapterContent.isNotBlank()) {
+            prelayoutCache[chapterCacheKey(chapterIndex - 1, prevChapterTitle, prevChapterContent)]
+        } else null
+    val nextTextChapter = syncNextTextChapter
+        ?: if (nextChapterTitle.isNotBlank() && nextChapterContent.isNotBlank()) {
+            prelayoutCache[chapterCacheKey(chapterIndex + 1, nextChapterTitle, nextChapterContent)]
+        } else null
     // When navigating backward, initialize to last page from prelayout cache
     // to avoid flashing page 0 for one frame before LaunchedEffect corrects it.
     var readerPageIndex by remember(chapterIndex) {
@@ -1380,10 +1418,17 @@ fun CanvasRenderer(
                 initialPageOffset = scrollState.consumeScrollOffset(),
                 onChapterCommit = { direction, scrollIntoOffset ->
                     scrollState.commitChapterShift(direction, scrollIntoOffset)
-                    when (direction) {
-                        ReaderPageDirection.NEXT -> onNextChapter()
-                        ReaderPageDirection.PREV -> onPrevChapter()
-                        else -> {}
+                    // Phase 2e: 优先走同步腾挪。返回 true 时 ChapterController 已经
+                    // 当帧把 _prev/_cur/_nextTextChapter + _chapterContent + _renderedChapter
+                    // 一齐更新，CanvasRenderer 下一帧重组拿到一致快照——视觉无缝。
+                    // 返回 false 退回老路径（loadChapter 异步加载），保证回归不破坏。
+                    val synced = onChapterCommitShift(direction)
+                    if (!synced) {
+                        when (direction) {
+                            ReaderPageDirection.NEXT -> onNextChapter()
+                            ReaderPageDirection.PREV -> onPrevChapter()
+                            else -> {}
+                        }
                     }
                 },
                 titlePaint = titlePaint,
