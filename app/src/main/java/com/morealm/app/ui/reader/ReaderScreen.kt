@@ -51,7 +51,7 @@ import com.morealm.app.ui.theme.toComposeColor
 import com.morealm.app.presentation.reader.ReaderViewModel
 import com.morealm.app.presentation.reader.PageTurnMode
 import com.morealm.app.ui.reader.renderer.ReaderPageDirection
-import com.morealm.app.ui.reader.renderer.toPageAnimType
+import com.morealm.app.ui.reader.page.animation.toPageAnimType
 import com.morealm.app.ui.reader.TtsOverlayPanel
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter

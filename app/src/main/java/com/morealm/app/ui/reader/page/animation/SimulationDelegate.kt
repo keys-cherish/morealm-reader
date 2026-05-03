@@ -10,13 +10,11 @@ import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.render.ImageColumn
 import com.morealm.app.domain.render.TextPage
-import com.morealm.app.ui.reader.renderer.PageAnimType
 import com.morealm.app.ui.reader.renderer.PageInfoOverlaySpec
 import com.morealm.app.ui.reader.renderer.PageTurnCoordinator
 import com.morealm.app.ui.reader.renderer.ReaderPageDirection
 import com.morealm.app.ui.reader.renderer.ReaderPageFactory
 import com.morealm.app.ui.reader.renderer.SelectionState
-import com.morealm.app.ui.reader.renderer.SimulationParams
 import com.morealm.app.ui.reader.renderer.chapterPositionAt
 import com.morealm.app.ui.reader.renderer.findWordRange
 import com.morealm.app.ui.reader.renderer.hitTestColumn
