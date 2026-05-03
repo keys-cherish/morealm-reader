@@ -54,6 +54,18 @@ class AppPreferences @Inject constructor(
          */
         val TTS_KEEP_CPU_AWAKE = booleanPreferencesKey("tts_keep_cpu_awake")
         /**
+         * 蓝牙耳机/有线耳机/Android Auto 上的「上一首/下一首」按键映射目标 ——
+         * 默认 false：按一下走 **段级**（PrevParagraph/NextParagraph），符合 Legado 默认。
+         *
+         * 改为 true 时改成 **章级**：按一下直接切上/下章。适合用户场景：
+         *  - 开车时单手控（章级跳转目的明确，段级误触多）
+         *  - 长章节（一段段跳太慢）
+         *  - 习惯 Legado 「按章」模式的老用户
+         *
+         * 锁屏通知按钮永远是章级，不受此偏好影响（按钮位置固定 + 标签写死「上一章/下一章」）。
+         */
+        val TTS_MEDIA_BUTTON_PER_CHAPTER = booleanPreferencesKey("tts_media_button_per_chapter")
+        /**
          * 朗读时是否自动跟随翻页 —— 默认 true。
          *
          * 行为（由阅读器外层订阅 [com.morealm.app.service.TtsPlaybackState.paragraphRange] 实现）：
@@ -282,6 +294,10 @@ class AppPreferences @Inject constructor(
     /** 见 [Keys.TTS_KEEP_CPU_AWAKE] —— 默认 false。 */
     val ttsKeepCpuAwake: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.TTS_KEEP_CPU_AWAKE] ?: false }
+
+    /** 见 [Keys.TTS_MEDIA_BUTTON_PER_CHAPTER] —— 默认 false（段级）。 */
+    val ttsMediaButtonPerChapter: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.TTS_MEDIA_BUTTON_PER_CHAPTER] ?: false }
 
     /** 见 [Keys.TTS_AUTO_FOLLOW_PAGE] —— 默认 true（朗读时自动跟随翻页）。 */
     val ttsAutoFollowPage: Flow<Boolean> = context.dataStore.data
@@ -550,6 +566,8 @@ class AppPreferences @Inject constructor(
     suspend fun setTtsSpeed(speed: Float) = update(Keys.TTS_SPEED, speed)
 
     suspend fun setTtsKeepCpuAwake(enabled: Boolean) = update(Keys.TTS_KEEP_CPU_AWAKE, enabled)
+    suspend fun setTtsMediaButtonPerChapter(enabled: Boolean) =
+        update(Keys.TTS_MEDIA_BUTTON_PER_CHAPTER, enabled)
     suspend fun setTtsAutoFollowPage(enabled: Boolean) = update(Keys.TTS_AUTO_FOLLOW_PAGE, enabled)
     suspend fun setShelfViewMode(mode: String) = update(Keys.SHELF_VIEW_MODE, mode)
     /** 写入新的书源分组模式；调用方负责传入 [Keys.SOURCE_GROUP_MODE] 注释里列出的字符串。 */

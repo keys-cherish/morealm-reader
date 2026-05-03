@@ -170,6 +170,12 @@ class ReaderTtsController(
         paragraphPositions: List<Int>? = null,
         bookId: String? = null,
         chapterIndex: Int? = null,
+        /**
+         * 段级跨章触发的"切上一章并落到末段读"专用旗标。默认 false 走原行为
+         * （从 [startChapterPosition] 或章首读）。仅由 ReaderViewModel 在收到
+         * [TtsEventBus.Event.PrevChapterToLast] 后下一次推章节内容时设 true。
+         */
+        startAtLastParagraph: Boolean = false,
         @Suppress("UNUSED_PARAMETER") onChapterFinished: (() -> Unit)? = null,
     ) {
         // TTS-DIAG #2 — controller received params. If we never reach the
@@ -180,7 +186,8 @@ class ReaderTtsController(
             "Controller.ttsPlay: contentLen=${displayedContent?.length ?: -1}, " +
                 "book='${bookTitle ?: ""}', chapter='${chapterTitle ?: ""}', " +
                 "startPos=$startChapterPosition, positions=${paragraphPositions?.size ?: -1}, " +
-                "bookId=${bookId ?: "<none>"}, chapterIndex=${chapterIndex ?: -1}",
+                "bookId=${bookId ?: "<none>"}, chapterIndex=${chapterIndex ?: -1}, " +
+                "startAtLastParagraph=$startAtLastParagraph",
         )
         ensureTtsService(bookTitle ?: "", chapterTitle ?: "", coverUrl)
         if (displayedContent != null) {
@@ -195,6 +202,7 @@ class ReaderTtsController(
                     startChapterPosition = startChapterPosition?.coerceAtLeast(0) ?: 0,
                     bookId = bookId,
                     chapterIndex = chapterIndex,
+                    startAtLastParagraph = startAtLastParagraph,
                 )
             )
         } else {
