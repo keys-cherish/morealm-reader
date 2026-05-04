@@ -73,12 +73,17 @@ class AnalyzeByJSonPath(json: Any) {
                     val ob = ctx.read<Any>(cleaned)
                     result = if (ob is List<*>) ob.joinToString("\n") else ob.toString()
                 } catch (e: Exception) {
-                    // "No results for path: $.foo" is the JsonPath library signaling
-                    // a missing field — happens for almost every search result on every
-                    // source because rules cover optional fields (uptime, process, etc).
-                    // Don't flood warn-level logs with these; debug-only.
+                    // 已知"字段缺失"两类异常都降级为 debug — 书源规则覆盖可选字段时，
+                    // 几乎每条搜索结果都会触发其中一种，warn 级别会刷屏。
+                    //   - "No results for path: $.foo"        → JsonPath 找不到节点
+                    //   - "Missing property in path $['lastChapter']" → 父路径节点为 null
+                    // 真正的规则配错（如 "Expected to find an object with property
+                    // ['data'] in path $ but found 'JSONArray'"）保留 warn，方便书源作者
+                    // 排查。
                     val msg = e.message ?: ""
-                    if (msg.contains("No results for path", ignoreCase = true)) {
+                    val isMissingField = msg.contains("No results for path", ignoreCase = true) ||
+                        msg.contains("Missing property in path", ignoreCase = true)
+                    if (isMissingField) {
                         AppLog.debug(TAG, "getString('${rule.take(60)}'): missing field")
                     } else {
                         AppLog.warn(TAG, "getString('${rule.take(60)}') failed: ${msg.take(120)}")
@@ -116,7 +121,9 @@ class AnalyzeByJSonPath(json: Any) {
                     else result.add(obj.toString())
                 } catch (e: Exception) {
                     val msg = e.message ?: ""
-                    if (msg.contains("No results for path", ignoreCase = true)) {
+                    val isMissingField = msg.contains("No results for path", ignoreCase = true) ||
+                        msg.contains("Missing property in path", ignoreCase = true)
+                    if (isMissingField) {
                         AppLog.debug(TAG, "getStringList('${rule.take(60)}'): missing field")
                     } else {
                         AppLog.warn(TAG, "getStringList('${rule.take(60)}') failed: ${msg.take(120)}")

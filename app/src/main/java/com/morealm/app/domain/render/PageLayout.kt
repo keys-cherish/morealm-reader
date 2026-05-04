@@ -402,6 +402,15 @@ class TextChapter(
     private val textPages = arrayListOf<TextPage>()
     val pages: List<TextPage> get() = snapshotPages()
 
+    /**
+     * 当前已排版完成的页数（流式 layout 期间会从 0 增长到 [snapshotPages] 收尾值）。
+     *
+     * 比 `pages.size` 便宜：直接读 mutable list 长度，不构造 toList() 快照。给那些
+     * 只关心"还有多少页"的下游用（[LazyScrollSection] effect 1 流式 reset 触发器、
+     * 流式进度条等）。
+     */
+    val pageCount: Int get() = synchronized(pageLock) { textPages.size }
+
     @Volatile
     var isCompleted = false
 

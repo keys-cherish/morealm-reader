@@ -8,9 +8,16 @@ import com.morealm.app.domain.repository.ReadStatsRepository
 import com.morealm.app.core.log.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -44,11 +51,27 @@ class ReaderProgressController(
     val _visiblePage = MutableStateFlow(VisibleReaderPage())
     val visiblePage: StateFlow<VisibleReaderPage> = _visiblePage.asStateFlow()
 
+    /**
+     * 当 restoreProgress 即将刷出 (chapterIdx, position) 时被置 true，
+     * collector 在下一次 emit 时把它消费掉，避免恢复进度时被误写回 DB。
+     * 调用方仍按"set true 后立即更新 _visiblePage / _scrollProgress"模式。
+     */
     var suppressNextProgressSave = false
-    private var lastQueuedProgressChapterIndex = -1
-    private var lastQueuedScrollProgress = -1
-    private var lastQueuedVisibleReadProgress = ""
-    private var lastQueuedChapterPosition = -1
+
+    /** Snapshot collector job — 由 [start] 启动，[stop] 取消。 */
+    private var collectorJob: Job? = null
+
+    /**
+     * 仅参与 dedup 的最小集；用 distinctUntilChanged 比较即可，
+     * **故意不含 readProgress 文本** —— 该字段在分页 rebuild 时会随 pageCount
+     * 变化而抖动，曾经导致 dedup 失效（同一 chapter+position+scroll 在 1.5s
+     * 内被 saveProgress 写 4 次，详见 log 19:31:27.004→27.508→27.569→28.549）。
+     */
+    private data class ProgressSnapshot(
+        val chapterIndex: Int,
+        val chapterPosition: Int,
+        val scrollProgress: Int,
+    )
 
     /**
      * Serializes saveProgress() execution.
@@ -75,6 +98,66 @@ class ReaderProgressController(
     /** Set by chapter controller so progress can reference book/chapter state */
     internal lateinit var chapterController: ReaderChapterController
 
+    /**
+     * 启动进度快照收集器：把 (chapterIndex, chapterPosition, scrollProgress)
+     * 三元组合并成单一冷 Flow，经 distinctUntilChanged + debounce(300ms) +
+     * conflate 收敛后调一次 [saveProgress]。
+     *
+     * 解决两类病理：
+     *  - L1：同一稳定状态被重复写（原 lastQueued* dedup 因 readProgress 文本
+     *    抖动失效）。distinctUntilChanged 用纯快照比较，彻底去重。
+     *  - L2：仿真翻页 commit 后第二条回调用旧 page.index 把 scroll% 拉回 0%。
+     *    debounce 300ms 把 0%→2%→0% 反弹合并为最终值，落地的是稳定态。
+     *
+     * 由 [ReaderViewModel] 在 `progress.chapterController = chapter` 之后立即调用。
+     * 必须在 chapterController 注入后才能读 `currentChapterIndex` flow。
+     */
+    @OptIn(FlowPreview::class)
+    fun start() {
+        if (collectorJob != null) return
+        collectorJob = scope.launch(Dispatchers.IO) {
+            combine(
+                _scrollProgress,
+                _visiblePage,
+                chapterController.currentChapterIndex,
+            ) { scroll, visible, currentIdx ->
+                val cnt = chapterController.chapters.value.size
+                val rawIdx = if (visible.chapterIndex in 0 until cnt) {
+                    visible.chapterIndex
+                } else {
+                    currentIdx
+                }
+                ProgressSnapshot(
+                    chapterIndex = rawIdx.coerceIn(0, (cnt - 1).coerceAtLeast(0)),
+                    chapterPosition = visible.chapterPosition.coerceAtLeast(0),
+                    scrollProgress = scroll,
+                )
+            }
+                .distinctUntilChanged()
+                .filter { snap ->
+                    // 与原 onVisiblePageChanged 中 scrollBoundaryPreview 判定保持等价：
+                    // SCROLL 模式下 visibleChapter ≠ currentChapter 是跨章 preview，
+                    // 不持久化（等 currentChapterIndex 真正推进后再 emit 一次）。
+                    val current = chapterController.currentChapterIndex.value
+                    !(pageTurnMode() == PageTurnMode.SCROLL && snap.chapterIndex != current)
+                }
+                .debounce(300)
+                .conflate()
+                .collect {
+                    if (suppressNextProgressSave) {
+                        suppressNextProgressSave = false
+                        return@collect
+                    }
+                    saveProgress()
+                }
+        }
+    }
+
+    fun stop() {
+        collectorJob?.cancel()
+        collectorJob = null
+    }
+
     // ── Progress Tracking ──
 
     // Tracks the previous direction of scroll% movement so we can detect direction
@@ -85,59 +168,36 @@ class ReaderProgressController(
     fun updateScrollProgress(pct: Int) {
         val old = _scrollProgress.value
         val next = pct.coerceIn(0, 100)
+        if (next == old) return
         _scrollProgress.value = next
-        if (suppressNextProgressSave) {
-            suppressNextProgressSave = false
-            return
+        // 诊断日志保留——大跳/方向反转时打一行，定位翻页反弹之类异常。
+        // 实际持久化由快照收集器 (start) 统一处理，这里不再 launch save。
+        val delta = next - old
+        val direction = when {
+            delta > 0 -> 1
+            delta < 0 -> -1
+            else -> 0
         }
-        if (next != old) {
-            // Diagnostic for the "scroll% bounces between 0 and 7 repeatedly"
-            // symptom seen in log.txt around 19:05:13~19:05:20. We log only when
-            // the change is large (≥5%) or the direction flips, so normal
-            // 1%-per-frame progress doesn't add noise. Includes chapterPosition
-            // because it was observed to toggle 0↔191 in lockstep with the
-            // oscillation, which suggests a renderer/state feedback loop rather
-            // than user input.
-            val delta = next - old
-            val direction = when {
-                delta > 0 -> 1
-                delta < 0 -> -1
-                else -> 0
-            }
-            val flipped = lastScrollProgressDirection != 0 &&
-                direction != 0 &&
-                direction != lastScrollProgressDirection
-            if (kotlin.math.abs(delta) >= 5 || flipped) {
-                AppLog.debug(
-                    "ProgressTrace",
-                    "updateScrollProgress jump | $old%→$next% (Δ=$delta)" +
-                        " | flip=$flipped" +
-                        " | chapterPosition=${_visiblePage.value.chapterPosition}" +
-                        " | chapterIndex=${_visiblePage.value.chapterIndex}",
-                )
-            }
-            lastScrollProgressDirection = direction
-            queueProgressSave()
+        val flipped = lastScrollProgressDirection != 0 &&
+            direction != 0 &&
+            direction != lastScrollProgressDirection
+        if (kotlin.math.abs(delta) >= 5 || flipped) {
+            AppLog.debug(
+                "ProgressTrace",
+                "updateScrollProgress jump | $old%→$next% (Δ=$delta)" +
+                    " | flip=$flipped" +
+                    " | chapterPosition=${_visiblePage.value.chapterPosition}" +
+                    " | chapterIndex=${_visiblePage.value.chapterIndex}",
+            )
         }
+        lastScrollProgressDirection = direction
     }
 
-    fun queueProgressSave(force: Boolean = false) {
-        val chapterIndex = chapterController.currentChapterIndex.value
-        val scrollProgress = _scrollProgress.value
-        val visibleReadProgress = _visiblePage.value.readProgress
-        val chapterPosition = _visiblePage.value.chapterPosition
-        if (!force &&
-            chapterIndex == lastQueuedProgressChapterIndex &&
-            scrollProgress == lastQueuedScrollProgress &&
-            visibleReadProgress == lastQueuedVisibleReadProgress &&
-            chapterPosition == lastQueuedChapterPosition
-        ) {
-            return
-        }
-        lastQueuedProgressChapterIndex = chapterIndex
-        lastQueuedScrollProgress = scrollProgress
-        lastQueuedVisibleReadProgress = visibleReadProgress
-        lastQueuedChapterPosition = chapterPosition
+    /**
+     * 强制立即保存（绕过 debounce）。
+     * 用于退出阅读器、TTS 切章、手动 navigation 等需要确定写入的场景。
+     */
+    fun queueProgressSave(@Suppress("UNUSED_PARAMETER") force: Boolean = false) {
         scope.launch(Dispatchers.IO) { saveProgress() }
     }
 
@@ -185,12 +245,6 @@ class ReaderProgressController(
                 readProgress = progress.totalProgress,
                 totalChapters = chapterCount,
             ))
-            lastQueuedProgressChapterIndex = chapterIdx
-            // _scrollProgress 是 in-memory live state（UI 底栏百分比 / TTS 通知进度）；
-            // 不再写 DB，但仍要参与 queue 去重，避免 UI 频繁 redraw 时反复 saveProgress。
-            lastQueuedScrollProgress = _scrollProgress.value
-            lastQueuedVisibleReadProgress = _visiblePage.value.readProgress
-            lastQueuedChapterPosition = chapterPosition
             flushReadingStats()
             // Fire-and-forget hook for WebDav progress sync. Wrapped in
             // runCatching because a network failure here must NOT bubble
@@ -243,16 +297,10 @@ class ReaderProgressController(
         } else {
             chapterPosition
         }
-        val visibleChanged = oldVisiblePage.chapterIndex != index ||
-            oldVisiblePage.title != title ||
-            oldVisiblePage.readProgress != readProgress ||
-            oldVisiblePage.chapterPosition != keptPosition
         _visiblePage.value = VisibleReaderPage(index, title, readProgress, keptPosition)
-        val chapterChanged = index != chapterController.currentChapterIndex.value
-        val scrollBoundaryPreview = pageTurnMode() == PageTurnMode.SCROLL && chapterChanged
-        if (!scrollBoundaryPreview && !chapterChanged && visibleChanged) {
-            queueProgressSave()
-        }
+        // 持久化由 [start] 启动的快照收集器接管，这里只更新内存 state。
+        // - SCROLL 模式跨章 preview 由 collector 内 filter 拦截
+        // - 同章页内变化经 distinctUntilChanged + debounce 自然合并
     }
 
     fun onVisibleChapterChanged(index: Int) {

@@ -95,6 +95,25 @@ fun ReaderScreen(
 ) {
     val book by viewModel.book.collectAsStateWithLifecycle()
     val chapters by viewModel.chapters.collectAsStateWithLifecycle()
+    // 是否本地 TXT 无目录自动分章本——决定是否跳过 CanvasRenderer 章首标题块、
+    // 以及目录 chip 显示成 (1) 而不是 (249)。
+    //
+    // 命中条件：本地 TXT + 章节列表非空 + 全部章节 isAutoSplitChapter()
+    // （标题命中 `^第\d+节$` 或纯"正文"，由 [LocalBookParser.parseWithoutToc] 硬切产生）。
+    //
+    // 由 [ChapterBookmarkPanel] 和 [com.morealm.app.ui.reader.renderer.CanvasRenderer]
+    // 共用：前者据此渲染"《书名》整本书"单 entry + 计数 1；后者据此把
+    // omitChapterTitleBlock 透传给 layoutChapter*/LazyScrollSection，让翻页/滚动
+    // 模式都不画 isTitle 行（之前依赖 cur.title.looksLikeAutoSplitTitle() 嗅探，
+    // 但 ReaderScreen 已用 displayTitle 把伪章名替换成书名，正则永远 miss）。
+    val isAutoSplitTxt = remember(book, chapters) {
+        book?.let { b ->
+            !b.localPath.isNullOrEmpty() &&
+                b.format == com.morealm.app.domain.entity.BookFormat.TXT &&
+                chapters.isNotEmpty() &&
+                chapters.all { it.isAutoSplitChapter() }
+        } ?: false
+    }
     val currentIndex by viewModel.currentChapterIndex.collectAsStateWithLifecycle()
     val content by viewModel.chapterContent.collectAsStateWithLifecycle()
     val renderedChapter by viewModel.renderedChapter.collectAsStateWithLifecycle()
@@ -110,7 +129,6 @@ fun ReaderScreen(
     val showSettings by viewModel.showSettingsPanel.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
-    val useLazyScrollRendererSetting by viewModel.settings.useLazyScrollRenderer.collectAsStateWithLifecycle()
     val fontFamily by viewModel.settings.fontFamily.collectAsStateWithLifecycle()
     val fontSize by viewModel.settings.fontSize.collectAsStateWithLifecycle()
     val lineHeight by viewModel.settings.lineHeight.collectAsStateWithLifecycle()
@@ -238,6 +256,22 @@ fun ReaderScreen(
     ) { /* granted or not, TTS still works — notification just won't show */ }
 
     val context = LocalContext.current
+
+    /**
+     * 添加书签 + 立即弹 Toast 反馈。
+     *
+     * controller 走 fire-and-forget 协程插 DB（[ReaderBookmarkController.addBookmark]），
+     * 在用户视角是"点了按钮屏幕没动静"——之前没有视觉反馈，用户会怀疑是否真的成功。
+     * 用 Toast 而不是 Snackbar：Reader 大量浮层（toolbar / mini-menu / TTS bar）已经
+     * 占着 Snackbar 默认位，再加一个会与现有浮层撞位；Toast 在系统层弹，零冲突。
+     *
+     * 没等 DB insert 回来：Repository 层基本不会因常规原因失败（无 unique 约束冲突，
+     * id 用 timestamp），让用户立刻看到反馈比"等 IO 再 toast"更顺手。
+     */
+    fun addBookmarkWithToast() {
+        viewModel.addBookmark()
+        android.widget.Toast.makeText(context, "已添加书签", android.widget.Toast.LENGTH_SHORT).show()
+    }
 
     fun openWebSearch(query: String) {
         if (query.isBlank()) return
@@ -610,7 +644,7 @@ fun ReaderScreen(
                     }
                     viewModel.toggleTtsPanel()
                 },
-                onAddBookmark = { viewModel.addBookmark() },
+                onAddBookmark = { addBookmarkWithToast() },
                 bookTitle = book?.title ?: "",
                 bookAuthor = book?.author ?: "",
                 tapActionTopLeft = tapTL,
@@ -650,7 +684,7 @@ fun ReaderScreen(
                         else -> false
                     }
                 },
-                useLazyScrollRenderer = useLazyScrollRendererSetting,
+                omitChapterTitleBlock = isAutoSplitTxt,
                 modifier = Modifier.fillMaxSize(),
             )
             } // end ReadAloudPositionScope lambda
@@ -679,7 +713,7 @@ fun ReaderScreen(
                     val fileName = (book?.title ?: "book") + ".txt"
                     exportLauncher.launch(fileName)
                 },
-                onBookmark = { viewModel.addBookmark() },
+                onBookmark = { addBookmarkWithToast() },
                 onEffectiveReplaces = { viewModel.showEffectiveReplacesDialog() },
                 onSettings = {
                     viewModel.hideControls()
@@ -900,6 +934,7 @@ fun ReaderScreen(
             selectedSideTab = if (showBookmarks) 1 else 0,
             linkedBooks = linkedBooks,
             book = book,
+            isAutoSplitTxt = isAutoSplitTxt,
             moColors = moColors,
             onTabChange = { tab ->
                 if (tab == 0) { showBookmarks = false; showChapterList = true }
@@ -909,7 +944,7 @@ fun ReaderScreen(
                 showChapterList = false
                 viewModel.loadChapter(chapterIndex)
             },
-            onAddBookmark = { viewModel.addBookmark() },
+            onAddBookmark = { addBookmarkWithToast() },
             onDeleteBookmark = { id -> viewModel.deleteBookmark(id) },
             onJumpToBookmark = { bm ->
                 showBookmarks = false
@@ -1056,6 +1091,12 @@ private fun ChapterBookmarkPanel(
      * 把"伪章名"替换成书名时需要。null 时退回原标题。
      */
     book: Book?,
+    /**
+     * 是否本地 TXT 无目录自动分章本（由 [ReaderScreen] 已经算好直接传入，避免本地
+     * 重算 + 与翻页/滚动路径口径漂移）。命中时目录 chip 计数显示 1（"整本书"单 entry），
+     * 否则按 chapters.size 显示真实章节数。
+     */
+    isAutoSplitTxt: Boolean,
     moColors: MoRealmColors,
     onTabChange: (Int) -> Unit,
     onChapterClick: (Int) -> Unit,
@@ -1096,7 +1137,10 @@ private fun ChapterBookmarkPanel(
                     FilterChip(
                         selected = !isBookmarkTab,
                         onClick = { onTabChange(0) },
-                        label = { Text("目录 (${chapters.size})") },
+                        // 自动分章 TXT 场景计数显示 1（一条「整本书」入口），
+                        // 否则按真实章节数。避免出现 "目录 (249)" 但下面只有
+                        // 一条 entry 的视觉违和。
+                        label = { Text("目录 (${if (isAutoSplitTxt) 1 else chapters.size})") },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                             selectedLabelColor = MaterialTheme.colorScheme.primary),
@@ -1165,11 +1209,9 @@ private fun ChapterBookmarkPanel(
                     // 不动，所有渲染层 / 续读 / 进度上报全部按原样跑。
                     //
                     // 搜索状态（chapterSearch 非空）下退化回原逐章列表 —— 用户可能在查 "第 N 节"。
-                    val isAutoSplitTxt = book != null &&
-                        !book.localPath.isNullOrEmpty() &&
-                        book.format == com.morealm.app.domain.entity.BookFormat.TXT &&
-                        chapters.isNotEmpty() &&
-                        chapters.all { it.isAutoSplitChapter() }
+                    // [isAutoSplitTxt] 由外层 [ReaderScreen] 计算后通过参数传入，与
+                    // [com.morealm.app.ui.reader.renderer.CanvasRenderer.omitChapterTitleBlock]
+                    // 同一口径，避免本地重算漂移。
                     val showMergedWholeBook = isAutoSplitTxt && chapterSearch.isBlank()
                     val listState = rememberLazyListState(
                         initialFirstVisibleItemIndex = when {

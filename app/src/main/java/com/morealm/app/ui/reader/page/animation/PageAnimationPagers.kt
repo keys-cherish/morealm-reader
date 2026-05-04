@@ -67,6 +67,17 @@ class SimulationParams(
     val bgBitmap: Bitmap? = null,
     val bgMeanColor: Int = bgColor,
     val pageInfoOverlay: PageInfoOverlaySpec? = null,
+    /**
+     * 当前章节的用户高亮（kind=0，画底色矩形）。SimulationPager.bitmapProvider 每次
+     * 渲染 page bitmap 时按页 chapter range 过滤后传给 [renderPageToBitmap]。
+     * 用户保存/删除高亮 → CanvasRenderer 透传新 SimulationParams（remember 入参变化）
+     * → SimulationReadView 收到后下一帧重出 bitmap。
+     */
+    val chapterHighlights: List<com.morealm.app.ui.reader.renderer.HighlightSpan> = emptyList(),
+    /**
+     * 当前章节的字体强调色 spans（kind=1，替换 paint.color）。
+     */
+    val chapterTextColorSpans: List<com.morealm.app.ui.reader.renderer.HighlightSpan> = emptyList(),
     val pageForTurn: (displayIndex: Int, relativePos: Int) -> TextPage? = { displayIndex, relativePos ->
         pages.getOrNull(displayIndex + relativePos)
     },
@@ -81,6 +92,20 @@ class SimulationParams(
      * 已被消费（弹出高亮 action menu），SimulationReadView 不再走 zone 翻页路由。
      */
     val onSingleTap: ((Offset) -> Boolean)? = null,
+    /**
+     * 选区 / 高亮 popup 是否正在显示。返回 `true` 时 [SimulationPager] 把
+     * `SimulationReadView.shouldGateTouch` 抬起，让仿真翻页手势在 popup 弹出
+     * 期间整个静默——避免出现「mini-menu 弹着但卷边动画也在拉」的二义体验。
+     * 缺省 `{ false }` 保持旧行为，调用方未填时退化为不门控。
+     */
+    val isSelectionActive: () -> Boolean = { false },
+    /**
+     * popup 弹出期间用户在阅读区点了空白：通知调用方关掉 popup（清选区 +
+     * 清 highlightActionTarget）。SLIDE / COVER 路径靠 `detectTapGestures` 兜底，
+     * SIMULATION 路径把所有触摸接管到 [com.morealm.app.ui.reader.renderer.SimulationReadView]，
+     * 没有这条回调就只能等用户点 Popup 内按钮才关。null = 不接管，保持旧行为。
+     */
+    val onDismissPopup: (() -> Unit)? = null,
 )
 
 /**

@@ -1,7 +1,8 @@
 package com.morealm.app.ui.profile
 
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -9,7 +10,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,21 +29,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.morealm.app.R
 
 /**
  * Donation page — author appreciation.
  *
  * Design intent (per discussion 2026-05-01):
- *  - 软件本体「永久免费 / 无广告 / 无内购 / 无付费功能」承诺写在卡片底部，
- *    避免让用户产生「点进来就是要被收钱」的反感。
  *  - 真诚口吻而非「服务器/域名烧钱」式卖惨 — MoRealm 是离线本地应用，
  *    没有真实的服务器开支，把它说成有就是失信。
  *  - 微信 / 支付宝 双码并列展示（不是 Tab 切换），用户扫习惯哪个用哪个，
  *    少一次手势就少一份流失。
+ *  - 不在此页做「永远不接广告」之类的硬承诺 —— 项目走向无法
+ *    100% 预判，承诺一旦写死就有打脸风险，态度由代码与版本节奏自然传达。
  *
  * 二维码资源（TODO 作者后续放置）：
  *  替换两张占位图为真实付款码 PNG，路径建议：
@@ -93,6 +96,7 @@ fun DonateScreen(onBack: () -> Unit) {
                 channel = "微信赞赏",
                 hint = "扫一扫 · 微信红包 / 微信赞赏",
                 accentColor = Color(0xFF07C160), // WeChat brand green
+                qrResId = R.drawable.qr_wxpay,
             )
 
             Spacer(Modifier.height(16.dp))
@@ -101,11 +105,8 @@ fun DonateScreen(onBack: () -> Unit) {
                 channel = "支付宝",
                 hint = "扫一扫 · 支付宝转账",
                 accentColor = Color(0xFF1677FF), // Alipay brand blue
+                qrResId = R.drawable.qr_alipay,
             )
-
-            Spacer(Modifier.height(28.dp))
-
-            PromiseFooter()
 
             Spacer(Modifier.height(96.dp))
         }
@@ -178,10 +179,18 @@ private fun HeroBlock() {
 
 /**
  * 单个支付渠道的卡片：渠道名 + 二维码 + 提示文字。
- * 二维码部分目前是 [QrCodePlaceholder]，作者后续替换为真实图。
+ *
+ * @param qrResId 已放置在 res/drawable-nodpi/ 下的赞赏码 PNG/JPG 资源 ID。
+ *                选 nodpi 是因为 QR 码对密度桶不敏感，强制用一张原图避免被
+ *                误当作 mdpi 在高密度设备上放大模糊。
  */
 @Composable
-private fun DonateCodeCard(channel: String, hint: String, accentColor: Color) {
+private fun DonateCodeCard(
+    channel: String,
+    hint: String,
+    accentColor: Color,
+    @DrawableRes qrResId: Int,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -209,7 +218,16 @@ private fun DonateCodeCard(channel: String, hint: String, accentColor: Color) {
 
             Spacer(Modifier.height(16.dp))
 
-            QrCodePlaceholder(channel = channel)
+            // 真实赞赏码。固定 200.dp 见方 — 接近物理 5cm，扫码距离 10–25cm 都能识别。
+            // 圆角与占位图保持一致，视觉位置不会跳。Fit 而非 Crop，保证 QR 完整不被裁。
+            Image(
+                painter = painterResource(qrResId),
+                contentDescription = "$channel 二维码",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .size(200.dp)
+                    .clip(RoundedCornerShape(12.dp)),
+            )
 
             Spacer(Modifier.height(12.dp))
 
@@ -219,116 +237,5 @@ private fun DonateCodeCard(channel: String, hint: String, accentColor: Color) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
         }
-    }
-}
-
-/**
- * 二维码占位组件。
- *
- * 替换为真实图的步骤（作者）：
- *  1. 把微信 / 支付宝付款码 PNG 放到：
- *       app/src/main/res/drawable/qr_wechat.png
- *       app/src/main/res/drawable/qr_alipay.png
- *  2. 在 [DonateCodeCard] 内把 `QrCodePlaceholder(channel = channel)` 改为：
- *       Image(
- *         painter = painterResource(
- *           if (channel == "微信赞赏") R.drawable.qr_wechat else R.drawable.qr_alipay
- *         ),
- *         contentDescription = "$channel 二维码",
- *         modifier = Modifier.size(200.dp).clip(MaterialTheme.shapes.medium),
- *       )
- *  3. 删掉本组件即可（如果不再有别处用到）。
- *
- *  尺寸：200.dp 见方 — 接近物理 5cm，扫码距离 10–25cm 都能识别。
- */
-@Composable
-private fun QrCodePlaceholder(channel: String) {
-    Box(
-        modifier = Modifier
-            .size(200.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
-                shape = RoundedCornerShape(12.dp),
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Default.QrCode2,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                modifier = Modifier.size(64.dp),
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "请作者放置 $channel 二维码",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                // 这条提示只有作者会看到（因为开发版本才会保留占位），但提前
-                // 写清楚替换路径可以避免「以后翻代码再回来找位置」。
-                text = "res/drawable/qr_*.png",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                textAlign = TextAlign.Center,
-            )
-        }
-    }
-}
-
-/** 永久承诺脚注。粗字号小，但永远在。 */
-@Composable
-private fun PromiseFooter() {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        ),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "MoRealm 的承诺",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(8.dp))
-            PromiseLine("软件本体永久免费")
-            PromiseLine("永远不接广告")
-            PromiseLine("永远不做内购，所有功能等同")
-            PromiseLine("捐赠 ≠ 解锁，捐与不捐使用体验完全一致")
-        }
-    }
-}
-
-@Composable
-private fun PromiseLine(text: String) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(vertical = 3.dp),
-    ) {
-        // 朴素小圆点 — 比 ✓ 更克制，不喧宾夺主
-        Box(
-            modifier = Modifier
-                .size(4.dp)
-                .clip(androidx.compose.foundation.shape.CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
-        )
-        Spacer(Modifier.width(10.dp))
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
-        )
     }
 }
