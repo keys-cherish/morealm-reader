@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -28,6 +29,8 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.ScrollParagraph
@@ -42,6 +45,21 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.sample
+
+/**
+ * 段级选区前景色：primary-ish 蓝紫，alpha ≈ 0.18。
+ *
+ * 选这个色的原因：
+ *  - 滚动模式没有字符级拖把手，得靠"整段被染色"告诉用户"刚长按的就是这段"
+ *  - alpha 太高遮住正文阅读不下去，太低用户看不到反馈 —— 0.18 是 Material 3
+ *    "selected container" 系列在 surfaceContainer 上叠加的常用区间
+ *  - ARGB 0x2D5B6CFE：alpha=0x2D≈18%，RGB 取主题 primary 通用蓝紫；硬编码 ARGB
+ *    让 [ScrollParagraphItem] 不依赖 Composition 上下文也能画（DrawScope 内）
+ *
+ * Phase 5 字符级选区落地后，这个常量应改为从 [LocalReaderRenderTheme] 取
+ * primary.copy(alpha=0.18f).toArgb()，让自定义主题（红/绿/紫色调）选区色一致。
+ */
+private const val SCROLL_PARAGRAPH_SELECTION_ARGB: Int = 0x2D5B6CFE.toInt()
 
 /**
  * LazyColumn 段落级瀑布流渲染器 —— 段落作为 LazyColumn item，由外部 caller 维护
@@ -158,7 +176,23 @@ fun LazyScrollRenderer(
     onVisibleParagraphChanged: (paragraph: ScrollParagraph, scrollOffsetInItem: Int) -> Unit = { _, _ -> },
     onScrollingChanged: (scrolling: Boolean) -> Unit = {},
     onTapCenter: () -> Unit = {},
-    onLongPressParagraph: (paragraph: ScrollParagraph, charOffsetInParagraph: Int) -> Unit = { _, _ -> },
+    /**
+     * 长按段落触发：caller 收到 `(paragraph, charOffsetInParagraph, anchorInWindow)`。
+     *
+     * - `charOffsetInParagraph`：段内字符偏移，Phase 5 字符级选区会用，当前段级方案下
+     *   只把它原样转到 chapterPosition + offset 给 onSpeakFromHere 用；段级选区主路径
+     *   用整段字符总数当 endChapterPos，不依赖此值。
+     * - `anchorInWindow`：长按 tap 点在 root window 中的全局坐标。caller 自己用
+     *   `LayoutCoordinates.windowToLocal` 转到自己 wrapper 容器内的局部坐标，再喂给
+     *   SelectionToolbar 的 Popup 定位（详见 [LazyScrollSection]）。
+     */
+    onLongPressParagraph: (paragraph: ScrollParagraph, charOffsetInParagraph: Int, anchorInWindow: Offset) -> Unit = { _, _, _ -> },
+    /**
+     * 当前被选中的段 key（[ScrollParagraph.key] = "$chapterIndex-$paragraphNum"）。
+     * null 时无段被选中（默认）；非 null 时匹配的段在 [ScrollParagraphItem] 内画
+     * 半透明前景作为视觉提示。
+     */
+    selectedParagraphKey: String? = null,
     nearStartThreshold: Int = 15,
     nearEndThreshold: Int = 15,
     chapterCharSizeProvider: (chapterIndex: Int) -> Int = { 1 },
@@ -516,8 +550,11 @@ fun LazyScrollRenderer(
                 ScrollParagraphItem(
                     paragraph = paragraph,
                     revealHighlight = if (isRevealTarget) revealHighlight else null,
+                    isSelected = selectedParagraphKey == paragraph.key,
                     onTap = onTapCenter,
-                    onLongPress = { offsetInPara -> onLongPressParagraph(paragraph, offsetInPara) },
+                    onLongPress = { offsetInPara, anchorInWindow ->
+                        onLongPressParagraph(paragraph, offsetInPara, anchorInWindow)
+                    },
                 )
             }
         }
@@ -553,8 +590,14 @@ fun LazyScrollRenderer(
 private fun ScrollParagraphItem(
     paragraph: ScrollParagraph,
     revealHighlight: RevealHighlight? = null,
+    /**
+     * 段级选区背景：true 时整段画一层 [SCROLL_PARAGRAPH_SELECTION_ARGB] 半透明前景。
+     * Phase 5 字符级选区落地后这个 flag 会让位给 selectionStart/End 参数，但当前
+     * 段级方案下只需要"整段被选中"的视觉提示就够了（mini-menu 同时弹）。
+     */
+    isSelected: Boolean = false,
     onTap: () -> Unit = {},
-    onLongPress: (charOffsetInParagraph: Int) -> Unit = {},
+    onLongPress: (charOffsetInParagraph: Int, anchorInWindow: Offset) -> Unit = { _, _ -> },
 ) {
     val theme = LocalReaderRenderTheme.current
     val density = LocalDensity.current
@@ -565,10 +608,16 @@ private fun ScrollParagraphItem(
         return
     }
 
+    // 段落顶左在 root window 中的坐标。每帧 onGloballyPositioned 触发更新；
+    // 长按时配合 detectTapGestures 给的段内 tap 偏移合成 anchorInWindow，让上层
+    // wrapper 能在自己的本地坐标系里准确摆 SelectionToolbar Popup。
+    var paragraphPosInWindow by remember(paragraph.key) { mutableStateOf(Offset.Zero) }
+
     Canvas(
         Modifier
             .fillMaxWidth()
             .height(heightDp)
+            .onGloballyPositioned { coords -> paragraphPosInWindow = coords.positionInWindow() }
             .pointerInput(paragraph.key) {
                 // 内层 detectTapGestures 必须同时处理 onTap，否则会消费短点击事件、
                 // 让外层 Box 的 onTapCenter（菜单切换）失效。
@@ -576,11 +625,20 @@ private fun ScrollParagraphItem(
                     onTap = { onTap() },
                     onLongPress = { tap ->
                         val offsetInPara = computeCharOffsetInParagraph(paragraph, tap.x, tap.y)
-                        onLongPress(offsetInPara)
+                        // 段内 tap 偏移 + 段在 window 中的位置 = tap 点在 window 中的位置
+                        onLongPress(offsetInPara, paragraphPosInWindow + tap)
                     },
                 )
             },
     ) {
+        // ── 段级选区整段背景 ──
+        //
+        // 在 reveal / 文字层之**下**画，alpha 0.18 让文字仍可读。颜色取主题 primary
+        // 的 ARGB，由 wrapper 在调用 LazyScrollRenderer 时通过常量决定（见
+        // [SCROLL_PARAGRAPH_SELECTION_ARGB]）。
+        if (isSelected) {
+            drawRect(color = androidx.compose.ui.graphics.Color(SCROLL_PARAGRAPH_SELECTION_ARGB))
+        }
         // ── reveal 整段褪色高亮 ──
         //
         // 命中段 caller 已用 [RevealHighlight.startChapterPos]/[endChapterPos] 与

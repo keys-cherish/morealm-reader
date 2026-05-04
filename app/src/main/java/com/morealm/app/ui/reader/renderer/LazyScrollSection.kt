@@ -1,5 +1,6 @@
 package com.morealm.app.ui.reader.renderer
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -8,11 +9,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.domain.entity.SelectionMenuConfig
+import com.morealm.app.domain.entity.looksLikeAutoSplitTitle
 import com.morealm.app.domain.render.ScrollAnchor
 import com.morealm.app.domain.render.ScrollParagraph
 import com.morealm.app.domain.render.TextBaseColumn
@@ -21,7 +29,8 @@ import com.morealm.app.domain.render.bookmarkToAnchor
 import com.morealm.app.domain.render.chapterPositionToParagraphPos
 import com.morealm.app.domain.render.findAnchorIndex
 import com.morealm.app.domain.render.toScrollParagraphs
-import com.morealm.app.domain.entity.looksLikeAutoSplitTitle
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 
 /**
  * SCROLL 模式的"段落级 LazyColumn 瀑布流"实现 —— 从 [CanvasRenderer] 拆出。
@@ -62,7 +71,18 @@ import com.morealm.app.domain.entity.looksLikeAutoSplitTitle
  * @param revealHighlight 跳转后整段褪色高亮；caller 已用 chapterIndex 过滤旧章
  * @param onPrevChapter / onNextChapter 用户滚到窗口边缘时由 [LazyScrollRenderer] 触发
  * @param onProgress 进度上报（已经过本组件的第三道防线 dirty check + jumpSilence 过滤）
- * @param onCopyText 长按段落复制文本（Phase 5 之前的简版选区）
+ * @param onCopyText 段级 mini-menu 复制按钮 → 把整段文字传给 caller（通常 caller 走系统
+ *        ClipboardManager 或自有 toast）。Phase 5 字符级落地后会被 selection.text 取代，
+ *        但段级 MVP 阶段保持现签名。
+ * @param onSpeakFromHere 段级 mini-menu 朗读到此 → caller 用 chapterPosition 起播 TTS
+ * @param onTranslateText 段级 mini-menu 翻译 → caller 调翻译能力
+ * @param onLookupWord 段级 mini-menu 查词 → caller 弹查词面板
+ * @param onShareQuote 段级 mini-menu 分享 → caller 弹分享对话框
+ * @param onAddHighlight 段级 mini-menu 高亮调色板挑色 → caller 落 DB
+ *        参数：(start, end, content, colorArgb)；start/end 是 chapter-pos 字符范围
+ * @param onEraseHighlight 段级 mini-menu 橡皮 → caller 删除选区与已有高亮的交集
+ * @param onAddTextColor 段级 mini-menu 字体强调色 → caller 落 DB（kind = TEXT_COLOR）
+ * @param selectionMenuConfig 用户在阅读设置里配置的"主行/扩展行/隐藏"按钮分配
  * @param onTapCenter 点击空白切阅读器菜单
  * @param onVisiblePageChanged (chIdx, title, readProgressTag, charPos) —— 顶栏标题更新
  * @param onScrollingChanged fling/idle 切换
@@ -86,6 +106,14 @@ fun LazyScrollSection(
     onNextChapter: () -> Unit,
     onProgress: (Int) -> Unit,
     onCopyText: (String) -> Unit,
+    onSpeakFromHere: (Int) -> Unit = {},
+    onTranslateText: (String) -> Unit = {},
+    onLookupWord: (String) -> Unit = {},
+    onShareQuote: (String) -> Unit = {},
+    onAddHighlight: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
+    onEraseHighlight: ((start: Int, end: Int) -> Unit)? = null,
+    onAddTextColor: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
+    selectionMenuConfig: SelectionMenuConfig = SelectionMenuConfig.DEFAULT,
     onTapCenter: () -> Unit,
     onVisiblePageChanged: (chapterIdx: Int, title: String, readProgress: String, charPos: Int) -> Unit,
     onScrollingChanged: (Boolean) -> Unit,
@@ -239,86 +267,215 @@ fun LazyScrollSection(
         }
     }
 
-    LazyScrollRenderer(
-        paragraphs = paragraphsState,
-        listState = listState,
-        ttsHighlightChapterIndex = if (readAloudChapterPosition >= 0) chapterIndex else -1,
-        ttsHighlightChapterPosition = readAloudChapterPosition,
-        jumpChapterIndex = effectiveJumpChapterIdx,
-        jumpChapterPosition = effectiveJumpChapterPos,
-        jumpToken = effectiveJumpToken,
-        revealHighlight = revealHighlight,
-        onNearTop = onPrevChapter,
-        onNearBottom = onNextChapter,
-        onLongPressParagraph = { paragraph, _ ->
-            val text = buildString {
-                for (line in paragraph.lines) {
-                    for (col in line.columns) {
-                        if (col is TextBaseColumn) append(col.charData)
+    // ── 段级选区状态（Phase 5 之前的简版） ──
+    //
+    // - paragraphKey：被选中段的 [ScrollParagraph.key]（"$chapterIndex-$paragraphNum"），
+    //   传给 LazyScrollRenderer.selectedParagraphKey 让该段画选中前景。
+    // - text：整段连续字符（拆 [TextBaseColumn.charData] 拼起来），mini-menu 各动作的载荷。
+    // - chapterIndex / startChapterPos / endChapterPos：用于 onAddHighlight 等回调的 DB 持久化范围。
+    // - anchorInBox：长按 tap 点在 [boxCoords] 局部坐标系下的位置；SelectionToolbar 的 Popup
+    //   用 ReaderToolbarPositionProvider 以这个 Offset 当 anchor 决定 above/below。
+    //
+    // 字符级 Phase 5 落地后此 data class 会扩成 (startTextPos, endTextPos)，但当前段级
+    // MVP 不需要词级粒度。
+    var scrollSelection by remember { mutableStateOf<ScrollSelectionState?>(null) }
+    // wrapper Box 在 root window 中的 LayoutCoordinates —— 用来把 long-press 上报的
+    // anchorInWindow 转成 Box 内局部坐标（Popup parent 坐标系一致）。
+    var boxCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
+    // 滚动 / fling 时立即清选区：
+    //  - 段已经划出 viewport，菜单浮在空气上没意义
+    //  - 用户的预期是"我开始滚说明放弃了选这段"
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect { scrollSelection = null }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coords -> boxCoords = coords },
+    ) {
+        LazyScrollRenderer(
+            paragraphs = paragraphsState,
+            listState = listState,
+            ttsHighlightChapterIndex = if (readAloudChapterPosition >= 0) chapterIndex else -1,
+            ttsHighlightChapterPosition = readAloudChapterPosition,
+            jumpChapterIndex = effectiveJumpChapterIdx,
+            jumpChapterPosition = effectiveJumpChapterPos,
+            jumpToken = effectiveJumpToken,
+            revealHighlight = revealHighlight,
+            onNearTop = onPrevChapter,
+            onNearBottom = onNextChapter,
+            selectedParagraphKey = scrollSelection?.paragraphKey,
+            // ── 长按段落 → 段级选区 ──
+            //
+            // 1. 抽出整段文本（buildString 拼 TextBaseColumn.charData）
+            // 2. anchorInWindow 通过 boxCoords.windowToLocal 转到 wrapper 局部
+            // 3. ScrollSelectionState 包含全部 mini-menu 动作所需的元信息
+            //
+            // charOffsetInParagraph 暂时不用（接口为 Phase 5 字符级保留）—— 段级 MVP
+            // 直接以"整段"为选区，endChapterPos = firstChapterPosition + 段总字符数。
+            onLongPressParagraph = { paragraph, _, anchorInWindow ->
+                val text = buildString {
+                    for (line in paragraph.lines) {
+                        for (col in line.columns) {
+                            if (col is TextBaseColumn) append(col.charData)
+                        }
                     }
                 }
-            }
-            if (text.isNotBlank()) onCopyText(text)
-        },
-        // ── 进度上报闸门（第三道防线之二）──
+                if (text.isBlank()) return@LazyScrollRenderer
+                val coords = boxCoords ?: return@LazyScrollRenderer
+                // windowToLocal：把 root window 坐标 (anchorInWindow) 转成 Box 局部坐标
+                val anchorInBox = coords.windowToLocal(anchorInWindow)
+                scrollSelection = ScrollSelectionState(
+                    paragraphKey = paragraph.key,
+                    text = text,
+                    chapterIndex = paragraph.chapterIndex,
+                    startChapterPos = paragraph.firstChapterPosition,
+                    endChapterPos = paragraph.firstChapterPosition + text.length,
+                    anchorInBox = anchorInBox,
+                )
+            },
+            // ── 进度上报闸门（第三道防线之二）──
+            //
+            // 三层 guard：
+            //   1. cur 章未完成 → drop（避免 placeholderChapter 期间脏写）
+            //   2. reportChapterIdx != cur 章 → drop（窗口边缘瞬时态：用户视野落 prev 章末
+            //      或 next 章首，不该按 cur 章 idx 写 DB）
+            //   3. 跳转静默期内 → drop（scrollToItem settle 中间态）
+            onChapterProgressLive = { reportChapterIdx, prog ->
+                val nowMs = System.currentTimeMillis()
+                val curChapterIdx = chapter?.chapterIndex ?: -1
+                when {
+                    chapter?.isCompleted != true -> Unit
+                    reportChapterIdx != curChapterIdx -> {
+                        AppLog.debug(
+                            "Progress",
+                            "drop live: chIdx=$reportChapterIdx != cur=$curChapterIdx (cross-chapter transient)",
+                        )
+                    }
+                    nowMs < jumpSilenceUntilMs -> {
+                        AppLog.debug(
+                            "Progress",
+                            "drop live: jump silence ${jumpSilenceUntilMs - nowMs}ms remaining",
+                        )
+                    }
+                    else -> onProgress(prog)
+                }
+            },
+            onChapterProgressPersist = { reportChapterIdx, prog ->
+                val nowMs = System.currentTimeMillis()
+                val curChapterIdx = chapter?.chapterIndex ?: -1
+                when {
+                    chapter?.isCompleted != true -> Unit
+                    reportChapterIdx != curChapterIdx -> {
+                        AppLog.debug(
+                            "Progress",
+                            "drop persist: chIdx=$reportChapterIdx != cur=$curChapterIdx",
+                        )
+                    }
+                    nowMs < jumpSilenceUntilMs -> {
+                        AppLog.debug(
+                            "Progress",
+                            "drop persist: jump silence ${jumpSilenceUntilMs - nowMs}ms remaining",
+                        )
+                    }
+                    else -> onProgress(prog)
+                }
+            },
+            onVisibleParagraphChanged = { p, _ ->
+                val titleForChapter = when (p.chapterIndex) {
+                    chapter?.chapterIndex -> chapterTitle
+                    prevTextChapter?.chapterIndex -> prevChapterTitle
+                    nextTextChapter?.chapterIndex -> nextChapterTitle
+                    else -> ""
+                }
+                onVisiblePageChanged(p.chapterIndex, titleForChapter, "", p.firstChapterPosition)
+            },
+            onScrollingChanged = onScrollingChanged,
+            onTapCenter = onTapCenter,
+            chapterCharSizeProvider = { paraChapterIdx -> chapterCharSizes[paraChapterIdx] ?: 1 },
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        // ── 段级 mini-menu ──
         //
-        // 三层 guard：
-        //   1. cur 章未完成 → drop（避免 placeholderChapter 期间脏写）
-        //   2. reportChapterIdx != cur 章 → drop（窗口边缘瞬时态：用户视野落 prev 章末
-        //      或 next 章首，不该按 cur 章 idx 写 DB）
-        //   3. 跳转静默期内 → drop（scrollToItem settle 中间态）
-        onChapterProgressLive = { reportChapterIdx, prog ->
-            val nowMs = System.currentTimeMillis()
-            val curChapterIdx = chapter?.chapterIndex ?: -1
-            when {
-                chapter?.isCompleted != true -> Unit
-                reportChapterIdx != curChapterIdx -> {
-                    AppLog.debug(
-                        "Progress",
-                        "drop live: chIdx=$reportChapterIdx != cur=$curChapterIdx (cross-chapter transient)",
-                    )
-                }
-                nowMs < jumpSilenceUntilMs -> {
-                    AppLog.debug(
-                        "Progress",
-                        "drop live: jump silence ${jumpSilenceUntilMs - nowMs}ms remaining",
-                    )
-                }
-                else -> onProgress(prog)
-            }
-        },
-        onChapterProgressPersist = { reportChapterIdx, prog ->
-            val nowMs = System.currentTimeMillis()
-            val curChapterIdx = chapter?.chapterIndex ?: -1
-            when {
-                chapter?.isCompleted != true -> Unit
-                reportChapterIdx != curChapterIdx -> {
-                    AppLog.debug(
-                        "Progress",
-                        "drop persist: chIdx=$reportChapterIdx != cur=$curChapterIdx",
-                    )
-                }
-                nowMs < jumpSilenceUntilMs -> {
-                    AppLog.debug(
-                        "Progress",
-                        "drop persist: jump silence ${jumpSilenceUntilMs - nowMs}ms remaining",
-                    )
-                }
-                else -> onProgress(prog)
-            }
-        },
-        onVisibleParagraphChanged = { p, _ ->
-            val titleForChapter = when (p.chapterIndex) {
-                chapter?.chapterIndex -> chapterTitle
-                prevTextChapter?.chapterIndex -> prevChapterTitle
-                nextTextChapter?.chapterIndex -> nextChapterTitle
-                else -> ""
-            }
-            onVisiblePageChanged(p.chapterIndex, titleForChapter, "", p.firstChapterPosition)
-        },
-        onScrollingChanged = onScrollingChanged,
-        onTapCenter = onTapCenter,
-        chapterCharSizeProvider = { paraChapterIdx -> chapterCharSizes[paraChapterIdx] ?: 1 },
-        modifier = modifier.fillMaxSize(),
-    )
+        // selectionState != null 时叠在 LazyScrollRenderer 上层。各 callback 调用后
+        // 立即清 selection，让段背景褪去 + Popup 关闭，统一手感。
+        //
+        // 与分页模式的 ReaderSelectionToolbar 一致：用 SelectionToolbar 渲染、
+        // ReaderToolbarPositionProvider 决定 above/below。anchor 是 long-press tap
+        // 在本 Box 内的局部坐标（已经过 windowToLocal 转换）。
+        val sel = scrollSelection
+        if (sel != null) {
+            SelectionToolbar(
+                offset = sel.anchorInBox,
+                onCopy = {
+                    onCopyText(sel.text)
+                    scrollSelection = null
+                },
+                onSpeak = {
+                    onSpeakFromHere(sel.startChapterPos)
+                    scrollSelection = null
+                },
+                onTranslate = {
+                    onTranslateText(sel.text)
+                    scrollSelection = null
+                },
+                onShare = {
+                    onShareQuote(sel.text)
+                    scrollSelection = null
+                },
+                onLookup = {
+                    onLookupWord(sel.text)
+                    scrollSelection = null
+                },
+                onHighlight = onAddHighlight?.let { cb ->
+                    { argb ->
+                        cb(sel.startChapterPos, sel.endChapterPos, sel.text, argb)
+                        scrollSelection = null
+                    }
+                },
+                onEraseHighlight = onEraseHighlight?.let { cb ->
+                    {
+                        cb(sel.startChapterPos, sel.endChapterPos)
+                        scrollSelection = null
+                    }
+                },
+                onTextColor = onAddTextColor?.let { cb ->
+                    { argb ->
+                        cb(sel.startChapterPos, sel.endChapterPos, sel.text, argb)
+                        scrollSelection = null
+                    }
+                },
+                onDismiss = { scrollSelection = null },
+                config = selectionMenuConfig,
+            )
+        }
+    }
 }
+
+/**
+ * 段级 mini-menu 选区状态。Phase 5 字符级选区落地后会扩成 (startTextPos, endTextPos)
+ * 双锚点版本，但段级 MVP 只需要"哪个段被选 + 章内字符范围 + Popup 锚点"。
+ *
+ * @property paragraphKey 被选中段的 [ScrollParagraph.key]，给 [LazyScrollRenderer] 决定
+ *           哪个段画选中前景
+ * @property text 段落连续字符（按 [TextBaseColumn.charData] 顺序拼成），mini-menu 各动作的载荷
+ * @property chapterIndex 段所在的章索引（onAddHighlight 落 DB 用）
+ * @property startChapterPos / [endChapterPos] 章内字符 [start, end) 区间，
+ *           Highlight 的 startChapterPos / endChapterPos 直接用
+ * @property anchorInBox 长按 tap 点在 [LazyScrollSection] 包裹 Box 局部坐标系下的位置，
+ *           SelectionToolbar 的 ReaderToolbarPositionProvider 用它决定 above/below
+ */
+private data class ScrollSelectionState(
+    val paragraphKey: String,
+    val text: String,
+    val chapterIndex: Int,
+    val startChapterPos: Int,
+    val endChapterPos: Int,
+    val anchorInBox: Offset,
+)

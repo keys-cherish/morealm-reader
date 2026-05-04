@@ -1569,6 +1569,17 @@ fun CanvasRenderer(
                     onNextChapter = onNextChapter,
                     onProgress = onProgress,
                     onCopyText = onCopyText,
+                    // 段级 mini-menu 各回调透传（分享走本地 dialog；其余走 ReaderViewModel）
+                    onSpeakFromHere = onSpeakFromHere,
+                    onTranslateText = onTranslateText,
+                    onLookupWord = onLookupWord,
+                    onShareQuote = { text -> shareQuoteText = text },
+                    onAddHighlight = { start, end, text, argb ->
+                        onAddHighlight(start, end, text, argb)
+                    },
+                    onEraseHighlight = onEraseHighlight,
+                    onAddTextColor = onAddTextColor,
+                    selectionMenuConfig = selectionMenuConfig,
                     onTapCenter = onTapCenter,
                     onVisiblePageChanged = onVisiblePageChanged,
                     onScrollingChanged = { scrollInProgress = it },

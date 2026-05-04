@@ -58,6 +58,7 @@ import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.Bookmark
 import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.entity.displayTitle
+import com.morealm.app.domain.entity.isAutoSplitChapter
 import com.morealm.app.presentation.reader.ReaderSearchController
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.core.log.AppLog
@@ -1132,12 +1133,19 @@ private fun ChapterBookmarkPanel(
                         if (chapterSearch.isBlank()) chapters
                         else chapters.filter { it.title.contains(chapterSearch, ignoreCase = true) }
                     }
+                    // OutlinedTextField 默认 minHeight 56dp（M3 规范），原写法强制 .height(44.dp)
+                    // 会把 placeholder 压扁（视觉上"塌陷"成一条线）。改用 heightIn(min = 48.dp)：
+                    // 既给 M3 留出最小可读空间，又不会显得过于松散；singleLine=true 保证不会被
+                    // 多行内容撑高。
                     OutlinedTextField(
                         value = chapterSearch,
                         onValueChange = { chapterSearch = it },
                         placeholder = { Text("搜索章节", style = MaterialTheme.typography.bodySmall) },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(44.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .heightIn(min = 48.dp),
                         textStyle = MaterialTheme.typography.bodySmall,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
@@ -1145,41 +1153,100 @@ private fun ChapterBookmarkPanel(
                         ),
                     )
                     Spacer(Modifier.height(4.dp))
+                    // ── 本地 TXT 自动分章合并显示 ──
+                    //
+                    // [LocalBookParser.parseWithoutToc] 会把无目录 TXT 按 MAX_LENGTH_NO_TOC 切成
+                    // `第1节` / `第2节` / ... 这些伪章名。底层切分仍需保留（渲染缓存 / 续读 /
+                    // ScrollAnchor 都按段做），但目录里再展示成多行只会让用户看到一串相同的
+                    // "《书名》"（[BookChapter.displayTitle] 已把伪章名换成书名）—— 完全没区分度。
+                    //
+                    // 解决方案：检测到这种"全是自动分章"的本地 TXT 时，目录里只展示一个虚拟
+                    // "整本书"项；点击 = 跳到 chapter 0 + chapterPosition 0。chapters 数据本身
+                    // 不动，所有渲染层 / 续读 / 进度上报全部按原样跑。
+                    //
+                    // 搜索状态（chapterSearch 非空）下退化回原逐章列表 —— 用户可能在查 "第 N 节"。
+                    val isAutoSplitTxt = book != null &&
+                        !book.localPath.isNullOrEmpty() &&
+                        book.format == com.morealm.app.domain.entity.BookFormat.TXT &&
+                        chapters.isNotEmpty() &&
+                        chapters.all { it.isAutoSplitChapter() }
+                    val showMergedWholeBook = isAutoSplitTxt && chapterSearch.isBlank()
                     val listState = rememberLazyListState(
-                        initialFirstVisibleItemIndex = if (chapterSearch.isBlank()) (currentChapter - 2).coerceAtLeast(0) else 0
+                        initialFirstVisibleItemIndex = when {
+                            showMergedWholeBook -> 0
+                            chapterSearch.isBlank() -> (currentChapter - 2).coerceAtLeast(0)
+                            else -> 0
+                        }
                     )
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     ) {
-                        itemsIndexed(filteredChapters, key = { _, ch -> ch.id }) { _, ch ->
-                            val isCurrent = ch.index == currentChapter
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onChapterClick(ch.index) }
-                                    .background(
-                                        if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-                                        else Color.Transparent,
-                                        MaterialTheme.shapes.small
+                        if (showMergedWholeBook) {
+                            // 单 item — 整本书入口
+                            item(key = "merged_whole_book") {
+                                val totalChapters = chapters.size
+                                val readPercent = if (totalChapters > 0)
+                                    ((currentChapter + 1).toFloat() / totalChapters * 100f).toInt().coerceIn(0, 100)
+                                else 0
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onChapterClick(0) }
+                                        .background(
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                            MaterialTheme.shapes.small,
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 14.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        "《${book!!.title}》整本书",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
                                     )
-                                    .padding(horizontal = 12.dp, vertical = 11.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    ch.displayTitle(book),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (isCurrent) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                if (isCurrent) {
-                                    Text("▶", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                    Text(
+                                        "已读 $readPercent%",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                    )
+                                }
+                            }
+                        } else {
+                            itemsIndexed(filteredChapters, key = { _, ch -> ch.id }) { _, ch ->
+                                val isCurrent = ch.index == currentChapter
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onChapterClick(ch.index) }
+                                        .background(
+                                            if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                                            else Color.Transparent,
+                                            MaterialTheme.shapes.small
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 11.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        ch.displayTitle(book),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (isCurrent) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (isCurrent) {
+                                        Text("▶", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                    }
                                 }
                             }
                         }
