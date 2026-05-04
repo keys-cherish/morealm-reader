@@ -25,6 +25,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -675,16 +676,27 @@ private fun SourceItem(
 ) {
     val moColors = LocalMoRealmColors.current
     var showMenu by remember { mutableStateOf(false) }
-    val bgColor by animateColorAsState(
-        if (source.enabled) MaterialTheme.colorScheme.surfaceContainerHigh
-        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+    // ── 颜色动画降级到绘制层 ──
+    // 之前用 `val bgColor by animateColorAsState(...)` + `Surface(color = bgColor)`：
+    // 每帧 bgColor.value 变化都会让 SourceItem 整个 composable scope 重组（因为
+    // Surface 的 color 参数读取发生在 composition 阶段）。
+    //
+    // 现在保留 State<Color>（不解构 by），把 `.value` 的读取下沉到 drawBehind 的
+    // lambda —— drawBehind 只在 draw phase 触发，不参与 composition / layout，
+    // 颜色过渡的 16ms 帧只会跑 redraw 而非 recompose。
+    val enabledColor = MaterialTheme.colorScheme.surfaceContainerHigh
+    val disabledColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+    val bgColorAnim = animateColorAsState(
+        targetValue = if (source.enabled) enabledColor else disabledColor,
         label = "sourceBg"
     )
+    val shape = MaterialTheme.shapes.medium
 
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.medium,
-        color = bgColor,
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .drawBehind { drawRect(bgColorAnim.value) },
     ) {
         Row(
             modifier = Modifier

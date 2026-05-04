@@ -133,10 +133,28 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
         const val ACTION_PAUSE = "com.morealm.app.TTS_PAUSE"
         const val ACTION_RESUME = "com.morealm.app.TTS_RESUME"
         const val ACTION_ADD_TIMER = "com.morealm.app.TTS_ADD_TIMER"
+
+        /**
+         * 服务进程内活跃旗标。[onCreate] 置 true / [onDestroy] 置 false。
+         *
+         * **存在的理由**：替换 [ReaderTtsController.ttsServiceStarted] 这种本地
+         * Boolean 旗标——后者在系统强杀进程或服务被异常回收后无法复位，UI 侧会
+         * 误以为服务还活着，下次 `ensureTtsService` 只发 `UpdateMeta` 命令进
+         * SharedFlow buffer，无人订阅 → 用户点播放无反应（vendor ROM 高频复发的
+         * 「点播放没声音」症状之一）。
+         *
+         * 进程级 [java.util.concurrent.atomic.AtomicBoolean] 随进程一起重置，
+         * 服务被杀 → 进程没了 → 这个字段在新进程里默认是 false，下次访问就会
+         * 真启服务。原子读写避免主线程 / serviceScope / IO 线程的可见性问题。
+         *
+         * UI 侧用法见 [ReaderTtsController.ensureTtsService]。
+         */
+        val isRunning = java.util.concurrent.atomic.AtomicBoolean(false)
     }
 
     override fun onCreate() {
         super.onCreate()
+        isRunning.set(true)
         createNotificationChannel()
         // 占位通知：startForeground 必须在 onCreate 5s 内调一次，但此时 MediaSession
         // 还没建好，TtsNotificationProvider.createNotification 也还没机会跑。如果
@@ -663,6 +681,9 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
             release()
         }
         mediaSession = null
+        // 旗标最后置位 —— 在所有清理工作之后，确保下一次 ensureTtsService
+        // 看到 false 时新进程的 onCreate 已经能干净地接管所有资源。
+        isRunning.set(false)
         AppLog.info("TtsService", "Service destroyed")
         super.onDestroy()
     }

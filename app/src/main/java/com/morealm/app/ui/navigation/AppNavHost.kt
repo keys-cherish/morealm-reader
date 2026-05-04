@@ -70,11 +70,14 @@ fun MoRealmNavHost(
     // screen triggered the operation — fixes the "import 成功 toast replays
     // when ProfileScreen recomposes after returning from BackupExportScreen"
     // bug. SharedFlow has replay=0, so re-subscriptions don't see stale events.
-    val toastCtx = androidx.compose.ui.platform.LocalContext.current
+    //
+    // 由原生 android.widget.Toast 改成全局 Snackbar：颜色随主题，且通过
+    // ThemedSnackbarHost 浮在 PillNavigationBar 之上，避免被遮。
+    val globalSnackbarHost = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
         com.morealm.app.domain.sync.BackupStatusBus.events.collect { msg ->
             if (msg.isNotBlank()) {
-                android.widget.Toast.makeText(toastCtx, msg, android.widget.Toast.LENGTH_LONG).show()
+                globalSnackbarHost.showSnackbar(msg)
             }
         }
     }
@@ -520,6 +523,14 @@ fun MoRealmNavHost(
                 },
             )
         }
+        // 全局 Snackbar 覆盖层：承接 BackupStatusBus 等跨页消息。Z-order 高于 pill，
+        // padding(bottom=96dp) 让它浮在药丸导航栏上方 ~16dp。
+        com.morealm.app.ui.widget.ThemedSnackbarHost(
+            hostState = globalSnackbarHost,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 96.dp),
+        )
         } // Box
     }
 }

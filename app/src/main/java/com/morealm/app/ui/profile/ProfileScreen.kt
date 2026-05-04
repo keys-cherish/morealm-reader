@@ -10,7 +10,6 @@ import android.graphics.Shader
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import com.morealm.app.presentation.profile.ProfileViewModel
 import com.morealm.app.presentation.profile.AnnualReport
@@ -447,6 +446,12 @@ fun ProfileScreen(
         AnnualReportDialog(
             report = annualReport,
             accentColor = MaterialTheme.colorScheme.primary,
+            onSaveResult = { ok ->
+                // 保存结果走主屏 Snackbar（颜色随主题、避开 pill），原来用裸 Toast。
+                scope.launch {
+                    snackbarHost.showSnackbar(if (ok) "已保存到相册" else "保存失败")
+                }
+            },
             onDismiss = { showAnnualReport = false },
         )
     }
@@ -459,7 +464,14 @@ fun ProfileScreen(
         snackbarHost = snackbarHost,
     )
 
-    SnackbarHost(snackbarHost, modifier = Modifier.align(Alignment.BottomCenter))
+    // 浮在药丸导航栏之上：pill 高 64dp + 底 padding 16dp ≈ 80dp，
+    // 这里给 96dp 让 Snackbar 与 pill 之间留 ~16dp 视觉间隙，避免提示被吞掉。
+    com.morealm.app.ui.widget.ThemedSnackbarHost(
+        snackbarHost,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 96.dp),
+    )
     }
 }
 
@@ -618,6 +630,8 @@ fun SettingsItem(icon: ImageVector, title: String, subtitle: String? = null, onC
 private fun AnnualReportDialog(
     report: AnnualReport?,
     accentColor: Color,
+    /** 保存长图结果回调：true = 保存成功；调用方负责弹 Snackbar / Toast 反馈。 */
+    onSaveResult: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -672,7 +686,7 @@ private fun AnnualReportDialog(
                     Button(
                         onClick = {
                             val ok = saveAnnualReportCard(context, report, accentColor)
-                            Toast.makeText(context, if (ok) "已保存到相册" else "保存失败", Toast.LENGTH_SHORT).show()
+                            onSaveResult(ok)
                         },
                         modifier = Modifier.weight(1f),
                     ) {

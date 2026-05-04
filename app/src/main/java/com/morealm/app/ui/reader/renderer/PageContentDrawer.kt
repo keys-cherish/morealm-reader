@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import com.morealm.app.domain.entity.looksLikeAutoSplitTitle
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import com.morealm.app.domain.render.ImageCache
@@ -98,31 +99,25 @@ data class PageInfoOverlaySpec(
 /**
  * Single-page Canvas drawing composable.
  * Renders text lines, images, selection highlights, TTS highlights,
- * search result highlights, and bookmark indicators.
+ * search highlights, and bookmark indicator.
  *
- * Drawing order (back to front):
- * 1. Search result highlight rectangles
- * 2. Selection highlight rectangles
- * 3. TTS read-aloud highlight rectangles
- * 4. Text characters
- * 5. Images
- * 6. Bookmark indicator
+ * # 现代实践（Phase B P1 #4）
+ *
+ * 旧签名 14 入参（含 8 个 paint/bg/highlight-color 主题字段），改 LocalReaderRenderTheme
+ * 注入后签名瘦身到 9 入参，仅保留**真正动态**的渲染状态：page、selection、aloud、
+ * bookmark、readAloud 位置、highlights / textColorSpans。
+ *
+ * 主题字段 (titlePaint / contentPaint / chapterNumPaint / bgBitmap / selectionColor /
+ * aloudColor / searchResultColor / bookmarkColor) 统一从 [LocalReaderRenderTheme.current]
+ * 取，由 [com.morealm.app.ui.reader.renderer.CanvasRenderer] 主体注入。
  */
 @Composable
 fun PageCanvas(
     page: TextPage,
-    titlePaint: TextPaint,
-    contentPaint: TextPaint,
-    chapterNumPaint: TextPaint? = null,
-    bgBitmap: Bitmap? = null,
     selectionStart: TextPos? = null,
     selectionEnd: TextPos? = null,
-    selectionColor: Color = DEFAULT_SELECTION_COLOR,
     aloudLineIndex: Int = -1,
-    aloudColor: Color = DEFAULT_ALOUD_COLOR,
-    searchResultColor: Color = DEFAULT_SEARCH_RESULT_COLOR,
     hasBookmark: Boolean = false,
-    bookmarkColor: Color = DEFAULT_BOOKMARK_COLOR,
     /**
      * TTS 当前段在章节内的字符偏移；仅用作 Compose 重组依赖。
      * 不传时（-1）按非朗读路径走 canvasRecorder 缓存；变化时重组+重算 hasOverlay，
@@ -141,12 +136,30 @@ fun PageCanvas(
      * 命中范围内 column 的 paint.color 临时替换为该 span 的 colorArgb。
      */
     textColorSpans: List<HighlightSpan> = emptyList(),
+    /**
+     * 跳转后的整段褪色高亮状态（已由上层做了"同章"过滤）。
+     *
+     * **关键设计**：alpha 的 `Animatable.value` 读取**只**发生在下面的
+     * `Canvas { ... }` DrawScope 内，让 Compose 把它登记为**绘制阶段**依赖。
+     * 这样动画期间每帧只触发本 Canvas 的重画（Phase 3），不触发本 Composable
+     * 树的重组（Phase 1）/ 重布局（Phase 2）。
+     *
+     * 对照旧时代陷阱：如果在外层（@Composable 函数体）`if (rev.alpha.value > 0)`
+     * 这样读，整条调用链会随动画每帧重组——经典"重组风暴"。
+     */
+    revealHighlight: RevealHighlight? = null,
     modifier: Modifier = Modifier,
 ) {
-    val selColorArgb = selectionColor.toArgb()
-    val aloudColorArgb = aloudColor.toArgb()
-    val searchColorArgb = searchResultColor.toArgb()
-    val bmColorArgb = bookmarkColor.toArgb()
+    // ── 主题注入：8 字段从 LocalReaderRenderTheme.current 取 ────────────────────
+    val theme = LocalReaderRenderTheme.current
+    val titlePaint = theme.titlePaint
+    val contentPaint = theme.contentPaint
+    val chapterNumPaint = theme.chapterNumPaint
+    val bgBitmap = theme.bgBitmap
+    val selColorArgb = theme.selectionColor.toArgb()
+    val aloudColorArgb = theme.aloudColor.toArgb()
+    val searchColorArgb = theme.searchResultColor.toArgb()
+    val bmColorArgb = theme.bookmarkColor.toArgb()
 
     // 必须把 page.lines.any { it.isReadAloud } 也算进来：
     // CanvasRenderer 走的是 LaunchedEffect 直接修改 page.lines 的 isReadAloud 字段，
@@ -163,9 +176,13 @@ fun PageCanvas(
     val textColorSpansKey = textColorSpans.size
     // 字体色 span 也算 overlay：和背景高亮一样，画字符时实时染色无法走 canvasRecorder
     // 缓存（缓存里色已经定死）；用户增删 textColor 高亮时也要走直绘路径。
+    //
+    // reveal 也算 overlay：alpha 动画期间显然不能复用静态缓存。**注意**：这里只是
+    // Composition 层的"是否启用 overlay 路径"决策（presence 触发，非 per-frame），
+    // alpha.value 的真正读取仍在下面 Canvas DrawScope 内。
     val hasOverlay = selectionStart != null || aloudLineIndex >= 0 ||
         page.lines.any { it.isReadAloud } || highlights.isNotEmpty() ||
-        textColorSpans.isNotEmpty()
+        textColorSpans.isNotEmpty() || revealHighlight != null
     Canvas(modifier = modifier.fillMaxSize()) {
         val canvas = drawContext.canvas.nativeCanvas
         val w = size.width.toInt()
@@ -177,6 +194,28 @@ fun PageCanvas(
             if (bgBitmap != null && !bgBitmap.isRecycled) {
                 drawBgBitmap(canvas, bgBitmap, size.width, size.height)
             }
+            // ── 绘制阶段（Phase 3）合成 reveal HighlightSpan ──
+            //
+            // 在 DrawScope 内读 [RevealHighlight.alpha.value] —— Compose 把它登记为
+            // 绘制阶段依赖；alpha 动画时仅重画本 Canvas，不重组、不重布局。
+            // 与已存高亮共用 [drawPageContent] 的 per-line bg-rect 路径，零额外绘制
+            // 代码：合成一条临时 [HighlightSpan]，alpha 已通过 [RevealHighlight.currentArgb]
+            // 调制进 colorArgb。
+            val effectiveHighlights = revealHighlight?.let { rev ->
+                val pageStart = page.chapterPosition
+                val pageEnd = pageStart + page.charSize
+                val overlapsPage = rev.startChapterPos < pageEnd && rev.endChapterPos > pageStart
+                // alpha.value 读取 → 仅注册绘制阶段依赖
+                val alphaArgb = if (overlapsPage) rev.currentArgb() else 0
+                if ((alphaArgb ushr 24) != 0) {
+                    highlights + HighlightSpan(
+                        id = REVEAL_HIGHLIGHT_ID,
+                        startChapterPos = rev.startChapterPos,
+                        endChapterPos = rev.endChapterPos,
+                        colorArgb = alphaArgb,
+                    )
+                } else highlights
+            } ?: highlights
             drawPageContent(
                 canvas = canvas,
                 page = page,
@@ -192,7 +231,7 @@ fun PageCanvas(
                 hasBookmark = hasBookmark,
                 bmColorArgb = bmColorArgb,
                 canvasWidth = size.width,
-                highlights = highlights,
+                highlights = effectiveHighlights,
                 textColorSpans = textColorSpans,
             )
         } else {
@@ -610,7 +649,11 @@ private fun infoSlotText(slot: String, page: TextPage, spec: PageInfoOverlaySpec
     if (slot == "none") return null
     val actualPageIndex = page.index
     val actualPageCount = page.pageSize.takeIf { it > 0 } ?: spec.pageCount
-    val actualChapterTitle = page.title.takeIf { it.isNotBlank() } ?: spec.chapterTitle
+    // 自动分节伪标题（"第N节" / "正文"）退回 spec.chapterTitle —— 后者由 ReaderScreen
+    // 经 [BookChapter.displayTitle] 已替换为书名。
+    val actualChapterTitle = page.title
+        .takeIf { it.isNotBlank() && !it.looksLikeAutoSplitTitle() }
+        ?: spec.chapterTitle
     val actualChapterIndex = page.chapterIndex
     val readProgress = page.readProgress.takeIf { it.isNotBlank() } ?: run {
         if (actualPageCount > 1) {

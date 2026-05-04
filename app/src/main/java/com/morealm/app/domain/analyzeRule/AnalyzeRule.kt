@@ -94,7 +94,7 @@ class AnalyzeRule(
     // ── JS 执行 ──
 
     fun evalJS(jsStr: String, result: Any? = null): Any? {
-        return JsExtensions.withRuntimeContext(source, coroutineContext, ruleData) {
+        return JsExtensions.withRuntimeContext(source, coroutineContext, ruleData, this) {
             val bindings = ScriptBindings()
             org.mozilla.javascript.Context.enter()
             try {

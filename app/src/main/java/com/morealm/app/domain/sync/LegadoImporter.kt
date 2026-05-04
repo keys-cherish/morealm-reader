@@ -353,7 +353,6 @@ object LegadoImporter {
                             chapterOffset = 0f,
                             totalProgress = if (dto.totalChapterNum > 0)
                                 dto.durChapterIndex.toFloat() / dto.totalChapterNum else 0f,
-                            scrollProgress = 0,
                             updatedAt = dto.durChapterTime,
                         )
                         db.readProgressDao().save(progress)

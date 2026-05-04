@@ -148,7 +148,9 @@ fun ReaderScreen(
     val effectiveMarginT = marginPreviewT ?: marginTopVal
     val effectiveMarginB = marginPreviewB ?: marginBottomVal
     val autoPageInterval by viewModel.autoPageInterval.collectAsStateWithLifecycle()
-    val ttsChapterPosition by viewModel.tts.ttsChapterPosition.collectAsStateWithLifecycle()
+    // ttsChapterPosition 不在这里 collect —— 段切高频更新会触发整个 ReaderScreen
+    // 重组（贴文里的「重组风暴」）。下沉到 [ReadAloudPositionScope] 这个 leaf
+    // composable，仅它和 CanvasRenderer 那一层重组。
     val pendingSearchSelection by viewModel.pendingSearchSelection.collectAsStateWithLifecycle()
     val customCss by viewModel.settings.customCss.collectAsStateWithLifecycle()
     val customBgImage by viewModel.settings.customBgImage.collectAsStateWithLifecycle()
@@ -495,9 +497,14 @@ fun ReaderScreen(
         // Keep the last real reader surface on screen. During initial loading, avoid rendering
         // a synthetic 1/1 empty chapter that shows up as a visible white/loading flicker in LDPlayer.
         if (displayContent.isNotBlank()) {
+            // 把 ttsChapterPosition 的 collect 收敛进这个 leaf composable —— 段切
+            // 时只重组 [ReadAloudPositionScope] 自己 + 内部 lambda 里的 CanvasRenderer
+            // 调用，不再让外层 ReaderScreen 整体 recompose。CanvasRenderer 自身的
+            // stable check 会进一步把更新缩窄到 readAloudChapterPosition 一个参数。
+            ReadAloudPositionScope(viewModel.tts.ttsChapterPosition) { ttsChapterPosition ->
             com.morealm.app.ui.reader.renderer.CanvasRenderer(
                 content = displayContent,
-                chapterTitle = renderedChapter.title.ifEmpty { chapters.getOrNull(currentIndex)?.displayTitle(book) ?: "" },
+                chapterTitle = chapters.getOrNull(currentIndex)?.displayTitle(book) ?: renderedChapter.title,
                 chapterIndex = renderedChapter.index,
                 nextChapterTitle = nextPreloadedChapter?.takeIf { it.index == currentIndex + 1 }?.let { ch -> chapters.getOrNull(ch.index)?.displayTitle(book) ?: ch.title } ?: "",
                 nextChapterContent = nextPreloadedChapter?.takeIf { it.index == currentIndex + 1 }?.content ?: "",
@@ -645,6 +652,7 @@ fun ReaderScreen(
                 useLazyScrollRenderer = useLazyScrollRendererSetting,
                 modifier = Modifier.fillMaxSize(),
             )
+            } // end ReadAloudPositionScope lambda
         }
 
         // Loading indicator
@@ -890,6 +898,7 @@ fun ReaderScreen(
             currentChapter = currentIndex,
             selectedSideTab = if (showBookmarks) 1 else 0,
             linkedBooks = linkedBooks,
+            book = book,
             moColors = moColors,
             onTabChange = { tab ->
                 if (tab == 0) { showBookmarks = false; showChapterList = true }
@@ -1004,6 +1013,35 @@ fun ReaderScreen(
 
 // ── Extracted composables ──────────────────────────────────────────────────────
 
+/**
+ * 把 TTS 段切高频更新的 [kotlinx.coroutines.flow.StateFlow] 收敛在自己内部 collect，
+ * 避免外层 [ReaderScreen] 因为这一个 State 的变化整体 recompose。
+ *
+ * 用法（取代原先在 ReaderScreen 顶层 `val ttsChapterPosition by ...collectAsStateWithLifecycle()`）：
+ * ```
+ * ReadAloudPositionScope(viewModel.tts.ttsChapterPosition) { pos ->
+ *     CanvasRenderer(readAloudChapterPosition = pos, ... )
+ * }
+ * ```
+ *
+ * **为什么有效**：Compose 重组的最小单元是 `@Composable` 函数。在 ReaderScreen
+ * 函数体里 `by collectAsStateWithLifecycle()` 等价于让该 State 的变化重组
+ * 整个 ReaderScreen；把 collect 挪到这个 leaf 函数里后，State 变化只重组本函数和
+ * 它内部 lambda 调到的 CanvasRenderer 一个节点，外层结构稳定的所有兄弟组件全部
+ * 跳过 recomposition。
+ *
+ * 配合 CanvasRenderer 内部的 stable 检测 + Canvas drawWithContent 直绘高亮，
+ * TTS 段切 → 仅高亮那一小块矩形重画，外层零成本。
+ */
+@Composable
+private fun ReadAloudPositionScope(
+    flow: kotlinx.coroutines.flow.StateFlow<Int>,
+    content: @Composable (Int) -> Unit,
+) {
+    val pos by flow.collectAsStateWithLifecycle()
+    content(pos)
+}
+
 @Composable
 private fun ChapterBookmarkPanel(
     visible: Boolean,
@@ -1012,6 +1050,11 @@ private fun ChapterBookmarkPanel(
     currentChapter: Int,
     selectedSideTab: Int,
     linkedBooks: List<Book>,
+    /**
+     * 当前书。仅用于章节标题显示（[BookChapter.displayTitle]）—— TXT 自动分章场景
+     * 把"伪章名"替换成书名时需要。null 时退回原标题。
+     */
+    book: Book?,
     moColors: MoRealmColors,
     onTabChange: (Int) -> Unit,
     onChapterClick: (Int) -> Unit,
@@ -1126,7 +1169,7 @@ private fun ChapterBookmarkPanel(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    ch.title,
+                                    ch.displayTitle(book),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (isCurrent) MaterialTheme.colorScheme.primary
                                             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),

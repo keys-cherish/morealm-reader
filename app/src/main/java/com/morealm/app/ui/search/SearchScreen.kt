@@ -1,6 +1,5 @@
 package com.morealm.app.ui.search
 
-import android.widget.Toast
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -319,7 +318,7 @@ fun SearchScreen(
                                         onNavigateReader(bookId)
                                     }
                                 } else {
-                                    Toast.makeText(ctx, "非文本书源暂不能阅读", Toast.LENGTH_SHORT).show()
+                                    scope.launch { snackbarHost.showSnackbar("非文本书源暂不能阅读") }
                                 }
                             },
                             onLongClick = {
@@ -329,7 +328,7 @@ fun SearchScreen(
                                 if (result.sourceType == 0) {
                                     addToShelfDialogTarget = result
                                 } else {
-                                    Toast.makeText(ctx, "非文本书源暂不能阅读", Toast.LENGTH_SHORT).show()
+                                    scope.launch { snackbarHost.showSnackbar("非文本书源暂不能阅读") }
                                 }
                             },
                             onDownload = {
@@ -339,7 +338,7 @@ fun SearchScreen(
                                     // 撤销时同步 stopDownload。这里不再 Toast，避免双重反馈。
                                     viewModel.addToShelfAndDownload(result)
                                 } else {
-                                    Toast.makeText(ctx, "非文本书源暂不能缓存", Toast.LENGTH_SHORT).show()
+                                    scope.launch { snackbarHost.showSnackbar("非文本书源暂不能缓存") }
                                 }
                             },
                         )
@@ -365,7 +364,14 @@ fun SearchScreen(
             }
         }
     }
-        SnackbarHost(snackbarHost, modifier = Modifier.align(Alignment.BottomCenter))
+        // 浮在药丸导航栏之上：pill 高 64dp + 底 padding 16dp ≈ 80dp，
+        // 这里给 96dp 让 Snackbar 与 pill 之间留 ~16dp 视觉间隙，避免提示被吞掉。
+        com.morealm.app.ui.widget.ThemedSnackbarHost(
+            snackbarHost,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 96.dp),
+        )
     }
 }
 

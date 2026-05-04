@@ -85,13 +85,18 @@ class ReaderViewModel @Inject constructor(
     private val sourceRepo: SourceRepository,
     private val progressSync: com.morealm.app.domain.sync.WebDavBookProgressSync,
     private val fontRepo: com.morealm.app.domain.font.FontRepository,
+    /**
+     * 用于阅读器 TTS 面板的"语音"下拉自加载（http_* 引擎走 dao 取源名作单元素 voice）。
+     * 见 [ReaderTtsController]：reader 不再依赖 host 那条 voices 路径，独立维护。
+     */
+    private val httpTtsDao: com.morealm.app.domain.db.HttpTtsDao,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     private val bookId: String = savedStateHandle["bookId"] ?: ""
 
     // ── Delegates (existing) ──
-    val tts = ReaderTtsController(context, prefs, viewModelScope)
+    val tts = ReaderTtsController(context, prefs, viewModelScope, httpTtsDao)
     val settings = ReaderSettingsController(prefs, viewModelScope, context, styleRepo, fontRepo)
 
     // ── Extracted Controllers ──

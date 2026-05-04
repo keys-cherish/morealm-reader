@@ -42,12 +42,15 @@ import androidx.compose.foundation.layout.asPaddingValues
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.entity.ReaderStyle
+import com.morealm.app.domain.entity.looksLikeAutoSplitTitle
 import com.morealm.app.domain.render.*
 import com.morealm.app.presentation.reader.ReaderSearchController
 import com.morealm.app.ui.reader.page.animation.AnimatedPageReader
 import com.morealm.app.ui.reader.page.animation.PageAnimType
 import com.morealm.app.ui.reader.page.animation.SimulationParams
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -58,6 +61,14 @@ import kotlin.math.roundToInt
 
 private const val VERTICAL_SWIPE_PAGE_THRESHOLD_RATIO = 0.08f
 private const val PAGE_DELEGATE_DRAG_AXIS_RATIO = 1.2f
+
+/**
+ * restoreProgress 重试上限：getPageIndexByCharIndex 返回 -1（pageFactory
+ * snapshot 还空）时，最多在同一 restoreToken 内静默重试这么多次再升级为
+ * error + fallback page 0。8 次 ≈ 章节正常加载所需 2-3 帧的余量充足值，
+ * 同时避免无限等待卡死 UI。
+ */
+private const val RESTORE_MAX_RETRIES = 8
 
 /**
  * Full-featured Canvas-based text reader.
@@ -705,6 +716,13 @@ fun CanvasRenderer(
 
     // Track whether we've already restored the saved position for this content.
     var progressRestored by remember { mutableStateOf(false) }
+    /**
+     * 当 `getPageIndexByCharIndex(initialChapterPosition)` 返回 -1（pageFactory
+     * snapshot 还空）时累计的重试次数。restoreToken 一变就清零；同 token 内
+     * 累到 [RESTORE_MAX_RETRIES] 仍解析不出来才升级为 error + fallback page 0，
+     * 避免静默回退把用户的书签位置悄悄掉到章首。
+     */
+    var restoreAttempts by remember(restoreToken) { mutableIntStateOf(0) }
     // restoreToken 是唯一判据：只有 loadChapter 生成新 token 时才清 progressRestored。
     // 用户翻页 / renderPageCount 变化 / 前后台切换不会改 token → 不会触发幽灵恢复。
     //
@@ -728,6 +746,23 @@ fun CanvasRenderer(
      */
     var highlightActionTarget by remember(chapterIndex) { mutableStateOf<Highlight?>(null) }
     var highlightActionOffset by remember { mutableStateOf(Offset.Zero) }
+    /**
+     * 滚动模式（[LazyScrollRenderer] / [ScrollRenderer]）当前是否处于
+     * fling/drag。由下游 onScrollingChanged 回调写入。Popup 化后用来：
+     * 用户开始滚动 → 立刻清掉 selection / highlightActionTarget，避免「僵尸菜单」
+     * 卡在屏幕上跟着内容飘。pageAnimType 走 pagerState 的模式则直接观察
+     * pagerState.isScrollInProgress，不依赖这个状态。
+     */
+    var scrollInProgress by remember { mutableStateOf(false) }
+    /**
+     * 跳转成功后的「整段褪色高亮」状态。书签 / TOC / 续读 / 跨章恢复成功后由
+     * restoreProgress LaunchedEffect 设值并启动 alpha 动画；动画结束后置回 null。
+     * 跨章节自动失效（key 含 chapterIndex），不会污染下一章。
+     *
+     * 渲染路径：作为一条临时 [HighlightSpan] 合并进 [highlightSpans]，复用已存
+     * 高亮的 per-line bg rect 绘制管线，零绘制代码改动。详见 [RevealHighlight] 文档。
+     */
+    var revealHighlight by remember(chapterIndex) { mutableStateOf<RevealHighlight?>(null) }
     // Share quote dialog state
     var shareQuoteText by remember { mutableStateOf<String?>(null) }
     var scrollPageIndex by remember(chapterIndex) { mutableIntStateOf(0) }
@@ -1009,9 +1044,44 @@ fun CanvasRenderer(
             )
             return@LaunchedEffect
         }
-        // BookmarkDebug: 诊断书签跳转后是否回到正确页
+        // BookmarkDebug: 诊断书签跳转后是否回到正确页。
+        //
+        // ── 静默回退 → 显式重试 ──
+        //
+        // 旧实现：`coerceIn(0, pageCount-1)` 直接把 -1 / 越界值夹到 0，下游
+        // computedTarget 跟着掉到 page 0；用户书签明明在第 5 页却跳回章首。
+        // 我们想要的语义：getPageIndexByCharIndex 返回 -1（pageFactory 还没
+        // ready，snapshotPages 尚空）就**等下一轮**，不要假装"映射成功"。
+        //
+        // 重试机制：restoreToken 变 → 计数器清零；同 token 内最多 8 次早 return
+        // （每次 LaunchedEffect 因 renderPageCount/pageCount/chapter.isCompleted
+        // 变化重进），仍解析不出来再升级为 ERROR + fallback page 0，避免无限
+        // 等待卡死 UI。8 次相对宽裕：实测一章正常加载 2-3 帧 pageFactory 追上，
+        // 极端情况留余量。
+        val rawPageFromCharIndex = if (initialChapterPosition > 0) {
+            chapter.getPageIndexByCharIndex(initialChapterPosition)
+        } else -1
+        if (initialChapterPosition > 0 && rawPageFromCharIndex < 0) {
+            if (restoreAttempts < RESTORE_MAX_RETRIES) {
+                restoreAttempts += 1
+                AppLog.debug(
+                    "BookmarkDebug",
+                    "restoreProgress retry char→page mapping ($restoreAttempts/$RESTORE_MAX_RETRIES)" +
+                        " | chIdx=$chapterIndex initChapPos=$initialChapterPosition" +
+                        " | pc=$pageCount renderPC=$renderPageCount token=$restoreToken",
+                )
+                return@LaunchedEffect
+            }
+            // 超限：升级为 error 严重度（旧实现仅 warn），并继续走 fallback
+            AppLog.error(
+                "BookmarkDebug",
+                "restoreProgress UNRESOLVED after $restoreAttempts retries — falling back to page 0" +
+                    " | chIdx=$chapterIndex initChapPos=$initialChapterPosition" +
+                    " | pc=$pageCount renderPC=$renderPageCount token=$restoreToken",
+            )
+        }
         val pageFromCharIndex = if (initialChapterPosition > 0) {
-            chapter.getPageIndexByCharIndex(initialChapterPosition).coerceIn(0, pageCount - 1)
+            rawPageFromCharIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         } else -1
         val currentTargetPage = when {
             startFromLastPage -> pageCount - 1
@@ -1025,21 +1095,8 @@ fun CanvasRenderer(
                 " initChapPos=$initialChapterPosition initProg=$initialProgress" +
                 " startFromLast=$startFromLastPage pageFromCharIdx=$pageFromCharIndex" +
                 " computedTarget=$currentTargetPage pc=$pageCount renderPC=$renderPageCount" +
-                " pageAnim=$pageAnimType restoreToken=$restoreToken",
+                " pageAnim=$pageAnimType restoreToken=$restoreToken attempts=$restoreAttempts",
         )
-        // Surface the case where we asked for a real position but couldn't resolve it.
-        // initChapPos>0 means the saved cursor expected a non-leading char, yet
-        // pageFromCharIndex=-1 means pageFactory failed to map it — we then silently
-        // fall back to page 0 / proportional, which can mask layout/loader bugs.
-        if (initialChapterPosition > 0 && pageFromCharIndex == -1) {
-            AppLog.warn(
-                "BookmarkDebug",
-                "restoreProgress UNRESOLVED charIndex" +
-                    " | chIdx=$chapterIndex initChapPos=$initialChapterPosition" +
-                    " | pc=$pageCount renderPC=$renderPageCount" +
-                    " | falling back to computedTarget=$currentTargetPage",
-            )
-        }
         AppLog.debug("CanvasRenderer", "restoreProgress: startFromLast=$startFromLastPage target=$currentTargetPage pc=$pageCount renderPC=$renderPageCount token=$restoreToken")
         val targetPage = pageFactory.displayIndexForCurrentPage(currentTargetPage).coerceIn(0, renderPageCount - 1)
         readerPageIndex = currentTargetPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
@@ -1059,12 +1116,18 @@ fun CanvasRenderer(
         //
         // 修复：先把 lastSettled / lastReaderContent 写好，再决定要不要 scrollToPage。
         // - 仿真模式：完全跳过 scrollToPage（pagerState 是摆设，scroll 反而触发幽灵 onPageSettled）
+        // - **滚动模式（SCROLL）**：实际渲染走 [LazyScrollRenderer] / [ScrollRenderer]，
+        //   pagerState 同样是摆设。多余的 scrollToPage 不仅无视觉效果，还因 LaunchedEffect
+        //   在 scroll 真正 suspend 之前 key 已变被 cancel → 抛 LeftCompositionCancellationException。
+        //   而且 onPageSettled 链会串扰 LazyScroll 的 firstVisibleItem 同步。
+        //   书签精确跳转改由 [LazyScrollRenderer] 的 `jumpAnchor` + `jumpToken` 命令式 API
+        //   接管（见本文件下方 LazyScrollRenderer 调用处）。
         // - 其他模式（SLIDE/COVER/NONE）：scrollToPage 仍然是必须的，pagerState 决定视觉
         coordinator.lastSettledDisplayPage = targetPage
         coordinator.lastReaderContent = coordinator.createPageState(targetPage).upContent()
         coordinator.reportProgress(coordinator.lastReaderContent)
 
-        if (pageAnimType != PageAnimType.SIMULATION) {
+        if (pageAnimType != PageAnimType.SIMULATION && pageAnimType != PageAnimType.SCROLL) {
             coordinator.ignoredSettledDisplayPage = targetPage
             val beforeScroll = pagerState.currentPage
             try {
@@ -1072,7 +1135,7 @@ fun CanvasRenderer(
                 val afterScroll = pagerState.currentPage
                 AppLog.info(
                     "BookmarkDebug",
-                    "restoreProgress JUMP DONE (non-SIM) before=$beforeScroll after=$afterScroll" +
+                    "restoreProgress JUMP DONE ($pageAnimType) before=$beforeScroll after=$afterScroll" +
                         " coord.lastSettled=${coordinator.lastSettledDisplayPage}" +
                         " scrollEffective=${afterScroll == targetPage}",
                 )
@@ -1082,20 +1145,83 @@ fun CanvasRenderer(
         } else {
             AppLog.info(
                 "BookmarkDebug",
-                "restoreProgress JUMP DONE (SIM, skip scrollToPage)" +
+                "restoreProgress JUMP DONE ($pageAnimType, skip scrollToPage)" +
                     " coord.lastSettled=${coordinator.lastSettledDisplayPage}",
             )
         }
         progressRestored = true
         onProgressRestored()
+
+        // ── 跳转后整段褪色高亮 ──
+        //
+        // 书签 / TOC / 续读跳转成功后给用户一个清晰的"我跳到这儿了"视觉反馈：
+        // 把目标 chapterPos 所在整段染上一层淡淡的 primary 色，1 秒内褪到透明。
+        //
+        // 触发条件：仅在用户主动跳转（initialChapterPosition > 0 或 startFromLastPage）
+        // 时显示。普通"打开新书第一次进章"（initialChapterPosition == 0）不闪烁，
+        // 避免每次进章都来一道光。
+        //
+        // chapterPosition 用来定位目标段：用 chapter.getParagraphs(pageSplit=false)
+        // 取段列表，找首个 chapterIndices 包住目标的 paragraph。找不到 → 不触发，
+        // 避免边界情况下画错位置（例如 layout 流式构造未完成）。
+        if (initialChapterPosition > 0 && chapter != null) {
+            val targetParagraph = chapter.getParagraphs(pageSplit = false).firstOrNull {
+                initialChapterPosition in it.chapterIndices
+            }
+            if (targetParagraph != null && targetParagraph.length > 0) {
+                val startCp = targetParagraph.chapterPosition
+                val endCp = startCp + targetParagraph.length
+                val baseArgb = accentColor.toArgb()
+                val animatable = androidx.compose.animation.core.Animatable(1f)
+                revealHighlight = RevealHighlight(
+                    chapterIndex = chapterIndex,
+                    startChapterPos = startCp,
+                    endChapterPos = endCp,
+                    baseColorArgb = baseArgb,
+                    alpha = animatable,
+                )
+                scope.launch {
+                    // hold 200ms 让用户先看清，然后 1000ms 渐隐到 0；总计 1.2s。
+                    // 用 separate scope.launch 而不是占用 restoreProgress 的 LaunchedEffect
+                    // 协程 —— 这条 LaunchedEffect 在 restoreToken 失效时会取消，太短不
+                    // 够画完动画；scope（rememberCoroutineScope）只在 Composable 离开
+                    // 组合时取消，更适合 UI 反馈类持续动效。
+                    kotlinx.coroutines.delay(200)
+                    animatable.animateTo(
+                        targetValue = 0f,
+                        animationSpec = androidx.compose.animation.core.tween(
+                            durationMillis = 1000,
+                        ),
+                    )
+                    // 动画完成后清空，避免下次同章相同位置 alpha=0 也保持引用
+                    revealHighlight = null
+                }
+            }
+        }
     }
 
-    // Report progress
-    LaunchedEffect(pagerState.currentPage, renderPageCount, pageCount, chapter?.isCompleted, progressRestored, pageAnimType) {
-        if (chapter?.isCompleted != true || !progressRestored) return@LaunchedEffect
-        val localPage = pageFactory.currentLocalIndex(pagerState.currentPage) ?: return@LaunchedEffect
-        val pct = if (pageCount > 1) (localPage * 100) / (pageCount - 1) else 100
-        onProgress(pct)
+    // Report progress —— 用 snapshotFlow + distinctUntilChanged 把「pagerState.currentPage
+    // 在翻页动画过渡帧的高频变化」节流为「真正的页索引变化」。旧写法
+    // `LaunchedEffect(pagerState.currentPage, renderPageCount, pageCount,
+    //   chapter?.isCompleted, progressRestored, pageAnimType)` 6-key 复合键在 fling
+    // 衰减期 + 章节切换瞬间会反复重启 effect，每次重新构造一个跑一帧就被取消的协程；
+    // snapshotFlow 把状态变化外包给 Compose snapshot 系统，filterNotNull 跳过
+    // 「未就绪态」（chapter 未完成 / progress 未恢复 / localPage 越界），
+    // distinctUntilChanged 去掉同百分比连续重复回调。
+    //
+    // LaunchedEffect key 收缩到 (pageFactory, pagerState) —— 仅章节切换 / pager 重建
+    // 时重启 Flow 链路；其余高频信号 (currentPage / pageCount / progressRestored /
+    // chapter.isCompleted) 通过 snapshotFlow 自动追踪 Compose snapshot 读。
+    LaunchedEffect(pageFactory, pagerState) {
+        snapshotFlow {
+            if (chapter?.isCompleted != true || !progressRestored) return@snapshotFlow null
+            val localPage = pageFactory.currentLocalIndex(pagerState.currentPage)
+                ?: return@snapshotFlow null
+            if (pageCount > 1) (localPage * 100) / (pageCount - 1) else 100
+        }
+            .filterNotNull()
+            .distinctUntilChanged()
+            .collect(onProgress)
     }
 
     val bgArgb = backgroundColor.toArgb()
@@ -1133,25 +1259,40 @@ fun CanvasRenderer(
         hasBgImage = bgBitmap != null,
     )
 
-    // ── 渲染主题（5 件套 paint + 背景）注入 ──
+    // ── 渲染主题（5 件套 paint + 背景 + 4 高亮色）注入 ──
     //
     // 旧链路把 titlePaint/contentPaint/chapterNumPaint/bgArgb/bgBitmap 当作 5 个独立
     // 入参分别透传给 [rememberSimulationParams] / [LazyScrollRenderer] / [ScrollRenderer]，
     // caller 只要漏一个字段就静默渲染异常（譬如忘了传 bgBitmap → 自定义背景图丢失）。
     //
     // Phase 2 起统一打包成 [ReaderRenderTheme] 一次性注入 [LocalReaderRenderTheme]，
-    // 让 SimulationDelegate / LazyScrollRenderer 等下游组件直接 .current 取，少传一组
-    // 字段、少一份「漏字段」风险。
+    // 让 SimulationDelegate / LazyScrollRenderer / PageCanvas / PageContentBox 等下游
+    // 组件直接 .current 取，少传一组字段、少一份「漏字段」风险。
     //
-    // remember key 用 5 件套本体：用户改字号 → titlePaint 换引用 → readerTheme 重建 →
-    // 下游 SimulationParams remember 失效 → renderPageToBitmap 用新 paint 出图。
-    val readerTheme = remember(titlePaint, contentPaint, chapterNumPaint, bgArgb, bgBitmap) {
+    // Phase B（P1 #4/#5）扩展：4 个高亮色（selection / aloud / searchResult / bookmark）
+    // 也并入 theme，从 [MaterialTheme.colorScheme] 派生。这样 PageCanvas / PageContentBox
+    // 不再各自重复 `MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)` 表达式，
+    // 主题切换 + 高亮色变化由 readerTheme 一处统一管理。
+    //
+    // remember key 用 5 件套 paint/bg + 2 件套 MaterialTheme 派生色：用户改字号 →
+    // titlePaint 换引用 → readerTheme 重建；切换日/夜 / 主题 → mtPrimary/mtError 变 →
+    // readerTheme 重建。下游 LazyScrollRenderer / PageCanvas 等通过 LocalReaderRenderTheme.current
+    // 自动拿到新主题。
+    val mtPrimary = MaterialTheme.colorScheme.primary
+    val mtError = MaterialTheme.colorScheme.error
+    val readerTheme = remember(
+        titlePaint, contentPaint, chapterNumPaint, bgArgb, bgBitmap, mtPrimary, mtError,
+    ) {
         ReaderRenderTheme(
             titlePaint = titlePaint,
             contentPaint = contentPaint,
             chapterNumPaint = chapterNumPaint,
             bgArgb = bgArgb,
             bgBitmap = bgBitmap,
+            selectionColor = mtPrimary.copy(alpha = 0.30f),
+            aloudColor = mtPrimary.copy(alpha = 0.20f),
+            searchResultColor = mtPrimary.copy(alpha = 0.25f),
+            bookmarkColor = mtError,
         )
     }
 
@@ -1404,206 +1545,35 @@ fun CanvasRenderer(
     ) {
         if (pageAnimType == PageAnimType.SCROLL) {
             if (useLazyScrollRenderer) {
-                // ── 实验：LazyColumn 段落级瀑布流引擎 ──
+                // ── SCROLL 模式：LazyColumn 段落级瀑布流 ──
                 //
-                // 现场把 prev + cur + next 三章的段落扁平拼成 paragraphs 列表喂给 LazyScrollRenderer。
-                // 跨章无缝衔接靠两条机制：
-                //   1. 列表 prepend/append（caller 加载邻章 → toScrollParagraphs 拼到列表头/尾）
-                //   2. prepend 锚定补偿（这里跟踪 firstKey 变化算 prependedCount）
-                //
-                // ReaderRenderTheme 通过 CompositionLocalProvider 注入，避免向 LazyScrollRenderer
-                // 层层传 paint/bg —— 这是新组件的现代实践示范。
-                val paragraphs = remember(prevTextChapter, chapter, nextTextChapter) {
-                    buildList {
-                        prevTextChapter?.let { addAll(it.toScrollParagraphs()) }
-                        (chapter ?: placeholderChapter()).let { addAll(it.toScrollParagraphs()) }
-                        nextTextChapter?.let { addAll(it.toScrollParagraphs()) }
-                    }
-                }
-
-                // 进度计算需要每章字符总数 —— 现场建小 map 缓存（窗口仅 3 章，零开销）
-                val chapterCharSizes = remember(prevTextChapter, chapter, nextTextChapter) {
-                    buildMap {
-                        prevTextChapter?.let { put(it.chapterIndex, it.getContent().length.coerceAtLeast(1)) }
-                        chapter?.let { put(it.chapterIndex, it.getContent().length.coerceAtLeast(1)) }
-                        nextTextChapter?.let { put(it.chapterIndex, it.getContent().length.coerceAtLeast(1)) }
-                    }
-                }
-
-                // ── prepend 锚定补偿 ──
-                //
-                // 跟踪 paragraphs.firstKey 变化：旧 firstKey 在新列表里的 idx 就是 prepend 数。
-                // 用 token = System.nanoTime() 做幂等 key，让连续 prepend 能逐次触发。
-                //
-                // ── drop-from-front 锚定补偿（章节切换回弹修复）──
-                //
-                // commitChapterShiftNext 让窗口从 [prev+cur+next] 变成 [cur+next+nextNext]，
-                // 即 prev 章 N 段从头部被「丢弃」、原本的 cur 段移到 idx=0。listState 的
-                // firstVisibleItemIndex 不会自动调整，旧值在新列表坐标系里指向「之后 N 段」
-                // → 视觉一闪、LazyScroll derive 章号震荡（22→21→22）。
-                //
-                // 检测条件：旧 firstKey 在新列表中找不到（不是 prepend）+ 新 firstKey 在旧
-                // 列表里曾出现于 idx > 0 → 那个 idx 就是被丢弃的段数。
-                //
-                // 实现：除 lastFirstKey 外再缓存 lastParagraphKeys（轻量，几百条 String 引用）。
-                var lastFirstKey by remember { mutableStateOf<String?>(null) }
-                var lastParagraphKeys by remember { mutableStateOf<List<String>>(emptyList()) }
-                var prependedCount by remember { mutableIntStateOf(0) }
-                var prependToken by remember { mutableLongStateOf(0L) }
-                var droppedFromFrontCount by remember { mutableIntStateOf(0) }
-                var dropToken by remember { mutableLongStateOf(0L) }
-                LaunchedEffect(paragraphs) {
-                    val newFirstKey = paragraphs.firstOrNull()?.key
-                    val oldFirstKey = lastFirstKey
-                    if (oldFirstKey != null && newFirstKey != null && oldFirstKey != newFirstKey) {
-                        val newPos = paragraphs.indexOfFirst { it.key == oldFirstKey }
-                        if (newPos > 0) {
-                            // prepend：旧首段在新列表里被推到 idx=newPos
-                            prependedCount = newPos
-                            prependToken = System.nanoTime()
-                            AppLog.debug("LazyScroll", "detected prepend: $newPos paragraphs added at top")
-                        } else {
-                            // drop-from-front：旧首段在新列表已不存在，找新首段在旧列表里的 idx
-                            val oldPosOfNewFirst = lastParagraphKeys.indexOf(newFirstKey)
-                            if (oldPosOfNewFirst > 0) {
-                                droppedFromFrontCount = oldPosOfNewFirst
-                                dropToken = System.nanoTime()
-                                AppLog.debug(
-                                    "LazyScroll",
-                                    "detected drop-from-front: $oldPosOfNewFirst paragraphs removed at top",
-                                )
-                            }
-                        }
-                    }
-                    lastFirstKey = newFirstKey
-                    lastParagraphKeys = paragraphs.map { it.key }
-                }
-
-                // ── 锚点恢复 ──
-                //
-                // **关键**：remember key 只依赖 (chapterIndex, initialChapterPosition, cur 章
-                // ready)，**不**依赖 paragraphs.size——否则 prev/next 章异步加载完时
-                // paragraphs.size 变化会触发 initialAnchor 重算 → key 变 → LazyScrollRenderer
-                // 整体重建 → listState 重置 → 旧的 prepend 锚定补偿与新 initialIdx 双重作用
-                // → idx 越界 coerce 到末尾 → onNearBottom 触发 → onNextChapter 死循环。
-                //
-                // 正确语义：用户「打开书 / 跳新章」才重算锚点；之后 paragraphs 怎么扩展、
-                // 用户怎么滚都不重算。
-                val curReady = chapter?.isCompleted == true
-                val initialAnchor = remember(chapterIndex, initialChapterPosition, curReady) {
-                    if (!curReady) null
-                    // bookmarkToAnchor 只需要 paragraphs 含锚点章；cur ready 时 paragraphs
-                    // 同帧已含 cur 段（paragraphs remember 也 keyed on chapter）。
-                    else bookmarkToAnchor(chapterIndex, initialChapterPosition, paragraphs)
-                        ?: ScrollAnchor.atChapterStart(chapterIndex)
-                }
-
-                // ── paragraphsReady gating ──
-                //
-                // ready=true 必须满足：
-                //   1. chapter 真实加载完成（isCompleted）—— 不是 placeholderChapter
-                //   2. 锚点章在 paragraphs 里（findAnchorIndex >= 0）——首次进入时 cur ready
-                //      后这条自然成立；后续不会回到 false（LazyScrollRenderer 持续存活）
-                //
-                // ready=false 时显示 ReaderLoadingCover，**不构造** LazyColumn。
-                // ready=true 后 LazyScrollRenderer 永久存活（不因 paragraphs / anchor 变化
-                // 重建），prepend 锚定补偿正常工作。
-                val paragraphsReady = curReady &&
-                    initialAnchor != null &&
-                    paragraphs.isNotEmpty() &&
-                    findAnchorIndex(paragraphs, initialAnchor) >= 0
-
-                if (!paragraphsReady) {
-                    // 加载占位 —— 和 LazyColumn 同色背景，切换零闪烁
-                    ReaderLoadingCover(
-                        bgColor = Color(readerTheme.bgArgb),
-                        textColor = Color(textColor.toArgb()),
-                        chapterTitle = chapterTitle.ifBlank { "正在加载…" },
-                        chapterSubtitle = if (chapterIndex >= 0) "第 ${chapterIndex + 1} 章" else null,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    // ── 初始 LazyListState 参数 ──
-                    //
-                    // remember key 含 paragraphs.size，让窗口扩展时也参与 invalidation——
-                    // 但 rememberLazyListState 的 initial 参数只在首次 compose 生效，
-                    // 后续重算 initialParams **不会**让 listState 重置（这是 Compose 的
-                    // rememberSaveable 设计），所以这里 paragraphs.size 进 key 是安全的，
-                    // 单纯避免 stale anchor。
-                    //
-                    // 关键防御：
-                    //   1. paragraphsReady gate 保证 anchor 非 null + 锚点章在 paragraphs 内
-                    //   2. ?.let 兜底：极小窗口竞态下 anchor 仍 null 时退化到 (0,0)，
-                    //      避免 !! NPE 崩溃
-                    //   3. coerceIn：万一 LazyColumn 尚未首次 layout 就 query state，
-                    //      负数 / 越界的 initial 参数会让 LazyListState saver 抛异常
-                    val initialParams = remember(chapterIndex, initialChapterPosition, paragraphs.size) {
-                        val anchor = initialAnchor
-                        if (anchor == null || paragraphs.isEmpty()) {
-                            0 to 0
-                        } else {
-                            val (idx, offset) = calcInitialListStateParams(paragraphs, anchor)
-                            idx.coerceIn(0, paragraphs.lastIndex) to offset.coerceAtLeast(0)
-                        }
-                    }
-                    val initialIdx = initialParams.first
-                    val initialOffsetPx = initialParams.second
-
-                    // **不要** `key(...)` 包裹 —— 让 LazyScrollRenderer 一旦挂载就持续存活，
-                    // paragraphs 后续 prepend/append 透传，listState 不重建。
-                    // readerTheme 已由外层 CompositionLocalProvider（L~1136 处）提供，
-                    // 这里直接走 LazyScrollRenderer，不再二次构造主题/嵌套 provider。
-                    LazyScrollRenderer(
-                        paragraphs = paragraphs,
-                        initialIdx = initialIdx,
-                        initialOffsetPx = initialOffsetPx,
-                        prependedCount = prependedCount,
-                        prependToken = prependToken,
-                        droppedFromFrontCount = droppedFromFrontCount,
-                        dropToken = dropToken,
-                        ttsHighlightChapterIndex = if (readAloudChapterPosition >= 0) chapterIndex else -1,
-                        ttsHighlightChapterPosition = readAloudChapterPosition,
-                        onNearTop = onPrevChapter,
-                        onNearBottom = onNextChapter,
-                        // Phase 4 长按段落 —— 当前 fallback 为 "复制整段"。Phase 5 接入完整
-                        // 选区拖把手 + ReaderSelectionToolbar 后替换。
-                        onLongPressParagraph = { paragraph, _ ->
-                            val text = buildString {
-                                for (line in paragraph.lines) {
-                                    for (col in line.columns) {
-                                        if (col is com.morealm.app.domain.render.TextBaseColumn) {
-                                            append(col.charData)
-                                        }
-                                    }
-                                }
-                            }
-                            if (text.isNotBlank()) onCopyText(text)
-                        },
-                        // UI 实时进度：底栏百分比跟随手指（外层 onProgress 是 UI state
-                        // 更新；写 DB 走下面的 persist 链）
-                        onChapterProgressLive = { _, prog ->
-                            if (chapter?.isCompleted == true) onProgress(prog)
-                        },
-                        // 持久化进度：debounce 800ms。上层 ReaderViewModel 内部已对
-                        // 写 DB / SP 做去重，这条 debounce 链保证最终落盘最多 1 次/停手。
-                        onChapterProgressPersist = { _, prog ->
-                            if (chapter?.isCompleted == true) onProgress(prog)
-                        },
-                        onVisibleParagraphChanged = { p, _ ->
-                            // 通知 ReaderScreen 顶栏：章 idx + 章首段 chapterPosition
-                            val titleForCh = when (p.chapterIndex) {
-                                chapter?.chapterIndex -> chapterTitle
-                                prevTextChapter?.chapterIndex -> prevChapterTitle
-                                nextTextChapter?.chapterIndex -> nextChapterTitle
-                                else -> ""
-                            }
-                            onVisiblePageChanged(p.chapterIndex, titleForCh, "", p.firstChapterPosition)
-                        },
-                        onTapCenter = onTapCenter,
-                        chapterCharSizeProvider = { chIdx -> chapterCharSizes[chIdx] ?: 1 },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+                // 数据流 + 三道防线全部委托给 [LazyScrollSection]（独立文件 ~280 行），
+                // 这里只透传 chapter window + 跳转坐标 + 回调。详细机制见
+                // [LazyScrollSection] 注释。
+                LazyScrollSection(
+                    chapter = chapter,
+                    prevTextChapter = prevTextChapter,
+                    nextTextChapter = nextTextChapter,
+                    chapterIndex = chapterIndex,
+                    initialChapterPosition = initialChapterPosition,
+                    restoreToken = restoreToken,
+                    readAloudChapterPosition = readAloudChapterPosition,
+                    chapterTitle = chapterTitle,
+                    prevChapterTitle = prevChapterTitle,
+                    nextChapterTitle = nextChapterTitle,
+                    backgroundColor = Color(readerTheme.bgArgb),
+                    textColor = Color(textColor.toArgb()),
+                    // 跨章后用 takeIf 过滤旧章 reveal 不画到当前 viewport
+                    revealHighlight = revealHighlight?.takeIf { it.chapterIndex == chapterIndex },
+                    onPrevChapter = onPrevChapter,
+                    onNextChapter = onNextChapter,
+                    onProgress = onProgress,
+                    onCopyText = onCopyText,
+                    onTapCenter = onTapCenter,
+                    onVisiblePageChanged = onVisiblePageChanged,
+                    onScrollingChanged = { scrollInProgress = it },
+                    modifier = Modifier.fillMaxSize(),
+                )
             } else {
                 ScrollRenderer(
                 pages = currentChapterPages,
@@ -1641,6 +1611,7 @@ fun CanvasRenderer(
                 onNearBottom = onScrollNearBottom,
                 onReachedBottom = onScrollReachedBottom,
                 onBoundaryPageTurn = { direction, displayIndex -> coordinator.commitScrollChapterBoundary(direction, displayIndex) { readerPageIndex = it } },
+                onScrollingChanged = { scrollInProgress = it },
                 onTapCenter = onTapCenter,
                 onImageClick = onImageClick,
                 onLongPressText = { page, textPos, offset ->
@@ -1769,10 +1740,6 @@ fun CanvasRenderer(
                     } else {
                         pagerState.currentPage
                     },
-                    titlePaint = titlePaint,
-                    contentPaint = contentPaint,
-                    chapterNumPaint = chapterNumPaint,
-                    bgBitmap = bgBitmap,
                     backgroundColor = backgroundColor,
                     selectionState = selectionState,
                     chapterTitle = chapterTitle,
@@ -1798,6 +1765,12 @@ fun CanvasRenderer(
                     readAloudChapterPosition = readAloudChapterPosition,
                     chapterHighlights = highlightSpans,
                     chapterTextColorSpans = textColorSpans,
+                    // 跳转后整段褪色高亮：只在「当前章节」转发；alpha.value 的读取**故意不**
+                    // 在这里展开 —— 读取被推迟到 [PageCanvas] 内的 Canvas DrawScope，
+                    // 让动画每帧仅触发 Phase 3（绘制）重跑，不触发 Phase 1（重组）/
+                    // Phase 2（布局）。这是 Compose 现代实践绕开"重组风暴"的关键
+                    // —— 旧时代 ObjectAnimator + invalidate() 会把整棵子树重画。
+                    revealHighlight = revealHighlight?.takeIf { it.chapterIndex == chapterIndex },
                     onCurrentPageChanged = {},
                     onSelectionStartMove = { textPos ->
                         selectedTextPage = coordinator.getPageAt(pageIndex)
@@ -1828,10 +1801,6 @@ fun CanvasRenderer(
                 page = TextPage(title = chapterTitle),
                 pageIndex = 0,
                 currentPage = 0,
-                titlePaint = titlePaint,
-                contentPaint = contentPaint,
-                chapterNumPaint = chapterNumPaint,
-                bgBitmap = bgBitmap,
                 backgroundColor = backgroundColor,
                 selectionState = selectionState,
                 chapterTitle = chapterTitle,
@@ -1868,6 +1837,22 @@ fun CanvasRenderer(
             coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax)
         } else {
             pagerState.currentPage
+        }
+        // ── 滚动 / 翻页时自动收掉浮层 —— 杀「僵尸菜单」 ──
+        //
+        // 旧实现：toolbar 是手画 Box 嵌在 reader 主层里，用户在浮层显示中翻页 /
+        // 滚动时 Column.offset 还按老 chapterPosition 算位置，菜单卡屏 + 跟着内容
+        // 飘是肉眼可见的体验问题。改成 Popup 后浮层在自己的 window，但状态机
+        // (selectionState / highlightActionTarget) 还活着，所以仍需明确触发清除。
+        //
+        // 同时清两个浮层：selectionState（编辑选区）和 highlightActionTarget（已存
+        // 高亮的删除/分享 action menu），逻辑一致。
+        val pagerScrolling = pagerState.isScrollInProgress
+        LaunchedEffect(pagerScrolling, scrollInProgress) {
+            if (pagerScrolling || scrollInProgress) {
+                if (selectionState.isActive) selectionState.clear()
+                if (highlightActionTarget != null) highlightActionTarget = null
+            }
         }
         ReaderSelectionToolbar(
             selectionState = selectionState,
@@ -2069,7 +2054,11 @@ private fun PageReaderInfoOverlay(
         val currentPage = pages.getOrNull(safePageIndex) ?: pages.firstOrNull()
         val actualPageIndex = currentPage?.index ?: safePageIndex
         val actualPageCount = currentPage?.pageSize?.takeIf { it > 0 } ?: pageCount
-        val actualChapterTitle = currentPage?.title?.takeIf { it.isNotBlank() } ?: chapterTitle
+        // 自动分节伪标题（"第N节" / "正文"）退回到外层 chapterTitle —— ReaderScreen 已用
+        // [BookChapter.displayTitle] 把它换成书名。
+        val actualChapterTitle = currentPage?.title
+            ?.takeIf { it.isNotBlank() && !it.looksLikeAutoSplitTitle() }
+            ?: chapterTitle
         val actualChapterIndex = currentPage?.chapterIndex ?: chapterIndex
         LaunchedEffect(currentPage) {
             currentPage?.let(onCurrentPageChanged)
@@ -2374,16 +2363,23 @@ private fun rememberBatteryLevel(context: Context): MutableState<Int> {
 
 /**
  * A single page's content: the Canvas-drawn text plus header/footer info bars.
+ *
+ * # Phase B P1 #5 签名瘦身
+ *
+ * 旧签名 4 个 theme 入参（titlePaint / contentPaint / chapterNumPaint / bgBitmap）
+ * 全部下沉到 [LocalReaderRenderTheme]，调用方不再写。本组件内部也不再透传给
+ * [PageCanvas]（PageCanvas P1 #4 已自取 theme），仅在 info bar 处需要 `bgBitmap`
+ * 判断是否走透明背景，故在函数体内一句 `theme.bgBitmap` 取出即可。
+ *
+ * 主体外层 [com.morealm.app.ui.reader.renderer.CanvasRenderer] 已用
+ * `CompositionLocalProvider(LocalReaderRenderTheme provides readerTheme)` 包住整片
+ * UI 子树，本函数所有调用点都在该作用域内，不需要每次再重新 provide。
  */
 @Composable
 private fun PageContentBox(
     page: TextPage,
     pageIndex: Int,
     currentPage: Int,
-    titlePaint: TextPaint,
-    contentPaint: TextPaint,
-    chapterNumPaint: TextPaint? = null,
-    bgBitmap: Bitmap?,
     backgroundColor: Color,
     selectionState: SelectionState,
     chapterTitle: String,
@@ -2420,6 +2416,15 @@ private fun PageContentBox(
      * 有交集的子集传给 [PageCanvas]。
      */
     chapterTextColorSpans: List<HighlightSpan> = emptyList(),
+    /**
+     * 跳转后整段褪色高亮的状态对象（已由上层做了"同章"过滤）。
+     *
+     * **故意不**在 PageContentBox 这层读 `alpha.value` —— 那样会让 alpha 动画
+     * 每一帧把本 Composable 树重组一遍。read 操作下沉到 [PageCanvas] 内部
+     * `Canvas { ... }` 的 DrawScope，让 Compose 把它登记为绘制阶段（Phase 3）依赖：
+     * alpha 变化 → 仅触发本 Canvas 重画，不触发重组 / 重布局。
+     */
+    revealHighlight: RevealHighlight? = null,
     onCurrentPageChanged: (TextPage) -> Unit = {},
     onSelectionStartMove: (TextPos) -> Unit = {},
     onSelectionEndMove: (TextPos) -> Unit = {},
@@ -2457,6 +2462,9 @@ private fun PageContentBox(
     }
 
     val isCurrentDisplayPage = pageIndex == currentPage
+    // Phase B P1 #5：唯一一处仍需 theme 字段的地方是 info bar 的 hasBgImage 判断；
+    // PageCanvas（已 P1 #4 瘦身）不再需要外部传 paint/bg，自取 LocalReaderRenderTheme。
+    val bgBitmap = LocalReaderRenderTheme.current.bgBitmap
     // Filter chapter-wide highlight set down to those overlapping THIS page's
     // character range. Cheap (O(highlights × 1)); avoids re-scanning unrelated
     // ranges inside the per-line draw loop.
@@ -2490,25 +2498,24 @@ private fun PageContentBox(
                 AppLog.debug("CursorHandleTrace", "PageContentBox cursor | $pcDigest")
             }
         }
+        // Phase B P1 #4：PageCanvas 8 个 theme 字段（3 paint + bgBitmap + 4 高亮色）
+        // 已迁到 LocalReaderRenderTheme，调用方不再写主题字段。本调用栈外层
+        // CompositionLocalProvider(LocalReaderRenderTheme provides readerTheme)
+        // 已在 CanvasRenderer 主体（L~1196）注入。
         PageCanvas(
             page = page,
-            titlePaint = titlePaint,
-            contentPaint = contentPaint,
-            chapterNumPaint = chapterNumPaint,
-            bgBitmap = bgBitmap,
             selectionStart = if (isCurrentDisplayPage) {
                 selectionState.startPos?.takeIf { it.relativePagePos == 0 }
             } else null,
             selectionEnd = if (isCurrentDisplayPage) {
                 selectionState.endPos?.takeIf { it.relativePagePos == 0 }
             } else null,
-            selectionColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
-            aloudColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
-            searchResultColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
-            bookmarkColor = MaterialTheme.colorScheme.error,
             readAloudChapterPosition = readAloudChapterPosition,
             highlights = pageHighlights,
             textColorSpans = pageTextColorSpans,
+            // reveal 不在这层做 page-bounds 过滤；交给 PageCanvas 在 DrawScope 里
+            // 一起判断 + 读 alpha.value，把"渲染决策"集中在绘制阶段。
+            revealHighlight = revealHighlight,
             modifier = Modifier.fillMaxSize(),
         )
         if (isCurrentDisplayPage) {
@@ -2539,16 +2546,8 @@ private fun PageContentBox(
             ) {
                 PageCanvas(
                     page = autoPageNextPage,
-                    titlePaint = titlePaint,
-                    contentPaint = contentPaint,
-                    chapterNumPaint = chapterNumPaint,
-                    bgBitmap = bgBitmap,
                     selectionStart = null,
                     selectionEnd = null,
-                    selectionColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
-                    aloudColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
-                    searchResultColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
-                    bookmarkColor = MaterialTheme.colorScheme.error,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

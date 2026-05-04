@@ -90,6 +90,12 @@ fun ScrollRenderer(
     searchResultColor: Color = DEFAULT_SEARCH_RESULT_COLOR,
     onScrollProgress: (Int) -> Unit = {},
     onScrollPageChanged: (pageIndex: Int, page: TextPage) -> Unit = { _, _ -> },
+    /**
+     * 用户拖拽 / fling 是否进行中。和 [LazyScrollRenderer.onScrollingChanged]
+     * 同名同语义：CanvasRenderer 把它转给浮层（SelectionToolbar / 高亮 action menu）
+     * 用，true 时立即收掉浮层避免「僵尸菜单」。默认 no-op，老 caller 不传无影响。
+     */
+    onScrollingChanged: (Boolean) -> Unit = {},
     onNearBottom: () -> Unit = {},
     onReachedBottom: () -> Unit = {},
     onBoundaryPageTurn: (direction: ReaderPageDirection, pageIndex: Int) -> Boolean = { _, _ -> false },
@@ -876,6 +882,10 @@ fun ScrollRenderer(
                         totalDragX = 0f
                         totalDragY = 0f
                         velocityTracker.resetTracking()
+                        // 通知 caller 用户开始拖动 → 收掉浮层（详见 onScrollingChanged 文档）。
+                        // 注意：drag 一开始就 emit true，不等 dragAxis 确定为竖向 ——
+                        // 浮层早一帧消失体感更好，万一是横向手势也只是浮层早消失而已。
+                        onScrollingChanged(true)
                     },
                     onDrag = { change, dragAmount ->
                         totalDragX += dragAmount.x
@@ -899,6 +909,8 @@ fun ScrollRenderer(
                     onDragEnd = {
                         if (dragAxis != 1) {
                             scrollDelegateState.stopScroll()
+                            // 非竖向手势 → 没有 fling，立即收尾
+                            onScrollingChanged(false)
                             return@detectDragGestures
                         }
                         val velocity = velocityTracker.calculateVelocity().y
@@ -917,11 +929,15 @@ fun ScrollRenderer(
                             }
                             isFling = false
                             scrollDelegateState.stopScroll()
+                            // fling 结束后再 emit false —— 浮层在 fling 全程保持隐藏，
+                            // 直到内容真正稳定下来用户才有机会重新长按选区。
+                            onScrollingChanged(false)
                         }
                     },
                     onDragCancel = {
                         isFling = false
                         scrollDelegateState.abortAnim()
+                        onScrollingChanged(false)
                     },
                 )
             }

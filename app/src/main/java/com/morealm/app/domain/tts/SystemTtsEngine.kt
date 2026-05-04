@@ -504,7 +504,31 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
         engine = id,
     )
 
-    override fun stop() { tts?.stop() }
+    /**
+     * 停止当前朗读。
+     *
+     * 实现注意：[TextToSpeech.stop] 内部是一次同步 binder transact，**部分设备**（特别是
+     * 系统 TTS 进程负载高 / engine buffer 多时）会阻塞调用线程 5–8 秒以上。日志
+     * `log_2026-05-04` 09:31:17 抓到一次 ANR 栈：
+     *
+     *     android.os.BinderProxy.transactNative
+     *       ← TextToSpeech.stop:1418
+     *       ← SystemTtsEngine.stop:507
+     *       ← TtsEngineHost.pause:600  (在 Dispatchers.Main 的 controlMutex 内)
+     *
+     * 主线程被卡 >8 秒 → ANR Watchdog。修复：把 binder 调用 fire-and-forget 到背景
+     * 线程；调用方（pause/stop/setEngine 路径）立刻返回，不再阻塞 Main。
+     *
+     * 这种 fire-and-forget 策略和 Legado `TTSReadAloudService` 一致：stop 没返回值
+     * 也不依赖完成时机——引擎下一次 enqueue 时会通过 onError 回调反馈状态。
+     */
+    override fun stop() {
+        val current = tts ?: return
+        Thread({ runCatching { current.stop() } }, "SystemTts-stop").apply {
+            isDaemon = true
+            start()
+        }
+    }
 
     override fun isAvailable(): Boolean = isReady
 
