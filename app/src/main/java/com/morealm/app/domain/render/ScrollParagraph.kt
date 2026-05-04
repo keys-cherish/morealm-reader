@@ -197,6 +197,35 @@ fun TextChapter.toScrollParagraphs(): List<ScrollParagraph> {
 
     val firstPagePaddingTop = pageSnapshot.first().paddingTop.toFloat()
 
+    // ── Pass 0：预扫所有同段同页相邻行差值，得到「整章典型行间距」 ──
+    //
+    // 用途：Pass 1 跨页相邻行（line N 在 page A 末，line N+1 在 page A+1 首）
+    // 的 page break 间隙必须丢弃（page A+1 paddingTop 不能保留在段内），但**不能
+    // 直接把两行拼在一起**——那样视觉上 page break 处的两行紧贴，比同段同页其它行
+    // 的间距小一截，肉眼看到「这两行突然挤在一起」的违和感。
+    //
+    // 解决：跨页相邻行用本章首个 > 0 的 intraGap 兜底，让 page break 跨页的两行
+    // 视觉上和段内其它相邻行行距一致。
+    //
+    // 为什么要全章扫而不是段内扫？因为有的段全部都跨页（每行都在不同页，比如
+    // 长段卡在 page break 上），段内根本没有「同页相邻行」可参考，要从其它段借
+    // 一份典型 intraGap。
+    val chapterFallbackIntraGap: Float = run {
+        for ((_, entries) in grouped) {
+            var ppi = -1
+            var plb = 0f
+            for ((pi, ln) in entries) {
+                if (pi == ppi) {
+                    val g = (ln.lineTop - plb).coerceAtLeast(0f)
+                    if (g > 0f) return@run g
+                }
+                ppi = pi
+                plb = ln.lineBottom
+            }
+        }
+        0f
+    }
+
     // ── Pass 1：先把每段的「不带尾部间距」基础布局算好 ──
     //
     // 把 paragraphSpacingAfter 算进 totalHeight 需要看下一段的首行位置，所以这里
@@ -260,8 +289,14 @@ fun TextChapter.toScrollParagraphs(): List<ScrollParagraph> {
                 val gap = (line.lineTop - prevLineBottom).coerceAtLeast(0f)
                 cursor += gap
                 if (firstIntraGap <= 0f && gap > 0f) firstIntraGap = gap
+            } else if (prevPageIdx >= 0) {
+                // 跨页相邻：丢弃 page break 间隙（page A+1 paddingTop 不能算进段内），
+                // 但**用 [chapterFallbackIntraGap] 补回正常行间距**——否则 page break
+                // 处的两行视觉上紧贴，比同段同页其它行的行距小，肉眼看到「某两行突然
+                // 挤在一起」的违和感。Pass 0 已扫整章给出典型 intraGap 值。
+                cursor += chapterFallbackIntraGap
             }
-            // 跨页：cursor 不补间距，直接接在上一行底部。
+            // 段首行（prevPageIdx == -1）：无相邻参考，cursor 直接是 paddingTop。
             linePositions[i] = cursor
             cursor += (line.lineBottom - line.lineTop).coerceAtLeast(0f)
             prevPageIdx = pageIdx
@@ -340,7 +375,8 @@ fun TextChapter.toScrollParagraphs(): List<ScrollParagraph> {
     //
     // 这条兜底只在「原算法的段间太小」时生效——若用户配置已经让段间足够明显
     // （如 Legado 默认 1.2 + 8 → 段间 1.0H 段内 0.2H = 5×），不会被改动。
-    val chapterFallbackIntraGap = raws.firstOrNull { it.intraLineGap > 0f }?.intraLineGap ?: 0f
+    // 注：直接复用 Pass 0 算出的 [chapterFallbackIntraGap]——两个 Pass 都需要同一个
+    // 「整章典型行间距」，只算一次共享。
     val result = ArrayList<ScrollParagraph>(raws.size)
     for (i in raws.indices) {
         val curr = raws[i]
