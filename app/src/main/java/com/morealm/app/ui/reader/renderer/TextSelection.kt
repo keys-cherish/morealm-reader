@@ -21,8 +21,14 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import com.morealm.app.domain.render.BaseColumn
 import com.morealm.app.domain.render.TextBaseColumn
 import com.morealm.app.domain.render.TextLine
@@ -348,38 +354,56 @@ fun SelectionToolbar(
         .coerceAtMost(configuration.screenWidthDp - 16)
     val menuWidth = menuWidthDp.dp
 
-    // Position: center on offset, clamp to screen
+    // Anchor: caller 给的是一个屏幕坐标点（长按位置 / 选区中心）；我们把它包成
+    // 一个 0×0 的 IntRect，让 PositionProvider 用 popupContentSize 自己测量真实宽高
+    // 来决定 above/below + 居中对齐。**不再**在 dp 层硬编码 menuHeightDp = 46+40+38 这类
+    // 估算累加：那是 View 时代的做法，菜单按钮 padding / 系统字体放大 / 中英文行高
+    // 任意一项变化都会让估算和真实高度脱节。Compose 已经帮我们测好了，直接用。
     val xDp = with(density) { offset.x.toDp() }
-    val yDp = with(density) { offset.y.toDp() }
-    val screenWidth = configuration.screenWidthDp.dp
-    val screenHeight = configuration.screenHeightDp.dp
-    // 高度估算：主行 46dp；扩展行 +~40dp；调色板 +~38dp。这是 menu 整体下边界
-    // 检测用，不影响实际渲染高度。两类调色板互斥，所以最多只会加一份 38dp。
-    val highlightVisibleInMainOrExpanded =
-        com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in mainItems ||
-            (expanded && com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in expandedItems)
-    val textColorVisibleInMainOrExpanded =
-        com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR in mainItems ||
-            (expanded && com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR in expandedItems)
-    var menuHeightDp = 46
-    if (expanded && hasExpandedRow) menuHeightDp += 40
-    if (paletteVisible && onHighlight != null && highlightVisibleInMainOrExpanded) menuHeightDp += 38
-    if (textColorPaletteVisible && onTextColor != null && textColorVisibleInMainOrExpanded) menuHeightDp += 38
-    val menuHeight = menuHeightDp.dp
-    val showBelow = yDp - menuHeight - 12.dp < 8.dp
-    val menuX = (xDp - menuWidth / 2).coerceIn(8.dp, screenWidth - menuWidth - 8.dp)
-    val menuY = if (showBelow) {
-        (yDp + 16.dp).coerceAtMost(screenHeight - menuHeight - 16.dp)
-    } else {
-        (yDp - menuHeight - 12.dp).coerceAtLeast(8.dp)
-    }
+    val menuX = (xDp - menuWidth / 2).coerceIn(
+        8.dp,
+        (configuration.screenWidthDp.dp - menuWidth - 8.dp).coerceAtLeast(8.dp),
+    )
     val arrowX = (xDp - menuX - 7.dp).coerceIn(18.dp, menuWidth - 18.dp)
 
-    Box(modifier = modifier.fillMaxSize()) {
+    // ── Popup 化 ──
+    //
+    // 之前自己用 Box(fillMaxSize) + Column.offset(menuX, menuY) 手摆位置 + 手算箭头。
+    // 现在 Popup + 自定义 PositionProvider：
+    //   1. 真实测量值由框架 `popupContentSize` 提供，above/below 决策 100% 准确，
+    //      不再依赖 dp 估算累加；
+    //   2. 滚动 / 翻页时由上层 wrapper（ReaderSelectionToolbar）通过 selectionState.clear()
+    //      关闭浮层，无需手画 fillMaxSize() backdrop；
+    //   3. focusable=false 让 reader 区下方的手势继续生效（cursor handle 拖动等）；
+    //      SelectionToolbar 历史行为是「点击各按钮自动 clear」，不靠点外部 dismiss。
+    val targetXPx = offset.x.toInt()
+    val targetYPx = offset.y.toInt()
+    val gapPx = with(density) { 12.dp.toPx() }.toInt()
+    val edgePx = with(density) { 8.dp.toPx() }.toInt()
+    val belowExtraPx = with(density) { 4.dp.toPx() }.toInt()
+    val showBelowState = remember { mutableStateOf(false) }
+    val provider = remember(targetXPx, targetYPx, gapPx, edgePx, belowExtraPx) {
+        ReaderToolbarPositionProvider(
+            anchorRect = IntRect(targetXPx, targetYPx, targetXPx, targetYPx),
+            gapPx = gapPx,
+            edgePx = edgePx,
+            belowExtraPx = belowExtraPx,
+            showBelowState = showBelowState,
+        )
+    }
+    val showBelow = showBelowState.value
+
+    Popup(
+        popupPositionProvider = provider,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(
+            focusable = false,
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+        ),
+    ) {
         Column(
-            modifier = Modifier
-                .offset(x = menuX, y = menuY)
-                .width(menuWidth),
+            modifier = modifier.width(menuWidth),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (showBelow) {
@@ -848,40 +872,49 @@ fun HighlightActionToolbar(
     val arrowColor = MaterialTheme.colorScheme.surfaceContainerHigh
 
     val xDp = with(density) { offset.x.toDp() }
-    val yDp = with(density) { offset.y.toDp() }
     val screenWidth = configuration.screenWidthDp.dp
-    val screenHeight = configuration.screenHeightDp.dp
     val menuWidth = 156.dp
-    val menuHeight = 46.dp
-    val showBelow = yDp - menuHeight - 12.dp < 8.dp
-    val menuX = (xDp - menuWidth / 2).coerceIn(8.dp, screenWidth - menuWidth - 8.dp)
-    val menuY = if (showBelow) {
-        (yDp + 16.dp).coerceAtMost(screenHeight - menuHeight - 16.dp)
-    } else {
-        (yDp - menuHeight - 12.dp).coerceAtLeast(8.dp)
-    }
+    val menuX = (xDp - menuWidth / 2).coerceIn(8.dp, (screenWidth - menuWidth - 8.dp).coerceAtLeast(8.dp))
     val arrowX = (xDp - menuX - 7.dp).coerceIn(18.dp, menuWidth - 18.dp)
 
-    Box(modifier = modifier.fillMaxSize()) {
-        // Tap-outside dismiss layer — covers the whole screen with a transparent
-        // box that swallows clicks. Without it the user has to tap precisely
-        // outside the toolbar to dismiss; here ANY tap that isn't on a button
-        // closes the menu (matches the behaviour of SelectionToolbar's
-        // backdrop, except SelectionToolbar relies on selection.clear() being
-        // called from each action).
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable(
-                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                    indication = null,
-                    onClick = onDismiss,
-                ),
+    // ── Popup 化 ──
+    //
+    // 旧实现自己用 Box(fillMaxSize) + 一个全屏透明 clickable Box 来吞外部点击触发
+    // dismiss。改用 Popup 后由 PopupProperties.dismissOnClickOutside 接管：点击 popup
+    // 区域之外的任何位置 → onDismissRequest → onDismiss。focusable=true 才能让
+    // dismissOnClickOutside / dismissOnBackPress 在所有 Compose 版本上稳定生效；
+    // 对 highlight action menu 来说聚焦 OK，反正用户点开它的目的就是快速做删除/分享。
+    //
+    // above/below 决策走和 SelectionToolbar 一样的 popupContentSize 真实测量路径，
+    // 不再 hardcode `menuHeight = 46.dp`。
+    val targetXPx = offset.x.toInt()
+    val targetYPx = offset.y.toInt()
+    val gapPx = with(density) { 12.dp.toPx() }.toInt()
+    val edgePx = with(density) { 8.dp.toPx() }.toInt()
+    val belowExtraPx = with(density) { 4.dp.toPx() }.toInt()
+    val showBelowState = remember { mutableStateOf(false) }
+    val provider = remember(targetXPx, targetYPx, gapPx, edgePx, belowExtraPx) {
+        ReaderToolbarPositionProvider(
+            anchorRect = IntRect(targetXPx, targetYPx, targetXPx, targetYPx),
+            gapPx = gapPx,
+            edgePx = edgePx,
+            belowExtraPx = belowExtraPx,
+            showBelowState = showBelowState,
         )
+    }
+    val showBelow = showBelowState.value
+
+    Popup(
+        popupPositionProvider = provider,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(
+            focusable = true,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+        ),
+    ) {
         Column(
-            modifier = Modifier
-                .offset(x = menuX, y = menuY)
-                .width(menuWidth),
+            modifier = modifier.width(menuWidth),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (showBelow) {
@@ -914,5 +947,66 @@ fun HighlightActionToolbar(
                 ToolbarArrow(arrowColor, pointsDown = true, modifier = Modifier.offset(x = arrowX - menuWidth / 2))
             }
         }
+    }
+}
+
+/**
+ * Reader 浮层（[SelectionToolbar] / [HighlightActionToolbar]）共用的 Popup 定位策略。
+ *
+ * 核心思想：把 Popup 视为「围绕一个屏幕坐标 rect」浮动。caller 只需提供
+ * - [anchorRect]：目标在 reader Box 局部坐标里的 rect（点击点 / 选区中心，
+ *   无明确高度时传 0×0 退化为点），
+ * - 几个像素常量：箭头与目标的间距 [gapPx]、屏幕边缘内边距 [edgePx]、
+ *   下方放置时再额外推一点 [belowExtraPx] 让箭头有呼吸感。
+ *
+ * 由 PositionProvider 用 Compose 框架在 measure 之后回传的真实 [popupContentSize]
+ * 决定 above/below：popup 真实高度放不下 anchor 上方 → 换到下方。决策结果通过
+ * [showBelowState] 写回给 caller，让外层渲染箭头朝向。
+ *
+ * **故意不**让 caller 在 dp 层估算 menuHeight：那种 `46 + 40 + 38` 累加做法
+ * 一旦按钮 padding / 字体放大 / 中英文行高变化就会和真实测量值脱节。
+ */
+private class ReaderToolbarPositionProvider(
+    private val anchorRect: IntRect,
+    private val gapPx: Int,
+    private val edgePx: Int,
+    /** showBelow 时额外往下推的像素，让箭头与目标之间留一点呼吸感。 */
+    private val belowExtraPx: Int,
+    /** 把"是否被迫放在 anchor 下方"的决策回写给上层渲染（决定箭头朝向）。 */
+    private val showBelowState: androidx.compose.runtime.MutableState<Boolean>,
+) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        // anchorBounds 是 Popup 的"父 Composable"在窗口里的 rect。我们把 Popup
+        // 直接塞在 reader 主 Box 里，所以 anchorBounds.topLeft = reader Box 的
+        // 窗口位置；加上 caller 给的 anchorRect 偏移就得到屏幕上的目标矩形。
+        val ax = anchorBounds.left + anchorRect.left
+        val ayTop = anchorBounds.top + anchorRect.top
+        val ayBottom = anchorBounds.top + anchorRect.bottom
+        val anchorCenterX = ax + anchorRect.width / 2
+        val popupW = popupContentSize.width
+        val popupH = popupContentSize.height
+
+        // X：popup 横向中心对齐 anchor 横向中心，钳到屏内
+        val maxX = (windowSize.width - popupW - edgePx).coerceAtLeast(edgePx)
+        val x = (anchorCenterX - popupW / 2).coerceIn(edgePx, maxX)
+
+        // Y：优先放在 anchor 上方；放不下退到下方。这是真正使用 popupContentSize
+        // 的关键 —— 由框架 measure 回传的 popupH 决定决策，不再依赖 caller 估算。
+        val aboveY = ayTop - popupH - gapPx
+        val showBelow = aboveY < edgePx
+        if (showBelowState.value != showBelow) showBelowState.value = showBelow
+        val y = if (showBelow) {
+            (ayBottom + gapPx + belowExtraPx).coerceAtMost(
+                (windowSize.height - popupH - edgePx).coerceAtLeast(0),
+            )
+        } else {
+            aboveY.coerceAtLeast(edgePx)
+        }
+        return IntOffset(x, y)
     }
 }

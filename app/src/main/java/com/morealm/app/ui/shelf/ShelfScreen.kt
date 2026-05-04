@@ -3,7 +3,6 @@ package com.morealm.app.ui.shelf
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +39,7 @@ import com.morealm.app.presentation.shelf.FolderImportState
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.shelf.ShelfViewModel
 import com.morealm.app.ui.widget.ShelfGridSkeleton
+import com.morealm.app.ui.widget.ThemedSnackbarHost
 import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -108,6 +108,11 @@ fun ShelfScreen(
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
+    // SnackbarHost / scope 提前到这里，保证下方 LaunchedEffect（如 organizeReport
+    // 上报）能在声明处访问。原本 host 放在中段会触发 Kotlin 向前引用错误。
+    val snackbarHost = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
     // 外层（如 PillNavigationBar 长按"书架" tab 弹分组菜单）通过 ViewModel 的
     // navigateToFolder SharedFlow 请求切到指定分组；这里订阅后直接写回
     // currentFolderId。同时把 batchMode / showSearch 等"妨碍跳转可见性"的状态
@@ -167,7 +172,8 @@ fun ShelfScreen(
     val organizeReport by viewModel.organizeReport.collectAsStateWithLifecycle()
     LaunchedEffect(organizeReport) {
         organizeReport?.let { msg ->
-            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            // Toast 改 Snackbar：和主屏 SnackbarHost 同一渠道，颜色随主题，不被 pill 遮。
+            snackbarHost.showSnackbar(msg)
             viewModel.consumeOrganizeReport()
         }
     }
@@ -217,8 +223,7 @@ fun ShelfScreen(
     }
 
     // UX-1: Snackbar host 用于「批量删书」的撤销窗口（5s）。原 BatchDeleteDialog 二次确认已下线。
-    val snackbarHost = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
+    // host 与 scope 已在函数顶部统一声明（见 organizeReport LaunchedEffect 上方），这里不再重复创建。
     // UX-8: 删除/进入批量模式 等关键交互配震动反馈
     val haptic = LocalHapticFeedback.current
 
@@ -424,7 +429,7 @@ fun ShelfScreen(
                             enabled = !isOrganizing,
                             onClick = {
                                 if (!isOrganizing) {
-                                    Toast.makeText(context, "开始整理书架…", Toast.LENGTH_SHORT).show()
+                                    scope.launch { snackbarHost.showSnackbar("开始整理书架…") }
                                     viewModel.organizeShelf()
                                 }
                                 showOverflowMenu = false
@@ -630,7 +635,7 @@ fun ShelfScreen(
             onRename = { showRenameGroupDialog = folderId; showDeleteFolderConfirm = null },
             onReclassify = {
                 viewModel.reclassifyUngroupedBooks()
-                Toast.makeText(context, "已按关键词重新归类未分组书籍", Toast.LENGTH_SHORT).show()
+                scope.launch { snackbarHost.showSnackbar("已按关键词重新归类未分组书籍") }
                 showDeleteFolderConfirm = null
             },
             onSetCover = {
@@ -757,7 +762,7 @@ fun ShelfScreen(
                     TextButton(onClick = {
                         val sourceUrl = book.sourceUrl ?: book.sourceId ?: return@TextButton
                         viewModel.startCacheBook(book.id, sourceUrl)
-                        Toast.makeText(context, "开始缓存: ${book.title}", Toast.LENGTH_SHORT).show()
+                        scope.launch { snackbarHost.showSnackbar("开始缓存: ${book.title}") }
                         showCacheBookDialog = null
                     }) { Text("缓存全本") }
                 }
@@ -779,7 +784,14 @@ fun ShelfScreen(
             },
         )
     }
-    SnackbarHost(snackbarHost, modifier = Modifier.align(Alignment.BottomCenter))
+    // 浮在药丸导航栏之上：pill 高 64dp + 底 padding 16dp ≈ 80dp，
+    // 这里给 96dp 让 Snackbar 与 pill 之间留 ~16dp 视觉间隙，避免提示被吞掉。
+    ThemedSnackbarHost(
+        snackbarHost,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 96.dp),
+    )
     }
 }
 

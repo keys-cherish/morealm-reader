@@ -440,7 +440,7 @@ class ReaderChapterController(
                     val startIndex = (progress?.chapterIndex ?: book.lastReadChapter)
                         .coerceIn(0, (cachedChapters.size - 1).coerceAtLeast(0))
                     lastPreCacheCenter = startIndex
-                    val savedScrollProgress = progress?.scrollProgress ?: estimateChapterProgress(book, startIndex, cachedChapters.size)
+                    val savedScrollProgress = estimateChapterProgress(book, startIndex, cachedChapters.size)
                     val savedChapterPosition = progress?.chapterPosition ?: book.lastReadPosition
                     AppLog.info(
                         "BookmarkDebug",
@@ -449,8 +449,7 @@ class ReaderChapterController(
                             " bookLastReadChapter=${book.lastReadChapter}" +
                             " bookLastReadPosition=${book.lastReadPosition}" +
                             " dbProgress.chapterIndex=${progress?.chapterIndex}" +
-                            " dbProgress.chapterPosition=${progress?.chapterPosition}" +
-                            " dbProgress.scrollProgress=${progress?.scrollProgress}",
+                            " dbProgress.chapterPosition=${progress?.chapterPosition}",
                     )
                     scrollProgressState.value = savedScrollProgress
                     loadChapter(startIndex, restoreProgress = savedScrollProgress, restoreChapterPosition = savedChapterPosition)
@@ -575,7 +574,7 @@ class ReaderChapterController(
                 .coerceIn(0, (chapters.size - 1).coerceAtLeast(0))
             lastPreCacheCenter = startIndex
 
-            val savedScrollProgress = progress?.scrollProgress ?: estimateChapterProgress(book, startIndex, chapters.size)
+            val savedScrollProgress = estimateChapterProgress(book, startIndex, chapters.size)
             val savedChapterPosition = progress?.chapterPosition ?: book.lastReadPosition
             AppLog.info(
                 "BookmarkDebug",
@@ -584,8 +583,7 @@ class ReaderChapterController(
                     " bookLastReadChapter=${book.lastReadChapter}" +
                     " bookLastReadPosition=${book.lastReadPosition}" +
                     " dbProgress.chapterIndex=${progress?.chapterIndex}" +
-                    " dbProgress.chapterPosition=${progress?.chapterPosition}" +
-                    " dbProgress.scrollProgress=${progress?.scrollProgress}",
+                    " dbProgress.chapterPosition=${progress?.chapterPosition}",
             )
             scrollProgressState.value = savedScrollProgress
             loadChapter(startIndex, restoreProgress = savedScrollProgress, restoreChapterPosition = savedChapterPosition)

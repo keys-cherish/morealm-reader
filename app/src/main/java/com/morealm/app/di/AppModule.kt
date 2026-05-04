@@ -458,6 +458,51 @@ private val MIGRATION_26_27 = object : Migration(26, 27) {
     }
 }
 
+/**
+ * v27 → v28：彻底删除 `read_progress.scrollProgress` 列。
+ *
+ * 历史用法：滚动模式下作为兜底位置（0..100 百分比）；其他模式不读。但百分比
+ * 依赖章节字符总数 + 当前字号 + 行距等易变量，跨设备 / 字体放大恢复时漂移
+ * 明显（详见 ReadProgress.kt 的字段注释）。新方案：所有模式统一用
+ * `chapterPosition`（字符偏移），滚动模式靠 [com.morealm.app.domain.render.ScrollAnchor]
+ * / `bookmarkToAnchor` 精准定位。
+ *
+ * Room 不支持 ALTER DROP COLUMN，所以走标准的 CREATE_NEW + INSERT_SELECT +
+ * DROP + RENAME 四步。原列数据直接舍弃 —— 用户任意章节都能从 chapterPosition
+ * 续读，不丢任何感知到的位置（除了纯滚动模式下的 sub-段精度，影响极小）。
+ *
+ * 升级前的自动备份由 [provideDatabase] 的 hook 接管 —— 万一用户后悔可以从
+ * `db_backup/morealm_*.db` 文件恢复。
+ */
+private val MIGRATION_27_28 = object : Migration(27, 28) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `read_progress_new` (
+                `bookId` TEXT NOT NULL,
+                `chapterIndex` INTEGER NOT NULL DEFAULT 0,
+                `chapterPosition` INTEGER NOT NULL DEFAULT 0,
+                `chapterOffset` REAL NOT NULL DEFAULT 0,
+                `totalProgress` REAL NOT NULL DEFAULT 0,
+                `updatedAt` INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(`bookId`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO `read_progress_new` (
+                `bookId`, `chapterIndex`, `chapterPosition`, `chapterOffset`, `totalProgress`, `updatedAt`
+            )
+            SELECT `bookId`, `chapterIndex`, `chapterPosition`, `chapterOffset`, `totalProgress`, `updatedAt`
+            FROM `read_progress`
+            """.trimIndent(),
+        )
+        db.execSQL("DROP TABLE `read_progress`")
+        db.execSQL("ALTER TABLE `read_progress_new` RENAME TO `read_progress`")
+    }
+}
+
 private val MIGRATION_9_10 = object : Migration(9, 10) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // book_sources 表结构完全重构，删除旧表并重建
@@ -579,6 +624,7 @@ object AppModule {
                 MIGRATION_24_25,
                 MIGRATION_25_26,
                 MIGRATION_26_27,
+                MIGRATION_27_28,
             )
             // On downgrade: try restore from backup, otherwise keep tables as-is
             .addCallback(object : RoomDatabase.Callback() {

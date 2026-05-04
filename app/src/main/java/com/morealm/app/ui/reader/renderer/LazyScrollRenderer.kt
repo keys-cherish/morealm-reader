@@ -8,8 +8,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -34,7 +34,6 @@ import com.morealm.app.domain.render.ScrollParagraph
 import com.morealm.app.domain.render.ScrollParagraphType
 import com.morealm.app.domain.render.TextBaseColumn
 import com.morealm.app.domain.render.calcChapterProgress
-import com.morealm.app.domain.render.calcNewAnchorAfterPrepend
 import com.morealm.app.domain.render.chapterPositionToParagraphPos
 import com.morealm.app.domain.render.findItemIndex
 import kotlinx.coroutines.FlowPreview
@@ -45,83 +44,113 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.sample
 
 /**
- * LazyColumn 段落级瀑布流渲染器 —— 段落作为 LazyColumn item，靠 prepend/append + 锚点
- * 修正实现跨章无缝衔接。
+ * LazyColumn 段落级瀑布流渲染器 —— 段落作为 LazyColumn item，由外部 caller 维护
+ * paragraphs 窗口（[androidx.compose.runtime.snapshots.SnapshotStateList]）和
+ * [LazyListState]，本组件只负责渲染 + 把滚动信号往上吐。
  *
  * ── 设计基调 ──
  *
  *   1. **粒度**：段落（[ScrollParagraph]，由 [com.morealm.app.domain.render.toScrollParagraphs]
  *      构建）。比页更细，比行更粗，瀑布流语义最自然
- *   2. **跨章**：caller 把 prev+cur+next 的段落扁平拼成一个 list 喂进来；滚到顶/底触发
- *      [onNearTop] / [onNearBottom] 让 caller 异步加载邻章并 prepend/append；prepend
- *      后通过 [prependedCount] + [prependToken] 信号触发我们做 [calcNewAnchorAfterPrepend]
- *      锚定补偿，视觉零跳动
- *   3. **现代实践**：CompositionLocal 取主题、snapshotFlow 处理高频滚动状态、
+ *   2. **跨章窗口由 caller 管**：caller（[CanvasRenderer]）持有 paragraphs 与 listState，
+ *      在 prev/cur/next 章异步加载完成时用 Key-Anchor 模式做窗口增量 mutation +
+ *      [LazyListState.requestScrollToItem] 静默调整视野。本组件**不关心**窗口怎么变，
+ *      不再监听 paragraphs.firstKey 来推断 prepend/drop（旧设计的"侧信道盲算"已废弃）。
+ *   3. **滚到边界仍然由本组件触发** [onNearTop] / [onNearBottom]，由 caller 决定要不要拉
+ *      邻章；本组件只负责"用户已经接近窗口边缘"这一信号。
+ *   4. **现代实践**：CompositionLocal 取主题、snapshotFlow 处理高频滚动状态、
  *      derivedStateOf 派生低频状态、contentType 复用 item 视图结构
  *
  * ── 不在本组件里做的事（Phase 4 / Phase 5 补）──
  *
  *   - 选区拖把手 / 长按选词
- *   - TTS 朗读高亮 + 自动跟随
+ *   - TTS 朗读高亮 + 自动跟随（已有最简实现：仅在目标段不在视口时滚显）
  *   - 搜索结果高亮
  *   - 用户高亮 / 书签三角
  *   - 自动滚动（autoScroll）
  *   - 音量键翻页 / 键盘导航
  *
- * 上述功能依赖坐标系迁移（TextPos → ParagraphTextPos），独立 PR 处理。Phase 2 主体
- * 先把"无缝瀑布流 + 滚动状态机外包给 Compose"这条主线打通。
+ * 上述功能依赖坐标系迁移（TextPos → ParagraphTextPos），独立 PR 处理。
  *
- * @param paragraphs 已扁平的段落窗口（含 prev+cur+next 三章）。caller 维护
- * @param initialIdx [androidx.compose.foundation.lazy.LazyListState] 构造时的初始 item
- *        index。caller 必须在 paragraphs **包含锚点章后**才挂载本 Composable
- *        （配合 `key(paragraphsReady)`），否则锚点会被锁在 0。详见
- *        [com.morealm.app.domain.render.calcInitialListStateParams]。
- * @param initialOffsetPx LazyListState 构造时的初始 item 内偏移（像素）
- * @param prependedCount 上一次 prepend 操作向窗口顶部加入的段数（用于锚定补偿）
- * @param prependToken 每次 prepend 完成换新值（System.nanoTime() 即可），即使 prependedCount
- *        数值与上次相同也能触发补偿。null/0 表示无 prepend
- * @param droppedFromFrontCount 上一次 drop-from-front 操作（如 commitChapterShiftNext
- *        让 prev 章被丢弃）从窗口顶部移除的段数，用于反向锚定补偿。
- * @param dropToken 每次 drop 完成换新值（System.nanoTime()），同样用作幂等 key。
- *        和 prependToken 互斥触发（一次 paragraphs 变化只可能是 prepend 或 drop 之一）。
+ * @param paragraphs 已扁平的段落窗口（含 prev+cur+next 三章）。caller 维护，
+ *        通常是 [androidx.compose.runtime.snapshots.SnapshotStateList]。
+ * @param listState 由 caller 持有的 [LazyListState]。caller 必须用同一个 listState
+ *        实例做窗口 Key-Anchor 补偿（snapshot anchor → mutate paragraphs →
+ *        [LazyListState.requestScrollToItem]），所以无法在本组件内 remember。
  * @param ttsHighlightChapterIndex 当前 TTS 朗读位置所在的章 idx；< 0 表示未在朗读。
- *        Phase 4 引入：TTS 推进段落时让 LazyColumn 自动滚到对应段。
  * @param ttsHighlightChapterPosition 当前 TTS 朗读段落的章内字符偏移；< 0 表示未在朗读。
  *        与 [ttsHighlightChapterIndex] 配套，用 [chapterPositionToParagraphPos] 解析为
  *        段编号，再 [findItemIndex] 拿到 LazyColumn item idx → animateScrollToItem。
  *        只在目标段当前**不在可见范围**时才滚，避免 TTS 跨段时反复扰动用户视野。
- * @param onNearTop 用户接近窗口顶 [nearStartThreshold] 段时触发，caller 应异步加载 prev 章并 prepend
- * @param onNearBottom 用户接近窗口底 [nearEndThreshold] 段时触发，caller 应异步加载 next 章并 append
+ * @param jumpChapterIndex 命令式跳转目标章 idx；-1 表示无跳转
+ * @param jumpChapterPosition 跳转章内字符偏移
+ * @param jumpToken 跳转幂等 key（每次跳转换 [System.nanoTime] 新值）；0L 表示无跳转。
+ *        caller 必须保证两阶段契约：paragraphs 已含目标章/段时才出非 0 token。
+ * @param onNearTop 用户接近窗口顶 [nearStartThreshold] 段时触发，caller 应异步加载 prev 章
+ * @param onNearBottom 用户接近窗口底 [nearEndThreshold] 段时触发，caller 应异步加载 next 章
  * @param onChapterProgressLive **UI 实时**进度回调：sample(150ms) 节流，fling 期间也持续上报
  *        让底栏百分比 / 进度条跟随手指。**不要**在此回调里写 DB——会被打爆。
  * @param onChapterProgressPersist **持久化**进度回调：debounce(800ms) 节流，停止滑动后才上报
  *        一次。caller 在此回调里写 DB / SP，安全。
- * @param onVisibleParagraphChanged (paragraph, scrollOffsetInItem) —— 可见首段变化时通知 caller，
- *        用于顶栏标题/章号更新、bookmark 持久化等
- * @param onScrollingChanged (scrolling) —— fling/idle 状态切换。caller 可在 idle 时启用
- *        TTS 高亮刷新等高开销 UI，scrolling 时降级
+ * @param onVisibleParagraphChanged (paragraph, scrollOffsetInItem) —— 可见首段变化时通知 caller
+ * @param onScrollingChanged (scrolling) —— fling/idle 状态切换
  * @param onTapCenter 点击空白区域 —— 切阅读器菜单
- * @param onLongPressParagraph Phase 4 引入：长按段落触发。caller 收到 `(paragraph, charOffset)`
- *        可走「复制段文本 / 朗读到此 / 加书签」等动作。**注意**：当前是段级粒度，不做
- *        词级选区拖把手；段内字符高亮 / 跨段选区留 Phase 5。
- *        默认 no-op，老 caller 不传时无功能但不会崩溃。
- * @param nearStartThreshold 章首预加载阈值（距窗口顶 N 段触发）。默认 15 —— 按用户建议
- *        预留 1/3 章空间，避免快速滑动时撞「空气墙」
+ * @param onLongPressParagraph 长按段落触发：caller 收到 `(paragraph, charOffset)`
+ * @param nearStartThreshold 章首预加载阈值（距窗口顶 N 段触发）。默认 15
  * @param nearEndThreshold 章末预加载阈值（距窗口底 N 段触发）。默认 15
- * @param chapterCharSizeProvider 给定 chapterIndex 返回该章总字符数，进度计算用
+ * @param chapterCharSizeProvider 给定 chapterIdx 返回该章总字符数，进度计算用
  */
 @OptIn(FlowPreview::class)
 @Composable
 fun LazyScrollRenderer(
     paragraphs: List<ScrollParagraph>,
-    initialIdx: Int,
-    initialOffsetPx: Int,
-    prependedCount: Int = 0,
-    prependToken: Long = 0L,
-    droppedFromFrontCount: Int = 0,
-    dropToken: Long = 0L,
+    listState: LazyListState,
     ttsHighlightChapterIndex: Int = -1,
     ttsHighlightChapterPosition: Int = -1,
+    /**
+     * 命令式跳转目标 —— 同书内书签 / TOC / 续读跳转用，使用稳定的"章节-段落-字符"
+     * 坐标，与书签 DB 存储格式 [com.morealm.app.domain.entity.Bookmark.chapterIndex] /
+     * [com.morealm.app.domain.entity.Bookmark.chapterPos] 直接对齐 —— caller 透传，
+     * 不需要再做 ScrollAnchor 转换。
+     *
+     * `rememberLazyListState(initialIdx, initialOffsetPx)` 的 initial 参数只在首次
+     * compose 生效（rememberSaveable 行为）。同书跳转时 paragraphs 重建但 listState
+     * 不重建（外层 caller 故意不 key 包裹以保留 prepend 锚定连续性），导致 initialIdx
+     * 重算了**没人消费**，LazyColumn 还停在旧位置。
+     *
+     * 本字段提供命令式补救：[jumpToken] 变 → 内部用 [chapterPositionToParagraphPos]
+     * 把 (chIdx, chPos) 解析为段编号 + 段内字符 offset，再用 [findItemIndex] 找 LazyColumn
+     * item idx，[ScrollParagraph.lines] 扫到目标行算段内 y 像素，最后 `scrollToItem(idx, y)`。
+     * 一次到位，精确到字符行级。
+     *
+     * ── 两阶段跳转契约（caller 保证）──
+     *
+     * caller（[CanvasRenderer]）只在 paragraphs 已含目标章/段时才出 token：
+     *   - Phase 1：chapterPositionToParagraphPos 返回 null → caller 传 jumpToken=0L、
+     *     jumpChapterIndex=-1
+     *   - Phase 2：anchor 解析成功 → caller 用
+     *     [com.morealm.app.presentation.reader.ReaderChapterController.loadChapter] 的
+     *     restoreToken 触发，jumpChapterIndex >= 0
+     *
+     * 本组件只做单一职责：token 变 + 章/位 在 paragraphs 里能找到段就 scrollToItem。
+     * 无 pending、无 retry、无 fallback —— 把"等 anchor 就绪"的复杂度上推到 caller。
+     *
+     * @see jumpChapterPosition 章内字符绝对偏移（与 [TextLine.chapterPosition] 同口径）
+     * @see jumpToken 幂等 key，每次跳转用 `System.nanoTime()` 换新值；caller 在
+     *      anchor 未解析期间传 0L 让 LaunchedEffect 跳过
+     */
+    jumpChapterIndex: Int = -1,
+    jumpChapterPosition: Int = 0,
+    jumpToken: Long = 0L,
+    /**
+     * 跳转后的目标段呼吸高亮（与翻页模式 [PageContentDrawer] 一致体验）。
+     *
+     * null 时不绘制；非 null 时段落落在 `[startChapterPos, endChapterPos)` 区间内
+     * 的 item 在文字之下叠一层 [RevealHighlight.currentArgb] 半透明矩形。alpha
+     * 由 [RevealHighlight.alpha] [androidx.compose.animation.core.Animatable] 驱动，
+     * 1.2s 内褪色到透明。
+     */
+    revealHighlight: RevealHighlight? = null,
     onNearTop: () -> Unit = {},
     onNearBottom: () -> Unit = {},
     onChapterProgressLive: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
@@ -136,85 +165,77 @@ fun LazyScrollRenderer(
     modifier: Modifier = Modifier,
 ) {
     val theme = LocalReaderRenderTheme.current
-    // ── 首帧锚定 ──
+    // ── listState 由 caller 持有 ──
     //
-    // 用 rememberLazyListState(initial...) 让 LazyColumn 首帧就在锚点处。
-    // caller 必须保证：本 Composable 挂载时 paragraphs 已包含锚点章，否则
-    // initialIdx/Offset 会指向错位置（caller 应用 key(paragraphsReady) 包裹）。
-    //
-    // 老路径用 LaunchedEffect + scrollToItem 是「事后纠偏」，肉眼可见从顶部到锚点的
-    // 瞬移。新路径零瞬移，是 LazyColumn 的现代实践推荐方式
-    // （见 androidx.compose.foundation.lazy.LazyListState 文档）。
-    val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = initialIdx,
-        initialFirstVisibleItemScrollOffset = initialOffsetPx,
-    )
+    // 跨章窗口的 Key-Anchor 视野补偿（snapshot anchorParaKey → mutate paragraphs →
+    // [LazyListState.requestScrollToItem]）必须由 caller 在 paragraphs mutation 同协程
+    // 上下文执行。所以 listState 必须由外部传入；本组件不再 rememberLazyListState。
 
-    // ── prepend 锚定补偿 ──
+    // ── 命令式跳转（书签 / TOC / 续读）──
     //
-    // caller 在窗口顶 prepend N 段后，传入 prependedCount=N + 新 prependToken。
-    // 我们立即 scrollToItem(oldIdx + N, oldOffset) 抵消视觉上的"列表往上跳 N 段"。
+    // 同书内跳转的难点：listState 的 initial 参数只在首次 compose 生效（rememberSaveable
+    // 设计），caller 后续算出新位置不会改 listState。
     //
-    // 用 prependToken 做幂等 key —— 同样的 prependedCount 数值（如连续两次都 prepend 30 段）
-    // 用 token 区分两次操作。
+    // 解决：caller 用 jumpToken 做幂等 key，每次跳转用 [System.nanoTime] 换新值；本
+    // LaunchedEffect 监听到 token 变化时 imperative scrollToItem。
     //
-    // ── 首次挂载 skip ──
+    // ── 两阶段跳转契约（caller 保证）──
     //
-    // 首次挂载时 listState 已用 [initialIdx]/[initialOffsetPx] 定位到正确锚点位置；
-    // 但 caller 的 prepend 检测可能在 LazyScrollRenderer 挂载之前就触发了
-    // （prev 章异步加载完毕、paragraphs 头部增加 N 段），给了非 0 的 [prependToken]。
-    // LaunchedEffect(prependToken) 在挂载时立即 fire，又给 listState idx 加 N →
-    // **双重补偿**，肉眼看到从锚点直接飞到末尾，撞 nearEnd 阈值死循环跳章。
+    // 上层 [CanvasRenderer] 已实现两阶段：
+    //   Phase 1：paragraphs 不含目标段 → 传 jumpToken=0L、jumpChapterIndex=-1
+    //   Phase 2：paragraphs 含目标段 → 传非 0 jumpToken + jumpChapterIndex >= 0
+    // 所以本 effect 只需相信契约，token 非 0 时直接 scrollToItem。无 pending、无 retry、
+    // 无 fallback —— 把"等 paragraphs 就绪"职责上推到 caller 层。
     //
-    // skip 规则：第一次进入 LaunchedEffect 不补偿，只把 firstPrependSkipped 设 true。
-    // 之后用户实际滚到顶 caller 再 prepend prev 章时，LaunchedEffect 重新触发（token 变）
-    // 走正常补偿路径。
-    var firstPrependSkipped by remember { mutableStateOf(false) }
-    LaunchedEffect(prependToken) {
-        if (prependedCount <= 0 || prependToken == 0L) return@LaunchedEffect
-        if (!firstPrependSkipped) {
-            firstPrependSkipped = true
-            AppLog.debug(
+    // ── 视野补偿不在本组件里做 ──
+    //
+    // prev 章 prepend / cur 章 drop 时保持视野不变的补偿：caller 在 mutate paragraphs
+    // 的同一个 LaunchedEffect 内用 [LazyListState.requestScrollToItem] 直接处理，
+    // 本组件**不再监听** paragraphs.firstKey 推断 prepend/drop——那种侧信道盲算与
+    // first-mount 时机有时序漏洞，已废弃。
+
+    LaunchedEffect(jumpToken) {
+        if (jumpToken == 0L) return@LaunchedEffect
+        if (jumpChapterIndex < 0) return@LaunchedEffect
+        // ── 字符级精确跳转 ──
+        //
+        // 步骤 1：把 (chIdx, chPos) 解析为段编号 + 段内 charOffset
+        val pos = chapterPositionToParagraphPos(paragraphs, jumpChapterIndex, jumpChapterPosition)
+        if (pos == null) {
+            // 两阶段契约破坏：caller 应已在 paragraphs 含目标段时才出 token
+            AppLog.warn(
                 "LazyScroll",
-                "skip first-mount prepend (initial idx already correct): prepended=$prependedCount",
+                "jump target not in paragraphs (caller two-phase contract violated):" +
+                    " chIdx=$jumpChapterIndex chPos=$jumpChapterPosition" +
+                    " paragraphs.size=${paragraphs.size} token=$jumpToken",
             )
             return@LaunchedEffect
         }
-        val oldIdx = listState.firstVisibleItemIndex
-        val oldOffset = listState.firstVisibleItemScrollOffset
-        val newIdx = calcNewAnchorAfterPrepend(oldIdx, prependedCount)
-        listState.scrollToItem(newIdx, oldOffset)
-        AppLog.debug(
-            "LazyScroll",
-            "prepend anchor: oldIdx=$oldIdx → newIdx=$newIdx (prepended=$prependedCount, offset=${oldOffset}px)",
-        )
-    }
-
-    // ── drop-from-front 锚定补偿 ──
-    //
-    // 与 prepend 对称：commitChapterShiftNext 让 prev 章从窗口头部被丢弃 N 段时，
-    // LazyColumn 的 firstVisibleItemIndex 仍是旧值，但旧值在新列表坐标系里指向了
-    // 「之后 N 段」的位置 → 用户视觉上看见列表「突然往下跳 N 段」（具体表现为：刚刚
-    // 滚到的当前章被推走，呈现下一章内容；接着 LazyScroll derive 又把 chapter 反推
-    // 回旧章——肉眼一闪）。
-    //
-    // 修正：scrollToItem(oldIdx - droppedFromFrontCount, oldOffset)。
-    //
-    // ── 不需要 first-mount skip ──
-    //
-    // 与 prepend 不同：drop-from-front 只来自 commitChapterShiftNext / Prev，这两条路径
-    // 都需要用户主动操作（滑过章末或目录跳转）触发，必然发生在 LazyScrollRenderer 挂载
-    // 之后；不存在「caller 提前 set token、LazyColumn 后挂载」的双重补偿场景。所以
-    // dropToken 第一次非 0 触发就直接做补偿，不需要 firstDropSkipped 的安全阀。
-    LaunchedEffect(dropToken) {
-        if (droppedFromFrontCount <= 0 || dropToken == 0L) return@LaunchedEffect
-        val oldIdx = listState.firstVisibleItemIndex
-        val oldOffset = listState.firstVisibleItemScrollOffset
-        val newIdx = (oldIdx - droppedFromFrontCount).coerceAtLeast(0)
-        listState.scrollToItem(newIdx, oldOffset)
-        AppLog.debug(
-            "LazyScroll",
-            "drop anchor: oldIdx=$oldIdx → newIdx=$newIdx (dropped=$droppedFromFrontCount, offset=${oldOffset}px)",
+        // 步骤 2：段编号 → LazyColumn item idx
+        val targetIdx = pos.findItemIndex(paragraphs)
+        if (targetIdx < 0) return@LaunchedEffect
+        val targetParagraph = paragraphs[targetIdx]
+        // 步骤 3：段内字符 offset → 段内行 idx → 段内 y 像素
+        // [TextLine.chapterPosition] 是该行首字符的章内位置，单调递增。扫到最后一个
+        // chapterPosition <= jumpChapterPosition 的行 idx。
+        var lineIdx = 0
+        for (i in targetParagraph.lines.indices) {
+            if (targetParagraph.lines[i].chapterPosition <= jumpChapterPosition) {
+                lineIdx = i
+            } else break
+        }
+        val offsetPx = targetParagraph.linePositions
+            .getOrNull(lineIdx)
+            ?.toInt()
+            ?.coerceAtLeast(0)
+            ?: 0
+        listState.scrollToItem(targetIdx, offsetPx)
+        AppLog.info(
+            "BookmarkDebug",
+            "LazyScroll JUMP scrollToItem(item=$targetIdx, offset=${offsetPx}px)" +
+                " char-level chIdx=$jumpChapterIndex chPos=$jumpChapterPosition" +
+                " paragraphNum=${pos.paragraphNum} charOffsetInPara=${pos.charOffset}" +
+                " lineIdx=$lineIdx token=$jumpToken paragraphs.size=${paragraphs.size}",
         )
     }
 
@@ -345,7 +366,19 @@ fun LazyScrollRenderer(
     // 解决：必须在用户**主动产生过滚动**后才允许触发预加载阈值。挂载时的初始 idx
     // 不算"用户滚动"，靠 [hasUserScrolled] 状态跟踪 [LazyListState.isScrollInProgress]
     // 第一次翻 true（手指 down + drag）来确认用户主动行为。
+    //
+    // ── 跳转后强制重置（书签 / TOC 跳转 → 程序行为不算用户滚动）──
+    //
+    // 跳书签命中 paraIdx 落在 < nearStartThreshold 区域（如目标段是章首附近），
+    // hasUserScrolled 旧值仍为 true 时会立即触发 onNearTop → 误推 prevChapter →
+    // cur 章被切到上一章 → 视野错位。修：jumpToken 翻新值时 hasUserScrolled 强制
+    // reset 为 false，需要用户再次手动滚动才重新启用预加载触发器。
     var hasUserScrolled by remember { mutableStateOf(false) }
+    LaunchedEffect(jumpToken) {
+        if (jumpToken != 0L) {
+            hasUserScrolled = false
+        }
+    }
     LaunchedEffect(Unit) {
         snapshotFlow { listState.isScrollInProgress }
             .filter { it }
@@ -467,8 +500,23 @@ fun LazyScrollRenderer(
                 key = { p -> p.key },
                 contentType = { p -> p.contentType },
             ) { paragraph ->
+                // ── reveal 命中判定 ──
+                //
+                // 段落字符区间 = [firstChapterPosition, firstChapterPosition + charSize)
+                // reveal 区间 = [startChapterPos, endChapterPos)
+                // 两者重叠即命中（用半开区间避免段尾恰好等于 reveal 起点时误命中）。
+                //
+                // 跨章后 caller 在 CanvasRenderer 的调用处用 takeIf { chapterIndex 匹配 }
+                // 兜过滤；这里再加一层 chapterIndex 比对作为防御性编程。
+                val isRevealTarget = revealHighlight?.let { rev ->
+                    paragraph.chapterIndex == rev.chapterIndex &&
+                        paragraph.firstChapterPosition < rev.endChapterPos &&
+                        (paragraph.firstChapterPosition + paragraph.charSize) > rev.startChapterPos
+                } ?: false
                 ScrollParagraphItem(
                     paragraph = paragraph,
+                    revealHighlight = if (isRevealTarget) revealHighlight else null,
+                    onTap = onTapCenter,
                     onLongPress = { offsetInPara -> onLongPressParagraph(paragraph, offsetInPara) },
                 )
             }
@@ -504,6 +552,8 @@ fun LazyScrollRenderer(
 @Composable
 private fun ScrollParagraphItem(
     paragraph: ScrollParagraph,
+    revealHighlight: RevealHighlight? = null,
+    onTap: () -> Unit = {},
     onLongPress: (charOffsetInParagraph: Int) -> Unit = {},
 ) {
     val theme = LocalReaderRenderTheme.current
@@ -520,7 +570,10 @@ private fun ScrollParagraphItem(
             .fillMaxWidth()
             .height(heightDp)
             .pointerInput(paragraph.key) {
+                // 内层 detectTapGestures 必须同时处理 onTap，否则会消费短点击事件、
+                // 让外层 Box 的 onTapCenter（菜单切换）失效。
                 detectTapGestures(
+                    onTap = { onTap() },
                     onLongPress = { tap ->
                         val offsetInPara = computeCharOffsetInParagraph(paragraph, tap.x, tap.y)
                         onLongPress(offsetInPara)
@@ -528,6 +581,22 @@ private fun ScrollParagraphItem(
                 )
             },
     ) {
+        // ── reveal 整段褪色高亮 ──
+        //
+        // 命中段 caller 已用 [RevealHighlight.startChapterPos]/[endChapterPos] 与
+        // [paragraph.firstChapterPosition]/[charSize] 区间比对过滤过；这里只画。
+        // 在 DrawScope 内读 [RevealHighlight.alpha].value（Animatable<Float>）让 Compose
+        // 自动登记 snapshot 依赖，每帧 animateTo 推进时重画自然衰减。
+        //
+        // 文字层在 drawIntoCanvas 之后画 → reveal 在文字之**下**，alpha 衰减不影响可读性。
+        // 上限 [RevealHighlight.currentArgb] 内已做 0.32 alpha 缩放；这里只检查 alpha>0
+        // 跳过完全透明帧，避免 GPU 浪费。
+        revealHighlight?.let { rev ->
+            val argb = rev.currentArgb()
+            if ((argb ushr 24) > 0) {
+                drawRect(color = androidx.compose.ui.graphics.Color(argb))
+            }
+        }
         drawIntoCanvas { compose ->
             drawScrollParagraphContent(
                 canvas = compose.nativeCanvas,

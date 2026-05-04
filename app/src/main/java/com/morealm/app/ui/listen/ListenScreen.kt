@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.morealm.app.domain.entity.TtsVoice
 import com.morealm.app.presentation.profile.ListenViewModel
 import com.morealm.app.service.TtsSystemSettings
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -48,6 +49,10 @@ fun ListenScreen(
     // Bug 4：TTS 硬错误持久化提示，替代旧的 Toast 路径
     val ttsErrorBanner by viewModel.ttsErrorBanner.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // 业务消息（如"已切换 TTS 引擎"）走与主屏一致的 Snackbar，颜色随主题，避免被 pill 遮。
+    // TtsErrorSnackbarHost 仍单独存在，专门承接 TtsEventBus.Event.Error。
+    val snackbarHost = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     val isActive = playback.bookTitle.isNotBlank()
     val progress = if (playback.totalParagraphs > 0)
@@ -373,11 +378,7 @@ fun ListenScreen(
                             showEnginePicker = false
                             // ViewModel 会通过 RebindSystemEngine command 即时换 host 引擎；
                             // 提示文案不再说"重启阅读器后生效"。
-                            android.widget.Toast.makeText(
-                                context,
-                                "已切换 TTS 引擎",
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
+                            scope.launch { snackbarHost.showSnackbar("已切换 TTS 引擎") }
                         },
                         onDismiss = { showEnginePicker = false },
                     )
@@ -438,11 +439,21 @@ fun ListenScreen(
         Spacer(Modifier.height(120.dp))
     }
 
+        // 浮在药丸导航栏之上：pill 高 64dp + 底 padding 16dp ≈ 80dp，
+        // 这里给 96dp 让 Snackbar 与 pill 之间留 ~16dp 视觉间隙，避免提示被吞掉。
+        // 不再叠加 navigationBarsPadding —— Scaffold(innerPadding) 已留出系统栏。
         com.morealm.app.ui.widget.TtsErrorSnackbarHost(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 8.dp)
+                .padding(bottom = 96.dp)
+        )
+        // 业务消息 Snackbar（与 TtsErrorSnackbarHost 共用 BottomCenter；同一时刻通常只
+        // 一个出现，叠在一起不会冲突）。颜色统一走 ThemedSnackbarHost 的主题色。
+        com.morealm.app.ui.widget.ThemedSnackbarHost(
+            hostState = snackbarHost,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 96.dp),
         )
     }
 }

@@ -169,7 +169,6 @@ class ReaderProgressController(
                 chapterIndex = chapterIdx,
                 chapterPosition = chapterPosition,
                 totalProgress = totalProgress.coerceIn(0f, 1f),
-                scrollProgress = _scrollProgress.value,
             )
             AppLog.debug("Progress", buildString {
                 append("saveProgress")
@@ -187,7 +186,9 @@ class ReaderProgressController(
                 totalChapters = chapterCount,
             ))
             lastQueuedProgressChapterIndex = chapterIdx
-            lastQueuedScrollProgress = progress.scrollProgress
+            // _scrollProgress 是 in-memory live state（UI 底栏百分比 / TTS 通知进度）；
+            // 不再写 DB，但仍要参与 queue 去重，避免 UI 频繁 redraw 时反复 saveProgress。
+            lastQueuedScrollProgress = _scrollProgress.value
             lastQueuedVisibleReadProgress = _visiblePage.value.readProgress
             lastQueuedChapterPosition = chapterPosition
             flushReadingStats()
@@ -216,11 +217,37 @@ class ReaderProgressController(
     fun onVisiblePageChanged(index: Int, title: String, readProgress: String, chapterPosition: Int = 0) {
         if (index !in chapterController.chapters.value.indices) return
         val oldVisiblePage = _visiblePage.value
+        // ── chapterPosition=0 feedback loop 守卫 ──
+        //
+        // 背景：CanvasRenderer 走 LazyScrollRenderer 时，「段首回调」(line 1644) 会带
+        // p.firstChapterPosition 上报；该值在用户停在段首行时常常 = 0 或较小值，
+        // 紧跟其后的「页/段切换回调」(line 1683 / 1683 等价 path) 又会带回精确的
+        // chapterPosition (如 191)。两条回调在同一帧错峰发射 → _visiblePage 被
+        // 0↔191 lockstep toggle，下次 saveProgress 写出的 lastReadPosition 就漂回
+        // 章首（详见 log.txt 19:05:13~20 段诊断）。
+        //
+        // 修法：同章 + 上报值 = 0 + 旧值 > 0 → 视作"渲染层段首回调的影子上报"，
+        // 保留旧值。跨章（index 变化）时 0 是合法的新章首，正常应用。
+        val sameChapter = index == oldVisiblePage.chapterIndex
+        val keptPosition = if (
+            sameChapter &&
+            chapterPosition == 0 &&
+            oldVisiblePage.chapterPosition > 0
+        ) {
+            // 调试日志保留：诊断假阳性（万一某些路径合法 reset 到 0）。
+            AppLog.debug(
+                "Progress",
+                "ignored zero chapterPosition shadow update | idx=$index keep=${oldVisiblePage.chapterPosition}",
+            )
+            oldVisiblePage.chapterPosition
+        } else {
+            chapterPosition
+        }
         val visibleChanged = oldVisiblePage.chapterIndex != index ||
             oldVisiblePage.title != title ||
             oldVisiblePage.readProgress != readProgress ||
-            oldVisiblePage.chapterPosition != chapterPosition
-        _visiblePage.value = VisibleReaderPage(index, title, readProgress, chapterPosition)
+            oldVisiblePage.chapterPosition != keptPosition
+        _visiblePage.value = VisibleReaderPage(index, title, readProgress, keptPosition)
         val chapterChanged = index != chapterController.currentChapterIndex.value
         val scrollBoundaryPreview = pageTurnMode() == PageTurnMode.SCROLL && chapterChanged
         if (!scrollBoundaryPreview && !chapterChanged && visibleChanged) {

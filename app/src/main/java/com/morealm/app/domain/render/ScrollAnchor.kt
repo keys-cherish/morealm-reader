@@ -212,3 +212,48 @@ fun calcInitialListStateParams(
     val offset = calcAnchorScrollOffsetPx(paragraphs[idx], anchor)
     return idx to offset
 }
+
+/**
+ * 跳转后的 visualOffset 预计算：把目标段所在的「锚点行」从屏幕顶端推到约屏幕 1/3
+ * 处（视觉舒适区），结果直接喂给 `rememberLazyListState(initialFirstVisibleItemIndex,
+ * initialFirstVisibleItemScrollOffset)` —— 一次到位，不依赖 LazyColumn 渲染完
+ * 再 scrollBy 微调，避免肉眼可见的"两阶段闪跳"。
+ *
+ * 算法思路（直接用每段的 [ScrollParagraph.totalHeight] 已预算好的高度，无需任何
+ * onGloballyPositioned 二次量测）：
+ *   - 输入 (锚点 idx N, 锚点行在 N 内的像素偏移 X) —— 对应"target 行处于视口顶端"。
+ *   - 想要 target 行处于视口 y = [visualOffsetPx]，等价于把 viewport 顶端位置
+ *     从 X 往**上**挪 visualOffsetPx 像素。
+ *   - 累加从 X 开始，依次往前段叠加 totalHeight，直到累加值 ≥ visualOffsetPx。
+ *   - 此时新 firstVisibleItemIndex = 当前 K，firstVisibleItemScrollOffset =
+ *     accumulated - visualOffsetPx（落在 paragraphs[K] 内某行处）。
+ *   - 边界：如果一路走到 K=0 累计仍不够（书太短），返回 (0, 0) —— target 行
+ *     无法到达 1/3 处但视觉至少 OK（顶端就是书首）。
+ *
+ * 复杂度 O(N - K)，N 通常在 200 左右、visualOffset 对应几行段落（~3-5 段），
+ * 实测 < 0.1ms，可以放心放在 [androidx.compose.runtime.remember] 里。
+ *
+ * @param paragraphs 段落列表（同 [calcInitialListStateParams]）
+ * @param anchorIdx 由 [calcInitialListStateParams] 算出的目标段 LazyColumn idx
+ * @param anchorOffsetWithinItem 目标行在该段内的像素偏移
+ * @param visualOffsetPx 期望 target 行落在视口 y = visualOffsetPx（如 viewport.h / 3）
+ * @return Pair(adjustedFirstVisibleItemIndex, adjustedFirstVisibleItemScrollOffset)
+ */
+fun applyVisualOffset(
+    paragraphs: List<ScrollParagraph>,
+    anchorIdx: Int,
+    anchorOffsetWithinItem: Int,
+    visualOffsetPx: Int,
+): Pair<Int, Int> {
+    if (visualOffsetPx <= 0 || paragraphs.isEmpty() || anchorIdx !in paragraphs.indices) {
+        return anchorIdx to anchorOffsetWithinItem
+    }
+    var k = anchorIdx
+    var accumulated = anchorOffsetWithinItem
+    while (k > 0 && accumulated < visualOffsetPx) {
+        k--
+        accumulated += paragraphs[k].totalHeight.toInt().coerceAtLeast(0)
+    }
+    val o = (accumulated - visualOffsetPx).coerceAtLeast(0)
+    return k to o
+}
