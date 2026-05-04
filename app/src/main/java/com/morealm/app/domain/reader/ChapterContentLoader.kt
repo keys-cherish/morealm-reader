@@ -8,6 +8,7 @@ import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.ReplaceRule
+import com.morealm.app.domain.entity.displayTitle
 import com.morealm.app.domain.parser.LocalBookParser
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.BookRepository
@@ -113,7 +114,7 @@ class ChapterContentLoader @Inject constructor(
                 val content = loadAndTransform(book, chapter, chapterIndex, chapters)
                 TtsChapterContent(
                     bookTitle = book.title,
-                    chapterTitle = chapter.title,
+                    chapterTitle = chapter.displayTitle(book),
                     coverUrl = book.coverUrl,
                     content = content,
                     chapterIndex = chapterIndex,

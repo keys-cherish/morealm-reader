@@ -57,6 +57,7 @@ import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.Bookmark
 import com.morealm.app.domain.entity.ReaderStyle
+import com.morealm.app.domain.entity.displayTitle
 import com.morealm.app.presentation.reader.ReaderSearchController
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.core.log.AppLog
@@ -496,11 +497,11 @@ fun ReaderScreen(
         if (displayContent.isNotBlank()) {
             com.morealm.app.ui.reader.renderer.CanvasRenderer(
                 content = displayContent,
-                chapterTitle = renderedChapter.title.ifEmpty { chapters.getOrNull(currentIndex)?.title ?: "" },
+                chapterTitle = renderedChapter.title.ifEmpty { chapters.getOrNull(currentIndex)?.displayTitle(book) ?: "" },
                 chapterIndex = renderedChapter.index,
-                nextChapterTitle = nextPreloadedChapter?.takeIf { it.index == currentIndex + 1 }?.title ?: "",
+                nextChapterTitle = nextPreloadedChapter?.takeIf { it.index == currentIndex + 1 }?.let { ch -> chapters.getOrNull(ch.index)?.displayTitle(book) ?: ch.title } ?: "",
                 nextChapterContent = nextPreloadedChapter?.takeIf { it.index == currentIndex + 1 }?.content ?: "",
-                prevChapterTitle = prevPreloadedChapter?.takeIf { it.index == currentIndex - 1 }?.title ?: "",
+                prevChapterTitle = prevPreloadedChapter?.takeIf { it.index == currentIndex - 1 }?.let { ch -> chapters.getOrNull(ch.index)?.displayTitle(book) ?: ch.title } ?: "",
                 prevChapterContent = prevPreloadedChapter?.takeIf { it.index == currentIndex - 1 }?.content ?: "",
                 backgroundColor = readerBg,
                 textColor = readerFg,
@@ -688,7 +689,7 @@ fun ReaderScreen(
             ReaderControlBar(
                 currentChapter = currentIndex,
                 totalChapters = chapters.size,
-                chapterTitle = chapters.getOrNull(currentIndex)?.title ?: visiblePage.title,
+                chapterTitle = chapters.getOrNull(currentIndex)?.displayTitle(book) ?: visiblePage.title,
                 readProgress = visiblePage.readProgress,
                 scrollProgress = scrollProgress,
                 onBack = ::exitReader,
@@ -858,7 +859,7 @@ fun ReaderScreen(
             val ttsVoiceName by viewModel.tts.ttsVoiceName.collectAsStateWithLifecycle()
             TtsOverlayPanel(
                 bookTitle = book?.title ?: "",
-                chapterTitle = chapters.getOrNull(currentIndex)?.title ?: "",
+                chapterTitle = chapters.getOrNull(currentIndex)?.displayTitle(book) ?: "",
                 isPlaying = ttsPlaying,
                 speed = ttsSpeed,
                 currentParagraph = ttsParagraphIndex,

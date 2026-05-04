@@ -1434,60 +1434,176 @@ fun CanvasRenderer(
                 //
                 // 跟踪 paragraphs.firstKey 变化：旧 firstKey 在新列表里的 idx 就是 prepend 数。
                 // 用 token = System.nanoTime() 做幂等 key，让连续 prepend 能逐次触发。
+                //
+                // ── drop-from-front 锚定补偿（章节切换回弹修复）──
+                //
+                // commitChapterShiftNext 让窗口从 [prev+cur+next] 变成 [cur+next+nextNext]，
+                // 即 prev 章 N 段从头部被「丢弃」、原本的 cur 段移到 idx=0。listState 的
+                // firstVisibleItemIndex 不会自动调整，旧值在新列表坐标系里指向「之后 N 段」
+                // → 视觉一闪、LazyScroll derive 章号震荡（22→21→22）。
+                //
+                // 检测条件：旧 firstKey 在新列表中找不到（不是 prepend）+ 新 firstKey 在旧
+                // 列表里曾出现于 idx > 0 → 那个 idx 就是被丢弃的段数。
+                //
+                // 实现：除 lastFirstKey 外再缓存 lastParagraphKeys（轻量，几百条 String 引用）。
                 var lastFirstKey by remember { mutableStateOf<String?>(null) }
+                var lastParagraphKeys by remember { mutableStateOf<List<String>>(emptyList()) }
                 var prependedCount by remember { mutableIntStateOf(0) }
                 var prependToken by remember { mutableLongStateOf(0L) }
+                var droppedFromFrontCount by remember { mutableIntStateOf(0) }
+                var dropToken by remember { mutableLongStateOf(0L) }
                 LaunchedEffect(paragraphs) {
                     val newFirstKey = paragraphs.firstOrNull()?.key
                     val oldFirstKey = lastFirstKey
                     if (oldFirstKey != null && newFirstKey != null && oldFirstKey != newFirstKey) {
                         val newPos = paragraphs.indexOfFirst { it.key == oldFirstKey }
                         if (newPos > 0) {
+                            // prepend：旧首段在新列表里被推到 idx=newPos
                             prependedCount = newPos
                             prependToken = System.nanoTime()
                             AppLog.debug("LazyScroll", "detected prepend: $newPos paragraphs added at top")
+                        } else {
+                            // drop-from-front：旧首段在新列表已不存在，找新首段在旧列表里的 idx
+                            val oldPosOfNewFirst = lastParagraphKeys.indexOf(newFirstKey)
+                            if (oldPosOfNewFirst > 0) {
+                                droppedFromFrontCount = oldPosOfNewFirst
+                                dropToken = System.nanoTime()
+                                AppLog.debug(
+                                    "LazyScroll",
+                                    "detected drop-from-front: $oldPosOfNewFirst paragraphs removed at top",
+                                )
+                            }
                         }
                     }
                     lastFirstKey = newFirstKey
+                    lastParagraphKeys = paragraphs.map { it.key }
                 }
 
                 // ── 锚点恢复 ──
                 //
-                // 启动 / 章节切换时：用 (chapterIndex, initialChapterPosition) 转 ScrollAnchor。
-                // 同章窗口扩展（prepend/append）时不重启此 effect —— LazyScrollRenderer 内部
-                // 用 anchor signature 幂等，不会 double-restore。
-                val initialAnchor = remember(chapterIndex, initialChapterPosition, paragraphs.size) {
-                    if (paragraphs.isEmpty()) null
+                // **关键**：remember key 只依赖 (chapterIndex, initialChapterPosition, cur 章
+                // ready)，**不**依赖 paragraphs.size——否则 prev/next 章异步加载完时
+                // paragraphs.size 变化会触发 initialAnchor 重算 → key 变 → LazyScrollRenderer
+                // 整体重建 → listState 重置 → 旧的 prepend 锚定补偿与新 initialIdx 双重作用
+                // → idx 越界 coerce 到末尾 → onNearBottom 触发 → onNextChapter 死循环。
+                //
+                // 正确语义：用户「打开书 / 跳新章」才重算锚点；之后 paragraphs 怎么扩展、
+                // 用户怎么滚都不重算。
+                val curReady = chapter?.isCompleted == true
+                val initialAnchor = remember(chapterIndex, initialChapterPosition, curReady) {
+                    if (!curReady) null
+                    // bookmarkToAnchor 只需要 paragraphs 含锚点章；cur ready 时 paragraphs
+                    // 同帧已含 cur 段（paragraphs remember 也 keyed on chapter）。
                     else bookmarkToAnchor(chapterIndex, initialChapterPosition, paragraphs)
                         ?: ScrollAnchor.atChapterStart(chapterIndex)
                 }
 
-                // readerTheme 已由外层 CompositionLocalProvider（L~1136 处）提供，
-                // 这里直接走 LazyScrollRenderer，不再二次构造主题/嵌套 provider。
-                LazyScrollRenderer(
-                    paragraphs = paragraphs,
-                    initialAnchor = initialAnchor,
-                    prependedCount = prependedCount,
-                    prependToken = prependToken,
-                    onNearTop = onPrevChapter,
-                    onNearBottom = onNextChapter,
-                    onChapterProgress = { _, prog ->
-                        if (chapter?.isCompleted == true) onProgress(prog)
-                    },
-                    onVisibleParagraphChanged = { p, _ ->
-                        // 通知 ReaderScreen 顶栏：章 idx + 章首段 chapterPosition
-                        val titleForCh = when (p.chapterIndex) {
-                            chapter?.chapterIndex -> chapterTitle
-                            prevTextChapter?.chapterIndex -> prevChapterTitle
-                            nextTextChapter?.chapterIndex -> nextChapterTitle
-                            else -> ""
+                // ── paragraphsReady gating ──
+                //
+                // ready=true 必须满足：
+                //   1. chapter 真实加载完成（isCompleted）—— 不是 placeholderChapter
+                //   2. 锚点章在 paragraphs 里（findAnchorIndex >= 0）——首次进入时 cur ready
+                //      后这条自然成立；后续不会回到 false（LazyScrollRenderer 持续存活）
+                //
+                // ready=false 时显示 ReaderLoadingCover，**不构造** LazyColumn。
+                // ready=true 后 LazyScrollRenderer 永久存活（不因 paragraphs / anchor 变化
+                // 重建），prepend 锚定补偿正常工作。
+                val paragraphsReady = curReady &&
+                    initialAnchor != null &&
+                    paragraphs.isNotEmpty() &&
+                    findAnchorIndex(paragraphs, initialAnchor) >= 0
+
+                if (!paragraphsReady) {
+                    // 加载占位 —— 和 LazyColumn 同色背景，切换零闪烁
+                    ReaderLoadingCover(
+                        bgColor = Color(readerTheme.bgArgb),
+                        textColor = Color(textColor.toArgb()),
+                        chapterTitle = chapterTitle.ifBlank { "正在加载…" },
+                        chapterSubtitle = if (chapterIndex >= 0) "第 ${chapterIndex + 1} 章" else null,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    // ── 初始 LazyListState 参数 ──
+                    //
+                    // remember key 含 paragraphs.size，让窗口扩展时也参与 invalidation——
+                    // 但 rememberLazyListState 的 initial 参数只在首次 compose 生效，
+                    // 后续重算 initialParams **不会**让 listState 重置（这是 Compose 的
+                    // rememberSaveable 设计），所以这里 paragraphs.size 进 key 是安全的，
+                    // 单纯避免 stale anchor。
+                    //
+                    // 关键防御：
+                    //   1. paragraphsReady gate 保证 anchor 非 null + 锚点章在 paragraphs 内
+                    //   2. ?.let 兜底：极小窗口竞态下 anchor 仍 null 时退化到 (0,0)，
+                    //      避免 !! NPE 崩溃
+                    //   3. coerceIn：万一 LazyColumn 尚未首次 layout 就 query state，
+                    //      负数 / 越界的 initial 参数会让 LazyListState saver 抛异常
+                    val initialParams = remember(chapterIndex, initialChapterPosition, paragraphs.size) {
+                        val anchor = initialAnchor
+                        if (anchor == null || paragraphs.isEmpty()) {
+                            0 to 0
+                        } else {
+                            val (idx, offset) = calcInitialListStateParams(paragraphs, anchor)
+                            idx.coerceIn(0, paragraphs.lastIndex) to offset.coerceAtLeast(0)
                         }
-                        onVisiblePageChanged(p.chapterIndex, titleForCh, "", p.firstChapterPosition)
-                    },
-                    onTapCenter = onTapCenter,
-                    chapterCharSizeProvider = { chIdx -> chapterCharSizes[chIdx] ?: 1 },
-                    modifier = Modifier.fillMaxSize(),
-                )
+                    }
+                    val initialIdx = initialParams.first
+                    val initialOffsetPx = initialParams.second
+
+                    // **不要** `key(...)` 包裹 —— 让 LazyScrollRenderer 一旦挂载就持续存活，
+                    // paragraphs 后续 prepend/append 透传，listState 不重建。
+                    // readerTheme 已由外层 CompositionLocalProvider（L~1136 处）提供，
+                    // 这里直接走 LazyScrollRenderer，不再二次构造主题/嵌套 provider。
+                    LazyScrollRenderer(
+                        paragraphs = paragraphs,
+                        initialIdx = initialIdx,
+                        initialOffsetPx = initialOffsetPx,
+                        prependedCount = prependedCount,
+                        prependToken = prependToken,
+                        droppedFromFrontCount = droppedFromFrontCount,
+                        dropToken = dropToken,
+                        ttsHighlightChapterIndex = if (readAloudChapterPosition >= 0) chapterIndex else -1,
+                        ttsHighlightChapterPosition = readAloudChapterPosition,
+                        onNearTop = onPrevChapter,
+                        onNearBottom = onNextChapter,
+                        // Phase 4 长按段落 —— 当前 fallback 为 "复制整段"。Phase 5 接入完整
+                        // 选区拖把手 + ReaderSelectionToolbar 后替换。
+                        onLongPressParagraph = { paragraph, _ ->
+                            val text = buildString {
+                                for (line in paragraph.lines) {
+                                    for (col in line.columns) {
+                                        if (col is com.morealm.app.domain.render.TextBaseColumn) {
+                                            append(col.charData)
+                                        }
+                                    }
+                                }
+                            }
+                            if (text.isNotBlank()) onCopyText(text)
+                        },
+                        // UI 实时进度：底栏百分比跟随手指（外层 onProgress 是 UI state
+                        // 更新；写 DB 走下面的 persist 链）
+                        onChapterProgressLive = { _, prog ->
+                            if (chapter?.isCompleted == true) onProgress(prog)
+                        },
+                        // 持久化进度：debounce 800ms。上层 ReaderViewModel 内部已对
+                        // 写 DB / SP 做去重，这条 debounce 链保证最终落盘最多 1 次/停手。
+                        onChapterProgressPersist = { _, prog ->
+                            if (chapter?.isCompleted == true) onProgress(prog)
+                        },
+                        onVisibleParagraphChanged = { p, _ ->
+                            // 通知 ReaderScreen 顶栏：章 idx + 章首段 chapterPosition
+                            val titleForCh = when (p.chapterIndex) {
+                                chapter?.chapterIndex -> chapterTitle
+                                prevTextChapter?.chapterIndex -> prevChapterTitle
+                                nextTextChapter?.chapterIndex -> nextChapterTitle
+                                else -> ""
+                            }
+                            onVisiblePageChanged(p.chapterIndex, titleForCh, "", p.firstChapterPosition)
+                        },
+                        onTapCenter = onTapCenter,
+                        chapterCharSizeProvider = { chIdx -> chapterCharSizes[chIdx] ?: 1 },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             } else {
                 ScrollRenderer(
                 pages = currentChapterPages,
