@@ -67,6 +67,45 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     var canTurnPrev: (() -> Boolean)? = null
     var bgMeanColor: Int = 0xFFFFFFFF.toInt()
 
+    /**
+     * 触摸门控：返回 `true` 时整个事件序列被本 View 静默吞掉，不触发翻页 / long-press /
+     * tap zone 路由。
+     *
+     * 用途：[com.morealm.app.ui.reader.renderer.SelectionToolbar] 弹出时其 Popup
+     * 走 `focusable = false` + `dismissOnClickOutside = false`——视觉盖在屏幕上但
+     * 触摸事件全部穿透到本 View，结果用户在 popup 弹着的时候随便戳屏幕都会触发
+     * 仿真翻页（参见 `log_2026-05-04` 用户截图：长按出 mini-menu 的同时仿真卷边
+     * 已经在拉）。
+     *
+     * 修复策略：让 wrapper（[com.morealm.app.ui.reader.page.animation.SimulationPager]）
+     * 把 `selectionState.isActive` 接到这里。门控为 `true` 时 [onTouchEvent] 一律
+     * 短路：不调 [abortAnim]、不写 startX/Y、不启动 long-press timer，**消费事件**
+     * 防止父布局接力出意外路径。
+     *
+     * 不直接走"DOWN 时主动 dismiss popup"的路径：popup 关闭由 SelectionToolbar 内部
+     * dismissOnClickOutside / 按钮点击决定，本类只负责"popup 在的时候我什么都不做"。
+     */
+    var shouldGateTouch: () -> Boolean = { false }
+
+    /**
+     * 选区/高亮 popup 弹出期间用户在 reader 区任何位置点了一下（ACTION_DOWN→
+     * ACTION_UP 且位移没超过 [slopSquare]）触发的回调。仅在 [shouldGateTouch] 返回
+     * `true` 的整段事件序列里有效。
+     *
+     * 用途：仿真模式下 [SelectionToolbar] 的 Popup 走 `dismissOnClickOutside=false`
+     * + `focusable=false`（让 cursor handle 拖动手势继续工作），所以 Popup 不会被
+     * 框架自动关。SLIDE / COVER 路径在 reader 主层加了一个 `pointerInput(isActive)
+     * { detectTapGestures { selectionState.clear() } }` 来兜底，但 SIMULATION 路径
+     * 把 detectTapGestures 整个关掉了——本类把所有触摸都接管了。结果 popup 弹着的
+     * 时候点空白没有反应，只能等用户点按钮才关，体验上是 bug。
+     *
+     * 这个回调让 wrapper（[com.morealm.app.ui.reader.page.animation.SimulationPager]
+     * 通过 [SimulationParams.onDismissPopup]）拿到 tap 事件后调用
+     * `selectionState.clear()` + 清掉 `highlightActionTarget`，等价于 SLIDE/COVER
+     * 路径里的 `detectTapGestures` 行为。
+     */
+    var onTapWhileGated: (() -> Unit)? = null
+
     // Bitmap provider: (relativePos, viewWidth, viewHeight) -> Bitmap?
     // relativePos: -1=prev, 0=current, 1=next
     // Uses the View's own dimensions to ensure correct bitmap size
@@ -188,6 +227,34 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     // ══════════════════════════════════════════════════════════════
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // 选区/高亮 popup 弹出时整个事件序列短路：不进入翻页/long-press 任何分支。
+        // 详见 [shouldGateTouch] 的注释。先取消可能已经排上的 long-press 计时器，
+        // 然后消费事件以避免父布局接力。
+        if (shouldGateTouch()) {
+            // 门控期间不允许翻页 / long-press，但仍然要追踪 DOWN→UP 的位移：
+            // tap on blank ⇒ 通知 wrapper 关掉 popup（等价 SLIDE/COVER 的
+            // detectTapGestures 兜底），drag/long-touch ⇒ 静默吞掉。
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    cancelLongPressTimer()
+                    longPressHandled = false
+                    startX = event.x
+                    startY = event.y
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dx = event.x - startX
+                    val dy = event.y - startY
+                    if (dx * dx + dy * dy <= slopSquare) {
+                        onTapWhileGated?.invoke()
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    cancelLongPressTimer()
+                    longPressHandled = false
+                }
+            }
+            return true
+        }
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 // Legado: abortAnim() + onDown()

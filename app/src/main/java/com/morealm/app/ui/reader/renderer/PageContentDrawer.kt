@@ -504,6 +504,11 @@ fun predecodePageImages(page: TextPage) {
  * 将一页内容渲染到 Bitmap。仿真翻页的贝塞尔算法需要 Bitmap 作为输入。
  * @param bgColor 背景色 ARGB
  * @param bgBitmap 背景图片（已缩放到屏幕尺寸），绘制在背景色之上、文字之下
+ * @param highlights 命中本页的用户高亮（kind=0，背景矩形）。caller 已过滤过页范围。
+ * @param textColorSpans 命中本页的字体强调色 spans（kind=1，替换 paint.color）。
+ * @param selectionStart 实时选区起点 [TextPos]。null = 无选区。
+ * @param selectionEnd 实时选区终点 [TextPos]。null = 无选区。
+ * @param selColorArgb 实时选区背景色 ARGB（默认 [DEFAULT_SELECTION_COLOR]）。
  */
 fun renderPageToBitmap(
     width: Int,
@@ -516,6 +521,11 @@ fun renderPageToBitmap(
     reuseBitmap: Bitmap? = null,
     bgBitmap: Bitmap? = null,
     pageInfoOverlay: PageInfoOverlaySpec? = null,
+    highlights: List<HighlightSpan> = emptyList(),
+    textColorSpans: List<HighlightSpan> = emptyList(),
+    selectionStart: TextPos? = null,
+    selectionEnd: TextPos? = null,
+    selColorArgb: Int = DEFAULT_SELECTION_COLOR.toArgb(),
 ): Bitmap {
     val bmp = if (reuseBitmap != null && reuseBitmap.width == width && reuseBitmap.height == height && !reuseBitmap.isRecycled) {
         reuseBitmap.eraseColor(bgColor)
@@ -537,6 +547,11 @@ fun renderPageToBitmap(
         titlePaint = titlePaint,
         contentPaint = contentPaint,
         chapterNumPaint = chapterNumPaint,
+        selectionStart = selectionStart,
+        selectionEnd = selectionEnd,
+        selColorArgb = selColorArgb,
+        highlights = highlights,
+        textColorSpans = textColorSpans,
         canvasWidth = width.toFloat(),
     )
     pageInfoOverlay?.let { overlay ->

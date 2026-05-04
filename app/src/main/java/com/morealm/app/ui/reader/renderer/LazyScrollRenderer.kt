@@ -177,6 +177,17 @@ fun LazyScrollRenderer(
     onScrollingChanged: (scrolling: Boolean) -> Unit = {},
     onTapCenter: () -> Unit = {},
     /**
+     * 段落 tap 触发：caller 收到 `(paragraph, charOffsetInParagraph, anchorInWindow)`。
+     * 与 [onLongPressParagraph] 同结构，但语义是"短点击"——caller 通常用它做：
+     *   - selection 弹着时清 selection（dismiss-on-tap）
+     *   - tap 命中已存高亮 → 弹删除 / 分享 action menu
+     *   - 否则降级到 [onTapCenter]（切换 reader 控制栏）
+     *
+     * 缺省为空 lambda，未传时点击会"沉默"（不切控制栏）。caller 一般要传一个 wrapper
+     * 实现上面三件事；如果只想要"点击切控制栏"行为，自己传一个调 [onTapCenter] 的实现即可。
+     */
+    onTapParagraph: (paragraph: ScrollParagraph, charOffsetInParagraph: Int, anchorInWindow: Offset) -> Unit = { _, _, _ -> },
+    /**
      * 长按段落触发：caller 收到 `(paragraph, charOffsetInParagraph, anchorInWindow)`。
      *
      * - `charOffsetInParagraph`：段内字符偏移，Phase 5 字符级选区会用，当前段级方案下
@@ -193,6 +204,18 @@ fun LazyScrollRenderer(
      * 半透明前景作为视觉提示。
      */
     selectedParagraphKey: String? = null,
+    /**
+     * 当前章节范围内的用户高亮（kind=0，画底色矩形）。
+     * 每个 [ScrollParagraphItem] 自己按段 chapter range 过滤后传给
+     * [drawScrollParagraphContent]——只命中"段范围内"的 spans，避免每段都遍历整章。
+     * caller 通常传 chapter window（cur 章）的 highlightSpans。
+     */
+    chapterHighlights: List<HighlightSpan> = emptyList(),
+    /**
+     * 当前章节范围内的字体强调色 spans（kind=1，替换 paint.color）。语义同
+     * [chapterHighlights]，但渲染时不画背景。
+     */
+    chapterTextColorSpans: List<HighlightSpan> = emptyList(),
     nearStartThreshold: Int = 15,
     nearEndThreshold: Int = 15,
     chapterCharSizeProvider: (chapterIndex: Int) -> Int = { 1 },
@@ -547,11 +570,26 @@ fun LazyScrollRenderer(
                         paragraph.firstChapterPosition < rev.endChapterPos &&
                         (paragraph.firstChapterPosition + paragraph.charSize) > rev.startChapterPos
                 } ?: false
+                // 段范围 [paraStart, paraEnd) 与 highlight 区间求交。
+                // chapterHighlights 通常是当前章节的全集（caller 透传），段过滤把
+                // O(highlights × paragraphs) 收敛到每段只看"碰到的那几条"，与
+                // [com.morealm.app.ui.reader.renderer.PageContentBox] 的 pageHighlights
+                // 计算思路一致。空集时短路避免分配。
+                val paraStart = paragraph.firstChapterPosition
+                val paraEnd = paraStart + paragraph.charSize
+                val paragraphHighlights = if (chapterHighlights.isEmpty()) emptyList() else
+                    chapterHighlights.filter { it.startChapterPos < paraEnd && it.endChapterPos > paraStart }
+                val paragraphTextColorSpans = if (chapterTextColorSpans.isEmpty()) emptyList() else
+                    chapterTextColorSpans.filter { it.startChapterPos < paraEnd && it.endChapterPos > paraStart }
                 ScrollParagraphItem(
                     paragraph = paragraph,
                     revealHighlight = if (isRevealTarget) revealHighlight else null,
                     isSelected = selectedParagraphKey == paragraph.key,
-                    onTap = onTapCenter,
+                    paragraphHighlights = paragraphHighlights,
+                    paragraphTextColorSpans = paragraphTextColorSpans,
+                    onTap = { offsetInPara, anchorInWindow ->
+                        onTapParagraph(paragraph, offsetInPara, anchorInWindow)
+                    },
                     onLongPress = { offsetInPara, anchorInWindow ->
                         onLongPressParagraph(paragraph, offsetInPara, anchorInWindow)
                     },
@@ -591,12 +629,22 @@ private fun ScrollParagraphItem(
     paragraph: ScrollParagraph,
     revealHighlight: RevealHighlight? = null,
     /**
-     * 段级选区背景：true 时整段画一层 [SCROLL_PARAGRAPH_SELECTION_ARGB] 半透明前景。
+     * 段级选区背景：true 时整段画一层 selection 色（来自主题 primary @ 18%）半透明前景。
      * Phase 5 字符级选区落地后这个 flag 会让位给 selectionStart/End 参数，但当前
      * 段级方案下只需要"整段被选中"的视觉提示就够了（mini-menu 同时弹）。
      */
     isSelected: Boolean = false,
-    onTap: () -> Unit = {},
+    /**
+     * 命中本段的用户高亮（kind=0 背景）。caller 已按段 chapter range 过滤过，
+     * drawScrollParagraphContent 会按行 chapterPosition 区间画矩形。
+     */
+    paragraphHighlights: List<HighlightSpan> = emptyList(),
+    /**
+     * 命中本段的字体强调色 spans（kind=1）。语义同 [paragraphHighlights]，但
+     * 在画字符时按 mid-char 命中替换 paint.color，不画背景。
+     */
+    paragraphTextColorSpans: List<HighlightSpan> = emptyList(),
+    onTap: (charOffsetInParagraph: Int, anchorInWindow: Offset) -> Unit = { _, _ -> },
     onLongPress: (charOffsetInParagraph: Int, anchorInWindow: Offset) -> Unit = { _, _ -> },
 ) {
     val theme = LocalReaderRenderTheme.current
@@ -622,7 +670,10 @@ private fun ScrollParagraphItem(
                 // 内层 detectTapGestures 必须同时处理 onTap，否则会消费短点击事件、
                 // 让外层 Box 的 onTapCenter（菜单切换）失效。
                 detectTapGestures(
-                    onTap = { onTap() },
+                    onTap = { tap ->
+                        val offsetInPara = computeCharOffsetInParagraph(paragraph, tap.x, tap.y)
+                        onTap(offsetInPara, paragraphPosInWindow + tap)
+                    },
                     onLongPress = { tap ->
                         val offsetInPara = computeCharOffsetInParagraph(paragraph, tap.x, tap.y)
                         // 段内 tap 偏移 + 段在 window 中的位置 = tap 点在 window 中的位置
@@ -633,11 +684,13 @@ private fun ScrollParagraphItem(
     ) {
         // ── 段级选区整段背景 ──
         //
-        // 在 reveal / 文字层之**下**画，alpha 0.18 让文字仍可读。颜色取主题 primary
-        // 的 ARGB，由 wrapper 在调用 LazyScrollRenderer 时通过常量决定（见
-        // [SCROLL_PARAGRAPH_SELECTION_ARGB]）。
+        // 在 reveal / 文字层之**下**画，alpha 0.18 让文字仍可读。颜色取主题
+        // [ReaderRenderTheme.selectionColor]（与分页模式一致来源），但分页模式默认 30%
+        // 较抢眼；段级选区是"整段染色"——面积比分页的字符级选区大得多，沿用 30% 会
+        // 把整段盖到难读，所以这里 .copy(alpha=0.18f) 削回 18%。Phase 5 字符级选区
+        // 落地后改回与分页同 alpha。
         if (isSelected) {
-            drawRect(color = androidx.compose.ui.graphics.Color(SCROLL_PARAGRAPH_SELECTION_ARGB))
+            drawRect(color = theme.selectionColor.copy(alpha = 0.18f))
         }
         // ── reveal 整段褪色高亮 ──
         //
@@ -662,6 +715,8 @@ private fun ScrollParagraphItem(
                 titlePaint = theme.titlePaint,
                 contentPaint = theme.contentPaint,
                 chapterNumPaint = theme.chapterNumPaint,
+                paragraphHighlights = paragraphHighlights,
+                paragraphTextColorSpans = paragraphTextColorSpans,
             )
         }
     }

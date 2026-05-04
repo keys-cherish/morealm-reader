@@ -77,6 +77,25 @@ object LocalBookParser {
     private const val MAX_LENGTH_NO_TOC = 10 * 1024 // 10KB per chapter when no TOC found
     private const val MAX_LENGTH_WITH_TOC = 200 * 1024 // 200KB max chapter with TOC
 
+    /**
+     * 一个 TOC rule 在 [BLOCK_SIZE] 采样文本中至少要命中这么多次，才被认为是真章节标题。
+     *
+     * 历史阈值是 1：只要 sample 里有 1 行匹配某个 pattern 就采用，跑 [parseWithTocPattern]
+     * 把整本书按该 pattern 切。问题：无章节标题的纯小说 txt，正文里偶尔出现『卷一』
+     * 『序章』『正文』『1.』这种字样就会误命中——一旦命中后，全文每一行被同一 pattern
+     * 扫过，长度落在 1..50 的几乎所有"小段"都会被切成假章节，于是出现『249 节』这种
+     * 用户视角完全不合理的目录数。
+     *
+     * 提到 3 的考虑：
+     *  - sample 是文件前 512KB（约 17 万汉字），真有章节的小说在这个窗口里至少应该
+     *    出现 3 个章节标题，否则就太"稀"了不像目录
+     *  - 误命中防御：偶发 1~2 个『卷一』之类的字眼不会触发误识别，仍走 parseWithoutToc
+     *    自动分章 → BookChapter.displayTitle / ReaderScreen.isAutoSplitTxt 合并显示路径
+     *    会把目录折叠为单条『《书名》整本书』
+     *  - 短篇容忍：正文不足 3 章的短小说本来就用不着目录，走自动分章无害
+     */
+    private const val MIN_TOC_MATCHES = 3
+
     fun parseTxtChapters(context: Context, uri: Uri, customRegex: String = ""): List<BookChapter> {
         val charsetName = getCachedCharset(context, uri)
         val cs = charset(charsetName)
@@ -112,7 +131,11 @@ object LocalBookParser {
         }
 
         var bestPattern: Pattern? = null
-        var maxMatches = 1
+        // 起始基准 = MIN_TOC_MATCHES - 1，配合下方 `count >= maxMatches` 让"最低 3 次匹配
+        // 才采用 rule"成立。注意：保留 `>=` 而不是 `>` —— DB 里 rule 按 sortOrder 升序，
+        // 这里 rulePatterns.reversed() 倒序遍历，tied count 时让低 sortOrder 的 rule 覆盖
+        // 高 sortOrder 的 rule（用户语义：sortOrder=0 的 builtin_1 优先级最高）。
+        var maxMatches = MIN_TOC_MATCHES - 1
 
         for (rulePattern in rulePatterns.reversed()) {
             val pattern = try {

@@ -94,6 +94,18 @@ class AnalyzeRule(
     // ── JS 执行 ──
 
     fun evalJS(jsStr: String, result: Any? = null): Any? {
+        // 熔断短路：同一 (bookSourceUrl, scriptHash) 连续失败 ≥ 阈值 且未过期 → 直接返回 null。
+        // 不打日志（已知失败、避免噪音）；过期后清记录允许重试。
+        val cacheKey = (source?.bookSourceUrl ?: "anon") + "::" + jsStr.hashCode()
+        jsFailureCache[cacheKey]?.let { rec ->
+            val age = System.currentTimeMillis() - rec.lastFailMs
+            if (rec.count.get() >= JS_FAILURE_THRESHOLD && age < JS_FAILURE_RESET_MS) {
+                return null
+            }
+            if (age >= JS_FAILURE_RESET_MS) {
+                jsFailureCache.remove(cacheKey)
+            }
+        }
         return JsExtensions.withRuntimeContext(source, coroutineContext, ruleData, this) {
             val bindings = ScriptBindings()
             org.mozilla.javascript.Context.enter()
@@ -139,13 +151,31 @@ class AnalyzeRule(
                 }
             }
             try {
-                if (compiled != null) {
+                val out = if (compiled != null) {
                     compiled.eval(scope, coroutineContext)
                 } else {
                     RhinoScriptEngine.eval(script, scope, coroutineContext)
                 }
+                // 成功：清掉熔断计数（书源换网恢复后立即恢复正常）。
+                jsFailureCache.remove(cacheKey)
+                out
             } catch (e: Exception) {
-                AppLog.warn("AnalyzeRule", "JS eval error: ${e.message}")
+                val rec = jsFailureCache.computeIfAbsent(cacheKey) {
+                    JsFailureRecord(java.util.concurrent.atomic.AtomicInteger(0), 0L)
+                }
+                val n = rec.count.incrementAndGet()
+                rec.lastFailMs = System.currentTimeMillis()
+                when {
+                    n < JS_FAILURE_THRESHOLD ->
+                        AppLog.warn("AnalyzeRule", "JS eval error: ${e.message}")
+                    n == JS_FAILURE_THRESHOLD ->
+                        AppLog.warn(
+                            "AnalyzeRule",
+                            "JS rule short-circuited after $n failures " +
+                                "(source=${source?.bookSourceUrl?.take(60)}): ${e.message?.take(80)}"
+                        )
+                    // n > THRESHOLD 不再重复打日志（熔断短路前已经 return null）
+                }
                 null
             }
         }
@@ -542,6 +572,27 @@ class AnalyzeRule(
 
         /** JS 编译缓存 — 相同脚本源码只编译一次，所有 AnalyzeRule 实例共享。 */
         private val scriptCache = ConcurrentHashMap<String, CompiledScript?>()
+
+        /**
+         * JS 失败熔断缓存 — key = bookSourceUrl + "::" + scriptHash。
+         *
+         * 背景：当一个书源对每条搜索结果都执行同一段失败的 JS（典型例子：
+         * `regex.exec(html)[1]` 当正则未匹配时整片 NPE），原实现在 evalJS catch
+         * 处只 warn 不熔断，单次"凡人"搜索下日志里 worker-13 连续抛同一异常 50+
+         * 次（持续 7 秒），把一个协程 worker 钉死、堆冷启动开销。
+         *
+         * 策略：连续失败到 [JS_FAILURE_THRESHOLD] 次后短路返回 null 不再执行；
+         * 超过 [JS_FAILURE_RESET_MS] 后窗口过期、允许重试（书源换网恢复后能自愈）。
+         * 任意一次成功立即清掉熔断记录。
+         */
+        private val jsFailureCache = ConcurrentHashMap<String, JsFailureRecord>()
+        private const val JS_FAILURE_THRESHOLD = 5
+        private const val JS_FAILURE_RESET_MS = 30_000L
+
+        private data class JsFailureRecord(
+            val count: java.util.concurrent.atomic.AtomicInteger,
+            @Volatile var lastFailMs: Long,
+        )
 
         fun getAbsoluteURL(baseUrl: URL?, relativePath: String): String {
             if (relativePath.isBlank()) return ""
