@@ -55,6 +55,20 @@ private data class SimulationIdleKey(
     val bgColor: Int,
     val bgBitmapId: Int,
     val overlayId: Int,
+    /**
+     * 当前章节用户高亮列表的身份哈希。`chapterHighlights` 在 ViewModel 里每次
+     * DB 变更（新增 / 删除高亮、橡皮擦）都会发出新的 List 实例，因此
+     * `System.identityHashCode` 足以代表「这一帧应该看到的高亮集合」。不并入
+     * 这个字段时：用户在同一页保存 / 删除 / 改色高亮 → pageId 不变 →
+     * SimulationIdleKey equals → setIdleBitmap 被 dedupe 跳过 → bitmap 还是旧的，
+     * 必须翻到下一页再翻回来才看到效果。
+     */
+    val highlightsId: Int,
+    /**
+     * 字体强调色 spans（kind=1）的身份哈希。同 [highlightsId]——不并入字段时
+     * 用户加 / 删字体色也要等翻页才生效。
+     */
+    val textColorId: Int,
 )
 
 /**
@@ -82,6 +96,7 @@ private data class SimulationIdleKey(
  * 是 CPU 重活）。在 [lastBitmapState] 里缓存 (displayPage, pageId)，相同就
  * 跳过 setIdleBitmap。time/电量 overlay 等下次真翻页时自然刷新。
  */
+private const val SKIP_LOG_THROTTLE_MS = 1_000L
 @Composable
 internal fun SimulationPager(
     pagerState: PagerState,
@@ -110,7 +125,23 @@ internal fun SimulationPager(
     // 解法：在 SimulationPager 这一层缓存上一次的 (displayPage, pageId)，相同就整段跳过
     // setIdleBitmap。overlayId 的变化本身不值得重绘（时间/电量每秒都在变，只有真的翻页
     // 或 displayPage 改变才重绘）。
-    val lastBitmapState = remember { intArrayOf(-1, 0) } // [0]=displayPage, [1]=pageId
+    //
+    // ── 高亮 / 字体色变更时必须重置缓存 ──
+    // 原 `remember { ... }` 没带 key——同一页的高亮增删 (chapterHighlights 引用变了
+    // 但 displayPage / pageId 都没变) 会命中早 return，bitmap 卡在旧状态，必须翻
+    // 一次页才看到效果。把 chapterHighlights / chapterTextColorSpans 的 list 引用
+    // 当作 key，当 ViewModel 推新列表时这个 IntArray 重新生成 → 早 return 失效 →
+    // 走完整 setIdleBitmap 路径。配合 SimulationIdleKey 里新增的 highlightsId /
+    // textColorId 字段（防止 setIdleBitmap 内部再次 dedupe），形成两层防御。
+    val lastBitmapState = remember(params.chapterHighlights, params.chapterTextColorSpans) {
+        intArrayOf(-1, 0)
+    } // [0]=displayPage, [1]=pageId
+    // 节流 "[3a] setIdleBitmap SKIPPED (unchanged)" 日志：分页流式产页时
+    // 同 (displayPage, pageId) 会在 ~50ms 内连发 ≥10 次（log 19:32:48.8~49.5），
+    // 污染日志。同 key 在 [SKIP_LOG_THROTTLE_MS] 内只打第一行，被压制的次数
+    // 累计到下一次允许打日志时一并附带。
+    val skipLogState = remember { LongArray(4) }
+    // [0]=lastDisplayPage [1]=lastPageId [2]=lastLogMs [3]=suppressedCount
 
     AndroidView(
         factory = { context ->
@@ -151,12 +182,20 @@ internal fun SimulationPager(
                 )
                 if (page != null && w > 0 && h > 0) {
                     try {
+                        val pageStart = page.chapterPosition
+                        val pageEnd = pageStart + page.lines.sumOf { it.charSize }
+                        val pageHighlights = if (params.chapterHighlights.isEmpty()) emptyList() else
+                            params.chapterHighlights.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
+                        val pageTextColor = if (params.chapterTextColorSpans.isEmpty()) emptyList() else
+                            params.chapterTextColorSpans.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
                         renderPageToBitmap(
                             w, h, params.bgColor, page,
                             params.titlePaint, params.contentPaint,
                             chapterNumPaint = params.chapterNumPaint,
                             reuseBitmap = null, bgBitmap = params.bgBitmap,
                             pageInfoOverlay = params.pageInfoOverlay,
+                            highlights = pageHighlights,
+                            textColorSpans = pageTextColor,
                         )
                     } catch (e: OutOfMemoryError) {
                         AppLog.error("Simulation", "bitmap OOM w=${w} h=${h}", e)
@@ -167,6 +206,13 @@ internal fun SimulationPager(
             view.onTapCenter = { params.onTapCenter() }
             view.onLongPress = { x, y -> params.onLongPress?.invoke(Offset(x, y)) }
             view.onSingleTap = { x, y -> params.onSingleTap?.invoke(Offset(x, y)) ?: false }
+            // 把 selectionState.isActive 接到 View 的触摸门控字段：popup 弹出期间
+            // 仿真卷边手势完全失效，等 popup 关闭后下一次 DOWN 自然恢复。lambda 形式
+            // 让 View 在 onTouchEvent 入口实时取最新值，不会被 update 闭包陈旧值卡住。
+            view.shouldGateTouch = { params.isSelectionActive() }
+            // 门控期间用户点空白：等价 SLIDE/COVER 的 detectTapGestures 兜底——通知
+            // 调用方关掉 popup。lambda 形式取 params.onDismissPopup 实时引用。
+            view.onTapWhileGated = { params.onDismissPopup?.invoke() }
             view.onPageTurnCompleted = { isNext ->
                 val direction = if (isNext) ReaderPageDirection.NEXT else ReaderPageDirection.PREV
                 val committedPage = params.onFillPage(displayPage, direction)
@@ -201,11 +247,26 @@ internal fun SimulationPager(
                     displayPage == lastBitmapState[0] &&
                     curPageId == lastBitmapState[1]
                 ) {
-                    // 跳过整段 —— overlay 时间/电量会在下次真翻页时自然刷新
-                    AppLog.debug(
-                        "PageTurnFlicker",
-                        "[3a] setIdleBitmap SKIPPED (unchanged) displayPage=$displayPage pageId=$curPageId",
-                    )
+                    // 节流：同 (displayPage, pageId) 在窗口期内只打第一条；其余仅累计。
+                    val nowMs = System.currentTimeMillis()
+                    val sameKey = displayPage.toLong() == skipLogState[0] &&
+                        curPageId.toLong() == skipLogState[1]
+                    val withinWindow = nowMs - skipLogState[2] < SKIP_LOG_THROTTLE_MS
+                    if (sameKey && withinWindow) {
+                        skipLogState[3] += 1
+                    } else {
+                        val suppressed = if (sameKey) skipLogState[3] else 0L
+                        AppLog.debug(
+                            "PageTurnFlicker",
+                            "[3a] setIdleBitmap SKIPPED (unchanged) displayPage=$displayPage" +
+                                " pageId=$curPageId" +
+                                if (suppressed > 0) " (+ ${suppressed}x suppressed in last ${SKIP_LOG_THROTTLE_MS}ms)" else "",
+                        )
+                        skipLogState[0] = displayPage.toLong()
+                        skipLogState[1] = curPageId.toLong()
+                        skipLogState[2] = nowMs
+                        skipLogState[3] = 0L
+                    }
                     return@AndroidView
                 }
                 lastBitmapState[0] = displayPage
@@ -226,6 +287,12 @@ internal fun SimulationPager(
                         bgColor = params.bgColor,
                         bgBitmapId = params.bgBitmap?.let(System::identityHashCode) ?: 0,
                         overlayId = params.pageInfoOverlay?.let(System::identityHashCode) ?: 0,
+                        // chapterHighlights / chapterTextColorSpans 是 ViewModel 每次 DB
+                        // 变更都换 List 实例，identityHashCode 直接代表「本帧高亮集合」。
+                        // 不并入 key 时同 page 的高亮增删被 dedupe 误吞——见
+                        // [SimulationIdleKey] 字段说明。
+                        highlightsId = System.identityHashCode(params.chapterHighlights),
+                        textColorId = System.identityHashCode(params.chapterTextColorSpans),
                     )
                 } else null
                 // Diagnostic — pairs with setIdleBitmap's RECV log so we can
@@ -256,13 +323,27 @@ internal fun SimulationPager(
                         " key=$contentKey",
                 )
                 view.setIdleBitmap(key = contentKey) {
-                    if (page != null) renderPageToBitmap(
-                        w, h, params.bgColor, page,
-                        params.titlePaint, params.contentPaint,
-                        chapterNumPaint = params.chapterNumPaint,
-                        reuseBitmap = null, bgBitmap = params.bgBitmap,
-                        pageInfoOverlay = params.pageInfoOverlay,
-                    ) else null
+                    if (page != null) {
+                        // 按 page chapter range 过滤章级 highlights / textColorSpans。
+                        // params.chapter* 是当前章节全集（CanvasRenderer 透传），这里
+                        // 收敛到本页 chapter range —— 与 [com.morealm.app.ui.reader.renderer.PageContentBox]
+                        // 的 pageHighlights 逻辑同源。
+                        val pageStart = page.chapterPosition
+                        val pageEnd = pageStart + page.lines.sumOf { it.charSize }
+                        val pageHighlights = if (params.chapterHighlights.isEmpty()) emptyList() else
+                            params.chapterHighlights.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
+                        val pageTextColor = if (params.chapterTextColorSpans.isEmpty()) emptyList() else
+                            params.chapterTextColorSpans.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
+                        renderPageToBitmap(
+                            w, h, params.bgColor, page,
+                            params.titlePaint, params.contentPaint,
+                            chapterNumPaint = params.chapterNumPaint,
+                            reuseBitmap = null, bgBitmap = params.bgBitmap,
+                            pageInfoOverlay = params.pageInfoOverlay,
+                            highlights = pageHighlights,
+                            textColorSpans = pageTextColor,
+                        )
+                    } else null
                 }
             } else if (w > 0 && h > 0) {
                 // 仅记日志，不动 idleBitmap——便于回看时确认"被故意跳过"

@@ -254,12 +254,18 @@ fun CanvasRenderer(
      */
     onChapterCommitShift: (ReaderPageDirection) -> Boolean = { _ -> false },
     /**
-     * 滚动模式渲染引擎切换 —— true 走 [LazyScrollRenderer]（段落级 LazyColumn 瀑布流），
-     * false 走老 [ScrollRenderer]（单 Canvas 手写状态机）。默认 false 保持兼容。
+     * 跳过章首标题块。本地 TXT 无目录自动分章场景必须设 true：
+     * [com.morealm.app.domain.parser.LocalBookParser.parseWithoutToc] 把整本书按 10KB
+     * 切成 N 段「第N节」伪章节，每段都画标题块会让用户翻页/滚动时反复看到同一书名。
      *
-     * 仅在 [pageAnimType] = SCROLL 时生效。其它翻页模式不受影响。
+     * 该 flag 同时透传给 [com.morealm.app.domain.render.ChapterProvider.layoutChapterAsync]
+     * （翻页路径首屏不画 isTitle 行）和 [LazyScrollSection]（滚动路径
+     * `toScrollParagraphs(skipChapterTitleParagraph=true)` 把 CHAPTER_TITLE 段置空）。
+     *
+     * 由 [com.morealm.app.ui.reader.ReaderScreen] 根据 `book.format == TXT &&
+     * book.localPath != null && chapters.all { it.isAutoSplitChapter() }` 计算后传入。
      */
-    useLazyScrollRenderer: Boolean = false,
+    omitChapterTitleBlock: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -417,7 +423,7 @@ fun CanvasRenderer(
         )
     }
 
-    fun chapterCacheKey(index: Int, title: String, body: String): String = "$index|$title|${body.hashCode()}|$screenWidthPx|$screenHeightPx|$fontSizePx|$lineHeight|$effectivePadLeft|$effectivePadRight|$effectivePadTop|$effectivePadBottom|${readerStyle?.hashCode()}|$titleAlign"
+    fun chapterCacheKey(index: Int, title: String, body: String): String = "$index|$title|${body.hashCode()}|$screenWidthPx|$screenHeightPx|$fontSizePx|$lineHeight|$effectivePadLeft|$effectivePadRight|$effectivePadTop|$effectivePadBottom|${readerStyle?.hashCode()}|$titleAlign|$omitChapterTitleBlock"
 
     val currentChapterKey: String = remember(
         chapterIndex,
@@ -433,6 +439,7 @@ fun CanvasRenderer(
         lineHeight,
         readerStyle,
         titleAlign,
+        omitChapterTitleBlock,
     ) {
         chapterCacheKey(chapterIndex, chapterTitle, content)
     }
@@ -510,6 +517,7 @@ fun CanvasRenderer(
                         content = body,
                         chapterIndex = index,
                         chaptersSize = chaptersSize,
+                        omitChapterTitleBlock = omitChapterTitleBlock,
                     )
                     chapter
                 }
@@ -560,6 +568,7 @@ fun CanvasRenderer(
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
                 scope = this,
+                omitChapterTitleBlock = omitChapterTitleBlock,
                 onPageReady = { index, _ ->
                     if (index == 0) {
                         textChapter = handle?.textChapter
@@ -769,8 +778,9 @@ fun CanvasRenderer(
     val autoPagerState = remember(chapterIndex, pageAnimType) { ReaderAutoPagerState() }
     var autoPageProgress by remember(chapterIndex, pageAnimType) { mutableIntStateOf(0) }
     var autoScrollDelta by remember(chapterIndex, pageAnimType) { mutableIntStateOf(0) }
-    // Cross-chapter scroll state: survives chapter transitions for visual continuity.
-    val scrollState = remember { ReaderScrollState() }
+    // Cross-chapter scroll state（已下线）：滚动模式现在走 [LazyScrollSection]，跨章
+    // 衔接由 LazyColumn 的 prepend/append 视野补偿（见 LazyScrollSection 三道防线）
+    // 接管，不再需要 ReaderScrollState 中转 displayOffset。
 
     // Pager state — always start at 0, then jump after layout completes
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { renderPageCount })
@@ -1321,6 +1331,11 @@ fun CanvasRenderer(
         coordinator = coordinator,
         selectionState = selectionState,
         chapterHighlights = chapterHighlights,
+        // 仿真模式渲染 highlights / textColor 用：CanvasRenderer 已派生 highlightSpans
+        // (kind=0) + textColorSpans (kind=1)，直接透传。SimulationDelegate 把它们填入
+        // SimulationParams.chapter*Spans，SimulationPager 渲染 bitmap 时按页过滤后画。
+        highlightSpans = highlightSpans,
+        textColorSpans = textColorSpans,
         onProgress = onProgress,
         onTapCenter = onTapCenter,
         onImageClick = onImageClick,
@@ -1544,157 +1559,142 @@ fun CanvasRenderer(
             )
     ) {
         if (pageAnimType == PageAnimType.SCROLL) {
-            if (useLazyScrollRenderer) {
-                // ── SCROLL 模式：LazyColumn 段落级瀑布流 ──
-                //
-                // 数据流 + 三道防线全部委托给 [LazyScrollSection]（独立文件 ~280 行），
-                // 这里只透传 chapter window + 跳转坐标 + 回调。详细机制见
-                // [LazyScrollSection] 注释。
-                LazyScrollSection(
-                    chapter = chapter,
-                    prevTextChapter = prevTextChapter,
-                    nextTextChapter = nextTextChapter,
-                    chapterIndex = chapterIndex,
-                    initialChapterPosition = initialChapterPosition,
-                    restoreToken = restoreToken,
-                    readAloudChapterPosition = readAloudChapterPosition,
-                    chapterTitle = chapterTitle,
-                    prevChapterTitle = prevChapterTitle,
-                    nextChapterTitle = nextChapterTitle,
-                    backgroundColor = Color(readerTheme.bgArgb),
-                    textColor = Color(textColor.toArgb()),
-                    // 跨章后用 takeIf 过滤旧章 reveal 不画到当前 viewport
-                    revealHighlight = revealHighlight?.takeIf { it.chapterIndex == chapterIndex },
-                    onPrevChapter = onPrevChapter,
-                    onNextChapter = onNextChapter,
-                    onProgress = onProgress,
-                    onCopyText = onCopyText,
-                    // 段级 mini-menu 各回调透传（分享走本地 dialog；其余走 ReaderViewModel）
-                    onSpeakFromHere = onSpeakFromHere,
-                    onTranslateText = onTranslateText,
-                    onLookupWord = onLookupWord,
-                    onShareQuote = { text -> shareQuoteText = text },
-                    onAddHighlight = { start, end, text, argb ->
-                        onAddHighlight(start, end, text, argb)
-                    },
-                    onEraseHighlight = onEraseHighlight,
-                    onAddTextColor = onAddTextColor,
-                    selectionMenuConfig = selectionMenuConfig,
-                    onTapCenter = onTapCenter,
-                    onVisiblePageChanged = onVisiblePageChanged,
-                    onScrollingChanged = { scrollInProgress = it },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                ScrollRenderer(
-                pages = currentChapterPages,
-                nextChapterPages = nextTextChapter?.pages.orEmpty(),
-                prevChapterPages = prevTextChapter?.pages.orEmpty(),
-                initialPageOffset = scrollState.consumeScrollOffset(),
-                onChapterCommit = { direction, scrollIntoOffset ->
-                    scrollState.commitChapterShift(direction, scrollIntoOffset)
-                    // Phase 2e: 优先走同步腾挪。返回 true 时 ChapterController 已经
-                    // 当帧把 _prev/_cur/_nextTextChapter + _chapterContent + _renderedChapter
-                    // 一齐更新，CanvasRenderer 下一帧重组拿到一致快照——视觉无缝。
-                    // 返回 false 退回老路径（loadChapter 异步加载），保证回归不破坏。
-                    val synced = onChapterCommitShift(direction)
-                    if (!synced) {
-                        when (direction) {
-                            ReaderPageDirection.NEXT -> onNextChapter()
-                            ReaderPageDirection.PREV -> onPrevChapter()
-                            else -> {}
-                        }
-                    }
-                },
-                titlePaint = titlePaint,
-                contentPaint = contentPaint,
-                chapterNumPaint = chapterNumPaint,
-                bgColor = bgArgb,
-                bgBitmap = bgBitmap,
-                selectionStart = selectionState.startPos,
-                selectionEnd = selectionState.endPos,
-                onScrollProgress = { if (chapter?.isCompleted == true) onProgress(it) },
-                onScrollPageChanged = { displayIndex, page ->
-                    scrollPageIndex = displayIndex
-                    readerPageIndex = displayIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
-                    onVisiblePageChanged(page.chapterIndex, page.title, page.readProgress, page.chapterPosition)
-                },
-                onNearBottom = onScrollNearBottom,
-                onReachedBottom = onScrollReachedBottom,
-                onBoundaryPageTurn = { direction, displayIndex -> coordinator.commitScrollChapterBoundary(direction, displayIndex) { readerPageIndex = it } },
-                onScrollingChanged = { scrollInProgress = it },
-                onTapCenter = onTapCenter,
-                onImageClick = onImageClick,
-                onLongPressText = { page, textPos, offset ->
-                    val wordRange = findWordRange(page, textPos)
-                    selectedTextPage = page
-                    scrollRelativePages = scrollRelativePages + (textPos.relativePagePos to page)
-                    selectionState.setSelection(wordRange.first, wordRange.second)
-                    toolbarOffset = offset
-                    // Diagnostic: confirm the SCROLL-mode long-press path actually
-                    // fires setSelection, and capture the word range's TextPos so we
-                    // can correlate with CursorHandleTrace's selStart/selEnd values.
-                    AppLog.info(
-                        "CursorHandleTrace",
-                        "SCROLL longPress setSelection" +
-                            " | tap=$textPos -> word(${wordRange.first}..${wordRange.second})" +
-                            " | page.lines.size=${page.lines.size} chPos=${page.chapterPosition}",
-                    )
-                },
-                onReadAloudVisiblePosition = { page, line ->
-                    onVisibleReadAloudPosition(page.chapterIndex, line.chapterPosition)
-                },
-                onSelectionStartMove = { page, textPos ->
-                    selectedTextPage = page
-                    scrollRelativePages = scrollRelativePages + (textPos.relativePagePos to page)
-                    selectionState.selectStartMove(textPos)
-                },
-                onSelectionEndMove = { page, textPos ->
-                    selectedTextPage = page
-                    scrollRelativePages = scrollRelativePages + (textPos.relativePagePos to page)
-                    selectionState.selectEndMove(textPos)
-                },
-                onRelativePagesChanged = { relativePages ->
-                    scrollRelativePages = relativePages
-                },
-                resetKey = chapterIndex,
-                restoreToken = restoreToken,
-                startFromLastPage = startFromLastPage,
-                initialProgress = initialProgress,
+            // ── SCROLL 模式：LazyColumn 段落级瀑布流 ──
+            //
+            // 数据流 + 三道防线全部委托给 [LazyScrollSection]（独立文件 ~280 行），
+            // 这里只透传 chapter window + 跳转坐标 + 回调。详细机制见
+            // [LazyScrollSection] 注释。
+            //
+            // 注：老 ScrollRenderer 路径已在删除 task #6 中下线，配套的
+            // [PageReaderInfoOverlay]（页码/电池/时间状态栏）也一并移除——
+            // 滚动模式天然无分页概念，状态栏由翻页模式独占即可。
+            LazyScrollSection(
+                chapter = chapter,
+                prevTextChapter = prevTextChapter,
+                nextTextChapter = nextTextChapter,
+                chapterIndex = chapterIndex,
                 initialChapterPosition = initialChapterPosition,
-                initialPageIndex = readerPageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
-                pageTurnCommand = pageTurnCommand,
-                onPageTurnCommandConsumed = onPageTurnCommandConsumed,
-                autoScrollDelta = autoScrollDelta,
-                onAutoScrollDeltaConsumed = { autoScrollDelta = 0 },
-                layoutCompleted = chapter?.isCompleted == true,
+                restoreToken = restoreToken,
+                readAloudChapterPosition = readAloudChapterPosition,
+                chapterTitle = chapterTitle,
+                prevChapterTitle = prevChapterTitle,
+                nextChapterTitle = nextChapterTitle,
+                backgroundColor = Color(readerTheme.bgArgb),
+                textColor = Color(textColor.toArgb()),
+                // 跨章后用 takeIf 过滤旧章 reveal 不画到当前 viewport
+                revealHighlight = revealHighlight?.takeIf { it.chapterIndex == chapterIndex },
+                onPrevChapter = onPrevChapter,
+                onNextChapter = onNextChapter,
+                onProgress = onProgress,
+                onCopyText = onCopyText,
+                // 段级 mini-menu 各回调透传（分享走本地 dialog；其余走 ReaderViewModel）
+                onSpeakFromHere = onSpeakFromHere,
+                onTranslateText = onTranslateText,
+                onLookupWord = onLookupWord,
+                onShareQuote = { text -> shareQuoteText = text },
+                onAddHighlight = { start, end, text, argb ->
+                    onAddHighlight(start, end, text, argb)
+                },
+                onEraseHighlight = onEraseHighlight,
+                onAddTextColor = onAddTextColor,
+                selectionMenuConfig = selectionMenuConfig,
+                // 滚动模式接通用户高亮（kind=0 背景）/ 字体强调色（kind=1）渲染。
+                // 这两个 List 已由 wrapper（CanvasRenderer 主体）从 chapterHighlights
+                // 派生为 [HighlightSpan]，分别按 kind 分桶 —— 直接透传即可。
+                chapterHighlights = highlightSpans,
+                chapterTextColorSpans = textColorSpans,
+                // 原始 Highlight 列表 + 删除/分享回调：滚动模式 tap 命中已存高亮 → 弹
+                // action menu 路径用，与分页模式的 chapterHighlights / onDeleteHighlight /
+                // onShareHighlight 一一对应。
+                chapterHighlightsRaw = chapterHighlights,
+                onDeleteHighlight = onDeleteHighlight,
+                onShareHighlight = onShareHighlight,
+                onTapCenter = onTapCenter,
+                onVisiblePageChanged = onVisiblePageChanged,
+                onScrollingChanged = { scrollInProgress = it },
+                omitChapterTitleBlock = omitChapterTitleBlock,
                 modifier = Modifier.fillMaxSize(),
             )
-            PageReaderInfoOverlay(
-                pages = currentChapterPages,
-                onCurrentPageChanged = {},
-                pageIndex = scrollPageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
-                pageCount = pageCount,
-                backgroundColor = backgroundColor,
+            // ── SCROLL 模式 info overlay（顶部章节标题 + 底部电池/时间/章节进度）──
+            //
+            // 分页模式由 [PageReaderInfoOverlay] 在每页 [PageContentBox] 内部叠加；
+            // SCROLL 模式的 [LazyScrollSection] 内部不画状态栏，缺一组就好像在裸文字
+            // 流上读，没有"我在哪一章"的视觉锚点。这里复用 [ReaderInfoBar]（同文件
+            // private fun）画顶部 + 底部两条，对齐分页模式的体验。
+            //
+            // slot 映射：SCROLL 没有"当前页"概念，配置里 page / progress / page_progress
+            // 三个 slot 自动 fallback 到 chapter_progress（X/Y 章），不至于显示
+            // "1/0" 这种坏数据。其它 slot（chapter / time / battery / time_battery /
+            // chapter_progress 等）保持原义。
+            //
+            // currentPage = null：InfoSlotContent 在 progress 分支会用 pageIndex/pageCount
+            // 推算百分比，传 pageCount=0 + 上面 slot 映射后 progress 永远不会被命中 ——
+            // 双重保险，不会进 NaN 路径。
+            fun mapSlotForScroll(s: String): String = when (s) {
+                "page", "progress", "page_progress" -> "chapter_progress"
+                else -> s
+            }
+            val scrollHasBg = readerTheme.bgBitmap != null
+            ReaderInfoBar(
+                slotLeft = if (showTimeBattery) mapSlotForScroll(headerLeft) else "none",
+                slotCenter = if (showChapterName) mapSlotForScroll(headerCenter) else "none",
+                slotRight = if (showTimeBattery) mapSlotForScroll(headerRight) else "none",
                 chapterTitle = chapterTitle,
+                pageIndex = 0,
+                pageCount = 0,
+                currentPage = null,
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
                 batteryLevel = batteryLevel,
                 batteryCharging = batteryCharging,
                 currentTime = currentTime,
                 textColor = textColor,
-                paddingHorizontal = paddingHorizontal,
-                showChapterName = showChapterName,
-                showTimeBattery = showTimeBattery,
-                headerLeft = headerLeft,
-                headerCenter = headerCenter,
-                headerRight = headerRight,
-                footerLeft = footerLeft,
-                footerCenter = footerCenter,
-                footerRight = footerRight,
-                hasBgImage = bgBitmap != null,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .fillMaxWidth()
+                    .height(64.dp)
+                    .then(
+                        if (scrollHasBg) Modifier
+                        else Modifier.background(
+                            Brush.verticalGradient(
+                                0f to backgroundColor,
+                                0.72f to backgroundColor,
+                                1f to backgroundColor.copy(alpha = 0f),
+                            )
+                        )
+                    )
+                    .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
             )
-            }
+            ReaderInfoBar(
+                slotLeft = if (showChapterName) mapSlotForScroll(footerLeft) else "none",
+                slotCenter = mapSlotForScroll(footerCenter),
+                slotRight = mapSlotForScroll(footerRight),
+                chapterTitle = chapterTitle,
+                pageIndex = 0,
+                pageCount = 0,
+                currentPage = null,
+                chapterIndex = chapterIndex,
+                chaptersSize = chaptersSize,
+                batteryLevel = batteryLevel,
+                batteryCharging = batteryCharging,
+                currentTime = currentTime,
+                textColor = textColor,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .height(64.dp)
+                    .then(
+                        if (scrollHasBg) Modifier
+                        else Modifier.background(
+                            Brush.verticalGradient(
+                                0f to backgroundColor.copy(alpha = 0f),
+                                0.28f to backgroundColor,
+                                1f to backgroundColor,
+                            )
+                        )
+                    )
+                    .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
+            )
         } else {
             // Diagnostic — pairs with [2] coordinator REBUILD and [3p]
             // SimulationPager COMPOSE so we can see the chain:
@@ -1704,12 +1704,31 @@ fun CanvasRenderer(
             // 第一次重组时是 0、第二次才变成 lastSettled——就解释了首页一帧。
             val computedSimDisplayPage =
                 coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax)
-            AppLog.debug(
-                "PageTurnFlicker",
-                "[1] simulationDisplayPage=$computedSimDisplayPage" +
-                    " (lastSettled=${coordinator.lastSettledDisplayPage}" +
-                    " safeDisplayMax=$safeDisplayMax pageAnimType=$pageAnimType)",
-            )
+            // 节流：分页流式产页时 safeDisplayMax 每追加几页就变一次，但
+            // computedSimDisplayPage 通常恒定 0。同 (computedSimDisplayPage,
+            // lastSettled) 在 1s 内只打第一行 + 累计被压制次数。
+            // [0]=key, [1]=lastLogMs, [2]=suppressedCount
+            val simDisplayPageLogState = remember { LongArray(3) }
+            val nowMs = System.currentTimeMillis()
+            val key = (computedSimDisplayPage.toLong() shl 32) or
+                (coordinator.lastSettledDisplayPage.toLong() and 0xFFFFFFFFL)
+            val sameKey = simDisplayPageLogState[0] == key
+            val withinWindow = nowMs - simDisplayPageLogState[1] < 1_000L
+            if (sameKey && withinWindow) {
+                simDisplayPageLogState[2] += 1
+            } else {
+                val suppressed = if (sameKey) simDisplayPageLogState[2] else 0L
+                AppLog.debug(
+                    "PageTurnFlicker",
+                    "[1] simulationDisplayPage=$computedSimDisplayPage" +
+                        " (lastSettled=${coordinator.lastSettledDisplayPage}" +
+                        " safeDisplayMax=$safeDisplayMax pageAnimType=$pageAnimType)" +
+                        if (suppressed > 0) " (+ ${suppressed}x suppressed in last 1000ms)" else "",
+                )
+                simDisplayPageLogState[0] = key
+                simDisplayPageLogState[1] = nowMs
+                simDisplayPageLogState[2] = 0L
+            }
             AnimatedPageReader(
                 pagerState = pagerState,
                 animType = pageAnimType,
@@ -1789,6 +1808,37 @@ fun CanvasRenderer(
                     },
                     onSelectionEndMove = { textPos ->
                         selectedTextPage = coordinator.getPageAt(pageIndex)
+                        selectionState.selectEndMove(textPos)
+                    },
+                )
+            }
+            // ── SIMULATION 模式选区/cursor overlay ──
+            //
+            // SimulationReadView 把整页烘成 bitmap 跑贝塞尔，PageContentBox 的实时
+            // selection 渲染 + CursorHandle 在这条路径上不会被调用。这里在
+            // AnimatedPageReader 之上叠一个 fillMaxSize 的 Compose overlay，专门负责：
+            //   - 选区背景矩形（每行一段，颜色 = 主题 selectionColor）
+            //   - 双 CursorHandle（拖动时调 selectionState.selectStartMove/EndMove）
+            //
+            // selectionState.startPos==null 或 endPos==null 时 overlay 自身 early-return
+            // 不渲染任何东西，所以非 SIMULATION + 非选区状态下零开销。
+            if (pageAnimType == PageAnimType.SIMULATION) {
+                com.morealm.app.ui.reader.page.animation.SimulationSelectionOverlay(
+                    selectionState = selectionState,
+                    currentPage = coordinator.getPageAt(
+                        coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax),
+                    ),
+                    selectionColor = readerTheme.selectionColor,
+                    onSelectionStartMove = { textPos ->
+                        selectedTextPage = coordinator.getPageAt(
+                            coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax),
+                        )
+                        selectionState.selectStartMove(textPos)
+                    },
+                    onSelectionEndMove = { textPos ->
+                        selectedTextPage = coordinator.getPageAt(
+                            coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax),
+                        )
                         selectionState.selectEndMove(textPos)
                     },
                 )
@@ -2676,6 +2726,17 @@ private fun ReaderSelectionToolbar(
      * 选区结束位置在章节字符流里的 offset。和 [selectedStartChapterPosition]
      * 配对组成 Highlight 的 startChapterPos / endChapterPos。columnIndex 接受
      * Int.MAX_VALUE 表示行末（跨页选择时上半段就这么传）。
+     *
+     * **半开区间 [start, end) 语义**：endChapterPos 应当指向"最后一个被选中字符之后
+     * 的位置"。[com.morealm.app.domain.render.TextPage.getPosByLineColumn] 对入参
+     * `columnIndex` 的实现是"行内 0..columnIndex-1 的累计字符数"——所以传 `columnIndex`
+     * 自身只到末选字符的"前缘"，丢了末字。修正：传 `columnIndex + 1` 让 end 跨过
+     * 末选字符；这样一段选 N 个字得到的 endChapterPos - startChapterPos 正好等于 N。
+     *
+     * 影响面：highlight 背景渲染、字体强调色渲染（[PageContentDrawer.drawPageContent]
+     * 用 `midPos < endChapterPos` 判定）、橡皮擦覆盖范围、以及上层
+     * [com.morealm.app.presentation.reader.ReaderHighlightController.add] 落 DB 的
+     * Highlight.endChapterPos。所有读这个值的地方都按半开区间约定来，统一修这一处。
      */
     fun selectedEndChapterPosition(): Int {
         val textPage = page ?: return 0
@@ -2683,7 +2744,10 @@ private fun ReaderSelectionToolbar(
         val end = selectionState.endPos ?: return textPage.chapterPosition
         val actualEnd = if (start.compare(end) <= 0) end else start
         val endPage = relativePageProvider(actualEnd.relativePagePos) ?: textPage
-        return endPage.chapterPosition + endPage.getPosByLineColumn(actualEnd.lineIndex, actualEnd.columnIndex)
+        // +1 让区间右端跨过末选字符（半开区间约定）。getPosByLineColumn 内部已对
+        // columnIndex 做 coerceIn(0, columns.size) 兜底，传 lastIndex+1 = columns.size
+        // 不会越界。
+        return endPage.chapterPosition + endPage.getPosByLineColumn(actualEnd.lineIndex, actualEnd.columnIndex + 1)
     }
 
     SelectionToolbar(

@@ -183,7 +183,13 @@ internal class ReaderPageFactory(
     private fun nextPageForLocalIndex(localIndex: Int): TextPage {
         currentChapter?.let { chapter ->
             if (localIndex < currentPages.size - 1) {
-                return currentPages.getOrNull(localIndex + 1)?.removePageAloudSpan()
+                // 同章邻页保留 isReadAloud：当前 TTS 朗读段所在页可能就是这个邻页，
+                // 这里清掉会让用户翻到隔壁页再翻回来时高亮永久消失（因为
+                // [CanvasRenderer] 的 LaunchedEffect(chapter, readAloudChapterPosition)
+                // key 都没变，不会重跑 upPageAloudSpan 来恢复）。
+                // 跨章路径下面那个 nextPages.firstOrNull()?.removePageAloudSpan()
+                // 才需要清——切到 next 章的页本来就不该带当前章的 aloud span。
+                return currentPages.getOrNull(localIndex + 1)
                     ?: formattedTitlePage(chapter.title, chapter)
             }
             if (!currentChapterCompleted) return formattedTitlePage(chapter.title, chapter)
@@ -198,7 +204,10 @@ internal class ReaderPageFactory(
     private fun prevPageForLocalIndex(localIndex: Int): TextPage {
         currentChapter?.let { chapter ->
             if (localIndex > 0) {
-                return currentPages.getOrNull(localIndex - 1)?.removePageAloudSpan()
+                // 同上：同章上一页禁清 aloud span，避免「翻去隔壁页再翻回来高亮消失」。
+                // 复现路径：朗读段 A 在 page X，TTS 标好 isReadAloud；用户翻到 X+1
+                // → next 路径不影响 X；翻回 X → prev 路径走到这里清掉了 X 的 aloud span。
+                return currentPages.getOrNull(localIndex - 1)
                     ?: formattedTitlePage(chapter.title, chapter)
             }
             if (!currentChapterCompleted) return formattedTitlePage(chapter.title, chapter)
@@ -213,7 +222,9 @@ internal class ReaderPageFactory(
     private fun nextPlusPageForLocalIndex(localIndex: Int): TextPage {
         currentChapter?.let { chapter ->
             if (localIndex < currentPages.size - 2) {
-                return currentPages.getOrNull(localIndex + 2)?.removePageAloudSpan()
+                // 同章 +2 同样禁清 aloud span，保持与 [pageForTurn] line 168 路径
+                // 一致（那条路径取同章邻页时不带 remove）。
+                return currentPages.getOrNull(localIndex + 2)
                     ?: formattedTitlePage(chapter.title, chapter)
             }
             if (!currentChapterCompleted) return formattedTitlePage(chapter.title, chapter)

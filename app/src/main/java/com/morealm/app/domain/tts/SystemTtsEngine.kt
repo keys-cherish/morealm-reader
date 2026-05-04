@@ -532,9 +532,34 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
 
     override fun isAvailable(): Boolean = isReady
 
+    /**
+     * 释放 [TextToSpeech] binder。
+     *
+     * 实现注意：和 [stop] 同样的 ANR 陷阱——[TextToSpeech.shutdown] 内部会同步发起
+     * `setCallback(null)` 这条 binder transact 给系统 TTS 进程；引擎进程负载高时阻塞
+     * 主线程 8 秒以上。`log_2026-05-04` 17:28 段抓到一次 ANR 栈：
+     *
+     *     android.os.BinderProxy.transactNative
+     *       ← ITextToSpeechService$Stub$Proxy.setCallback:903
+     *       ← TextToSpeech.lambda$shutdown$1:924
+     *       ← TextToSpeech.shutdown:923
+     *       ← SystemTtsEngine.shutdown:536
+     *       ← ReaderTtsController.shutdown:387
+     *       ← ReaderViewModel.onCleared:570  (Main thread)
+     *
+     * 修复策略和 [stop] 一致：把 binder 调用 fire-and-forget 到 daemon Thread；
+     * 调用方（onCleared 路径）立即返回，不再阻塞 Main。
+     *
+     * 字段 `tts` 立刻置 null，避免后续误用一个正在销毁的实例；后台 thread 抓的是
+     * 调用前快照下来的 `current`，不会因为字段 null 而漏 shutdown。
+     */
     fun shutdown() {
-        tts?.shutdown()
+        val current = tts ?: return
         tts = null
+        Thread({ runCatching { current.shutdown() } }, "SystemTts-shutdown").apply {
+            isDaemon = true
+            start()
+        }
     }
 
     /**

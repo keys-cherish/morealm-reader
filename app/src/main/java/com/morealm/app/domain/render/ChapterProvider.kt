@@ -81,10 +81,26 @@ class ChapterProvider(
         content: String,
         chapterIndex: Int,
         chaptersSize: Int = 0,
+        /**
+         * 跳过章首标题块（chapter-num 小字 + 大标题 + 装饰横条）。
+         *
+         * 给本地 TXT 无目录自动分章场景用——[com.morealm.app.domain.parser.LocalBookParser.parseWithoutToc]
+         * 把整本书按 10KB 切成 N 段「第N节」，每段被当独立章排版。如果每段都画标题块，
+         * 用户翻页/滚动时会看到 N 次相同的「《书名》」（[com.morealm.app.domain.entity.displayTitle]
+         * 已把伪章名替换成书名）—— 完全没区分度，且占据每页头部空间。
+         *
+         * 设为 true 时不画 isTitle/isChapterNum 行，全章直接从正文开始；info 状态栏
+         * 仍由 [com.morealm.app.ui.reader.renderer.PageContentDrawer] 用 spec.chapterTitle
+         * 单独绘制，所以书名一次性显示在状态栏不会丢失。
+         */
+        omitChapterTitleBlock: Boolean = false,
     ): TextChapter {
         val textChapter = TextChapter(chapterIndex, title, chaptersSize)
         val textPages = arrayListOf<TextPage>()
-        layoutInternal(title, content, chapterIndex, chaptersSize, textChapter, textPages)
+        layoutInternal(
+            title, content, chapterIndex, chaptersSize, textChapter, textPages,
+            omitChapterTitleBlock = omitChapterTitleBlock,
+        )
         return textChapter
     }
 
@@ -107,6 +123,8 @@ class ChapterProvider(
         onPageReady: ((Int, TextPage) -> Unit)? = null,
         onCompleted: (() -> Unit)? = null,
         onError: ((Throwable) -> Unit)? = null,
+        /** 见 [layoutChapter] 同名参数。 */
+        omitChapterTitleBlock: Boolean = false,
     ): AsyncLayoutHandle {
         val textChapter = TextChapter(chapterIndex, title, chaptersSize)
         val channel = Channel<TextPage>(Channel.UNLIMITED)
@@ -117,6 +135,7 @@ class ChapterProvider(
                 layoutInternal(
                     title, content, chapterIndex, chaptersSize,
                     textChapter, textPages, channel, onPageReady,
+                    omitChapterTitleBlock = omitChapterTitleBlock,
                 )
                 channel.close()
                 onCompleted?.invoke()
@@ -144,6 +163,7 @@ class ChapterProvider(
         textPages: ArrayList<TextPage>,
         channel: Channel<TextPage>? = null,
         onPageReady: ((Int, TextPage) -> Unit)? = null,
+        omitChapterTitleBlock: Boolean = false,
     ) {
         val stringBuilder = StringBuilder()
         var absStartX = paddingLeft
@@ -181,7 +201,9 @@ class ChapterProvider(
         val pageCountBefore = textPages.size
 
         // Layout title — split into chapter-num line + title line (4.htm style)
-        if (titleMode != 2 && !contentProvidesChapterTitle) {
+        // omitChapterTitleBlock 为 true 时整段跳过：自动分章 TXT 不再画伪章名标题。
+        // 等价于 titleMode==2 的"无标题"模式，但作用域只限本次调用，不污染全局偏好。
+        if (titleMode != 2 && !contentProvidesChapterTitle && !omitChapterTitleBlock) {
             val titleParts = splitChapterNumAndTitle(title)
             val chapterNumText = titleParts.first   // e.g. "第一章" or null
             val titleText = titleParts.second        // e.g. "山边小村" or full title

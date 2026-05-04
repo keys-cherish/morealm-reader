@@ -167,6 +167,10 @@ class ReaderViewModel @Inject constructor(
         chapter.linkedBooksState = navigation._linkedBooks
         // Progress controller needs chapter controller reference
         progress.chapterController = chapter
+        // 启动进度快照收集器：去掉直接 launch 的 saveProgress 路径，改由
+        // combine + distinctUntilChanged + debounce(300) 统一收口，避免翻页时
+        // 同状态被反复写 + scroll% 反弹被多次落地（详见 ReaderProgressController.start KDoc）。
+        progress.start()
 
         // Legado-parity：进入阅读器即清除"N 新"徽章。
         // Legado 是在 ReadBook.saveRead() 每次保存进度时清，我们这里在 init 一次性清掉，
@@ -567,6 +571,7 @@ class ReaderViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        progress.stop()
         tts.shutdown()
         val sessionMs = System.currentTimeMillis() - progress.readingStartTime
         @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)

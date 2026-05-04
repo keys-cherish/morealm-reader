@@ -32,16 +32,6 @@ class ReaderSettingsController(
         .map { key -> PageTurnMode.entries.find { it.key == key } ?: PageTurnMode.SCROLL }
         .stateIn(scope, SharingStarted.Eagerly, PageTurnMode.SCROLL)
 
-    /**
-     * 滚动模式渲染引擎开关（实验）—— true 走 [com.morealm.app.ui.reader.renderer.LazyScrollRenderer]
-     * 段落级 LazyColumn 瀑布流；false 走老 [com.morealm.app.ui.reader.renderer.ScrollRenderer]
-     * 单 Canvas 手写状态机。默认 false，实验性切换。
-     *
-     * 仅在 [pageTurnMode] = SCROLL 时生效；翻页 / 仿真 / 覆盖等模式不受影响。
-     */
-    val useLazyScrollRenderer: StateFlow<Boolean> = prefs.useLazyScrollRenderer
-        .stateIn(scope, SharingStarted.Eagerly, true)
-
     val customFontUri: StateFlow<String> = prefs.customFontUri
         .stateIn(scope, SharingStarted.Eagerly, "")
 

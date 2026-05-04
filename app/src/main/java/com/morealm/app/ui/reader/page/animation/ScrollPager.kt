@@ -27,9 +27,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
  * - 本 pager：page 为最小单位，跨章必须切 chapter；最简单的连续滚阅读。
  * - LazyScrollRenderer：段落为最小单位，prev/cur/next 三章扁平共一窗，跨章无缝。
  *
- * MoRealm 的 SCROLL 模式默认走 LazyScrollRenderer（见
- * [com.morealm.app.domain.preference.AppPreferences.useLazyScrollRenderer]），本 pager
- * 仅做 PagerState 衔接的兼容入口。
+ * MoRealm 的 SCROLL 模式现在固定走 [com.morealm.app.ui.reader.renderer.LazyScrollRenderer]
+ * 段落级 LazyColumn 瀑布流（老 ScrollRenderer 已下线），本 pager 仅做 PagerState 衔接
+ * 的兼容入口。
  *
  * # 现代实践：snapshotFlow 替代双向 LaunchedEffect 同步
  *

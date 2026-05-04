@@ -432,6 +432,82 @@ object JsExtensions {
         return createSymmetricCrypto(transformation, key.toByteArray(), iv?.toByteArray())
     }
 
+    // ── Legado 兼容 AES 便捷接口 ──
+    //
+    // 移植自 io.legado.app.help.JsEncodeUtils（已 @Deprecated 但仍被大量书源 JS 调用）。
+    // 形如「{{书源 JS}}」里写 `java.aesBase64DecodeToString(data, key, "AES/CBC/PKCS5Padding", iv)`
+    // 的旧规则会通过 Rhino 解析到这些方法，找不到就刷屏 `TypeError: 找不到函数 aesBase64DecodeToString`。
+    // 全部转调本类已有的 [createSymmetricCrypto] / [SymmetricCryptoHelper]，零运行时新依赖。
+    //
+    // 解码失败（key 错 / 数据非合法 base64 / cipher 抛 BadPaddingException 等）一律
+    // 返回 null —— 与 Legado 行为一致，让书源 JS 可以 try/catch 回退。绝不抛到 caller。
+
+    /**
+     * 已经 base64 编码的 AES 密文 → 解密为字符串。
+     * @param str base64 编码的 AES 加密数据
+     * @param key 解密 key
+     * @param transformation 形如 "AES/CBC/PKCS5Padding"
+     * @param iv 偏移向量（CBC 必填，ECB 传任意值即可，本实现 byte 化处理）
+     */
+    fun aesBase64DecodeToString(
+        str: String, key: String, transformation: String, iv: String,
+    ): String? = runCatching {
+        createSymmetricCrypto(transformation, key, iv).decryptStr(str)
+    }.getOrNull()
+
+    /** [aesBase64DecodeToString] 的 ByteArray 版本。 */
+    fun aesBase64DecodeToByteArray(
+        str: String, key: String, transformation: String, iv: String,
+    ): ByteArray? = runCatching {
+        createSymmetricCrypto(transformation, key, iv).decrypt(str)
+    }.getOrNull()
+
+    /** AES 加密原文 → base64 编码字符串。 */
+    fun aesEncodeToBase64String(
+        data: String, key: String, transformation: String, iv: String,
+    ): String? = runCatching {
+        createSymmetricCrypto(transformation, key, iv).encryptBase64(data)
+    }.getOrNull()
+
+    /** [aesEncodeToBase64String] 的 ByteArray 版本（base64 字符串再 .toByteArray()）。 */
+    fun aesEncodeToBase64ByteArray(
+        data: String, key: String, transformation: String, iv: String,
+    ): ByteArray? = runCatching {
+        createSymmetricCrypto(transformation, key, iv).encryptBase64(data).toByteArray()
+    }.getOrNull()
+
+    /** AES 加密原文 → 原始密文 ByteArray（不做 base64）。 */
+    fun aesEncodeToByteArray(
+        data: String, key: String, transformation: String, iv: String,
+    ): ByteArray? = runCatching {
+        createSymmetricCrypto(transformation, key, iv).encrypt(data)
+    }.getOrNull()
+
+    /**
+     * AES 加密原文 → 原始密文字符串（用 platform default charset 解码 ByteArray）。
+     * 注意：该接口在 Legado 命名上虽叫 `aesEncodeToString` 但语义和 `decryptStr` 一致（Legado
+     * 这边有历史遗留——回调实际还是 decryptStr）。我们沿用 Legado 行为以保证 JS 规则兼容。
+     */
+    fun aesEncodeToString(
+        data: String, key: String, transformation: String, iv: String,
+    ): String? = runCatching {
+        createSymmetricCrypto(transformation, key, iv).decryptStr(data)
+    }.getOrNull()
+
+    /** AES 已加密的非 base64 ByteArray → 解密为字符串。 */
+    fun aesDecodeToString(
+        data: String, key: String, transformation: String, iv: String,
+    ): String? = runCatching {
+        createSymmetricCrypto(transformation, key, iv).decryptStr(data)
+    }.getOrNull()
+
+    /** [aesDecodeToString] 的 ByteArray 版本。 */
+    fun aesDecodeToByteArray(
+        data: String, key: String, transformation: String, iv: String,
+    ): ByteArray? = runCatching {
+        createSymmetricCrypto(transformation, key, iv).decrypt(data)
+    }.getOrNull()
+
     // ── Digest ──
 
     fun digestHex(data: String, algorithm: String): String {
