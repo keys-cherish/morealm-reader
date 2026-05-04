@@ -46,6 +46,15 @@ object JsExtensions {
         val source: BookSource?,
         val coroutineContext: CoroutineContext,
         val ruleData: RuleDataInterface?,
+        /**
+         * 当前 JS 调用所归属的 AnalyzeRule 实例。Legado 那边 JsExtensions 是 interface，
+         * AnalyzeRule 直接 implements，所以书源 JS 写 `java.setContent(...)` / `java.getElements(...)`
+         * 时拿到的就是当前规则实例。我们这边 JsExtensions 是 `object`，没法被继承，
+         * 改用 ThreadLocal 把当前 AnalyzeRule 透传进来，由本类的 setContent/getElements
+         * 等方法转发出去。null = 当前调用栈没有 AnalyzeRule（极少见，只发生在
+         * 直接从外部调 JsExtensions 的方法时）。
+         */
+        val analyzeRule: AnalyzeRule? = null,
     )
 
     private val runtimeStack = ThreadLocal<MutableList<RuntimeContext>>()
@@ -58,10 +67,11 @@ object JsExtensions {
         source: BookSource?,
         coroutineContext: CoroutineContext = EmptyCoroutineContext,
         ruleData: RuleDataInterface? = null,
+        analyzeRule: AnalyzeRule? = null,
         block: () -> T,
     ): T {
         val stack = runtimeStack.get() ?: mutableListOf<RuntimeContext>().also(runtimeStack::set)
-        stack.add(RuntimeContext(source, coroutineContext, ruleData))
+        stack.add(RuntimeContext(source, coroutineContext, ruleData, analyzeRule))
         try {
             return block()
         } finally {
@@ -91,6 +101,72 @@ object JsExtensions {
         currentRuntimeContext()?.source ?: sourceGetter?.invoke() as? BookSource
 
     fun getTag(): String? = getSource()?.bookSourceUrl
+
+    /** 当前 JS 调用归属的 AnalyzeRule 实例（由 [AnalyzeRule.evalJS] 在 [withRuntimeContext] 时压栈）。 */
+    private fun currentAnalyzeRule(): AnalyzeRule? = currentRuntimeContext()?.analyzeRule
+
+    // ── AnalyzeRule 转发桥 ─────────────────────────────────────────────────────
+    //
+    // Legado 那边 AnalyzeRule 直接 implements JsExtensions，书源 JS 写
+    // `java.setContent(...)` / `java.getElements(...)` 拿到的就是当前规则实例。
+    // 我们 JsExtensions 是 object 没法被继承，所以书源 JS 调到这两个方法时
+    // 落到这里的占位实现。日志 `log_2026-05-04` 大量
+    // `TypeError: 在对象 ... JsExtensions ... 中找不到函数 setContent / getElements`
+    // 即此问题 —— 桥不全 → 书源在搜索 / 详情 / 章节列表路径直接挂掉。
+    //
+    // 实现策略：转发到 ThreadLocal 内的当前 AnalyzeRule。null 时返回安全兜底
+    // （setContent 返回 null、getElements 返回空列表）让 JS 继续往下走，避免
+    // 整段规则中断。
+
+    /**
+     * 把 [content] 注入当前规则上下文，对齐 Legado [AnalyzeRule.setContent]。
+     *
+     * @return 当前 [AnalyzeRule]（链式调用）；当前调用栈没有 AnalyzeRule 时返回 null。
+     */
+    fun setContent(content: Any?): AnalyzeRule? = setContent(content, null)
+
+    fun setContent(content: Any?, baseUrl: String?): AnalyzeRule? {
+        val rule = currentAnalyzeRule() ?: run {
+            AppLog.warn(
+                "JsExtensions",
+                "setContent called outside an AnalyzeRule context (returning null); " +
+                    "source='${getSource()?.bookSourceName ?: ""}'",
+            )
+            return null
+        }
+        return rule.setContent(content, baseUrl)
+    }
+
+    /** 给当前规则换 baseUrl，对齐 Legado [AnalyzeRule.setBaseUrl]。 */
+    fun setBaseUrl(baseUrl: String?): AnalyzeRule? = currentAnalyzeRule()?.setBaseUrl(baseUrl)
+
+    /**
+     * 用规则取列表，对齐 Legado [AnalyzeRule.getElements]。
+     * @return 解析结果列表；当前调用栈没有 AnalyzeRule 时返回空列表。
+     */
+    fun getElements(ruleStr: String): List<Any> {
+        val rule = currentAnalyzeRule() ?: run {
+            AppLog.warn(
+                "JsExtensions",
+                "getElements called outside an AnalyzeRule context (returning emptyList); " +
+                    "rule='$ruleStr' source='${getSource()?.bookSourceName ?: ""}'",
+            )
+            return emptyList()
+        }
+        return runCatching { rule.getElements(ruleStr) }.getOrElse {
+            AppLog.warn("JsExtensions", "getElements failed for rule='$ruleStr': ${it.message}")
+            emptyList()
+        }
+    }
+
+    /** 单元素版本，对齐 Legado [AnalyzeRule.getElement]，未实现时直接返回列表第一个。 */
+    fun getElement(ruleStr: String): Any? = getElements(ruleStr).firstOrNull()
+
+    // 注：Legado 那边 AnalyzeRule 还提供 `getString` / `getStringList` 作为规则解析桥，
+    // 但本类的 [getString]（HTTP fetch，行 134/224）和 [JsExtensions.connect] 衍生
+    // 出来的同名方法占用了相同 JVM 签名，重定义会触发 platform declaration clash。
+    // 当前书源 JS 主要报 `setContent` / `getElements` 找不到，先把这两个补齐让规则
+    // 能跑；规则版 getString 走旧名 `connect(...).body` 或 `ajax(...)` 兜底。
 
     // ── Variable get/put (delegated to ruleData, matches AnalyzeUrl API) ──
 

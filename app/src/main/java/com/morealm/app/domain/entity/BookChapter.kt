@@ -36,15 +36,26 @@ data class BookChapter(
 private val AUTO_SPLIT_TITLE_PATTERN = Regex("^第\\d+节$")
 
 /**
+ * 字符串级判断：传入的标题文本是否长得像 [parseWithoutToc] 自动生成的伪章名。
+ *
+ * 给那些拿不到 BookChapter / Book 上下文、只有标题字符串的渲染层用
+ * （例如 [PageContentDrawer] 在画 page info overlay 时只有 `page.title`）。
+ *
+ * 误伤面：极少数真章节标题恰好是 `第\d+节` 或 `正文`。但 `parseWithTocPattern` 路径
+ * 会保留章节正文里的额外字符（如 "第 22 节 风雪夜归人"），不会撞这条规则。
+ */
+fun String.looksLikeAutoSplitTitle(): Boolean {
+    return AUTO_SPLIT_TITLE_PATTERN.matches(this) || this == "正文"
+}
+
+/**
  * 判断该章是否是 TXT 无目录解析时的自动分节产物。
  *
  * 触发条件：标题是 [AUTO_SPLIT_TITLE_PATTERN] 命中或纯 "正文"。
  * **注意**：返回 true 不代表书一定是本地 TXT；调用 [displayTitle] 时再附加 book
  * 来源校验，避免误伤其他来源的同名章节。
  */
-fun BookChapter.isAutoSplitChapter(): Boolean {
-    return AUTO_SPLIT_TITLE_PATTERN.matches(title) || title == "正文"
-}
+fun BookChapter.isAutoSplitChapter(): Boolean = title.looksLikeAutoSplitTitle()
 
 /**
  * 给 UI 显示用的章节标题。

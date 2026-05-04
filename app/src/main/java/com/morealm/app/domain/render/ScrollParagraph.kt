@@ -178,7 +178,19 @@ enum class ScrollParagraphType {
  *
  * @return immutable [List]<[ScrollParagraph]>。空章返回 emptyList()。
  */
-fun TextChapter.toScrollParagraphs(): List<ScrollParagraph> {
+/**
+ * 把 [TextChapter] 转换为 LazyColumn 段落流。
+ *
+ * @param skipChapterTitleParagraph true 时跳过章首 CHAPTER_TITLE 段（含
+ *        [TextLine.isChapterNum] / [isTitle] 行），让该章在视觉上无标题分隔，看起来像
+ *        全章正文连续。给 TXT 无目录自动分节场景用 —— 那种「第N节」是 [LocalBookParser]
+ *        硬切的伪标题，渲染出来会让用户以为内容被分章了。
+ *
+ *        默认 false 保持原行为。
+ */
+fun TextChapter.toScrollParagraphs(
+    skipChapterTitleParagraph: Boolean = false,
+): List<ScrollParagraph> {
     val pageSnapshot = snapshotPages()
     if (pageSnapshot.isEmpty()) return emptyList()
 
@@ -412,6 +424,35 @@ fun TextChapter.toScrollParagraphs(): List<ScrollParagraph> {
                 charSize = curr.charSize,
             ),
         )
+    }
+    // 自动分节伪章名：把 CHAPTER_TITLE 段「视觉折叠」—— 保留段编号 + firstChapterPosition
+    // + charSize 用于书签 / 进度定位，但 totalHeight=0 + lines=emptyList 让 LazyColumn item
+    // 渲染零高度、不画任何东西。这样：
+    //
+    //   - 数据层：[bookmarkToAnchor] 仍能在 paragraphs 里找到 paragraphNum=1 段，落在
+    //     标题字符范围内的旧书签 chapterPosition 仍精确恢复
+    //   - 视觉层：用户看不到 "第N节" 标题，章节流呈现连续正文
+    //
+    // 不直接 filter 而保留是因为 [findAnchorIndex] / [bookmarkToAnchor] 依赖段在 paragraphs
+    // 里出现，filter 掉会让章首附近书签恢复失败（fall back 到段首段=0,0 全章起点丢精度）。
+    if (skipChapterTitleParagraph) {
+        return result.map { p ->
+            if (p.contentType == ScrollParagraphType.CHAPTER_TITLE) {
+                ScrollParagraph(
+                    key = p.key,
+                    contentType = p.contentType,
+                    chapterIndex = p.chapterIndex,
+                    paragraphNum = p.paragraphNum,
+                    lines = emptyList(),
+                    linePositions = FloatArray(0),
+                    paddingTop = 0f,
+                    totalHeight = 0f,
+                    paragraphSpacingAfter = 0f,
+                    firstChapterPosition = p.firstChapterPosition,
+                    charSize = p.charSize,
+                )
+            } else p
+        }
     }
     return result
 }

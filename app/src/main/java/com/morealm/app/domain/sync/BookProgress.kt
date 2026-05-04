@@ -20,7 +20,9 @@ import kotlinx.serialization.Serializable
  * @property chapterIndex    `Book.lastReadChapter` snapshot
  * @property chapterPosition `Book.lastReadPosition` (intra-chapter)
  * @property totalProgress   `Book.readProgress` (0-1 fraction)
- * @property scrollProgress  `ReadProgress.scrollProgress` (0-100 percent)
+ * @property scrollProgress  Deprecated since v28：本地 [ReadProgress] 不再保留
+ *                           滚动百分比；这里保留字段是为了和老 WebDav JSON 保持
+ *                           可解析，写入时填 0，读到 > 0 也忽略。
  * @property updatedAt       client wall-clock at upload; the merge step
  *                           prefers the larger of (remote, local) when
  *                           breaking ties on the cursor itself.
@@ -33,7 +35,8 @@ data class BookProgress(
     val chapterIndex: Int,
     val chapterPosition: Int,
     val totalProgress: Float,
-    val scrollProgress: Int,
+    /** @see BookProgress KDoc — 字段保留仅为 JSON 兼容，本地不再使用。 */
+    val scrollProgress: Int = 0,
     val updatedAt: Long = System.currentTimeMillis(),
 ) {
     companion object {
@@ -44,7 +47,8 @@ data class BookProgress(
             chapterIndex = progress.chapterIndex,
             chapterPosition = progress.chapterPosition,
             totalProgress = progress.totalProgress,
-            scrollProgress = progress.scrollProgress,
+            // 本地实体已不存 scrollProgress；写云端时占位 0，老客户端读到也不会崩。
+            scrollProgress = 0,
             updatedAt = System.currentTimeMillis(),
         )
     }
