@@ -27,7 +27,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.morealm.app.presentation.profile.ProfileViewModel
+import com.morealm.app.presentation.profile.BackupRestoreViewModel
 
 /**
  * 导入备份选项页（与 [BackupExportScreen] 对称）。
@@ -51,15 +51,15 @@ import com.morealm.app.presentation.profile.ProfileViewModel
 @Composable
 fun BackupImportScreen(
     onBack: () -> Unit,
-    profileViewModel: ProfileViewModel = hiltViewModel(),
+    viewModel: BackupRestoreViewModel = hiltViewModel(),
 ) {
-    val sections by profileViewModel.restoreSections.collectAsStateWithLifecycle()
-    val selections by profileViewModel.restoreSelections.collectAsStateWithLifecycle()
-    val loading by profileViewModel.restoreSectionsLoading.collectAsStateWithLifecycle()
-    val pendingUri by profileViewModel.restorePendingUri.collectAsStateWithLifecycle()
-    val previewError by profileViewModel.restorePreviewError.collectAsStateWithLifecycle()
-    val passwordOverride by profileViewModel.restorePasswordOverride.collectAsStateWithLifecycle()
-    val savedPassword by profileViewModel.backupPassword.collectAsStateWithLifecycle()
+    val sections by viewModel.restoreSections.collectAsStateWithLifecycle()
+    val selections by viewModel.restoreSelections.collectAsStateWithLifecycle()
+    val loading by viewModel.restoreSectionsLoading.collectAsStateWithLifecycle()
+    val pendingUri by viewModel.restorePendingUri.collectAsStateWithLifecycle()
+    val previewError by viewModel.restorePreviewError.collectAsStateWithLifecycle()
+    val passwordOverride by viewModel.restorePasswordOverride.collectAsStateWithLifecycle()
+    val savedPassword by viewModel.backupPassword.collectAsStateWithLifecycle()
 
     var showConfirm by remember { mutableStateOf(false) }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -67,7 +67,7 @@ fun BackupImportScreen(
     val pickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
-        uri?.let { profileViewModel.loadRestoreSections(it) }
+        uri?.let { viewModel.loadRestoreSections(it) }
     }
 
     val selectedCount = remember(sections, selections) {
@@ -156,9 +156,9 @@ fun BackupImportScreen(
                 password = passwordOverride.ifEmpty { savedPassword },
                 visible = passwordVisible,
                 onToggleVisible = { passwordVisible = !passwordVisible },
-                onChange = { profileViewModel.setRestorePasswordOverride(it) },
+                onChange = { viewModel.setRestorePasswordOverride(it) },
                 onApply = {
-                    if (pendingUri != null) profileViewModel.reloadRestorePreview()
+                    if (pendingUri != null) viewModel.reloadRestorePreview()
                 },
                 applyEnabled = pendingUri != null && !loading,
             )
@@ -201,12 +201,12 @@ fun BackupImportScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         OutlinedButton(
-                            onClick = { profileViewModel.selectAllRestoreSections() },
+                            onClick = { viewModel.selectAllRestoreSections() },
                             enabled = !loading && sections.isNotEmpty(),
                             modifier = Modifier.weight(1f),
                         ) { Text("全选") }
                         OutlinedButton(
-                            onClick = { profileViewModel.clearRestoreSelections() },
+                            onClick = { viewModel.clearRestoreSelections() },
                             enabled = !loading && sections.isNotEmpty(),
                             modifier = Modifier.weight(1f),
                         ) { Text("全不选") }
@@ -227,13 +227,13 @@ fun BackupImportScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { profileViewModel.toggleRestoreSection(info.key) }
+                                        .clickable { viewModel.toggleRestoreSection(info.key) }
                                         .padding(horizontal = 16.dp, vertical = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Checkbox(
                                         checked = checked,
-                                        onCheckedChange = { profileViewModel.toggleRestoreSection(info.key) },
+                                        onCheckedChange = { viewModel.toggleRestoreSection(info.key) },
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     Column(Modifier.weight(1f)) {
@@ -289,7 +289,7 @@ fun BackupImportScreen(
             categoryLabels = sections.filter { it.key in selections }.map { it.label },
             onConfirm = {
                 showConfirm = false
-                profileViewModel.runImportWithSelections()
+                viewModel.runImportWithSelections()
                 onBack()
             },
             onCancel = { showConfirm = false },

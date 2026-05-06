@@ -58,6 +58,23 @@ class ReaderProgressController(
      */
     var suppressNextProgressSave = false
 
+    /**
+     * 「首次章节加载完成」闸门。ViewModel init 启动 progress collector 的同一时刻
+     * 还在 IO 上跑 loadBook → parseChapters → loadChapter；parse 约需 100-300ms，
+     * 恰好撞上 combine 的初始 emit + debounce(300) 的到点时刻 —— 如果不设闸门，
+     * 会在 loadChapter 写进 visiblePage 之前先用初始 (0,0,0) 把 DB 刷成 0，导致
+     * 下次打开书退回章首（log 11:39:37.431 现象命门）。
+     *
+     * ChapterController.loadChapter 成功后（_renderedChapter + visiblePage 全都刷新
+     * 完毕）调 [ReaderChapterController.markInitialLoadComplete] → 这里置 true，
+     * 之后 saveProgress 才开始真的写库。
+     *
+     * 注意：这是「单向闸门」—— 置 true 后永远保持，后续章节跳转 / TTS 续播
+     * 不会再影响它。
+     */
+    @Volatile
+    var initialLoadComplete: Boolean = false
+
     /** Snapshot collector job — 由 [start] 启动，[stop] 取消。 */
     private var collectorJob: Job? = null
 
@@ -211,6 +228,13 @@ class ReaderProgressController(
     private suspend fun saveProgressLocked() {
         try {
             val book = chapterController.book.value ?: return
+            // 首次章节加载未完成前拒绝写库 —— 防止 ViewModel init 阶段的
+            // 初始 combine emit + debounce(300ms) 把 (0,0,0) 刷进 DB 盖掉
+            // 上次阅读进度（详见 [initialLoadComplete] KDoc）。
+            if (!initialLoadComplete) {
+                AppLog.debug("Progress", "saveProgress gated: initial load not complete yet")
+                return
+            }
             val chapterCount = chapterController.chapters.value.size
             val visible = _visiblePage.value
             val currentIndex = chapterController.currentChapterIndex.value

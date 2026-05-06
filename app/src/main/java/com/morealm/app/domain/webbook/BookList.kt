@@ -34,7 +34,10 @@ object BookList {
          */
         isRedirect: Boolean = false,
     ): ArrayList<SearchBook> {
-        body ?: throw Exception("获取网页内容失败: ${analyzeUrl.ruleUrl}")
+        if (body.isNullOrBlank()) {
+            AppLog.warn("BookList", "Empty response body from ${analyzeUrl.ruleUrl}")
+            return ArrayList()
+        }
         val bookList = ArrayList<SearchBook>()
         val analyzeRule = AnalyzeRule(ruleData, bookSource)
         analyzeRule.setContent(body).setBaseUrl(baseUrl)

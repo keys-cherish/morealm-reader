@@ -159,38 +159,66 @@ class AnalyzeUrl(
      */
     fun getSource(): BookSource? = source
 
+    /**
+     * 执行 URL 层 `<js>` / `@js:` / `{{...}}` 内的脚本。
+     *
+     * 与 [AnalyzeRule.evalJS] 行为对齐（参考 Legado AnalyzeUrl.evalJS）：
+     *
+     * 1. **withRuntimeContext** —— 把当前 [source] / [coroutineContext] / [ruleData]
+     *    压入 [JsExtensions] 的 ThreadLocal 栈。这样书源 JS 里写 `java.connect(...)`
+     *    / `java.ajax(...)` 时，[JsExtensions] 内部能拿到正确的书源（用于限流、
+     *    cookie jar、bookSource header）和取消语义。
+     *    历史 bug：原实现裸调 `RhinoScriptEngine.eval`，`JsExtensions.getSource()`
+     *    只剩 legacy getter 兜底，并发搜索时会出现源串掉、限流失效、cookie 丢失。
+     *
+     * 2. **sharedScope (jsLib)** —— 与 [AnalyzeRule.evalJS] 相同：若 [source] 配了
+     *    `jsLib`，把 jsLib 的 RhinoTopLevel 设为 bindings 的 prototype，让 URL @js
+     *    能调到书源自定义的辅助函数（如 `getKey()` / `getDecryptKey()`）。
+     *    没配 jsLib 时仍走 [RhinoScriptEngine.getRuntimeScope]，行为不变。
+     */
     fun evalJS(jsStr: String, result: Any? = null): Any? {
-        val bindings = ScriptBindings()
-        org.mozilla.javascript.Context.enter()
-        try {
-            // FIX: previously `bindings["java"] = this` exposed AnalyzeUrl as `java`,
-            // but book sources call `java.connect(...)` (or even bare `connect(...)`)
-            // expecting JsExtensions. AnalyzeUrl itself doesn't have `connect`, so
-            // every such source crashed with "找不到函数 connect". Bind JsExtensions
-            // for the `java` namespace and keep AnalyzeUrl reachable as `analyzeUrl`
-            // for the rare source that needs page/key/source helpers from it.
-            bindings["java"] = JsExtensions
-            bindings["analyzeUrl"] = this
-            bindings["baseUrl"] = baseUrl
-            bindings["page"] = page
-            bindings["key"] = key
-            // 兼容部分 Legado/阅读旧书源中仍在使用的别名。
-            bindings["searchPage"] = page
-            bindings["searchKey"] = key
-            bindings["source"] = source
-            bindings["result"] = result
-            bindings["cookie"] = CookieStore
-            bindings["cache"] = CacheManager
-            // HttpTts 朗读路径：把待合成文本与速度也丢进 JS 上下文。BookSource 路径
-            // 下两个值都是 null，对老书源完全无影响。
-            bindings["speakText"] = speakText ?: ""
-            bindings["speakSpeed"] = speakSpeed ?: 0
-            bindings["httpTts"] = httpTts
-        } finally {
-            org.mozilla.javascript.Context.exit()
+        return JsExtensions.withRuntimeContext(source, coroutineContext, ruleData) {
+            val bindings = ScriptBindings()
+            org.mozilla.javascript.Context.enter()
+            try {
+                // FIX: previously `bindings["java"] = this` exposed AnalyzeUrl as `java`,
+                // but book sources call `java.connect(...)` (or even bare `connect(...)`)
+                // expecting JsExtensions. AnalyzeUrl itself doesn't have `connect`, so
+                // every such source crashed with "找不到函数 connect". Bind JsExtensions
+                // for the `java` namespace and keep AnalyzeUrl reachable as `analyzeUrl`
+                // for the rare source that needs page/key/source helpers from it.
+                bindings["java"] = JsExtensions
+                bindings["analyzeUrl"] = this
+                bindings["baseUrl"] = baseUrl
+                bindings["page"] = page
+                bindings["key"] = key
+                // 兼容部分 Legado/阅读旧书源中仍在使用的别名。
+                bindings["searchPage"] = page
+                bindings["searchKey"] = key
+                bindings["source"] = source
+                bindings["result"] = result
+                bindings["cookie"] = CookieStore
+                bindings["cache"] = CacheManager
+                // HttpTts 朗读路径：把待合成文本与速度也丢进 JS 上下文。BookSource 路径
+                // 下两个值都是 null，对老书源完全无影响。
+                bindings["speakText"] = speakText ?: ""
+                bindings["speakSpeed"] = speakSpeed ?: 0
+                bindings["httpTts"] = httpTts
+            } finally {
+                org.mozilla.javascript.Context.exit()
+            }
+            // jsLib 共享作用域 —— 失败时（脚本异常 / 网络问题）退化为标准 runtime scope，
+            // 避免一个有问题的 jsLib 把整个搜索 URL 跑炸。
+            val sharedScope = source?.jsLib?.let {
+                runCatching { SharedJsScope.getScope(it, coroutineContext) }.getOrNull()
+            }
+            val scope = if (sharedScope != null) {
+                bindings.apply { prototype = sharedScope }
+            } else {
+                RhinoScriptEngine.getRuntimeScope(bindings)
+            }
+            RhinoScriptEngine.eval(normalizeJsSnippet(jsStr), scope, coroutineContext)
         }
-        val scope = RhinoScriptEngine.getRuntimeScope(bindings)
-        return RhinoScriptEngine.eval(normalizeJsSnippet(jsStr), scope, coroutineContext)
     }
 
     private fun normalizeJsSnippet(jsStr: String): String {

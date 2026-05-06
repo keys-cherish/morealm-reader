@@ -16,6 +16,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -32,7 +33,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.domain.render.BaseColumn
 import com.morealm.app.domain.render.ScrollParagraph
 import com.morealm.app.domain.render.ScrollParagraphType
 import com.morealm.app.domain.render.TextBaseColumn
@@ -114,8 +117,8 @@ private const val SCROLL_PARAGRAPH_SELECTION_ARGB: Int = 0x2D5B6CFE.toInt()
  * @param onScrollingChanged (scrolling) —— fling/idle 状态切换
  * @param onTapCenter 点击空白区域 —— 切阅读器菜单
  * @param onLongPressParagraph 长按段落触发：caller 收到 `(paragraph, charOffset)`
- * @param nearStartThreshold 章首预加载阈值（距窗口顶 N 段触发）。默认 15
- * @param nearEndThreshold 章末预加载阈值（距窗口底 N 段触发）。默认 15
+ * @param nearStartThreshold 章首预加载阈值（距窗口顶 N 段触发）。默认 20
+ * @param nearEndThreshold 章末预加载阈值（距窗口底 N 段触发）。默认 20
  * @param chapterCharSizeProvider 给定 chapterIdx 返回该章总字符数，进度计算用
  */
 @OptIn(FlowPreview::class)
@@ -216,8 +219,19 @@ fun LazyScrollRenderer(
      * [chapterHighlights]，但渲染时不画背景。
      */
     chapterTextColorSpans: List<HighlightSpan> = emptyList(),
-    nearStartThreshold: Int = 15,
-    nearEndThreshold: Int = 15,
+    /**
+     * 章首预加载阈值（距窗口顶 N 段触发 [onNearTop]）。
+     *
+     * 默认 20 —— 与 solution.txt（temp/solution.txt）的「现代化预加载」原则对齐：
+     * 用户离边界还远（20 段 ≈ 半屏滚动距离）就开始静默 fetch 上一章，永远不会等到
+     * 真撞墙才 load。值过小（< 10）会让 IO 跟不上 fling 速度产生 LOADING 占位段；
+     * 过大（> 30）会让窗口频繁 prepend 占用内存。
+     */
+    nearStartThreshold: Int = 20,
+    /**
+     * 章末预加载阈值（距窗口底 N 段触发 [onNearBottom]）。同 [nearStartThreshold]。
+     */
+    nearEndThreshold: Int = 20,
     chapterCharSizeProvider: (chapterIndex: Int) -> Int = { 1 },
     modifier: Modifier = Modifier,
 ) {
@@ -346,7 +360,13 @@ fun LazyScrollRenderer(
     // 用 firstVisibleItemIndex + scrollOffset pair；段切换或精确像素都触发，但通过
     // distinctUntilChanged 自动过滤同段同偏移的重复 emit（fling 期间偏移连续变化，
     // 这里不能用 sample 因 caller 需要实时拿最新偏移做 bookmark 持久化）。
-    LaunchedEffect(paragraphs) {
+    //
+    // 用 LaunchedEffect(listState) 而非 LaunchedEffect(paragraphs) —— paragraphs 是
+    // SnapshotStateList，其内容变化由 snapshotFlow 内部读取自动驱动；用 paragraphs
+    // 作 key 会让 effect 在每次窗口 mutation 时被取消重启，distinctUntilChanged
+    // 状态丢失，连环重复 emit（旧实现中是空气墙 / 瞬移 bug 的命门之一，见
+    // temp/solution.txt 「斩断 derivedStateOf 副作用风暴」）。
+    LaunchedEffect(listState) {
         snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
             .distinctUntilChanged()
             .collect { (idx, offset) ->
@@ -361,7 +381,7 @@ fun LazyScrollRenderer(
     // 进度只需要"百分比变化时"通知 caller（caller 通常更新底栏 + 持久化），
     // sample(150L) 把 fling 期间一秒几十次的状态变化压成 ~6 次，再叠加
     // distinctUntilChanged 让最终上报 ~1 次/百分比阶。
-    LaunchedEffect(paragraphs) {
+    LaunchedEffect(listState) {
         snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
             .sample(150L)
             .map { (idx, offset) ->
@@ -388,7 +408,7 @@ fun LazyScrollRenderer(
     //   - #3 sample：固定时间窗取最新（持续输出）→ UI 跟随
     //   - #3.5 debounce：等待无新事件→单次输出（停下才出）→ 持久化
     // 两条链共用同一 snapshotFlow source，但 operator 不同，目标 sink 不同。
-    LaunchedEffect(paragraphs) {
+    LaunchedEffect(listState) {
         snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
             .debounce(800L)
             .map { (idx, offset) ->
@@ -431,43 +451,108 @@ fun LazyScrollRenderer(
     // cur 章被切到上一章 → 视野错位。修：jumpToken 翻新值时 hasUserScrolled 强制
     // reset 为 false，需要用户再次手动滚动才重新启用预加载触发器。
     var hasUserScrolled by remember { mutableStateOf(false) }
+    var scrollDirection by remember { mutableStateOf(0) }
+    var lastScrollPair by remember { mutableStateOf(listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset) }
     LaunchedEffect(jumpToken) {
         if (jumpToken != 0L) {
             hasUserScrolled = false
+            scrollDirection = 0
+            lastScrollPair = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+            AppLog.debug(
+                "LazyScroll",
+                "jumpToken=$jumpToken reset hasUserScrolled=false; first=${listState.firstVisibleItemIndex} " +
+                    "offset=${listState.firstVisibleItemScrollOffset} paragraphs=${paragraphs.size}",
+            )
         }
     }
     LaunchedEffect(Unit) {
-        snapshotFlow { listState.isScrollInProgress }
-            .filter { it }
-            .collect {
+        snapshotFlow {
+            Triple(
+                listState.isScrollInProgress,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+            )
+        }
+            .filter { it.first }
+            .collect { (_, first, offset) ->
+                val previous = lastScrollPair
+                scrollDirection = when {
+                    first > previous.first || first == previous.first && offset > previous.second -> 1
+                    first < previous.first || first == previous.first && offset < previous.second -> -1
+                    else -> scrollDirection
+                }
+                lastScrollPair = first to offset
                 if (!hasUserScrolled) {
                     hasUserScrolled = true
-                    AppLog.debug("LazyScroll", "user scroll detected; enabling near-edge preload triggers")
+                    val visible = listState.layoutInfo.visibleItemsInfo
+                    val last = visible.lastOrNull()?.index ?: -1
+                    AppLog.debug(
+                        "LazyScroll",
+                        "user scroll detected; enabling near-edge preload triggers; " +
+                            "first=${listState.firstVisibleItemIndex} offset=${listState.firstVisibleItemScrollOffset} " +
+                            "last=$last paragraphs=${paragraphs.size} thresholdTop=$nearStartThreshold thresholdBottom=$nearEndThreshold",
+                    )
                 }
             }
     }
 
-    LaunchedEffect(paragraphs.size, nearEndThreshold) {
+    LaunchedEffect(listState, nearEndThreshold) {
         snapshotFlow {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            last >= 0 && last >= (paragraphs.size - nearEndThreshold).coerceAtLeast(0)
+            val visible = listState.layoutInfo.visibleItemsInfo
+            val first = visible.firstOrNull()?.index ?: -1
+            val last = visible.lastOrNull()?.index ?: -1
+            val threshold = (paragraphs.size - nearEndThreshold).coerceAtLeast(0)
+            val hasRealParagraph = paragraphs.any { it.contentType != ScrollParagraphType.LOADING }
+            hasRealParagraph && paragraphs.size > 1 && hasUserScrolled && scrollDirection > 0 && first >= 0 && last >= 0 && last >= threshold
         }
             .distinctUntilChanged()
-            .filter { it && hasUserScrolled }
-            .collect { onNearBottom() }
+            .filter { it }
+            .collect {
+                val first = listState.firstVisibleItemIndex
+                val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+                AppLog.debug(
+                    "LazyScroll",
+                    "nearBottom trigger: first=$first last=$last paragraphs=${paragraphs.size} " +
+                        "threshold=${(paragraphs.size - nearEndThreshold).coerceAtLeast(0)} " +
+                        "direction=$scrollDirection hasUserScrolled=$hasUserScrolled",
+                )
+                onNearBottom()
+            }
     }
 
     // ── snapshotFlow #5：章首预加载触发 ──
     //
-    // 同样需要 hasUserScrolled gate—— 进入书时 initialIdx 可能就 < nearStartThreshold（15）
+    // 同样需要 hasUserScrolled gate—— 进入书时 initialIdx 可能就 < nearStartThreshold（20）
     // （比如用户上次读到章首附近），不该立即触发 onPrevChapter。
-    LaunchedEffect(paragraphs.size, nearStartThreshold) {
+    //
+    // 用 LaunchedEffect(listState, ...) 而非 LaunchedEffect(paragraphs.size, ...) 是关键：
+    // 旧实现把 paragraphs.size 作 key，每次窗口 mutation（cur 流式 layout 增页 / prev
+    // prepend / next append）都重启 effect，导致 distinctUntilChanged 状态丢失，新 collect
+    // 重新发射当前 TRUE 值 → 重复触发 onNearBottom → cascading nextChapter（temp 日志里
+    // 80ms 内 ~10 次 Nav nextChapter 就是这条路）。
+    // 现在 paragraphs 是 SnapshotStateList，size 变化由 snapshotFlow 内部读取自动
+    // 触发重新求值，不需要外层 effect 重启。
+    LaunchedEffect(listState, nearStartThreshold) {
         snapshotFlow {
-            paragraphs.isNotEmpty() && listState.firstVisibleItemIndex < nearStartThreshold
+            val first = listState.firstVisibleItemIndex
+            val hasRealParagraph = paragraphs.any { it.contentType != ScrollParagraphType.LOADING }
+            hasRealParagraph && paragraphs.size > 1 && hasUserScrolled && scrollDirection < 0 && first < nearStartThreshold
         }
             .distinctUntilChanged()
-            .filter { it && hasUserScrolled }
-            .collect { onNearTop() }
+            .filter { it }
+            .collect {
+                val first = listState.firstVisibleItemIndex
+                val offset = listState.firstVisibleItemScrollOffset
+                val firstPara = paragraphs.getOrNull(first)
+                AppLog.debug(
+                    "LazyScroll",
+                    "nearTop trigger: first=$first offset=$offset paragraphs=${paragraphs.size} " +
+                        "threshold=$nearStartThreshold direction=$scrollDirection firstPara=${firstPara?.key} " +
+                        "firstParaCh=${firstPara?.chapterIndex} firstParaPos=${firstPara?.firstChapterPosition} " +
+                        "hasUserScrolled=$hasUserScrolled",
+                )
+                onNearTop()
+            }
     }
 
     // ── derivedStateOf 派生：当前可见章 idx ──
@@ -521,6 +606,7 @@ fun LazyScrollRenderer(
         // 且不需要手写 saveLayer/restore。
         LazyColumn(
             state = listState,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 96.dp),
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
@@ -661,6 +747,20 @@ private fun ScrollParagraphItem(
     // wrapper 能在自己的本地坐标系里准确摆 SelectionToolbar Popup。
     var paragraphPosInWindow by remember(paragraph.key) { mutableStateOf(Offset.Zero) }
 
+    // ── stale-callback 防护 ──
+    //
+    // [pointerInput] 的 suspend block 只在 key 变化时重启；本组件 key 用
+    // [paragraph.key]（"$chapterIndex-$paragraphNum"），段内 onTap / onLongPress
+    // 的回调身份在 caller 重组时一直在变（caller 闭包的 chapterHighlightsRaw
+    // 等高亮列表每次 DB 变更都换新引用），但 detectTapGestures 内捕获的还是
+    // 首次启动时那个旧 lambda → 用户删 / 加高亮后再次点击同段，hit-test 看到
+    // 的还是首次启动那一刻的高亮列表，弹出已被删除的高亮 popup。
+    //
+    // [rememberUpdatedState] 让闭包始终读到最新 lambda 引用，pointerInput 不必
+    // 重启（重启会丢失 down 状态、影响连续手势体验）。
+    val currentOnTap by rememberUpdatedState(onTap)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
+
     Canvas(
         Modifier
             .fillMaxWidth()
@@ -672,12 +772,12 @@ private fun ScrollParagraphItem(
                 detectTapGestures(
                     onTap = { tap ->
                         val offsetInPara = computeCharOffsetInParagraph(paragraph, tap.x, tap.y)
-                        onTap(offsetInPara, paragraphPosInWindow + tap)
+                        currentOnTap(offsetInPara, paragraphPosInWindow + tap)
                     },
                     onLongPress = { tap ->
                         val offsetInPara = computeCharOffsetInParagraph(paragraph, tap.x, tap.y)
                         // 段内 tap 偏移 + 段在 window 中的位置 = tap 点在 window 中的位置
-                        onLongPress(offsetInPara, paragraphPosInWindow + tap)
+                        currentOnLongPress(offsetInPara, paragraphPosInWindow + tap)
                     },
                 )
             },
@@ -723,42 +823,47 @@ private fun ScrollParagraphItem(
 }
 
 /**
- * 把段内 (x, y) 坐标转换为段内字符 offset。
+ * 把段内 (x, y) 坐标转换为段内字符 offset。返回 -1 表示 tap 不落在任何文字列上
+ * （段间 / 行间空白 / 行内列间隙 / 完全越界）—— 上层据此决定是否跳过高亮 hit-test、
+ * 是否拒绝长按选词，避免「点段落空白也弹出删除菜单」之类的幽灵触发。
  *
- * 算法：
- *   1. 用 [paragraph.linePositions] 找到 y 落在哪一行（最后一个 linePos <= y）
- *   2. 在该行的 columns 里用 [BaseColumn.isTouch] 找命中列，并累加前置列的 charSize
- *      得到行内字符 offset
- *   3. 段内字符 offset = (行首章内位置 + 行内字符 offset) - 段首章内位置
+ * 算法（严格命中）：
+ *   1. y 必须落在某行的 [linePos, linePos + lineHeight] 内（lineHeight 由
+ *      [TextLine.lineBottom] - [TextLine.lineTop] 决定，与渲染层 baseHeight 同口径）。
+ *      落在两行间的 page-local 间距 / 段顶段尾留白上 → 视为 miss。
+ *   2. 行内必须有 [BaseColumn.isTouch] 命中的列；x 越过行末或落在列间隙 → miss。
+ *   3. 仅文字列 ([TextBaseColumn]) 才算可选字符；图片列等非文字列 → miss。
  *
- * 找不到精确命中时退化：
- *   - y 越过末行 → 段尾字符
- *   - x 越过行末 → 行末字符
- *   - 行内全是非文本列（图片等）→ 行首字符
+ * 命中时返回段内字符 offset = (line.chapterPosition + 行内累积字符数) - 段首章内位置。
  */
 private fun computeCharOffsetInParagraph(paragraph: ScrollParagraph, x: Float, y: Float): Int {
-    if (paragraph.lines.isEmpty() || paragraph.linePositions.isEmpty()) return 0
-    // 找命中行：最后一个 linePosition <= y
-    var lineIdx = paragraph.lines.lastIndex
-    for (i in paragraph.linePositions.indices) {
-        if (paragraph.linePositions[i] > y) {
-            lineIdx = (i - 1).coerceAtLeast(0)
+    if (paragraph.lines.isEmpty() || paragraph.linePositions.isEmpty()) return -1
+    // 1. 严格找命中行：y 必须在 [linePos, linePos + lineHeight] 内
+    var lineIdx = -1
+    val lineCount = minOf(paragraph.lines.size, paragraph.linePositions.size)
+    for (i in 0 until lineCount) {
+        val line = paragraph.lines[i]
+        val lineTopY = paragraph.linePositions[i]
+        val lineHeight = (line.lineBottom - line.lineTop).coerceAtLeast(0f)
+        val lineBottomY = lineTopY + lineHeight
+        if (y in lineTopY..lineBottomY) {
+            lineIdx = i
             break
         }
     }
-    val line = paragraph.lines.getOrNull(lineIdx) ?: paragraph.lines[0]
-    // 累加列字符数到命中列
+    if (lineIdx < 0) return -1
+    val line = paragraph.lines[lineIdx]
+    if (line.columns.isEmpty()) return -1
+    // 2. 行内严格命中列；不做"最近列"兜底，避免行末空白被吸到末字符
     var charsBefore = 0
-    var hit = false
+    var hitCol: BaseColumn? = null
     for (col in line.columns) {
-        if (col.isTouch(x)) { hit = true; break }
+        if (col.isTouch(x)) { hitCol = col; break }
         if (col is TextBaseColumn) charsBefore += col.charData.length
     }
-    val lineCharOffset = if (hit) charsBefore else {
-        // x 越过行末 → 行内总字符 - 1（如果有内容），否则 0
-        val total = line.columns.sumOf { c -> if (c is TextBaseColumn) c.charData.length else 0 }
-        (total - 1).coerceAtLeast(0)
-    }
-    val charIdxInChapter = line.chapterPosition + lineCharOffset
+    if (hitCol == null) return -1
+    // 3. 仅文字列可选；图片等非文字列不参与字符 hit-test
+    if (hitCol !is TextBaseColumn) return -1
+    val charIdxInChapter = line.chapterPosition + charsBefore
     return (charIdxInChapter - paragraph.firstChapterPosition).coerceAtLeast(0)
 }

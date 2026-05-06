@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -23,6 +24,7 @@ import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.entity.SelectionMenuConfig
 import com.morealm.app.domain.render.ScrollAnchor
 import com.morealm.app.domain.render.ScrollParagraph
+import com.morealm.app.domain.render.ScrollParagraphType
 import com.morealm.app.domain.render.TextBaseColumn
 import com.morealm.app.domain.render.TextChapter
 import com.morealm.app.domain.render.bookmarkToAnchor
@@ -105,6 +107,20 @@ fun LazyScrollSection(
     onNextChapter: () -> Unit,
     onProgress: (Int) -> Unit,
     onCopyText: (String) -> Unit,
+    /**
+     * SCROLL 重架后的滑动窗口数据源。**非 null 时**：
+     *   - paragraphsState 直接指向 [ChapterWindowSource.paragraphs]
+     *   - 跨章 prepend/append 由 windowSource 自己管，effect 1/2/3 跳过
+     *   - onPrevChapter / onNextChapter 不再驱动 commitChapterShift/loadChapter，
+     *     改成 windowSource.prependPrev() / appendNext() 静默扩窗
+     *   - 跳转通过 windowSource.pendingJump 派生（覆盖 initialChapterPosition / restoreToken）
+     *
+     * **null 时**：旧路径完全保留（翻页 / 仿真模式继续走 commitChapterShift 不受影响；
+     * 历史 caller 也不会因签名变化崩）。
+     *
+     * 命门定位见 plan：`C:/Users/test/.claude/plans/glittery-dancing-swing.md`。
+     */
+    windowSource: com.morealm.app.presentation.reader.scroll.ChapterWindowSource? = null,
     onSpeakFromHere: (Int) -> Unit = {},
     onTranslateText: (String) -> Unit = {},
     onLookupWord: (String) -> Unit = {},
@@ -166,10 +182,17 @@ fun LazyScrollSection(
     // [listState] 必须由本层创建：effect 2/3 要在 paragraphs mutation 同协程上下文里
     // snapshot anchorParaKey + 调 [LazyListState.requestScrollToItem]，listState 实例
     // 不能在 [LazyScrollRenderer] 内部 remember（那样外层 effect 拿不到）。
-    val paragraphsState = remember { mutableStateListOf<ScrollParagraph>() }
+    //
+    // **SCROLL 重架后**：当 [windowSource] 非 null 时，paragraphsState 直接指向
+    // [ChapterWindowSource.paragraphs]（同一 SnapshotStateList），跨章窗口管理由 windowSource
+    // 自己负责，本组件 effect 1/2/3 全部跳过。
+    val legacyParagraphsState = remember { mutableStateListOf<ScrollParagraph>() }
+    val paragraphsState: SnapshotStateList<ScrollParagraph> =
+        windowSource?.paragraphs ?: legacyParagraphsState
     val listState = rememberLazyListState()
 
-    // 进度计算需要每章字符总数 —— 现场建小 map 缓存（窗口仅 3 章）
+    // 进度计算需要每章字符总数 —— windowSource 路径用其 chapterByIdx 的章节字符数；
+    // 老路径仍用本地小 map 缓存（仅 prev/cur/next 三章）。
     val chapterCharSizes = remember(prevTextChapter, chapter, nextTextChapter) {
         buildMap {
             prevTextChapter?.let { put(it.chapterIndex, it.getContent().length.coerceAtLeast(1)) }
@@ -178,7 +201,7 @@ fun LazyScrollSection(
         }
     }
 
-    // ── effect 1: cur 章 reset / 流式 append ──
+    // ── effect 1: cur 章 reset / 流式 append ──（仅老路径执行；windowSource 路径下整个 effect 早返）
     //
     // 触发条件：
     //   (a) chapter.chapterIndex 变化 —— 用户跳章 / commitChapterShift / loadChapter
@@ -197,6 +220,7 @@ fun LazyScrollSection(
     // 重复触发同一组合直接跳过；流式期间每次 pages 增长都换出新 key，触发增量 reset。
     var lastResetSnapshot by remember { mutableStateOf(Triple(-1, -1, false)) }
     LaunchedEffect(chapter?.chapterIndex, chapter?.pageCount, chapter?.isCompleted) {
+        if (windowSource != null) return@LaunchedEffect  // 新路径不跑老 reset
         val cur = chapter ?: return@LaunchedEffect
         val snapshot = Triple(cur.chapterIndex, cur.pageCount, cur.isCompleted)
         if (snapshot == lastResetSnapshot) return@LaunchedEffect
@@ -210,8 +234,17 @@ fun LazyScrollSection(
         val anchorOffsetPx = listState.firstVisibleItemScrollOffset
         val anchorParaKey = paragraphsState.getOrNull(anchorParaIdx)?.key
 
-        val prev = prevTextChapter?.takeIf { it.isCompleted == true }
-        val next = nextTextChapter?.takeIf { it.isCompleted == true }
+        // Bug 修复（LazyColumn 重复 Key 崩溃）：prev/next 必须严格落在 cur 之前/之后。
+        // 章节快速切换时 [prevTextChapter] / [nextTextChapter] 是异步 StateFlow，单次重组
+        // 里可能出现「chapter=c5, nextTextChapter=c5(还没更新)」「prevTextChapter=c5, chapter=c5」
+        // 这种瞬态自我重叠 —— 不加 chapterIndex 比对会把 cur 同章段加两次，paragraphsState
+        // 出现两个相同 key（如 "5-1"），下次 measure 抛 IllegalArgumentException("Key was already used")。
+        val prev = prevTextChapter?.takeIf {
+            it.isCompleted == true && it.chapterIndex < cur.chapterIndex
+        }
+        val next = nextTextChapter?.takeIf {
+            it.isCompleted == true && it.chapterIndex > cur.chapterIndex
+        }
         // 用 caller 显式传入的 omitChapterTitleBlock 决定 skipChapterTitleParagraph：
         // 之前依赖 cur.title.looksLikeAutoSplitTitle() 已不可靠（chapterTitle 在 ReaderScreen
         // 被 displayTitle 替换为书名，正则永远 miss）。本 flag 同时影响 prev/cur/next 三章，
@@ -257,11 +290,14 @@ fun LazyScrollSection(
     // [LazyListState.requestScrollToItem]（Foundation 1.7+）的关键属性：**不取消
     // 进行中的 fling**——layout 用新 anchor 静默调整，物理动画继续推。
     LaunchedEffect(prevTextChapter?.chapterIndex, prevTextChapter?.isCompleted) {
+        if (windowSource != null) return@LaunchedEffect  // 新路径自管 prepend
         val prev = prevTextChapter?.takeIf { it.isCompleted == true } ?: return@LaunchedEffect
         val cur = chapter?.takeIf { it.isCompleted == true } ?: return@LaunchedEffect
         if (paragraphsState.isEmpty()) return@LaunchedEffect
-        // 已含 prev 章（effect 1 reset 过的同窗口）跳过
-        if (paragraphsState.firstOrNull()?.chapterIndex == prev.chapterIndex) return@LaunchedEffect
+        // 已含 prev 章（effect 1 reset 过的同窗口，或上一次 prepend 已就位）跳过。
+        // 用 any 而非 firstOrNull —— 章节窗口快速滑动时新 prev 可能已被 effect 1
+        // 放到中段（不再是首段），靠首段判定会漏过去再 prepend 一次产生重复 key。
+        if (paragraphsState.any { it.chapterIndex == prev.chapterIndex }) return@LaunchedEffect
         // 防 stale prev（StateFlow 短暂错位时）
         if (prev.chapterIndex >= cur.chapterIndex) return@LaunchedEffect
 
@@ -286,10 +322,12 @@ fun LazyScrollSection(
 
     // ── effect 3: next 章 append（无需视野补偿） ──
     LaunchedEffect(nextTextChapter?.chapterIndex, nextTextChapter?.isCompleted) {
+        if (windowSource != null) return@LaunchedEffect  // 新路径自管 append
         val next = nextTextChapter?.takeIf { it.isCompleted == true } ?: return@LaunchedEffect
         val cur = chapter?.takeIf { it.isCompleted == true } ?: return@LaunchedEffect
         if (paragraphsState.isEmpty()) return@LaunchedEffect
-        if (paragraphsState.lastOrNull()?.chapterIndex == next.chapterIndex) return@LaunchedEffect
+        // 同 effect 2 注释：用 any 而非 lastOrNull，避免 next 章已在中段时再 append 一次。
+        if (paragraphsState.any { it.chapterIndex == next.chapterIndex }) return@LaunchedEffect
         if (next.chapterIndex <= cur.chapterIndex) return@LaunchedEffect
 
         val nextParas = next.toScrollParagraphs(omitChapterTitleBlock)
@@ -326,15 +364,51 @@ fun LazyScrollSection(
     }
 
     // ── 命令式跳转两阶段屏障（第一道防线）──
-    val jumpReady = remember(chapterIndex, initialChapterPosition, paragraphsState.size) {
-        if (initialChapterPosition <= 0) false
-        else chapterPositionToParagraphPos(
-            paragraphsState, chapterIndex, initialChapterPosition,
-        ) != null
+    //
+    // windowSource 路径下，跳转坐标来自 [ChapterWindowSource.pendingJump]（resetTo 触发
+    // 时填充），覆盖 caller 传入的 initialChapterPosition / restoreToken —— 后者在
+    // 重架后由 ChapterWindowSource 持有真值。
+    val activeJumpChapterIdx: Int
+    val activeJumpChapterPos: Int
+    val activeJumpToken: Long
+    if (windowSource != null) {
+        val pj = windowSource.pendingJump
+        activeJumpChapterIdx = pj?.chapterIdx ?: -1
+        activeJumpChapterPos = pj?.chapterPos ?: 0
+        activeJumpToken = pj?.token ?: 0L
+    } else {
+        activeJumpChapterIdx = chapterIndex
+        activeJumpChapterPos = initialChapterPosition
+        activeJumpToken = restoreToken
     }
-    val effectiveJumpChapterIdx = if (jumpReady) chapterIndex else -1
-    val effectiveJumpChapterPos = if (jumpReady) initialChapterPosition else 0
-    val effectiveJumpToken = if (jumpReady) restoreToken else 0L
+    val jumpReady = remember(activeJumpChapterIdx, activeJumpChapterPos, paragraphsState.size) {
+        if (activeJumpChapterIdx < 0) {
+            false
+        } else if (activeJumpChapterPos <= 0) {
+            paragraphsState.any {
+                it.chapterIndex == activeJumpChapterIdx &&
+                    it.contentType != ScrollParagraphType.LOADING
+            }
+        } else {
+            chapterPositionToParagraphPos(
+                paragraphsState, activeJumpChapterIdx, activeJumpChapterPos,
+            ) != null
+        }
+    }
+    val effectiveJumpChapterIdx = if (jumpReady) activeJumpChapterIdx else -1
+    val effectiveJumpChapterPos = if (jumpReady) activeJumpChapterPos else 0
+    val effectiveJumpToken = if (jumpReady) activeJumpToken else 0L
+
+    // 上层 ChapterWindowSource 的 pendingJump 是「一次性」请求 —— 我们消费完后
+    // 立刻 consume 掉，避免重组循环里反复触发 scrollToItem。
+    LaunchedEffect(effectiveJumpToken) {
+        if (windowSource != null && effectiveJumpToken != 0L) {
+            // 让 LazyScrollRenderer 的 jump LaunchedEffect 先消费一次再清；
+            // 这里加 1 帧延迟保险。
+            kotlinx.coroutines.delay(16L)
+            windowSource.consumePendingJump()
+        }
+    }
 
     // ── 跳转静默期（第三道防线之一）──
     //
@@ -414,8 +488,33 @@ fun LazyScrollSection(
             jumpChapterPosition = effectiveJumpChapterPos,
             jumpToken = effectiveJumpToken,
             revealHighlight = revealHighlight,
-            onNearTop = onPrevChapter,
-            onNearBottom = onNextChapter,
+            // SCROLL 重架后：windowSource 路径下 onNearTop/Bottom 直接驱动滑动窗口
+            // 静默扩展，**不**走 caller 的 onPrev/NextChapter（那俩会触发 commitChapterShift
+            // / loadChapter 的清空+重建链路，正是空气墙/瞬移命门）。
+            onNearTop = if (windowSource != null) {
+                {
+                    val first = listState.firstVisibleItemIndex
+                    val p = paragraphsState.getOrNull(first)
+                    AppLog.debug(
+                        "LazyScrollSection",
+                        "onNearTop -> windowSource.prependPrev: first=$first offset=${listState.firstVisibleItemScrollOffset} " +
+                            "para=${p?.key} paraCh=${p?.chapterIndex} loaded=${windowSource.loadedChapters.toList()} paras=${paragraphsState.size}",
+                    )
+                    windowSource.prependPrev()
+                }
+            } else onPrevChapter,
+            onNearBottom = if (windowSource != null) {
+                {
+                    val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+                    val p = paragraphsState.getOrNull(last)
+                    AppLog.debug(
+                        "LazyScrollSection",
+                        "onNearBottom -> windowSource.appendNext: last=$last para=${p?.key} paraCh=${p?.chapterIndex} " +
+                            "loaded=${windowSource.loadedChapters.toList()} paras=${paragraphsState.size}",
+                    )
+                    windowSource.appendNext()
+                }
+            } else onNextChapter,
             // 选区改成字符级后不再用整段染色作为视觉提示——selectionSpan 已经画在
             // 字符背景上，再加段级背景反而会盖住已存高亮 / 字色 spans。传 null
             // 让 [ScrollParagraphItem.isSelected] 不命中。
@@ -446,7 +545,13 @@ fun LazyScrollSection(
                     return@LazyScrollRenderer
                 }
                 // step 2: highlight hit-test
-                if (chapterHighlightsRaw.isNotEmpty()) {
+                // 仅在 [computeCharOffsetInParagraph] 真正命中文字列（charOffset >= 0）时才走。
+                // 否则 tap 落在段间留白 / 行间空隙 / 列间隙 / 图片列 → 不该弹 highlight 菜单，
+                // 直接 fall-through 到 onTapCenter 切控制栏（与 Legado 行为对齐）。
+                // 这一道是「幽灵弹窗」修复的核心：以前 charOffset 强制 clamp 到 0 导致段顶
+                // 留白被误判命中段首字符，恰好与高亮区间相交时弹出错的 target，用户点删除
+                // 也删不掉真实那条。
+                if (charOffsetInParagraph >= 0 && chapterHighlightsRaw.isNotEmpty()) {
                     val hitChapterPos = paragraph.firstChapterPosition + charOffsetInParagraph
                     val hit = chapterHighlightsRaw.firstOrNull { h ->
                         h.chapterIndex == paragraph.chapterIndex &&
@@ -474,6 +579,10 @@ fun LazyScrollSection(
             // 找到 tap 字符所在的词 boundaries，selection.startChapterPos / endChapterPos
             // 落到字符级精度。后续用户可以拖动 CursorHandle 调整选区起止字符。
             onLongPressParagraph = { paragraph, charOffsetInParagraph, anchorInWindow ->
+                // 长按落在段间空白 / 行间空隙 / 图片列 → charOffset 为 -1，直接放弃选词。
+                // 之前用 coerceIn(0, paraText.length) 兜底会把空白长按当成「选段首字」，
+                // 用户感受到「明明按在空白上却弹出了 mini-menu」。
+                if (charOffsetInParagraph < 0) return@LazyScrollRenderer
                 val (wordStartInPara, wordEndInPara) = findWordRangeInParagraph(
                     paragraph, charOffsetInParagraph,
                 )
@@ -499,11 +608,27 @@ fun LazyScrollSection(
             //
             // 三层 guard：
             //   1. cur 章未完成 → drop（避免 placeholderChapter 期间脏写）
+            //      windowSource 路径下：只要该章在 loadedChapters 里就视为有效
             //   2. reportChapterIdx != cur 章 → drop（窗口边缘瞬时态：用户视野落 prev 章末
             //      或 next 章首，不该按 cur 章 idx 写 DB）
+            //      windowSource 路径下：cur 章由 viewport center 派生，与 reportChapterIdx
+            //      自然一致，不会有「写错章」问题——但仍校验该章在 loadedChapters 里。
             //   3. 跳转静默期内 → drop（scrollToItem settle 中间态）
             onChapterProgressLive = { reportChapterIdx, prog ->
                 val nowMs = System.currentTimeMillis()
+                if (windowSource != null) {
+                    when {
+                        reportChapterIdx !in windowSource.loadedChapters -> Unit  // 暂态，drop
+                        nowMs < jumpSilenceUntilMs -> {
+                            AppLog.debug(
+                                "Progress",
+                                "drop live: jump silence ${jumpSilenceUntilMs - nowMs}ms remaining",
+                            )
+                        }
+                        else -> onProgress(prog)
+                    }
+                    return@LazyScrollRenderer
+                }
                 val curChapterIdx = chapter?.chapterIndex ?: -1
                 when {
                     chapter?.isCompleted != true -> Unit
@@ -524,6 +649,19 @@ fun LazyScrollSection(
             },
             onChapterProgressPersist = { reportChapterIdx, prog ->
                 val nowMs = System.currentTimeMillis()
+                if (windowSource != null) {
+                    when {
+                        reportChapterIdx !in windowSource.loadedChapters -> Unit
+                        nowMs < jumpSilenceUntilMs -> {
+                            AppLog.debug(
+                                "Progress",
+                                "drop persist: jump silence ${jumpSilenceUntilMs - nowMs}ms remaining",
+                            )
+                        }
+                        else -> onProgress(prog)
+                    }
+                    return@LazyScrollRenderer
+                }
                 val curChapterIdx = chapter?.chapterIndex ?: -1
                 when {
                     chapter?.isCompleted != true -> Unit
@@ -543,6 +681,15 @@ fun LazyScrollSection(
                 }
             },
             onVisibleParagraphChanged = { p, _ ->
+                // SCROLL 重架：windowSource 路径下用 viewport center 章 idx 驱动 cur 章节真值流
+                // （via [ChapterWindowSource.updateViewportCenter] → setCurrentChapterIndexFromScroll）。
+                // 标题查询从 windowSource.chapterTitleAt 走，不再依赖 caller 传 prev/cur/next 三个标题。
+                if (windowSource != null) {
+                    windowSource.updateViewportCenter(p.chapterIndex)
+                    val title = windowSource.chapterTitleAt(p.chapterIndex)
+                    onVisiblePageChanged(p.chapterIndex, title, "", p.firstChapterPosition)
+                    return@LazyScrollRenderer
+                }
                 val titleForChapter = when (p.chapterIndex) {
                     chapter?.chapterIndex -> chapterTitle
                     prevTextChapter?.chapterIndex -> prevChapterTitle
@@ -553,7 +700,10 @@ fun LazyScrollSection(
             },
             onScrollingChanged = onScrollingChanged,
             onTapCenter = onTapCenter,
-            chapterCharSizeProvider = { paraChapterIdx -> chapterCharSizes[paraChapterIdx] ?: 1 },
+            chapterCharSizeProvider = { paraChapterIdx ->
+                if (windowSource != null) windowSource.chapterCharSize(paraChapterIdx)
+                else chapterCharSizes[paraChapterIdx] ?: 1
+            },
             modifier = Modifier.fillMaxSize(),
         )
 

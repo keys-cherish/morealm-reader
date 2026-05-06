@@ -157,6 +157,8 @@ fun CanvasRenderer(
     chaptersSize: Int = 0,
     showChapterName: Boolean = true,
     showTimeBattery: Boolean = true,
+    /** Controls 浮层（ReaderTopBar / ReaderControlBar）显示时关掉 Canvas 层 info bar。 */
+    controlsVisible: Boolean = false,
     headerLeft: String = "chapter",
     headerCenter: String = "none",
     headerRight: String = "none",
@@ -266,6 +268,21 @@ fun CanvasRenderer(
      * book.localPath != null && chapters.all { it.isAutoSplitChapter() }` 计算后传入。
      */
     omitChapterTitleBlock: Boolean = false,
+    /**
+     * SCROLL 模式专用滑动窗口数据源（由 ReaderViewModel 提供，见
+     * [com.morealm.app.presentation.reader.ReaderViewModel.chapterWindow]）。
+     *
+     * 非 null 时本组件在 SCROLL 路径下：
+     *   1. 在 [LaunchedEffect(layoutInputs)] 里把 [chapterLayouter] attach 给 windowSource，
+     *      让它能用当前排版上下文（屏幕尺寸 / 字号 / padding 等）排版章节
+     *   2. 在 [LaunchedEffect(chapterIndex, restoreToken)] 里调 `windowSource.resetTo(...)`
+     *      响应初次进入 / 用户跳转
+     *   3. 把 windowSource 透传给 [LazyScrollSection]，由其驱动 LazyColumn 段落窗口
+     *
+     * null 时 SCROLL 路径回落到旧 _prev/_cur/_nextTextChapter 三 flow + 三段窗口逻辑
+     * （翻页 / 仿真模式不受影响，永远不读这个字段）。
+     */
+    chapterWindow: com.morealm.app.presentation.reader.scroll.ChapterWindowSource? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -311,11 +328,39 @@ fun CanvasRenderer(
     val padTopPx = with(density) { (paddingTop ?: paddingVertical).dp.toPx().toInt() }
     val padBotPx = with(density) { (paddingBottom ?: paddingVertical).dp.toPx().toInt() }
     val infoBarHeightPx = with(density) { 64.dp.toPx().toInt() }
+    // ── info bar 是否真有内容 → 决定要不要预留 64dp ──
+    //
+    // 之前 effectivePadTop/Bottom 一律 +infoBarHeightPx，即使所有 slot 都
+    // resolve 成 "none"（用户关掉 showChapterName / showTimeBattery，或把 slot 设为
+    // "none"）也照样空 64dp，体验上是「明明关了 info 还有一截大空白」。
+    //
+    // 这里跟 [PageReaderInfoOverlay] (line 2202~) / [LazyScrollSection] 的
+    // SCROLL info bar (line 1700~) 用同样的 slot resolve 规则：showTimeBattery
+    // 控制 left/right，showChapterName 控制 center（footer 略不同）。三 slot
+    // resolve 后全 "none" → 该条 info bar 不会画 → padding 也不再为它预留。
+    //
+    // 注意：showChapterName / showTimeBattery / 6 slot 任一变化都会触发
+    // layoutInputs 重排版（因为它们参与 effectivePadTop/Bottom 计算），与改字号 /
+    // 改边距等已有重排版触发同级；用户只在设置面板触发，可以接受。
+    val headerHasContent = run {
+        val l = if (showTimeBattery) headerLeft else "none"
+        val c = if (showChapterName) headerCenter else "none"
+        val r = if (showTimeBattery) headerRight else "none"
+        l != "none" || c != "none" || r != "none"
+    }
+    val footerHasContent = run {
+        val l = if (showChapterName) footerLeft else "none"
+        val c = footerCenter
+        val r = footerRight
+        l != "none" || c != "none" || r != "none"
+    }
+    val topInfoBarPx = if (headerHasContent) infoBarHeightPx else 0
+    val bottomInfoBarPx = if (footerHasContent) infoBarHeightPx else 0
     // Ensure content padding is at least as large as the cutout insets
     val effectivePadLeft = maxOf(padHPx, cutoutLeft)
     val effectivePadRight = maxOf(padHPx, cutoutRight)
-    val effectivePadTop = maxOf(padTopPx, cutoutTop) + infoBarHeightPx
-    val effectivePadBottom = maxOf(padBotPx, cutoutBottom) + infoBarHeightPx
+    val effectivePadTop = maxOf(padTopPx, cutoutTop) + topInfoBarPx
+    val effectivePadBottom = maxOf(padBotPx, cutoutBottom) + bottomInfoBarPx
     val fontSizePx = with(density) { fontSize.sp.toPx() }
 
     // ── Battery level + charging (ported from Legado ReadBookActivity battery receiver) ──
@@ -533,6 +578,47 @@ fun CanvasRenderer(
         }
     }
 
+    // ── SCROLL 重架：chapterLayouter 注入到 ChapterWindowSource ──
+    //
+    // ChapterWindowSource 在 ViewModel 层创建，但排版函数依赖 layoutInputs（屏幕尺寸 / paint
+    // / padding，全是 Compose state），只能在 Composable 里 attach。layoutInputs 变化时
+    // 重新 attach（改字号、改 padding、转屏后），让窗口里后续 append/prepend 用最新排版。
+    LaunchedEffect(chapterWindow, layoutInputs) {
+        if (chapterWindow == null) return@LaunchedEffect
+        val provider = layoutInputs.provider
+        chapterWindow.chapterLayouter = { title, content, idx, chSize, omit ->
+            try {
+                provider.layoutChapter(
+                    title = title,
+                    content = content,
+                    chapterIndex = idx,
+                    chaptersSize = chSize,
+                    omitChapterTitleBlock = omit,
+                )
+            } catch (e: Exception) {
+                AppLog.warn("CanvasRenderer", "windowSource.chapterLayouter failed for idx=$idx: ${e.message}", e)
+                null
+            }
+        }
+    }
+
+    // ── SCROLL 重架：chapterIndex / restoreToken 变化触发 windowSource.resetTo ──
+    //
+    // 只有在用户主动跳章（书签 / TOC / 续读首次进入）时 chapterIndex / restoreToken 会
+    // 变；自然滚动跨章时 setCurrentChapterIndexFromScroll 不改 token，所以这条 effect
+    // 不会被滚动触发，避免产生 reset 风暴。
+    LaunchedEffect(chapterWindow, chapterIndex, restoreToken, pageAnimType) {
+        if (chapterWindow == null) return@LaunchedEffect
+        if (pageAnimType != PageAnimType.SCROLL) return@LaunchedEffect
+        if (chapterIndex < 0) return@LaunchedEffect
+        // 已经包含且 chapterPos 也对得上的窗口不重置（避免无意义 clear）
+        if (chapterIndex in chapterWindow.loadedChapters && initialChapterPosition == 0) {
+            return@LaunchedEffect
+        }
+        AppLog.debug("CanvasRenderer", "windowSource.resetTo(chIdx=$chapterIndex, chPos=$initialChapterPosition, token=$restoreToken)")
+        chapterWindow.resetTo(chapterIndex, initialChapterPosition)
+    }
+
     LaunchedEffect(currentChapterKey, layoutInputs) {
         // Cache hit: 立即显示完整布局（如来自 next/prev 预排版，或之前的 padding 配置）。
         val cachedChapter = prelayoutCache[currentChapterKey]
@@ -716,8 +802,12 @@ fun CanvasRenderer(
         }
     }
 
-    LaunchedEffect(chapter) {
-        val positions = chapter?.getParagraphs(pageSplit = false)
+    LaunchedEffect(chapter, chapterWindow?.chapterByIdx?.get(chapterIndex)) {
+        // SCROLL 重架路径：windowSource 持有的 TextChapter 是真正排版完成的版本，
+        // 而 CanvasRenderer 内部的 `chapter`（textChapter）在 SCROLL 模式下可能是
+        // placeholder 或与 windowSource 不同步。优先从 windowSource 取段落位置。
+        val effectiveChapter = chapterWindow?.chapterByIdx?.get(chapterIndex) ?: chapter
+        val positions = effectiveChapter?.getParagraphs(pageSplit = false)
             ?.map { it.chapterPosition }
             .orEmpty()
         onReadAloudParagraphPositions(positions)
@@ -1267,6 +1357,7 @@ fun CanvasRenderer(
         footerCenter = footerCenter,
         footerRight = footerRight,
         hasBgImage = bgBitmap != null,
+        controlsVisible = controlsVisible,
     )
 
     // ── 渲染主题（5 件套 paint + 背景 + 4 高亮色）注入 ──
@@ -1587,6 +1678,10 @@ fun CanvasRenderer(
                 onNextChapter = onNextChapter,
                 onProgress = onProgress,
                 onCopyText = onCopyText,
+                // SCROLL 重架命门修复：传滑动窗口数据源，让 LazyScrollSection 旁路
+                // 老的 commitChapterShift / coordinator REBUILD / restoreProgress JUMP 链路。
+                // 命门定位见 plan：`C:/Users/test/.claude/plans/glittery-dancing-swing.md`。
+                windowSource = chapterWindow,
                 // 段级 mini-menu 各回调透传（分享走本地 dialog；其余走 ReaderViewModel）
                 onSpeakFromHere = onSpeakFromHere,
                 onTranslateText = onTranslateText,
@@ -1801,6 +1896,7 @@ fun CanvasRenderer(
                     // Phase 2（布局）。这是 Compose 现代实践绕开"重组风暴"的关键
                     // —— 旧时代 ObjectAnimator + invalidate() 会把整棵子树重画。
                     revealHighlight = revealHighlight?.takeIf { it.chapterIndex == chapterIndex },
+                    controlsVisible = controlsVisible,
                     onCurrentPageChanged = {},
                     onSelectionStartMove = { textPos ->
                         selectedTextPage = coordinator.getPageAt(pageIndex)
@@ -1881,7 +1977,10 @@ fun CanvasRenderer(
                 footerRight = footerRight,
                 showChapterName = showChapterName,
                 showTimeBattery = showTimeBattery,
-                onCurrentPageChanged = { page -> onVisiblePageChanged(page.chapterIndex, page.title, page.readProgress, page.chapterPosition) },
+                onCurrentPageChanged = { page ->
+                    onVisiblePageChanged(page.chapterIndex, page.title, page.readProgress, page.chapterPosition)
+                    onVisibleReadAloudPosition(page.chapterIndex, page.chapterPosition)
+                },
                 onSelectionStartMove = { textPos ->
                     selectedTextPage = TextPage(title = chapterTitle)
                     selectionState.selectStartMove(textPos)
@@ -2109,7 +2208,10 @@ private fun PageReaderInfoOverlay(
     footerCenter: String,
     footerRight: String,
     hasBgImage: Boolean = false,
+    /** Controls 浮层显示时关掉 info bar。 */
+    controlsVisible: Boolean = false,
 ) {
+    if (controlsVisible) return
     Box(modifier = Modifier.fillMaxSize()) {
         val safePageIndex = pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         val currentPage = pages.getOrNull(safePageIndex) ?: pages.firstOrNull()
@@ -2486,6 +2588,11 @@ private fun PageContentBox(
      * alpha 变化 → 仅触发本 Canvas 重画，不触发重组 / 重布局。
      */
     revealHighlight: RevealHighlight? = null,
+    /**
+     * 控制栏（ReaderTopBar / ReaderControlBar）显示时关掉 Canvas 层 info bar，
+     * 透传给 [PageReaderInfoOverlay]。默认 false 保留旧调用方兼容。
+     */
+    controlsVisible: Boolean = false,
     onCurrentPageChanged: (TextPage) -> Unit = {},
     onSelectionStartMove: (TextPos) -> Unit = {},
     onSelectionEndMove: (TextPos) -> Unit = {},
@@ -2644,6 +2751,7 @@ private fun PageContentBox(
             footerCenter = footerCenter,
             footerRight = footerRight,
             hasBgImage = bgBitmap != null,
+            controlsVisible = controlsVisible,
         )
     }
 }
