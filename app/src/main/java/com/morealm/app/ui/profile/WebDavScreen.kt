@@ -1,7 +1,7 @@
 package com.morealm.app.ui.profile
 
 import androidx.compose.foundation.background
-import com.morealm.app.presentation.profile.ProfileViewModel
+import com.morealm.app.presentation.profile.WebDavViewModel
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -30,7 +30,7 @@ import com.morealm.app.ui.theme.LocalMoRealmColors
 fun WebDavScreen(
     onBack: () -> Unit,
     onNavigateRemoteBooks: () -> Unit = {},
-    viewModel: ProfileViewModel = hiltViewModel(),
+    viewModel: WebDavViewModel = hiltViewModel(),
 ) {
     val moColors = LocalMoRealmColors.current
     val savedUrl by viewModel.webDavUrl.collectAsStateWithLifecycle()

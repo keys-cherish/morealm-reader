@@ -74,6 +74,15 @@ class ReaderChapterController(
     private val onChapterLoaded: () -> Unit,
     /** Notify progress controller to suppress next save */
     private val setSuppressNextProgressSave: (Boolean) -> Unit,
+    /**
+     * 首次章节加载完成（RenderedReaderChapter + visiblePage 全部刷新完毕）时触发。
+     * ReaderViewModel 用它把 ReaderProgressController.initialLoadComplete 置 true，
+     * 解除「启动时 combine collector 初始 emit 把 (0,0,0) 刷进 DB」的闸门。
+     *
+     * 幂等：loadChapter 每次成功都会调，但 progress controller 那边只看第一次。
+     * 默认 no-op 保证单测 / 旧调用方零迁移。
+     */
+    private val onInitialChapterLoaded: () -> Unit = {},
 ) {
     // ── Core State ──
     private val _book = MutableStateFlow<Book?>(null)
@@ -441,7 +450,14 @@ class ReaderChapterController(
                         .coerceIn(0, (cachedChapters.size - 1).coerceAtLeast(0))
                     lastPreCacheCenter = startIndex
                     val savedScrollProgress = estimateChapterProgress(book, startIndex, cachedChapters.size)
-                    val savedChapterPosition = progress?.chapterPosition ?: book.lastReadPosition
+                    // DB 容灾：progress?.chapterPosition 可能被旧 bug 刷成 0（ViewModel init
+                    // 阶段 combine collector 初始 emit 抢跑），此时回退到 book.lastReadPosition
+                    // 作为兜底——后者由 saveProgress 同步写入 book 表，不受 reading_progress 表
+                    // 被冲的影响。两者都为 0 时才是真正的章首。
+                    val savedChapterPosition = run {
+                        val fromProgress = progress?.chapterPosition ?: 0
+                        if (fromProgress > 0) fromProgress else book.lastReadPosition
+                    }
                     AppLog.info(
                         "BookmarkDebug",
                         "loadBook ENTRY (web) bookId=$bookId startIndex=$startIndex" +
@@ -575,7 +591,12 @@ class ReaderChapterController(
             lastPreCacheCenter = startIndex
 
             val savedScrollProgress = estimateChapterProgress(book, startIndex, chapters.size)
-            val savedChapterPosition = progress?.chapterPosition ?: book.lastReadPosition
+            // DB 容灾（同 web 路径注释）：progress?.chapterPosition 被旧 bug 刷 0 时
+            // 回退到 book.lastReadPosition。
+            val savedChapterPosition = run {
+                val fromProgress = progress?.chapterPosition ?: 0
+                if (fromProgress > 0) fromProgress else book.lastReadPosition
+            }
             AppLog.info(
                 "BookmarkDebug",
                 "loadBook ENTRY (local) bookId=$bookId startIndex=$startIndex" +
@@ -718,6 +739,7 @@ class ReaderChapterController(
                 // Don't reset navigateDirection here — let CanvasRenderer consume it
                 // for startFromLastPage before resetting after progress restoration.
                 if (targetProgress == 0 && targetChapterPosition == 0) onChapterLoaded()
+                onInitialChapterLoaded()
                 preloadNextChapter(index + 1)
                 preloadPrevChapter(index - 1)
                 maybeRetriggerPreCache(index)
@@ -1132,4 +1154,77 @@ class ReaderChapterController(
             }
         }
     }
+
+    // ── SCROLL 模式专用接口（supplied for ChapterWindowSource） ──
+    //
+    // 这两个函数是 SCROLL 重架的「桥」：让独立 [ChapterWindowSource] 能复用
+    // ReaderChapterController 已有的 fetch + replace rule + 繁简转换管线，又
+    // 不会触发 [loadChapter] 的副作用风暴（清空三 flow / coordinator REBUILD /
+    // restoreProgress JUMP）。
+    //
+    // 见 docs（temp/solution.txt）的「废除运行时强行 JUMP」与「LazyColumn 直接 addAll」
+    // 现代化原则：SCROLL 模式滑动窗口仅扩展段落集合，不切换 cur 章。
+
+    /**
+     * 仅取章节正文文本：用 web book 走 [loadWebChapterContent]，本地书走
+     * [LocalBookParser.readChapter]，再过 [applyReplaceRules] + 繁简转换。
+     *
+     * 与 [loadChapter] 的关键区别：
+     * - **不**写 [_chapterContent] / [_renderedChapter] / [_currentChapterIndex] 任何 state
+     * - **不**清空 prev/cur/next flow，**不**触发 preload neighbors
+     * - **不**与 [chapterLoadJob] / [chapterLoadToken] 冲突（独立 IO 协程）
+     *
+     * 返回 null 表示加载失败（例如越界、book 为空、IO 异常）；调用方应自行处理
+     * 占位 / 重试。同步异常会被吞 + 走 [AppLog.warn]。
+     *
+     * @param index 目标章节索引
+     */
+    suspend fun fetchAndPrepareChapter(index: Int): String? {
+        val chapterList = _chapters.value
+        if (index !in chapterList.indices) return null
+        val book = _book.value ?: return null
+        val chapter = chapterList[index]
+        return try {
+            withContext(Dispatchers.IO) {
+                val raw = if (isWebBook(book)) {
+                    loadWebChapterContent(book, chapter, index)
+                } else {
+                    val localPath = book.localPath ?: return@withContext null
+                    LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapter)
+                }
+                val replaced = applyReplaceRules(raw)
+                com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 结构化并发的取消传递必须重抛，不能吞，否则上层 launch 会以为该协程「成功完成」
+            throw e
+        } catch (e: Exception) {
+            AppLog.warn("Chapter", "fetchAndPrepareChapter($index) failed: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * SCROLL 模式下视口中心段所属章节漂移到新值时，由 [ChapterWindowSource]（debounced 300ms）
+     * 调用，仅同步 [_currentChapterIndex]，让进度系统 / TTS / TOC 高亮等下游 collect 到正确
+     * 章索引。
+     *
+     * **关键**：不调 [loadChapter]、不清空 prev/cur/next flow、不触发 preload。
+     * 视口里的段落 (paragraphs) 由 [ChapterWindowSource] 自己管，cur 章的"切换"对
+     * SCROLL 模式来说只是 UI 派生量。
+     *
+     * 同 idx 重复调用时短路（避免 StateFlow 触发不必要的下游重组）。
+     */
+    fun setCurrentChapterIndexFromScroll(index: Int) {
+        if (index < 0 || index >= _chapters.value.size) return
+        if (_currentChapterIndex.value == index) return
+        _currentChapterIndex.value = index
+    }
+
+    /** 给 ChapterWindowSource 用的章节标题查询 —— 本身就是 [chapters] flow 的薄包装。 */
+    fun chapterTitleAt(index: Int): String =
+        _chapters.value.getOrNull(index)?.title.orEmpty()
+
+    /** 章节总数 —— 边界检查用。 */
+    fun chaptersSize(): Int = _chapters.value.size
 }

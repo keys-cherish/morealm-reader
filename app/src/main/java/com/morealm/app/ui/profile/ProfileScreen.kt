@@ -11,7 +11,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
-import com.morealm.app.presentation.profile.ProfileViewModel
+import com.morealm.app.presentation.profile.ProfileStatsViewModel
 import com.morealm.app.presentation.profile.AnnualReport
 import com.morealm.app.presentation.appearance.GlobalBgViewModel
 import com.morealm.app.presentation.update.UpdateViewModel
@@ -72,7 +72,7 @@ import java.io.FileOutputStream
 @Composable
 fun ProfileScreen(
     themeViewModel: ThemeViewModel = hiltViewModel(),
-    profileViewModel: ProfileViewModel = hiltViewModel(),
+    profileViewModel: ProfileStatsViewModel = hiltViewModel(),
     updateViewModel: UpdateViewModel = hiltViewModel(),
     onNavigateWebDav: () -> Unit = {},
     onNavigateAbout: () -> Unit = {},
@@ -103,14 +103,6 @@ fun ProfileScreen(
     val recentDays by profileViewModel.recentDays.collectAsStateWithLifecycle()
     val annualReport by profileViewModel.annualReport.collectAsStateWithLifecycle()
     var showAnnualReport by remember { mutableStateOf(false) }
-
-    val backupImportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        // 旧路径保留：导入备份按钮如果用户长按或某些 fallback 场景仍走全量恢复。
-        // 主交互已经迁到 BackupImportScreen — 见 onNavigateBackupImport。
-        uri?.let { profileViewModel.importBackup(it) }
-    }
 
     val themeExportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")

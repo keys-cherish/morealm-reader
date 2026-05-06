@@ -116,7 +116,15 @@ internal fun drawScrollParagraphContent(
         if (line.isImage) {
             for (col in line.columns) {
                 if (col is ImageColumn) {
+                    // drawImageColumn 内部用 line.lineTop/lineBottom（page-local 坐标）定位图片。
+                    // 段级瀑布流里行的实际 Y 是 linePositions[i]（paragraph-local），必须
+                    // translate canvas 让 page-local 映射到 paragraph-local，否则图片会画在
+                    // page-local Y 上而文字画在 paragraph-local Y 上 → 图文叠加。
+                    val dy = paragraphLineTop - line.lineTop
+                    canvas.save()
+                    canvas.translate(0f, dy)
                     drawImageColumn(canvas, col, line)
+                    canvas.restore()
                 }
             }
         } else {

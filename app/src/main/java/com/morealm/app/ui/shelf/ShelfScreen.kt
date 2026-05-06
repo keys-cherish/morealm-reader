@@ -92,7 +92,6 @@ fun ShelfScreen(
     var currentFolderId by rememberSaveable { mutableStateOf<String?>(null) }
 
     // Inline search
-    var searchResults by remember { mutableStateOf<List<Book>>(emptyList()) }
     var showDeleteFolderConfirm by remember { mutableStateOf<String?>(null) }
     /**
      * 自定义封面长按菜单：值非 null 时弹出 [BookCoverActionDialog]，提供"设置封面 / 移除封面"。
@@ -106,7 +105,6 @@ fun ShelfScreen(
     // 当前输入值。声明于此（早于下面 navigateToFolder LaunchedEffect 引用它们的
     // 闭包），避免 Kotlin 向前引用错误。
     var showSearch by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
 
     // SnackbarHost / scope 提前到这里，保证下方 LaunchedEffect（如 organizeReport
     // 上报）能在声明处访问。原本 host 放在中段会触发 Kotlin 向前引用错误。
@@ -123,7 +121,7 @@ fun ShelfScreen(
             batchMode = false
             selectedIds = emptySet()
             showSearch = false
-            searchQuery = ""
+            viewModel.setSearchQuery("")
         }
     }
     // UX-1: showBatchDeleteConfirm 已下线 — 删除改为「立即删 + Snackbar 撤销」内联到 onClick。
@@ -144,20 +142,13 @@ fun ShelfScreen(
     // Web book long-press cache dialog
     var showCacheBookDialog by remember { mutableStateOf<Book?>(null) }
     val isDownloading by viewModel.isCacheDownloading.collectAsStateWithLifecycle()
-    val downloadProgress by viewModel.cacheDownloadProgress.collectAsStateWithLifecycle()
+    val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
 
-    LaunchedEffect(showSearch, searchQuery) {
-        val query = searchQuery.trim()
-        if (!showSearch || query.isEmpty()) {
-            searchResults = emptyList()
-            return@LaunchedEffect
-        }
-        delay(300)
-        viewModel.searchBooks(query) { results ->
-            if (showSearch && searchQuery.trim() == query) {
-                searchResults = results
-            }
-        }
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
+
+    LaunchedEffect(showSearch) {
+        if (!showSearch) viewModel.setSearchQuery("")
     }
 
     LaunchedEffect(folderImportState.running, folderImportState.message, folderImportState.error) {
@@ -603,18 +594,14 @@ fun ShelfScreen(
             query = searchQuery,
             results = searchResults,
             onQueryChange = { q ->
-                searchQuery = q
-                if (q.isBlank()) {
-                    searchResults = emptyList()
-                }
+                viewModel.setSearchQuery(q)
             },
             onBookClick = { bookId ->
                 showSearch = false
-                searchQuery = ""
-                searchResults = emptyList()
+                viewModel.setSearchQuery("")
                 onBookClick(bookId)
             },
-            onDismiss = { showSearch = false; searchQuery = ""; searchResults = emptyList() },
+            onDismiss = { showSearch = false; viewModel.setSearchQuery("") },
         )
     }
 

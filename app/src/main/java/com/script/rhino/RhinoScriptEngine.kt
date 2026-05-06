@@ -70,9 +70,16 @@ import kotlin.coroutines.CoroutineContext
 @Suppress("MemberVisibilityCanBePrivate")
 object RhinoScriptEngine : AbstractScriptEngine(), Invocable, Compilable {
     var accessContext: AccessControlContext? = null
-    private var topLevel: RhinoTopLevel? = null
+    private var _topLevel: RhinoTopLevel? = null
     private val indexedProps: MutableMap<Any, Any?>
     private val implementor: InterfaceImplementor
+
+    /**
+     * RhinoTopLevel 实例 — 继承自 ImporterTopLevel，内置 importClass/importPackage 等函数。
+     * ScriptBindings 使用此作为 prototype，外部只能读取，不能修改。
+     */
+    val topLevel: RhinoTopLevel
+        get() = _topLevel ?: throw IllegalStateException("RhinoScriptEngine not initialized")
 
     fun eval(js: String, bindingsConfig: ScriptBindings.() -> Unit = {}): Any? {
         val bindings = ScriptBindings()
@@ -203,7 +210,7 @@ object RhinoScriptEngine : AbstractScriptEngine(), Invocable, Compilable {
                 throw NullPointerException("方法名为空")
             }
             if (thiz1 != null && thiz1 !is Scriptable) {
-                thiz1 = Context.toObject(thiz1, topLevel)
+                thiz1 = Context.toObject(thiz1, _topLevel)
             }
             val engineScope = getRuntimeScope(context)
             val localScope = thiz1 ?: engineScope
@@ -266,7 +273,7 @@ object RhinoScriptEngine : AbstractScriptEngine(), Invocable, Compilable {
             // `importPackage(...)` (Mozilla Rhino top-level helpers from ImporterTopLevel).
             // RhinoTopLevel extends ImporterTopLevel, so promoting it to the prototype
             // chain restores those globals.
-            bindings.prototype = topLevel ?: cx.initStandardObjects()
+            bindings.prototype = _topLevel ?: cx.initStandardObjects()
         } finally {
             Context.exit()
         }
@@ -303,7 +310,7 @@ object RhinoScriptEngine : AbstractScriptEngine(), Invocable, Compilable {
         } else {
             val res = arrayOfNulls<Any>(args.size)
             for (i in res.indices) {
-                res[i] = Context.javaToJS(args[i], topLevel)
+                res[i] = Context.javaToJS(args[i], _topLevel)
             }
             res
         }
@@ -404,7 +411,7 @@ object RhinoScriptEngine : AbstractScriptEngine(), Invocable, Compilable {
         }
         val cx = Context.enter()
         try {
-            topLevel = RhinoTopLevel(cx, this)
+            _topLevel = RhinoTopLevel(cx, this)
         } finally {
             Context.exit()
         }
@@ -415,7 +422,7 @@ object RhinoScriptEngine : AbstractScriptEngine(), Invocable, Compilable {
                 var obj1 = obj
                 return try {
                     if (obj1 != null && obj1 !is Scriptable) {
-                        obj1 = Context.toObject(obj1, topLevel)
+                        obj1 = Context.toObject(obj1, _topLevel)
                     }
                     val engineScope = getRuntimeScope(context)
                     val localScope = obj1 ?: engineScope

@@ -73,6 +73,8 @@ class BookDetailViewModel @Inject constructor(
     val changeSourceCandidates: StateFlow<List<ChangeSourceCandidate>> = changeSource.candidates
     val changeSourceProgress: StateFlow<List<ChangeSourceProgress>> = changeSource.progress
     val changeSourceSearching: StateFlow<Boolean> = changeSource.searching
+    /** 换源失败提示流（toc 拉空、源被删等）。UI 层订阅后弹 toast。 */
+    val changeSourceErrorEvents = changeSource.errorEvents
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -107,7 +109,19 @@ class BookDetailViewModel @Inject constructor(
     }
 
     fun applyChangedSource(candidate: ChangeSourceCandidate) {
-        val current = _book.value ?: return
+        val current = _book.value ?: run {
+            AppLog.warn(
+                "ChangeSource",
+                "applyChangedSource called but _book is null — VM not initialized? bookId=$bookId"
+            )
+            return
+        }
+        AppLog.info(
+            "ChangeSource",
+            "applyChangedSource click: book='${current.title}' (origin=${current.origin}) " +
+                "→ candidate=${candidate.sourceName}/${candidate.sourceUrl} " +
+                "fromCache=${candidate.fromCache}"
+        )
         changeSource.applyCandidate(current, candidate) { updated ->
             // Mirror to local _book so detail UI re-renders with the new source's
             // metadata immediately. Persistence already happened inside the controller.

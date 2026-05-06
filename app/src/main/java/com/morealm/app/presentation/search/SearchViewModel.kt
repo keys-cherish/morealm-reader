@@ -160,8 +160,8 @@ class SearchViewModel @Inject constructor(
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            val count = searchRepo.getEnabledSources()
-                .count { it.bookSourceType == TEXT_BOOK_SOURCE_TYPE }
+            // 优化：只查 count，不加载全量源（避免 10 万源 OOM）
+            val count = searchRepo.getEnabledSourceCount()
             _sourceCount.value = count
         }
     }
@@ -198,16 +198,11 @@ class SearchViewModel @Inject constructor(
                 _localResults.value = localBooks
                 AppLog.info("Search", "Local: ${localBooks.size} results for '$keyword'")
 
-                val allSources = searchRepo.getEnabledSources()
+                // 优化：用 lite 投影拉取源列表，只包含必要字段
+                val allSourcesLite = searchRepo.getEnabledSourcesLite()
                 if (!isCurrentSearch(searchId)) return@launch
-                val skipped = allSources.filter { it.bookSourceType != TEXT_BOOK_SOURCE_TYPE }
-                if (skipped.isNotEmpty()) {
-                    AppLog.info(
-                        "Search",
-                        "Skipped ${skipped.size} non-text sources: ${skipped.joinToString { decodeHtmlEntities(it.bookSourceName) }}",
-                    )
-                }
-                val sources = allSources.filter { it.bookSourceType == TEXT_BOOK_SOURCE_TYPE }
+
+                val sources = allSourcesLite.filter { it.bookSourceType == TEXT_BOOK_SOURCE_TYPE }
                 if (sources.isEmpty()) {
                     if (isCurrentSearch(searchId)) _isSearching.value = false
                     return@launch
@@ -226,10 +221,14 @@ class SearchViewModel @Inject constructor(
                 val timeoutMs = prefs.getSourceSearchTimeoutMs()
                 val semaphore = Semaphore(parallelism.coerceAtMost(sources.size).coerceAtLeast(1))
                 supervisorScope {
-                    val sourceJobs = sources.map { source ->
+                    val sourceJobs = sources.map { sourceLite ->
                         launch {
                             semaphore.withPermit {
-                                searchSingleSource(searchId, source, keyword, timeoutMs)
+                                // 按需懒加载完整 BookSource
+                                val fullSource = searchRepo.loadSourceByUrl(sourceLite.bookSourceUrl)
+                                if (fullSource != null) {
+                                    searchSingleSource(searchId, fullSource, keyword, timeoutMs)
+                                }
                             }
                         }
                     }
@@ -300,23 +299,36 @@ class SearchViewModel @Inject constructor(
     private suspend fun mergeResults(searchId: Int, newItems: List<SearchResult>, keyword: String) {
         mergeMutex.withLock {
             if (!isCurrentSearch(searchId)) return@withLock
-            val current = ArrayList(_results.value)
-            for (item in newItems) {
-                val existing = current.find {
-                    (it.title == item.title && it.author == item.author) ||
-                    (it.bookUrl.isNotBlank() && it.bookUrl == item.bookUrl)
+            // 优化：用 HashMap 去重，避免 O(N²) 的 ArrayList.find
+            val resultMap = LinkedHashMap<String, SearchResult>()
+            _results.value.forEach { existing ->
+                val key = if (existing.bookUrl.isNotBlank()) {
+                    "url:${existing.bookUrl}"
+                } else {
+                    "title:${existing.title}:${existing.author}"
                 }
+                resultMap[key] = existing
+            }
+
+            for (item in newItems) {
+                val key = if (item.bookUrl.isNotBlank()) {
+                    "url:${item.bookUrl}"
+                } else {
+                    "title:${item.title}:${item.author}"
+                }
+                val existing = resultMap[key]
                 if (existing != null) {
                     // Prefer the result with more info (cover, intro)
                     if (item.coverUrl != null && existing.coverUrl == null ||
                         item.intro.length > existing.intro.length) {
-                        current[current.indexOf(existing)] = item
+                        resultMap[key] = item
                     }
                 } else {
-                    current.add(item)
+                    resultMap[key] = item
                 }
             }
-            val sorted = current.sortedWith(
+
+            val sorted = resultMap.values.sortedWith(
                 compareByDescending<SearchResult> {
                     it.title == keyword
                 }.thenByDescending {
@@ -340,13 +352,12 @@ class SearchViewModel @Inject constructor(
     private fun updateSourceStatus(searchId: Int, sourceUrl: String, status: SourceStatus, errorMessage: String? = null) {
         _sourceProgress.update { progress ->
             if (!isCurrentSearch(searchId)) return@update progress
-            progress.map {
-                if (it.sourceUrl == sourceUrl) {
-                    it.copy(status = status, errorMessage = errorMessage)
-                } else {
-                    it
-                }
+            // 优化：用 Map 查找，避免 O(N) 的全列表遍历
+            val progressMap = progress.associateBy { it.sourceUrl }.toMutableMap()
+            progressMap[sourceUrl]?.let { old ->
+                progressMap[sourceUrl] = old.copy(status = status, errorMessage = errorMessage)
             }
+            progressMap.values.toList()
         }
     }
 
