@@ -89,7 +89,7 @@ class ScrollParagraphTest {
         val paragraphs = ch.toScrollParagraphs()
         assertEquals(1, paragraphs.size)
         val p = paragraphs[0]
-        assertEquals("0-1", p.key)
+        assertEquals("0-1-0", p.key)
         assertEquals(0, p.chapterIndex)
         assertEquals(1, p.paragraphNum)
         assertEquals(2, p.lines.size)
@@ -122,9 +122,9 @@ class ScrollParagraphTest {
         )
         val paragraphs = ch.toScrollParagraphs()
         assertEquals(3, paragraphs.size)
-        assertEquals("0-1", paragraphs[0].key)
-        assertEquals("0-2", paragraphs[1].key)
-        assertEquals("0-3", paragraphs[2].key)
+        assertEquals("0-1-0", paragraphs[0].key)
+        assertEquals("0-2-0", paragraphs[1].key)
+        assertEquals("0-3-0", paragraphs[2].key)
         // 第一段保留 paddingTop（章首），后续段 paddingTop = 0
         assertEquals(0f, paragraphs[0].paddingTop, 0.001f)
         assertEquals(0f, paragraphs[1].paddingTop, 0.001f)
@@ -262,7 +262,7 @@ class ScrollParagraphTest {
         )
         val paragraphs = ch.toScrollParagraphs()
         assertEquals(1, paragraphs.size)
-        assertEquals("0-1", paragraphs[0].key)
+        assertEquals("0-1-0", paragraphs[0].key)
         assertEquals(1, paragraphs[0].lines.size)
     }
 
@@ -280,8 +280,8 @@ class ScrollParagraphTest {
         val key0 = ch0.toScrollParagraphs()[0].key
         val key1 = ch1.toScrollParagraphs()[0].key
         assertNotEquals(key0, key1)
-        assertEquals("0-1", key0)
-        assertEquals("1-1", key1)
+        assertEquals("0-1-0", key0)
+        assertEquals("1-1-0", key1)
     }
 
     // ── 7. LOADING 占位段 ──
@@ -291,7 +291,7 @@ class ScrollParagraphTest {
         val p = loadingScrollParagraph(chapterIndex = 5)
         assertEquals(ScrollParagraphType.LOADING, p.contentType)
         assertEquals(5, p.chapterIndex)
-        assertEquals("loading-5", p.key)
+        assertEquals("loading-5-0", p.key)
         assertEquals(0, p.paragraphNum)
         assertTrue("LOADING 段无 line", p.lines.isEmpty())
         assertEquals(0, p.linePositions.size)
