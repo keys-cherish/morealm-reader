@@ -20,7 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.morealm.app.presentation.profile.ProfileViewModel
+import com.morealm.app.presentation.profile.BackupExportViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -50,19 +50,19 @@ import java.util.Locale
 @Composable
 fun BackupExportScreen(
     onBack: () -> Unit,
-    profileViewModel: ProfileViewModel = hiltViewModel(),
+    viewModel: BackupExportViewModel = hiltViewModel(),
 ) {
-    val sections by profileViewModel.backupSections.collectAsStateWithLifecycle()
-    val selections by profileViewModel.backupSelections.collectAsStateWithLifecycle()
-    val loading by profileViewModel.backupSectionsLoading.collectAsStateWithLifecycle()
+    val sections by viewModel.backupSections.collectAsStateWithLifecycle()
+    val selections by viewModel.backupSelections.collectAsStateWithLifecycle()
+    val loading by viewModel.backupSectionsLoading.collectAsStateWithLifecycle()
 
     // 进入时刷新预览。Idempotent，重复进入也只是再读一次 DB。
-    LaunchedEffect(Unit) { profileViewModel.loadBackupSections() }
+    LaunchedEffect(Unit) { viewModel.loadBackupSections() }
 
     val backupExportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
     ) { uri ->
-        uri?.let { profileViewModel.exportBackup(it) }
+        uri?.let { viewModel.exportBackup(it) }
     }
 
     // 实时合计已勾选类别的 json 字节数。空选 = 0 B。
@@ -169,12 +169,12 @@ fun BackupExportScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedButton(
-                    onClick = { profileViewModel.selectAllBackupSections() },
+                    onClick = { viewModel.selectAllBackupSections() },
                     enabled = !loading && sections.isNotEmpty(),
                     modifier = Modifier.weight(1f),
                 ) { Text("全选") }
                 OutlinedButton(
-                    onClick = { profileViewModel.clearBackupSections() },
+                    onClick = { viewModel.clearBackupSections() },
                     enabled = !loading && sections.isNotEmpty(),
                     modifier = Modifier.weight(1f),
                 ) { Text("全不选") }
@@ -216,14 +216,14 @@ fun BackupExportScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { profileViewModel.toggleBackupSection(info.key) }
+                                    .clickable { viewModel.toggleBackupSection(info.key) }
                                     .padding(horizontal = 16.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Checkbox(
                                     checked = checked,
                                     onCheckedChange = {
-                                        profileViewModel.toggleBackupSection(info.key)
+                                        viewModel.toggleBackupSection(info.key)
                                     },
                                 )
                                 Spacer(Modifier.width(8.dp))

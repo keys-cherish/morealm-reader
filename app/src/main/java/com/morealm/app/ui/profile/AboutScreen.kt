@@ -115,7 +115,7 @@ fun AboutScreen(
             Text("MoRealm", style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
             Spacer(Modifier.height(4.dp))
-            Text("v1.0-alpha3", style = MaterialTheme.typography.labelMedium,
+            Text("v${com.morealm.app.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(8.dp))
             Text(

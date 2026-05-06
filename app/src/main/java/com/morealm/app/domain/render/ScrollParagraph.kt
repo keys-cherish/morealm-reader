@@ -34,11 +34,16 @@ package com.morealm.app.domain.render
  */
 class ScrollParagraph(
     /**
-     * LazyColumn item key —— `"$chapterIndex-$paragraphNum"` 形式。
+     * LazyColumn item key —— `"$chapterIndex-$paragraphNum-$generationId"` 形式。
      *
      * 用 String 而非 [Long] 哈希组合，因为：
-     * - LOADING 占位段无 paragraphNum，要走 `"loading-$chapterIndex"` 这种特殊 key
+     * - LOADING 占位段无 paragraphNum，要走 `"loading-$chapterIndex-$generationId"` 这种特殊 key
      * - 跨章窗口拼接后唯一性靠 chapterIndex 前缀保证，调试时直接看 key 就知道归属
+     * - 旧实现 `"$chapterIndex-$paragraphNum"` 在快切章 + 流式 layout 的瞬态里会
+     *   碰撞（旧 ch5 段还在 paragraphsState 里时新一轮 ch5 layout 又生成同 key），
+     *   导致 LazyColumn 抛 `IllegalArgumentException("Key was already used")`。
+     *   generationId 由 [ChapterWindowSource] 在每次新章节加入窗口时换新值（System.nanoTime()），
+     *   即使存在同章节双份段落也能被 LazyColumn 区分对待。
      */
     val key: String,
     /** 见 [ScrollParagraphType] —— LazyColumn `contentType` 参数。 */
@@ -119,6 +124,17 @@ class ScrollParagraph(
     val firstChapterPosition: Int,
     /** 段总字符数（含段末换行符）。 */
     val charSize: Int,
+    /**
+     * Layout 世代号 —— 同章节多次 layout 时换新值，参与 [key] 拼接。
+     *
+     * 用于杜绝 LazyColumn 「Key was already used」碰撞：当章节段落需要从窗口里
+     * 临时下线再重新挂回（如用户快速跳章 → 旧段尚未 GC → 新段已经入窗口）时，
+     * 旧段的 generationId 与新段不同，[key] 自动唯一化。
+     *
+     * 默认 0L 兼容旧测试 / 翻页模式（不参与窗口跨章拼接）；ChapterWindowSource
+     * 用 [System.nanoTime] 取值，保证 monotonically increasing。
+     */
+    val generationId: Long = 0L,
 ) {
     /** 该段是否已是某章的最后一段。计算需要 [chapterTotalParagraphs] 上下文，故未存字段。 */
     fun isChapterLast(chapterTotalParagraphs: Int): Boolean = paragraphNum == chapterTotalParagraphs
@@ -187,9 +203,14 @@ enum class ScrollParagraphType {
  *        硬切的伪标题，渲染出来会让用户以为内容被分章了。
  *
  *        默认 false 保持原行为。
+ *
+ * @param generationId 给生成的所有段落统一打上的 layout 世代号。默认 0L 兼容旧路径
+ *        （翻页/仿真模式 / 单测）；[ChapterWindowSource] 在 SCROLL 模式滑动窗口入窗时
+ *        会按 [System.nanoTime] 取新值，杜绝同章节段落跨 layout 周期的 key 碰撞。
  */
 fun TextChapter.toScrollParagraphs(
     skipChapterTitleParagraph: Boolean = false,
+    generationId: Long = 0L,
 ): List<ScrollParagraph> {
     val pageSnapshot = snapshotPages()
     if (pageSnapshot.isEmpty()) return emptyList()
@@ -402,8 +423,12 @@ fun TextChapter.toScrollParagraphs(
         }
         // 章末段（next==null）保留 0f 不兜底——避免和下一章 paddingTop 叠加造成
         // 异常长空白；其它段用 intraLineGap 兜底拉开段间比例。
+        // 图片段落：使用较小的间距，避免图片之间空白过大
         val effectiveIntraGap = if (curr.intraLineGap > 0f) curr.intraLineGap else chapterFallbackIntraGap
         val tailSpacing: Float = if (next == null || effectiveIntraGap <= 0f) {
+            rawTail
+        } else if (curr.contentType == ScrollParagraphType.IMAGE) {
+            // 图片段落：使用原始间距，不强制拉大到 2 倍
             rawTail
         } else {
             maxOf(rawTail, effectiveIntraGap * PARAGRAPH_GAP_MIN_RATIO_TO_LINE_GAP)
@@ -411,7 +436,7 @@ fun TextChapter.toScrollParagraphs(
 
         result.add(
             ScrollParagraph(
-                key = "$chapterIndex-${curr.paragraphNum}",
+                key = "$chapterIndex-${curr.paragraphNum}-$generationId",
                 contentType = curr.contentType,
                 chapterIndex = chapterIndex,
                 paragraphNum = curr.paragraphNum,
@@ -422,6 +447,7 @@ fun TextChapter.toScrollParagraphs(
                 paragraphSpacingAfter = tailSpacing,
                 firstChapterPosition = curr.firstLine.chapterPosition,
                 charSize = curr.charSize,
+                generationId = generationId,
             ),
         )
     }
@@ -450,6 +476,7 @@ fun TextChapter.toScrollParagraphs(
                     paragraphSpacingAfter = 0f,
                     firstChapterPosition = p.firstChapterPosition,
                     charSize = p.charSize,
+                    generationId = p.generationId,
                 )
             } else p
         }
@@ -511,12 +538,17 @@ private const val PARAGRAPH_GAP_MIN_RATIO_TO_LINE_GAP = 2.0f
  * @param chapterIndex 占位段对应的章 idx
  * @param placeholderHeight 占位高度，建议 viewport 高度的 30%~50%。默认 600px ≈ 1080p
  *        屏 30%。
+ * @param generationId 与同章其它段保持一致的 layout 世代号；默认 0L 兼容旧路径。
+ *        在 SCROLL 模式 ChapterWindowSource 里：占位段创建时会先取一个 placeholderGen，
+ *        真实段就绪后用一个独立 finalGen 入窗 —— 替换时按 chapterIndex 移除而非按 key
+ *        移除，无需保持两者 generationId 相同。
  */
 fun loadingScrollParagraph(
     chapterIndex: Int,
     placeholderHeight: Float = 600f,
+    generationId: Long = 0L,
 ): ScrollParagraph = ScrollParagraph(
-    key = "loading-$chapterIndex",
+    key = "loading-$chapterIndex-$generationId",
     contentType = ScrollParagraphType.LOADING,
     chapterIndex = chapterIndex,
     paragraphNum = 0,
@@ -529,4 +561,5 @@ fun loadingScrollParagraph(
     paragraphSpacingAfter = 0f,
     firstChapterPosition = 0,
     charSize = 0,
+    generationId = generationId,
 )

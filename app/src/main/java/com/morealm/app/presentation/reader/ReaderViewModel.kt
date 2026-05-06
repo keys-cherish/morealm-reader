@@ -113,6 +113,7 @@ class ReaderViewModel @Inject constructor(
         resetTtsParagraphIndex = { tts.resetParagraphIndex() },
         onChapterLoaded = { viewModelScope.launch(Dispatchers.IO) { progress.saveProgress() } },
         setSuppressNextProgressSave = { progress.suppressNextProgressSave = it },
+        onInitialChapterLoaded = { progress.initialLoadComplete = true },
     )
 
     val progress = ReaderProgressController(
@@ -156,6 +157,34 @@ class ReaderViewModel @Inject constructor(
         context = context,
         scope = viewModelScope,
         chapter = chapter,
+    )
+
+    /**
+     * SCROLL 模式专用滑动窗口数据源 —— 接管 LazyScrollSection 的章节窗口管理。
+     *
+     * 绕开 ReaderChapterController 的 commitChapterShift / loadChapter 副作用风暴
+     * （命门见 plan：`C:/Users/test/.claude/plans/glittery-dancing-swing.md`）。
+     *
+     * **chapterLayouter 由 Compose 端注入** —— 见 [com.morealm.app.ui.reader.renderer.CanvasRenderer]
+     * 的 LaunchedEffect(layoutInputs)。在注入之前 [ChapterWindowSource.resetTo] 等
+     * 方法可以安全调用（fetch 部分先做，layouter 缺位时先保留 LOADING 占位段）。
+     */
+    val chapterWindow = com.morealm.app.presentation.reader.scroll.ChapterWindowSource(
+        scope = viewModelScope,
+        chapterFetcher = { idx -> chapter.fetchAndPrepareChapter(idx) },
+        chapterTitleProvider = { idx -> chapter.chapterTitleAt(idx) },
+        chapterCountProvider = { chapter.chaptersSize() },
+        omitChapterTitleProvider = {
+            // 整书属性：是否本地 TXT 无目录自动分章。与 ReaderScreen.omitChapterTitleBlock
+            // 派生一致 —— 见 ReaderScreen 同名变量计算。
+            val book = chapter.book.value
+            book?.localPath != null &&
+                chapter.chapters.value.isNotEmpty() &&
+                chapter.chapters.value.all {
+                    it.title.matches(Regex("^第\\d+节$"))
+                }
+        },
+        onCenterChapterChanged = { idx -> chapter.setCurrentChapterIndexFromScroll(idx) },
     )
 
     // ── Wire shared state flows between controllers ──
@@ -300,11 +329,19 @@ class ReaderViewModel @Inject constructor(
         // the click never reached the VM; check the Reader UI button wiring.
         val content = chapter.chapterContent.value
         val title = chapter.chapters.value.getOrNull(chapter.currentChapterIndex.value)?.title ?: ""
+        // SCROLL 模式下 CanvasRenderer 内部的 textChapter 可能是 placeholder，
+        // onReadAloudParagraphPositions 回调拿到空列表 → readAloudParagraphPositions 为 null。
+        // 同步从 chapterWindow.chapterByIdx 兜底取段落位置，保证 TTS host 能正确分段。
+        val positions = readAloudParagraphPositions
+            ?: chapterWindow.chapterByIdx[chapter.currentChapterIndex.value]
+                ?.getParagraphs(pageSplit = false)
+                ?.map { it.chapterPosition }
+                ?.also { readAloudParagraphPositions = it }
         AppLog.info(
             "TTS",
             "VM.ttsPlayPause: isPlaying=${tts.ttsPlaying.value}, " +
                 "book='${chapter.book.value?.title ?: ""}', chapter='$title', " +
-                "contentLen=${content.length}, positions=${readAloudParagraphPositions?.size ?: -1}, " +
+                "contentLen=${content.length}, positions=${positions?.size ?: -1}, " +
                 "startPos=${visibleReadAloudChapterPosition}",
         )
         tts.ttsPlayPause(
@@ -314,7 +351,7 @@ class ReaderViewModel @Inject constructor(
             coverUrl = chapter.book.value?.coverUrl,
             startChapterPosition = visibleReadAloudChapterPosition
                 .takeIf { tts.ttsPlaying.value.not() && it >= 0 },
-            paragraphPositions = readAloudParagraphPositions,
+            paragraphPositions = positions,
             bookId = chapter.book.value?.id,
             chapterIndex = chapter.currentChapterIndex.value,
             onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
@@ -427,12 +464,17 @@ class ReaderViewModel @Inject constructor(
     }
 
     fun readAloudFromPosition(chapterPosition: Int) {
+        val positions = readAloudParagraphPositions
+            ?: chapterWindow.chapterByIdx[chapter.currentChapterIndex.value]
+                ?.getParagraphs(pageSplit = false)
+                ?.map { it.chapterPosition }
+                ?.also { readAloudParagraphPositions = it }
         tts.readAloudFrom(
             displayedContent = chapter.chapterContent.value.cleanContentForTts(),
             bookTitle = chapter.book.value?.title ?: "",
             chapterTitle = chapter.chapters.value.getOrNull(chapter.currentChapterIndex.value)?.title ?: "",
             startChapterPosition = chapterPosition.coerceAtLeast(0),
-            paragraphPositions = readAloudParagraphPositions,
+            paragraphPositions = positions,
             bookId = chapter.book.value?.id,
             chapterIndex = chapter.currentChapterIndex.value,
             onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
@@ -442,6 +484,19 @@ class ReaderViewModel @Inject constructor(
 
     fun updateReadAloudParagraphPositions(positions: List<Int>) {
         readAloudParagraphPositions = positions.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * 获取当前章节的段落总数（用于 TTS 面板显示）。
+     * 优先返回已缓存的 readAloudParagraphPositions.size；
+     * 若为 null 则尝试从 chapterWindow 实时计算。
+     */
+    fun getCurrentChapterParagraphCount(): Int {
+        return readAloudParagraphPositions?.size
+            ?: chapterWindow.chapterByIdx[chapter.currentChapterIndex.value]
+                ?.getParagraphs(pageSplit = false)
+                ?.size
+            ?: 0
     }
 
     fun updateVisibleReadAloudPosition(chapterIndex: Int, chapterPosition: Int) {

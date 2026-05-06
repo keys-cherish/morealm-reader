@@ -145,6 +145,23 @@ interface ChapterDao {
     suspend fun deleteByBookId(bookId: String)
 }
 
+/**
+ * Lightweight projection of [BookSource] used by the search dispatcher when the user
+ * has imported tens of thousands of sources. Loading the full entity (with 6 nested
+ * rule JSON blobs deserialized via TypeConverters) for every source would put hundreds
+ * of MB on the heap and crash the app — see the OOM regression triggered by the 100k
+ * source import.
+ *
+ * Workers fetch the full [BookSource] on demand via [BookSourceDao.getByUrl] right
+ * before they actually need to call WebBook, so the rule blobs only live for the
+ * duration of a single source's search.
+ */
+data class BookSourceLite(
+    val bookSourceUrl: String,
+    val bookSourceName: String,
+    val bookSourceType: Int = 0,
+)
+
 @Dao
 interface BookSourceDao {
     @Query("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY customOrder")
@@ -152,6 +169,19 @@ interface BookSourceDao {
 
     @Query("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY customOrder")
     suspend fun getEnabledSourcesList(): List<BookSource>
+
+    /**
+     * Lightweight projection limited to text sources (bookSourceType=0). Used by
+     * SearchViewModel to schedule searches without paying the cost of materializing
+     * every nested rule object. Keeps ~32 bytes/row instead of a few KB/row, letting
+     * 100k-source imports search without OOM.
+     */
+    @Query("SELECT bookSourceUrl, bookSourceName, bookSourceType FROM book_sources WHERE enabled = 1 ORDER BY customOrder")
+    suspend fun getEnabledSourcesLite(): List<BookSourceLite>
+
+    /** Fast count of enabled sources — avoid pulling 100k rows just to display a number. */
+    @Query("SELECT COUNT(*) FROM book_sources WHERE enabled = 1")
+    suspend fun getEnabledSourceCount(): Int
 
     @Query("SELECT * FROM book_sources ORDER BY customOrder")
     fun getAllSources(): Flow<List<BookSource>>

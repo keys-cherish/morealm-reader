@@ -17,6 +17,16 @@ class SourceRepository @Inject constructor(
 
     suspend fun getEnabledSourcesList(): List<BookSource> = sourceDao.getEnabledSourcesList()
 
+    /**
+     * Lightweight projection of enabled sources. Workers load the full [BookSource]
+     * on demand via [getByUrl] when they're ready to actually search — this keeps
+     * the 100k-source case from OOMing on the rule JSON blobs.
+     */
+    suspend fun getEnabledSourcesLite() = sourceDao.getEnabledSourcesLite()
+
+    /** O(1) count for UI / dispatcher without materializing the full source list. */
+    suspend fun getEnabledSourceCount(): Int = sourceDao.getEnabledSourceCount()
+
     fun getAllSources(): Flow<List<BookSource>> = sourceDao.getAllSources()
 
     suspend fun getByUrl(url: String): BookSource? = sourceDao.getByUrl(url)

@@ -656,6 +656,7 @@ fun ReaderScreen(
                 titleAlign = titleAlign,
                 showChapterName = showChapterNameSetting,
                 showTimeBattery = showTimeBatterySetting,
+                controlsVisible = showControls,
                 headerLeft = hdrLeft,
                 headerCenter = hdrCenter,
                 headerRight = hdrRight,
@@ -685,6 +686,10 @@ fun ReaderScreen(
                     }
                 },
                 omitChapterTitleBlock = isAutoSplitTxt,
+                // SCROLL 模式专用：把 ViewModel 的 ChapterWindowSource 透传下去，
+                // CanvasRenderer 会在 SCROLL 路径下旁路 commitChapterShift / restoreProgress
+                // JUMP 链路。命门定位见 `C:/Users/test/.claude/plans/glittery-dancing-swing.md`。
+                chapterWindow = viewModel.chapterWindow,
                 modifier = Modifier.fillMaxSize(),
             )
             } // end ReadAloudPositionScope lambda
@@ -729,10 +734,18 @@ fun ReaderScreen(
             exit = fadeOut(tween(200)),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
+            val controlChapterIndex = if (
+                pageTurnMode == PageTurnMode.SCROLL &&
+                visiblePage.chapterIndex in chapters.indices
+            ) {
+                visiblePage.chapterIndex
+            } else {
+                currentIndex
+            }
             ReaderControlBar(
-                currentChapter = currentIndex,
+                currentChapter = controlChapterIndex,
                 totalChapters = chapters.size,
-                chapterTitle = chapters.getOrNull(currentIndex)?.displayTitle(book) ?: visiblePage.title,
+                chapterTitle = chapters.getOrNull(controlChapterIndex)?.displayTitle(book) ?: visiblePage.title,
                 readProgress = visiblePage.readProgress,
                 scrollProgress = scrollProgress,
                 onBack = ::exitReader,
@@ -900,13 +913,16 @@ fun ReaderScreen(
             val ttsSleepMinutes by viewModel.tts.ttsSleepMinutes.collectAsStateWithLifecycle()
             val ttsVoices by viewModel.tts.ttsVoices.collectAsStateWithLifecycle()
             val ttsVoiceName by viewModel.tts.ttsVoiceName.collectAsStateWithLifecycle()
+            // 如果还没播放（ttsTotalParagraphs == 0），使用当前章节的段落数作为预览
+            val effectiveTotalParagraphs = if (ttsTotalParagraphs > 0) ttsTotalParagraphs
+                else viewModel.getCurrentChapterParagraphCount()
             TtsOverlayPanel(
                 bookTitle = book?.title ?: "",
                 chapterTitle = chapters.getOrNull(currentIndex)?.displayTitle(book) ?: "",
                 isPlaying = ttsPlaying,
                 speed = ttsSpeed,
                 currentParagraph = ttsParagraphIndex,
-                totalParagraphs = ttsTotalParagraphs,
+                totalParagraphs = effectiveTotalParagraphs,
                 selectedEngine = ttsEngine,
                 sleepMinutes = ttsSleepMinutes,
                 onPlayPause = viewModel::ttsPlayPause,

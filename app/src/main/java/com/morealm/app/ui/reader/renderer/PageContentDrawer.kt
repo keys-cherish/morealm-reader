@@ -94,6 +94,8 @@ data class PageInfoOverlaySpec(
     val footerCenter: String,
     val footerRight: String,
     val hasBgImage: Boolean = false,
+    /** Controls 浮层显示时关掉 Canvas 层的 info bar，避免双重叠加留白。 */
+    val controlsVisible: Boolean = false,
 )
 
 /**
@@ -567,6 +569,8 @@ private fun drawPageInfoOverlay(
     page: TextPage,
     spec: PageInfoOverlaySpec,
 ) {
+    // Controls 浮层显示时关掉 Canvas info bar，避免双重叠加。
+    if (spec.controlsVisible) return
     drawInfoBar(
         canvas = canvas,
         width = width,

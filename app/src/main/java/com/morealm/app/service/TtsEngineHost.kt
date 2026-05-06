@@ -933,11 +933,14 @@ class TtsEngineHost(
             val mode = if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
             val id = "morealm_${utt.paraIdx}_${utt.subIdx}"
             val result = engine.enqueue(utt.text, id, mode)
-            AppLog.debug(
-                "TtsHost",
-                "enqueue[$i] id=$id mode=${if (mode == TextToSpeech.QUEUE_FLUSH) "FLUSH" else "ADD"} " +
-                    "len=${utt.text.length} result=$result",
-            )
+            // 降低日志级别：只在首条或出错时打印，避免长章节污染日志
+            if (i == 0 || result == TextToSpeech.ERROR) {
+                AppLog.debug(
+                    "TtsHost",
+                    "enqueue[$i] id=$id mode=${if (mode == TextToSpeech.QUEUE_FLUSH) "FLUSH" else "ADD"} " +
+                        "len=${utt.text.length} result=$result",
+                )
+            }
             if (result == TextToSpeech.ERROR) {
                 AppLog.error("TtsHost", "batch enqueue ERROR at i=$i id=$id, aborting")
                 engine.setBatchCallback(null)

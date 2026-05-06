@@ -17,7 +17,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -425,22 +427,71 @@ fun MoRealmNavHost(
                 arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
             ) { entry ->
                 val bookId = entry.arguments?.getString("bookId") ?: return@composable
-                ReaderScreen(
-                    bookId = bookId,
-                    onBack = { navController.safePopBackStackOrHome() },
-                    onNavigateToBook = { targetBookId ->
-                        navController.safeNavigate("reader/$targetBookId") {
-                            popUpTo("reader/$bookId") { inclusive = true }
+                // ── Reader 全屏化：抵消 Scaffold innerPadding ──
+                //
+                // AppNavHost.NavHost 给所有路由统一 Modifier.padding(innerPadding)，
+                // innerPadding 包含 Scaffold 自动计算的 statusBars + navigationBars
+                // inset（contentWindowInsets 默认 = systemBars）。普通页面要这块
+                // 才不会被状态栏盖；但 reader 想要全屏沉浸式，自己用 enableEdgeToEdge
+                // 已经把 status bar 设成透明 / 可隐藏，再被 NavHost padding 推一次
+                // 就在顶部留下「与状态栏等高」的大空白（用户截图明显观感）。
+                //
+                // 用 Modifier.layout 做反向抵消：测量时把 constraints 顶部 / 底部
+                // 都扩回原始 window 高度，再 place(0, -topPx) 把内容上移；对父级
+                // 报告的 size 仍是父期望尺寸，不破坏 Scaffold 自身布局。
+                //
+                // ReaderTopBar 内部已用 windowInsetsPadding(displayCutout.only(Top))
+                // 处理刘海；为了 showStatusBar=true 时不被状态栏盖文字，下面单独把
+                // statusBars 也并进 ReaderTopBar 自己的 inset（见 ReaderComponents.kt）。
+                Box(
+                    modifier = Modifier.layout { measurable, constraints ->
+                        val topPx = innerPadding.calculateTopPadding().roundToPx()
+                        val bottomPx = innerPadding.calculateBottomPadding().roundToPx()
+                        val expanded = Constraints(
+                            minWidth = constraints.minWidth,
+                            maxWidth = constraints.maxWidth,
+                            minHeight = (constraints.minHeight + topPx + bottomPx)
+                                .coerceAtLeast(0),
+                            maxHeight = if (constraints.maxHeight == Constraints.Infinity) {
+                                Constraints.Infinity
+                            } else {
+                                constraints.maxHeight + topPx + bottomPx
+                            },
+                        )
+                        val placeable = measurable.measure(expanded)
+                        val reportedWidth = placeable.width
+                            .coerceIn(constraints.minWidth, constraints.maxWidth)
+                        val reportedHeight = (placeable.height - topPx - bottomPx)
+                            .coerceIn(
+                                constraints.minHeight,
+                                if (constraints.maxHeight == Constraints.Infinity) {
+                                    Int.MAX_VALUE
+                                } else {
+                                    constraints.maxHeight
+                                },
+                            )
+                        layout(reportedWidth, reportedHeight) {
+                            placeable.place(0, -topPx)
                         }
-                    },
-                    onNavigateToReplaceRule = { ruleId ->
-                        navController.safeNavigate("replace_rules?editId=$ruleId")
-                    },
-                    onNavigateToFontManager = {
-                        navController.safeNavigate("font_manager")
-                    },
-                    themeViewModel = themeViewModel,
-                )
+                    }
+                ) {
+                    ReaderScreen(
+                        bookId = bookId,
+                        onBack = { navController.safePopBackStackOrHome() },
+                        onNavigateToBook = { targetBookId ->
+                            navController.safeNavigate("reader/$targetBookId") {
+                                popUpTo("reader/$bookId") { inclusive = true }
+                            }
+                        },
+                        onNavigateToReplaceRule = { ruleId ->
+                            navController.safeNavigate("replace_rules?editId=$ruleId")
+                        },
+                        onNavigateToFontManager = {
+                            navController.safeNavigate("font_manager")
+                        },
+                        themeViewModel = themeViewModel,
+                    )
+                }
             }
 
             composable(

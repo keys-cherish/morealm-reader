@@ -48,8 +48,12 @@ class AnalyzeRule(
 
     @JvmOverloads
     fun setContent(content: Any?, baseUrl: String? = null): AnalyzeRule {
-        if (content == null) throw AssertionError("Content cannot be null")
-        this.content = content
+        if (content == null) {
+            AppLog.warn("AnalyzeRule", "setContent received null, using empty string")
+            this.content = ""
+        } else {
+            this.content = content
+        }
         isJSON = when (content) {
             is Node -> false
             else -> {

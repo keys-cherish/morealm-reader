@@ -1,6 +1,12 @@
 package com.morealm.app.ui.settings
 
+import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -813,53 +819,93 @@ private fun CrashFilesTab(
  *
  * 设计选择：
  *   - 文件而不是剪贴板：大体量日志（数千条）会突破剪贴板 Binder 单次事务上
- *     限，触发静默丢包；走 FileProvider + ACTION_SEND 没有这个问题。
- *   - 写入 cacheDir/log_export/：FileProvider 已配的可分享目录之一；OS 会按
- *     需清理，不需要主动 GC。
+ *     限，触发静默丢包；导出文件再走系统分享没有这个问题。
+ *   - 写入 Download/morealm/log_exports/：用户容易找到，不会被 OS 随意清理。
  *   - 失败时打 ERROR 日志 + Toast；不静默吞异常，否则用户不知道为什么没弹分享。
  */
 private fun exportLogTxt(
-    context: android.content.Context,
+    context: Context,
     records: List<LogRecord>,
     tagFilter: String?,
 ) {
     try {
-        val cacheDir = File(context.cacheDir, "log_export").apply { mkdirs() }
         val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val txtFile = File(cacheDir, "MoRealm_log_$ts.txt")
+        val fileName = "MoRealm_log_$ts.txt"
+        val content = buildLogExportContent(records, tagFilter)
+        val uri = writeLogExportToDownloads(context, fileName, content)
 
-        val expFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-        val content = buildString {
-            appendLine("=== MoRealm Log Export ===")
-            appendLine("Exported: ${expFmt.format(Date())}")
-            if (tagFilter != null) appendLine("Filter: tag=$tagFilter")
-            appendLine("Entries: ${records.size}")
-            appendLine()
-            appendLine("--- Device ---")
-            // AppLog.getDeviceInfo() 已经以 key:value 平铺、末尾自带换行；
-            // 直接 append（而不是 appendLine）避免多出一个空行。
-            append(AppLog.getDeviceInfo())
-            appendLine()
-            appendLine("--- Logs ---")
-            if (records.isEmpty()) appendLine("(empty)")
-            else appendLine(joinRecordsText(records))
-        }
-
-        txtFile.writeText(content)
-
-        val uri = FileProvider.getUriForFile(
-            context, "${context.packageName}.fileprovider", txtFile,
-        )
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_STREAM, uri)
             putExtra(Intent.EXTRA_SUBJECT, "MoRealm log $ts")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+        Toast.makeText(
+            context,
+            "已保存到 /storage/emulated/0/Download/morealm/log_exports/$fileName",
+            Toast.LENGTH_LONG,
+        ).show()
         context.startActivity(Intent.createChooser(intent, "导出日志 TXT"))
     } catch (e: Exception) {
         AppLog.error("LogExport", "Failed to export TXT", e)
         Toast.makeText(context, "导出失败：${e.message ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun buildLogExportContent(
+    records: List<LogRecord>,
+    tagFilter: String?,
+): String {
+    val expFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    return buildString {
+        appendLine("=== MoRealm Log Export ===")
+        appendLine("Exported: ${expFmt.format(Date())}")
+        if (tagFilter != null) appendLine("Filter: tag=$tagFilter")
+        appendLine("Entries: ${records.size}")
+        appendLine()
+        appendLine("--- Device ---")
+        append(AppLog.getDeviceInfo())
+        appendLine()
+        appendLine("--- Logs ---")
+        if (records.isEmpty()) appendLine("(empty)")
+        else appendLine(joinRecordsText(records))
+    }
+}
+
+private fun writeLogExportToDownloads(
+    context: Context,
+    fileName: String,
+    content: String,
+): Uri {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/morealm/log_exports")
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: error("无法创建下载文件")
+        try {
+            resolver.openOutputStream(uri)?.use { stream ->
+                stream.write(content.toByteArray())
+            } ?: error("无法写入下载文件")
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            uri
+        } catch (t: Throwable) {
+            resolver.delete(uri, null, null)
+            throw t
+        }
+    } else {
+        @Suppress("DEPRECATION")
+        val baseDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val exportDir = File(baseDir, "morealm/log_exports").apply { mkdirs() }
+        val txtFile = File(exportDir, fileName)
+        txtFile.writeText(content)
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", txtFile)
     }
 }
 

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +56,13 @@ fun SearchScreen(
     onNavigateReader: (String) -> Unit = {},
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
-    var query by remember { mutableStateOf("") }
+    // rememberSaveable：把搜索关键词存入 SavedState，跨 reader 跳转返回时保留输入；
+    // 同时配合下方 didAutoFocus，让「从 reader 退回」「从其他 tab 切回」不再重弹 IME。
+    var query by rememberSaveable { mutableStateOf("") }
+    // didAutoFocus：标记本 NavBackStackEntry 是否已经自动获取过焦点。
+    // SavedState 跟随该 tab 的 SaveableStateHolder 持久化 —— 应用本次启动后只 focus 一次，
+    // 修复 Bug：从书内退回 / 切 tab 切回时 LaunchedEffect 重新执行导致输入法意外弹出。
+    var didAutoFocus by rememberSaveable { mutableStateOf(false) }
     val results by viewModel.results.collectAsStateWithLifecycle()
     val localResults by viewModel.localResults.collectAsStateWithLifecycle()
     val sourceProgress by viewModel.sourceProgress.collectAsStateWithLifecycle()
@@ -154,7 +161,14 @@ fun SearchScreen(
         val focusRequester = remember { FocusRequester() }
         val focusManager = LocalFocusManager.current
         val keyboardController = LocalSoftwareKeyboardController.current
-        LaunchedEffect(Unit) { focusRequester.requestFocus() }
+        LaunchedEffect(Unit) {
+            // didAutoFocus 在 rememberSaveable 中持久化，从 reader 退回 / 切 tab 回来都视为已 focus 过，
+            // 不再重弹 IME。仅在用户本次启动后第一次进入「发现」tab 时自动 focus + 弹键盘。
+            if (!didAutoFocus) {
+                focusRequester.requestFocus()
+                didAutoFocus = true
+            }
+        }
         // Bug 修复：搜索 tab 切换离开时（被 AppNavHost cached 但不可见）若 OutlinedTextField
         // 仍持有焦点，Compose 内部的 BringIntoViewRequester 会试图 scroll 进可见区，但此时父
         // 节点（switched-away tab）尚未 placed，触发：

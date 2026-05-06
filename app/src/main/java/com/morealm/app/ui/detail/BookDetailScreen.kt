@@ -1,6 +1,8 @@
 package com.morealm.app.ui.detail
 
+import android.widget.Toast
 import androidx.compose.foundation.background
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.presentation.profile.BookDetailViewModel
 import com.morealm.app.presentation.source.SearchStatus
 import androidx.compose.foundation.clickable
@@ -54,6 +56,15 @@ fun BookDetailScreen(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
 
+    // 订阅换源失败事件 -> Toast 反馈。
+    // 历史 bug：applyCandidate Step 1/2 失败时只 silent return，UI 看上去"点了没反应"。
+    // 这里把 controller 发出的错误信息直接弹出，让用户立刻知道为什么没换成。
+    LaunchedEffect(viewModel) {
+        viewModel.changeSourceErrorEvents.collect { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -99,9 +110,11 @@ fun BookDetailScreen(
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (b.coverUrl != null) {
+                    // 优先级：customCoverUrl > coverUrl > 默认图标
+                    val coverToShow = b.customCoverUrl ?: b.coverUrl
+                    if (coverToShow != null) {
                         AsyncImage(
-                            model = b.coverUrl,
+                            model = coverToShow,
                             contentDescription = b.title,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize(),
@@ -287,15 +300,38 @@ fun BookDetailScreen(
                             modifier = Modifier.padding(vertical = 16.dp),
                         )
                     }
-                    LazyColumn(
+                    // 候选列表 —— 用 Column + verticalScroll 而不是 LazyColumn。
+                    //
+                    // 已知 bug 修复：Material3 AlertDialog 的 text slot 内部已经包了一层
+                    // verticalScroll，再嵌套 LazyColumn 会导致：
+                    //   1. 嵌套滚动容器抢手势焦点，点击事件被 LazyColumn 内部 fling
+                    //      检测器吞掉，clickable 永远不触发（用户报「点了没反应」）
+                    //   2. LazyColumn 测量到自身 unbounded 高度时只渲染 1-2 个 item，
+                    //      用户看到候选项被截断
+                    // 候选数量级 ~50 条以内，Column 渲染开销可以忽略，换它最稳。
+                    Column(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        items(changeCandidates, key = { it.sourceUrl + "|" + it.searchBook.bookUrl }) { c ->
+                        for (c in changeCandidates) {
                             val isCurrent = c.sourceUrl == book?.origin
+                            // 关键：用 Surface(onClick=...) 而非 Modifier.clickable —— Material3
+                            // 推荐写法，会自动接入 minimumInteractiveComponentSize +
+                            // interactionSource，在 AlertDialog 这种嵌套滚动 / 触摸目标受限的
+                            // 容器里点击命中率更高。历史 bug：用户报"点 52书库 没反应"，
+                            // 复现条件包含 candidate 多到 480.dp 之外被半截渲染、Surface 被
+                            // 父级 verticalScroll 偷走 ACTION_DOWN，等等。改 onClick 形式后，
+                            // 同时 enabled 显式置 false 时连 ripple 都不会触发，UI 反馈更清晰。
                             Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable(enabled = !isCurrent) { viewModel.applyChangedSource(c) },
+                                onClick = {
+                                    AppLog.info(
+                                        "ChangeSource",
+                                        "candidate clicked: name=${c.sourceName} url=${c.sourceUrl}"
+                                    )
+                                    viewModel.applyChangedSource(c)
+                                },
+                                enabled = !isCurrent,
+                                modifier = Modifier.fillMaxWidth(),
                                 shape = MaterialTheme.shapes.small,
                                 color = if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
                                         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),

@@ -19,8 +19,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.joinAll
@@ -101,6 +105,22 @@ class ChangeSourceController(
     private val _searching = MutableStateFlow(false)
     val searching: StateFlow<Boolean> = _searching.asStateFlow()
 
+    /**
+     * 用户可见的错误提示流（典型：换源 Step 1 找不到源、Step 2 toc 拉不到 / 为空）。
+     *
+     * 为什么用 SharedFlow 而非 StateFlow：
+     * - 同一类错误可能连续触发（用户连点 N 次都失败），需要"每次都通知 UI"语义；
+     *   StateFlow 重复值会被去重，UI 收不到第二次。
+     * - replay = 0 + onBufferOverflow = DROP_OLDEST：UI 没在监听时（对话框已关）就把
+     *   错误丢弃，不会在重新打开对话框时弹一堆陈年 toast。
+     */
+    private val _errorEvents = MutableSharedFlow<String>(
+        replay = 0,
+        extraBufferCapacity = 4,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val errorEvents: SharedFlow<String> = _errorEvents.asSharedFlow()
+
     // ── Internal state ────────────────────────────────────────────────────
 
     private var changeSourceJob: Job? = null
@@ -168,13 +188,24 @@ class ChangeSourceController(
         candidate: ChangeSourceCandidate,
         onApplied: (Book) -> Unit,
     ) {
+        AppLog.info(
+            "ChangeSource",
+            "applyCandidate enter: book='${book.title}' (origin=${book.origin}) → " +
+                "candidate sourceUrl=${candidate.sourceUrl} sourceName=${candidate.sourceName} " +
+                "fromCache=${candidate.fromCache} bookUrl=${candidate.searchBook.bookUrl}"
+        )
         scope.launch(Dispatchers.IO) {
             val sb = candidate.searchBook
             val tocUrl = sb.tocUrl.ifBlank { sb.bookUrl }
 
             // Step 1: 找新源
             val newSource = sourceRepo.getByUrl(candidate.sourceUrl) ?: run {
-                AppLog.warn("ChangeSource", "Source ${candidate.sourceUrl} not found, abort")
+                AppLog.warn(
+                    "ChangeSource",
+                    "applyCandidate Step 1 abort: BookSource '${candidate.sourceUrl}' not in DB. " +
+                        "Likely cache stale or source was deleted/re-imported with different URL."
+                )
+                _errorEvents.tryEmit("书源「${candidate.sourceName}」已不存在或被删除")
                 return@launch
             }
 
@@ -185,11 +216,21 @@ class ChangeSourceController(
                     WebBook.getChapterListAwait(newSource, sb.bookUrl, tocUrl)
                 }.also { tocCache[cacheKey] = it }
             } catch (e: Exception) {
-                AppLog.warn("ChangeSource", "Failed to fetch toc on new source: ${e.message}")
+                AppLog.warn(
+                    "ChangeSource",
+                    "applyCandidate Step 2 abort: failed to fetch toc on new source " +
+                        "'${newSource.bookSourceName}' bookUrl=${sb.bookUrl}: ${e.message}"
+                )
+                _errorEvents.tryEmit("拉取目录失败：${e.message?.take(60) ?: "未知错误"}")
                 return@launch
             }
             if (newToc.isEmpty()) {
-                AppLog.warn("ChangeSource", "New source returned empty toc, abort")
+                AppLog.warn(
+                    "ChangeSource",
+                    "applyCandidate Step 2 abort: empty toc from '${newSource.bookSourceName}' " +
+                        "bookUrl=${sb.bookUrl}"
+                )
+                _errorEvents.tryEmit("「${newSource.bookSourceName}」返回空目录，换源中止")
                 return@launch
             }
 
@@ -331,14 +372,37 @@ class ChangeSourceController(
                 searchRepo.searchOnlineSource(source, keyword)
             }
             val elapsed = System.currentTimeMillis() - startTime
-            // Filter: title 模糊匹配 + author 模糊匹配（任一方可选） + 排除当前源。
+            // 候选过滤策略 —— 与 Legado MD3 行为对齐，比旧实现更宽松：
+            //
+            // 旧版 bug：
+            //   1) `it.name.contains(keyword) || keyword.contains(it.name)` 反向 contains
+            //      会把 it.name="圣"、""、单字碎片也算作匹配，引入垃圾候选；
+            //   2) `(book.author.isBlank() || it.author.contains(book.author) ||
+            //       book.author.contains(it.author))` 当 book.author 非空但 it.author
+            //      是不同作者（典型："未知"、错误别名、源解析失败兜底值）时，整本被滤掉。
+            //      这是用户报"50 个源里有 1 本，候选只剩 1 个"的主因。
+            //
+            // 新策略：
+            //   - 书名：单向 forward `it.name.contains(keyword)`，去掉反向；
+            //   - 作者：双向缺失任一都通过，仅当两边都填且都对不上才滤掉；
+            //   - 类型 + 排除当前源：保持不变。
             val filtered = results.filter {
-                it.type == TEXT_BOOK_SOURCE_TYPE &&
-                    (it.name.contains(keyword, ignoreCase = true) ||
-                        keyword.contains(it.name, ignoreCase = true)) &&
-                    (book.author.isBlank() || it.author.contains(book.author, ignoreCase = true) ||
-                        book.author.contains(it.author, ignoreCase = true)) &&
-                    it.origin != book.origin
+                if (it.type != TEXT_BOOK_SOURCE_TYPE) return@filter false
+                if (it.origin == book.origin) return@filter false
+                val nameMatch = it.name.equals(keyword, ignoreCase = true) ||
+                    it.name.contains(keyword, ignoreCase = true)
+                if (!nameMatch) return@filter false
+                val authorMatch = book.author.isBlank() || it.author.isBlank() ||
+                    it.author.contains(book.author, ignoreCase = true) ||
+                    book.author.contains(it.author, ignoreCase = true)
+                authorMatch
+            }
+            if (results.isNotEmpty() && filtered.size < results.size) {
+                AppLog.debug(
+                    "ChangeSource",
+                    "Filter on '${source.bookSourceName}': ${results.size} -> ${filtered.size} " +
+                        "(name='$keyword' author='${book.author}')"
+                )
             }
             if (filtered.isNotEmpty()) {
                 // 1. 写 db cache 持久化（先写库再 merge UI，避免崩溃丢候选）。

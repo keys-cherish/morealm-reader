@@ -55,7 +55,18 @@ fun ReaderTopBar(
     ) {
         Row(
             modifier = Modifier
-                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                // ── 顶部 inset 合并：statusBars + displayCutout ──
+                //
+                // 之前只 only(displayCutout) → showStatusBar=true 时状态栏会盖住第一行
+                // 文字（"返回总纲"被电池图标压一截）。现在并进 statusBars 让 ReaderTopBar
+                // 自动避让状态栏；showStatusBar=false（沉浸模式）时 statusBars inset
+                // 系统会自动归零，TopBar 自然贴到屏幕极顶——与「让 reader 路由抵消
+                // Scaffold innerPadding」配合，组成完整的「reader 全屏沉浸」体验。
+                .windowInsetsPadding(
+                    WindowInsets.statusBars
+                        .union(WindowInsets.displayCutout)
+                        .only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+                )
                 .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

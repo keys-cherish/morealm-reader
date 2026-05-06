@@ -877,16 +877,21 @@ fun HighlightActionToolbar(
     val menuX = (xDp - menuWidth / 2).coerceIn(8.dp, (screenWidth - menuWidth - 8.dp).coerceAtLeast(8.dp))
     val arrowX = (xDp - menuX - 7.dp).coerceIn(18.dp, menuWidth - 18.dp)
 
-    // ── Popup 化 ──
+    // ── Popup 化（focusable=false 与 SelectionToolbar 对齐）──
     //
-    // 旧实现自己用 Box(fillMaxSize) + 一个全屏透明 clickable Box 来吞外部点击触发
-    // dismiss。改用 Popup 后由 PopupProperties.dismissOnClickOutside 接管：点击 popup
-    // 区域之外的任何位置 → onDismissRequest → onDismiss。focusable=true 才能让
-    // dismissOnClickOutside / dismissOnBackPress 在所有 Compose 版本上稳定生效；
-    // 对 highlight action menu 来说聚焦 OK，反正用户点开它的目的就是快速做删除/分享。
+    // 旧实现 focusable=true + dismissOnClickOutside=true 想让 Popup 自己处理外部点击，
+    // 但 focusable=true 在 Android 上会让 Popup 创建 focusable Window，**首次点击按钮**的
+    // 触摸事件常被系统当作焦点切换吞掉 —— 用户感受到「弹出来后点删除没反应」。
     //
-    // above/below 决策走和 SelectionToolbar 一样的 popupContentSize 真实测量路径，
-    // 不再 hardcode `menuHeight = 46.dp`。
+    // 改成 focusable=false 后：
+    //   - 首次点击按钮事件不再被焦点切换吞，删除/分享立刻触发；
+    //   - dismissOnClickOutside 在 focusable=false 下被框架忽略，但**不影响功能**：
+    //     LazyScrollSection.onTapParagraph 的 step 1 已经在用户点击 Popup 之外区域时
+    //     主动 clearHighlightActionTarget，与 SelectionToolbar 共用同一道 dismiss 路径。
+    //   - dismissOnBackPress 同样需要 focusable=true 才生效，回退后 back 由阅读器主体处理
+    //     （back 键 = 退出阅读器，菜单一并消失），用户体感无差异。
+    //
+    // above/below 决策仍走 popupContentSize 真实测量路径，不再 hardcode menuHeight。
     val targetXPx = offset.x.toInt()
     val targetYPx = offset.y.toInt()
     val gapPx = with(density) { 12.dp.toPx() }.toInt()
@@ -908,7 +913,7 @@ fun HighlightActionToolbar(
         popupPositionProvider = provider,
         onDismissRequest = onDismiss,
         properties = PopupProperties(
-            focusable = true,
+            focusable = false,
             dismissOnBackPress = true,
             dismissOnClickOutside = true,
         ),

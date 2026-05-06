@@ -95,7 +95,7 @@ class LogcatSink(override var minLevel: LogLevel = LogLevel.VERBOSE) : LogSink {
  */
 class MemorySink(
     override var minLevel: LogLevel = LogLevel.DEBUG,
-    initialMaxEntries: Int = 300,
+    initialMaxEntries: Int = 1000,
 ) : LogSink {
     override val name = "memory"
     @Volatile var maxEntries: Int = initialMaxEntries
@@ -479,7 +479,7 @@ object AppLog {
     /** Hard cap on `crash_*.txt`. UI shows 10 — keep more on disk so
      *  crash bursts don't drop history below what the UI hints at. */
     private const val DEFAULT_MAX_CRASH_FILES = 20
-    private const val DEFAULT_MEM_ENTRIES = 500
+    private const val DEFAULT_MEM_ENTRIES = 1000
     private const val DEFAULT_FILE_SIZE_BYTES = 4L * 1024 * 1024
     /** 0 = no total-directory-size cap (the legacy behavior — only
      *  count + age limits applied). User can set it explicitly via
@@ -669,7 +669,7 @@ object AppLog {
         companion object {
             /** Defaults — used when prefs are missing or after a reset. */
             val DEFAULT = LogLimits(
-                memoryEntries = 500,
+                memoryEntries = 1000,
                 maxFileSizeBytes = 4L * 1024 * 1024,
                 maxTotalDirBytes = 0L,  // off by default — opt-in
                 maxAgeDays = 7,
