@@ -618,9 +618,33 @@ class AnalyzeRule(
                 trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true) -> trimmed
                 trimmed.startsWith("//") -> "https:$trimmed"
                 trimmed.startsWith("www.", true) -> "https://$trimmed"
-                trimmed.matches(Regex("^[A-Za-z0-9.-]+\\.[A-Za-z]{2,}(/.*)?$")) -> "https://$trimmed"
+                // 裸域名兜底：example.com / sub.example.com / sub.example.com/path
+                // 必须排除 s.php / index.html / search.action 这种"看起来像 host
+                // 但其实是相对路径文件名"的输入；否则会被当成绝对 URL，URL 解析阶段
+                // 把 s.php 当 hostname 抛 UnknownHostException。
+                // 判定：最后一个 `.` 后面到 `/` 或串尾的那段，不能是常见文件扩展名。
+                trimmed.matches(BARE_DOMAIN_REGEX) && !looksLikeRelativeFile(trimmed) -> "https://$trimmed"
                 else -> null
             }
+        }
+
+        private val BARE_DOMAIN_REGEX = Regex("^[A-Za-z0-9.-]+\\.[A-Za-z]{2,}(/.*)?$")
+
+        // 常见 web 文件扩展名（小写）。如果裸域名候选的"TLD"段命中这里，说明它
+        // 实际上是一段相对路径文件名（如 s.php），不能当绝对 URL 使用。
+        private val FILE_EXTENSION_BLACKLIST = setOf(
+            "php", "html", "htm", "shtml", "phtml",
+            "asp", "aspx", "jsp", "do", "action", "cgi",
+            "json", "xml", "css", "js",
+            "png", "jpg", "jpeg", "gif", "svg", "webp", "ico",
+            "pdf", "txt", "md", "epub", "mobi",
+            "zip", "rar", "7z", "tar", "gz",
+        )
+
+        private fun looksLikeRelativeFile(s: String): Boolean {
+            val firstSegment = s.substringBefore('/')
+            val tld = firstSegment.substringAfterLast('.', missingDelimiterValue = "")
+            return tld.lowercase() in FILE_EXTENSION_BLACKLIST
         }
 
         fun AnalyzeRule.setCoroutineContext(context: CoroutineContext): AnalyzeRule {

@@ -62,15 +62,36 @@ class ReaderBookmarkController(
     }
 
     fun jumpToBookmark(bookmark: Bookmark) {
+        // SCROLL 模式 bug：addBookmark 时 progress.visiblePage.chapterPosition 常停在 0
+        // （首段顶仍可见时，"屏幕顶部 char index" 一直是 0），书签里只剩 scrollProgress
+        // 这一条 % 信息。restoreProgress 在 SCROLL 模式跳过 page seek，LazyScroll 又只
+        // 看 chapterPos，不读 scrollProgress —— 结果跳回总落在章首，丢失 N% 精度。
+        //
+        // 临时桥接：chapterPos=0 但 scrollProgress>0 时，把 % 折成估算 char 位置（按
+        // 当前章内容总长同比例），交给统一的 chapterPos→paragraph 映射。失败时仍
+        // 落在最近段首，体感比"始终回章首"好得多。
+        //
+        // 长期方案应该在 addBookmark 阶段拿到真实 visible-top char index，或在
+        // restoreProgress 里把 scrollProgress 透传到 LazyScroll 做 px 级 scrollBy。
+        // 那两条改动需要动 ReaderProgressController + LazyScrollSection，先不做。
+        val effectiveChapterPos = if (bookmark.chapterPos == 0 && bookmark.scrollProgress > 0) {
+            val contentLen = chapter.chapterContent.value.length
+            if (contentLen > 0) {
+                ((bookmark.scrollProgress.toLong() * contentLen) / 100L)
+                    .toInt()
+                    .coerceIn(0, contentLen - 1)
+            } else bookmark.chapterPos
+        } else bookmark.chapterPos
         AppLog.info(
             "BookmarkDebug",
             "jumpToBookmark id=${bookmark.id} chapterIdx=${bookmark.chapterIndex}" +
-                " chapterPos=${bookmark.chapterPos} scrollProgress=${bookmark.scrollProgress}",
+                " chapterPos=${bookmark.chapterPos}→$effectiveChapterPos" +
+                " scrollProgress=${bookmark.scrollProgress}",
         )
         chapter.loadChapter(
             bookmark.chapterIndex,
             restoreProgress = bookmark.scrollProgress,
-            restoreChapterPosition = bookmark.chapterPos,
+            restoreChapterPosition = effectiveChapterPos,
         )
     }
 }

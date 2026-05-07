@@ -32,6 +32,8 @@ class MoRealmApp : Application(), ImageLoaderFactory {
     @Inject lateinit var txtTocRuleDao: TxtTocRuleDao
     @Inject lateinit var progressSync: WebDavBookProgressSync
     @Inject lateinit var backupRunner: WebDavBackupRunner
+    @Inject lateinit var database: com.morealm.app.domain.db.AppDatabase
+    @Inject lateinit var snapshotManager: com.morealm.app.domain.db.snapshot.SnapshotManager
 
     /**
      * App-scoped supervisor for fire-and-forget background work that
@@ -74,6 +76,19 @@ class MoRealmApp : Application(), ImageLoaderFactory {
         appScope.launch {
             runCatching { backupRunner.runIfDue() }
                 .onFailure { AppLog.warn("App", "Auto-backup check failed: ${it.message}") }
+        }
+
+        // 每日首次启动跑一次全量 JSON 快照（filesDir/db_snapshot/snapshot.json）。
+        // SnapshotManager 自己用文件 mtime 判断是否到期；同一天内多次冷启动只跑一次。
+        // 与 backupRunner（WebDav 24h auto-backup）独立——后者是用户可选的远端备份，
+        // snapshot 是本地强制双保险，无 opt-in。
+        //
+        // 这里 fire-and-forget；database.openHelper.writableDatabase 第一次访问会触发
+        // Room 真正打开 + migration —— 此调用前的 backup/preserve 已经跑完了。
+        appScope.launch {
+            runCatching {
+                snapshotManager.runDailySnapshotIfDue(database.openHelper.writableDatabase)
+            }.onFailure { AppLog.warn("App", "Daily snapshot failed: ${it.message}") }
         }
 
         AppLog.info("App", "MoRealm started")

@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.Book
+import com.morealm.app.core.text.sortedNaturalBy
+import com.morealm.app.core.text.sortedNaturalWith
 import com.morealm.app.domain.entity.BookGroup
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.AutoGroupClassifier
@@ -106,13 +108,21 @@ class ShelfViewModel @Inject constructor(
         viewModelScope.launch { _navigateToFolder.emit(folderId) }
     }
 
-    private val _sortMode = MutableStateFlow("title")
-    val sortMode: StateFlow<String> = _sortMode.asStateFlow()
+    /**
+     * 书架排序模式 — 持久化到 [AppPreferences.shelfSortMode]，重启 App 后恢复。
+     *
+     * `stateIn` 用 Eagerly 立即拉取首值，避免 books 流首次 emit 时 sortMode 还是初始值
+     * 触发一次"先按 title 排，紧接着切到用户偏好排"的视觉抖动。
+     */
+    val sortMode: StateFlow<String> = prefs.shelfSortMode
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "title")
 
-    fun setSortMode(mode: String) { _sortMode.value = mode }
+    fun setSortMode(mode: String) {
+        viewModelScope.launch { prefs.setShelfSortMode(mode) }
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val books: StateFlow<List<Book>> = _sortMode.flatMapLatest { sort ->
+    val books: StateFlow<List<Book>> = sortMode.flatMapLatest { sort ->
         bookRepo.getAllBooks().map { list ->
             withContext(Dispatchers.Default) {
                 sortBooks(list, sort)
@@ -146,8 +156,10 @@ class ShelfViewModel @Inject constructor(
     private fun sortBooks(list: List<Book>, sort: String): List<Book> = when (sort) {
         "recent" -> list.sortedByDescending { it.lastReadAt }
         "addTime" -> list.sortedByDescending { it.addedAt }
-        "format" -> list.sortedWith(compareBy<Book> { it.format.name }.thenBy { it.title.lowercase() })
-        else -> list.sortedBy { it.title.lowercase() }
+        // 走 Schwartzian transform：title 只 tokenize 一次，比 sortedWith(compareBy(...))
+        // 在大书架（千书）+ 含中文数字解析时显著省时。
+        "format" -> list.sortedNaturalWith(compareBy { it.format.name }) { it.title }
+        else -> list.sortedNaturalBy { it.title }
     }
 
     fun togglePinBook(bookId: String) {

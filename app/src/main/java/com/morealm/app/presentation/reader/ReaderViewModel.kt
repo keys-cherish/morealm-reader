@@ -16,6 +16,7 @@ import com.morealm.app.domain.repository.ReadStatsRepository
 import com.morealm.app.domain.repository.ReplaceRuleRepository
 import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.core.text.stripHtml
 import com.morealm.app.service.TtsEventBus
 import com.morealm.app.widget.WidgetUpdater
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -362,14 +363,22 @@ class ReaderViewModel @Inject constructor(
 
     fun setChineseConvertMode(mode: Int) {
         if (mode == settings.chineseConvertMode.value) return
-        settings.setChineseConvertMode(mode)
-        chapter.nextChapterCache = null
-        chapter.prevChapterCache = null
-        chapter.loadChapter(
-            chapter.currentChapterIndex.value,
-            restoreProgress = progress.scrollProgress.value,
-            restoreChapterPosition = progress.visiblePage.value.chapterPosition,
-        )
+        viewModelScope.launch {
+            settings.setChineseConvertMode(mode)
+            // 等 stateIn 反映新值再 reload，避免 chineseConvertMode() lambda
+            // 在 IO 协程里读到旧值（DataStore 写入 → Flow emit → stateIn StateFlow.value
+            // 更新存在跨线程延迟，旧路径直接 loadChapter 会 race 拿到旧 mode）。
+            settings.chineseConvertMode.first { it == mode }
+            // 清旧 mode 转过的预加载（StateFlow + @Volatile 双轨），
+            // 否则同步翻页直接消费旧 PreloadedReaderChapter，呈现
+            // "切完繁简翻下一页又变回去" 的反效果。
+            chapter.clearPreloadedChapters()
+            chapter.loadChapter(
+                chapter.currentChapterIndex.value,
+                restoreProgress = progress.scrollProgress.value,
+                restoreChapterPosition = progress.visiblePage.value.chapterPosition,
+            )
+        }
     }
 
     fun setReaderBrightness(value: Float) { _readerBrightness.value = value }
@@ -424,6 +433,17 @@ class ReaderViewModel @Inject constructor(
     fun onScrollReachedBottom() = navigation.onScrollReachedBottom()
 
     fun searchFullText(query: String) = search.searchFullText(query)
+    /**
+     * 章内搜索：用已加载的当前章节内容做关键词扫描，列出**所有**命中位置。比
+     * [searchFullText] 瞬时（无 IO，不下载其它章节），命中无 50 条上限。
+     * 复用 `_searchResults`，UI 端共用 [FullTextSearchPanel] 渲染——区别由 Tab 决定。
+     */
+    fun searchInChapter(query: String) {
+        val plain = chapter.chapterContent.value.stripHtml()
+        val idx = chapter.currentChapterIndex.value
+        val title = chapter.chapters.value.getOrNull(idx)?.title ?: ""
+        search.searchCurrentChapter(query, plain, idx, title)
+    }
     fun clearSearchResults() = search.clearSearchResults()
     fun openSearchResult(result: ReaderSearchController.SearchResult) = search.openSearchResult(result)
     fun consumeSearchSelection() = search.consumeSearchSelection()
