@@ -58,6 +58,16 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
+        <!--
+            数据库恢复入口。仅由 MainActivity / 进程重启 launcher Intent 触发，
+            不暴露给其他 app（exported=false）。launchMode=singleTask 防止重复栈起。
+        -->
+        <activity
+            android:name=".ui.recovery.RecoveryActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:configChanges="screenSize|screenLayout|orientation|smallestScreenSize|density" />
+
         <service
             android:name=".service.TtsService"
             android:exported="false"

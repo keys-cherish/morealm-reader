@@ -2,6 +2,7 @@ package com.morealm.app.presentation.reader
 
 import android.content.Context
 import android.net.Uri
+import com.morealm.app.core.text.sortedNaturalBy
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.parser.LocalBookParser
@@ -489,7 +490,7 @@ class ReaderChapterController(
 
                     if (book.folderId != null) {
                         val folderBooks = bookRepo.getBooksByFolderId(book.folderId!!)
-                            .sortedBy { it.title }
+                            .sortedNaturalBy { it.title }
                         linkedBooksState.value = folderBooks.filter { it.id != bookId }
                     }
                     return
@@ -611,7 +612,7 @@ class ReaderChapterController(
 
             if (book.folderId != null) {
                 val folderBooks = bookRepo.getBooksByFolderId(book.folderId!!)
-                    .sortedBy { it.title }
+                    .sortedNaturalBy { it.title }
                 linkedBooksState.value = folderBooks.filter { it.id != bookId }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -728,6 +729,7 @@ class ReaderChapterController(
                 setSuppressNextProgressSave(targetProgress > 0 || targetChapterPosition > 0)
 
                 AppLog.info("Chapter", "loadChapter #$index/${chapterList.size} \"${chapter.title.take(20)}\" prog=$targetProgress pos=$targetChapterPosition ${if (isWebBook) "web" else "local"}")
+                AppLog.info("ChapterIdxDebug", "loadChapter idx=$index title=\"${chapter.title}\" url=${chapter.url}")
                 // BookmarkDebug: 同步打到书签调试 tag 方便抓链路（addBookmark →
                 // jumpToBookmark → loadChapter → RenderedReaderChapter.initialChapterPosition
                 // → CanvasRenderer.restoreProgress）。
@@ -942,6 +944,7 @@ class ReaderChapterController(
     }
 
     suspend fun loadWebChapterContent(book: Book, chapter: BookChapter, index: Int): String {
+        AppLog.info("ChapterIdxDebug", "loadWebChapterContent ENTRY idx=$index title=\"${chapter.title}\" url=${chapter.url}")
         if (chapter.url.startsWith(READER_ERROR_CHAPTER_URL_PREFIX)) {
             return chapter.variable ?: readerErrorContent(chapter.title, "\u5f53\u524d\u4e66\u6e90\u6ca1\u6709\u8fd4\u56de\u53ef\u9605\u8bfb\u5185\u5bb9\u3002")
         }
@@ -962,6 +965,11 @@ class ReaderChapterController(
 
         val nextUrl = _chapters.value.getOrNull(index + 1)?.url
         val content = WebBook.getContentAwait(source, chapter.url, nextUrl)
+        AppLog.info(
+            "ChapterIdxDebug",
+            "loadWebChapterContent FETCHED idx=$index title=\"${chapter.title}\"" +
+                " bodyLen=${content.length} bodyHead=\"${content.take(80).replace('\n', ' ')}\"",
+        )
         val sanitized = sanitizeWebChapterContent(content)
         // Empty body / parse-failure → return a readable placeholder instead of "" so
         // the reader has something to render and the user is told how to recover.
@@ -1031,6 +1039,23 @@ class ReaderChapterController(
         hitTitleRulesSet.clear()
         _hitContentRules.value = emptyList()
         _hitTitleRules.value = emptyList()
+    }
+
+    /**
+     * 清空 next/prev 章节的所有缓存（@Volatile 字段 + StateFlow）。
+     *
+     * 设计目的：当影响"章节内容呈现"的全局开关切换时（如繁简转换 mode、替换规则启用/禁用），
+     * 已缓存的内容是用旧规则转换出来的，必须丢弃，否则会出现：切繁简模式后翻到下一章看到的
+     * 还是用旧 mode 转过的字（"反效果"现象）；同步翻页路径 commitChapterShiftNext/Prev
+     * 也会直接消费旧 PreloadedReaderChapter。
+     *
+     * 不清 _chapterContent（当前章），调用方负责后续 loadChapter 重排版。
+     */
+    fun clearPreloadedChapters() {
+        nextChapterCache = null
+        prevChapterCache = null
+        _nextPreloadedChapter.value = null
+        _prevPreloadedChapter.value = null
     }
 
     /** Re-pull rules from db (called after EffectiveReplacesDialog disables/edits a rule). */
