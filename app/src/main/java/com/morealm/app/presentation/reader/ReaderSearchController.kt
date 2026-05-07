@@ -100,6 +100,49 @@ class ReaderSearchController(
 
     fun clearSearchResults() { _searchResults.value = emptyList() }
 
+    /**
+     * 仅搜索当前已加载章节，返回章节内**所有**命中位置（不止首个）。
+     *
+     * 触发场景：用户在阅读器底部搜索面板把 Tab 切到「当前章」时调用。区别于
+     * [searchFullText] 的 "全书首匹配 + 50 个结果上限"，章内搜索：
+     *   - 不再请求其他章节内容（无网络/IO 开销，瞬时返回）
+     *   - 命中无上限（同一章内 200+ 命中也全列出，让用户像 Ctrl+F 一样翻阅）
+     *   - 每个命中独占一个 [SearchResult]，[queryIndexInChapter] 各不相同，
+     *     点击就能精确跳到对应字符位置（复用现有 [openSearchResult] 链路）。
+     *
+     * 不直接读 ChapterController 的 _chapterContent —— 那是 stripHtml 之前的原始
+     * 文本，命中位置算出来的 char index 跟阅读器排版后的 chapterPosition 不一致，
+     * 跳转会偏移。所以参数从外部传当前章节文本（caller 用同一份 stripHtml 后的内容）。
+     */
+    fun searchCurrentChapter(query: String, plainText: String, chapterIndex: Int, chapterTitle: String) {
+        if (query.isBlank()) { _searchResults.value = emptyList(); return }
+        val lowerQuery = query.lowercase()
+        val lowerText = plainText.lowercase()
+        val results = mutableListOf<SearchResult>()
+        var idx = lowerText.indexOf(lowerQuery)
+        var matchNo = 1
+        while (idx >= 0) {
+            val start = (idx - 16).coerceAtLeast(0)
+            val end = (idx + query.length + 24).coerceAtMost(plainText.length)
+            val snippet = (if (start > 0) "..." else "") +
+                plainText.substring(start, end).replace('\n', ' ').trim() +
+                (if (end < plainText.length) "..." else "")
+            results.add(
+                SearchResult(
+                    chapterIndex = chapterIndex,
+                    chapterTitle = "[第 $matchNo 处] $chapterTitle",
+                    snippet = snippet,
+                    query = query,
+                    queryIndexInChapter = idx,
+                    queryLength = query.length,
+                ),
+            )
+            matchNo++
+            idx = lowerText.indexOf(lowerQuery, idx + query.length)
+        }
+        _searchResults.value = results
+    }
+
     fun openSearchResult(result: SearchResult) {
         _pendingSearchSelection.value = SearchSelection(
             chapterIndex = result.chapterIndex,

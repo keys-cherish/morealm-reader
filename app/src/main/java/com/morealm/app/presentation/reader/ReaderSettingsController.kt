@@ -293,9 +293,46 @@ class ReaderSettingsController(
         scope.launch { prefs.setPageAnim(anim) }
     }
 
+    /**
+     * #1 还原默认排版参数。
+     *
+     * 仅重置「排版相关」字段（字号/行距/段距/页边距/字体），保留：
+     *  - 颜色（bg/text + day/night 各四套）：用户切换样式预设时已经选过配色，
+     *    一键还原不该把配色也带走，否则用户会误以为「样式没了」。
+     *  - id / name / sortOrder / isBuiltin：标识字段不动。
+     *  - customCss / customBgImage：另有"清除"入口，避免和这里语义重叠。
+     *
+     * 走 [updateStyle] → upsert 落 Room，`activeStyle` StateFlow 自动驱动 UI 重排。
+     */
+    fun resetCurrentStyleParams() = updateStyle { current ->
+        val d = ReaderStyle(id = current.id) // 拿默认值
+        current.copy(
+            textSize = d.textSize,
+            fontFamily = d.fontFamily,
+            textBold = d.textBold,
+            letterSpacing = d.letterSpacing,
+            lineHeight = d.lineHeight,
+            paragraphSpacing = d.paragraphSpacing,
+            paragraphIndent = d.paragraphIndent,
+            textAlign = d.textAlign,
+            paddingTop = d.paddingTop,
+            paddingBottom = d.paddingBottom,
+            paddingLeft = d.paddingLeft,
+            paddingRight = d.paddingRight,
+        ).also {
+            AppLog.info("Settings", "resetCurrentStyleParams: id=${current.id}")
+        }
+    }
+
     // ── Style preset management ──
 
     fun switchStyle(styleId: String) {
+        val before = _activeStyleId.value
+        // 用户报"切样式出现翻页动画"——根因待定，先打点观察上下游：
+        // ① 切换瞬间 _activeStyleId 翻新；
+        // ② activeStyle 衍生流（fontSize / lineHeight / typeface / paddings / customCss）会陆续 emit；
+        // ③ CanvasRenderer 的 layoutInputs 重排版 → pageCount 突变 → 看 HorizontalPager 是否 fling。
+        AppLog.debug("StyleSwitch", "switchStyle from=$before to=$styleId")
         _activeStyleId.value = styleId
         scope.launch { prefs.setActiveReaderStyle(styleId) }
     }

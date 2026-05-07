@@ -201,6 +201,10 @@ internal class PageTurnCoordinator(
             if (committed != null) {
                 scope.launch { state.scrollToPage(committed.coerceIn(0, renderPageCount - 1)) }
             }
+            AppLog.info(
+                "ReaderTap",
+                "turnPageByTap NONE-anim: dir=$direction start=$startDisplayPage committed=$committed",
+            )
             return
         }
         val target = when (direction) {
@@ -212,12 +216,28 @@ internal class PageTurnCoordinator(
             pendingSettledDirection = direction
             pendingTurnStartDisplayPage = startDisplayPage
             scope.launch { state.animateScrollToPage(target) }
+            AppLog.info(
+                "ReaderTap",
+                "turnPageByTap animate: dir=$direction start=$startDisplayPage target=$target renderPC=$renderPageCount",
+            )
         } else if (
             (direction == ReaderPageDirection.PREV && factory.hasPrev(startDisplayPage)) ||
             (direction == ReaderPageDirection.NEXT && factory.hasNext(startDisplayPage))
         ) {
+            // 关键诊断点：target=null 但 hasNext/hasPrev=true 时走 commitPageTurn，
+            // 这条路径会跨章节（commitPageTurn 内部会调 nextChapter/prevChapter）。
+            // 用户报"点屏跳下一章"如果出在这里，常见原因：当前章节只有 1 页（renderPC=1）
+            // 或当前已停在章末且 moveToNext 返回 null。
+            AppLog.info(
+                "ReaderTap",
+                "turnPageByTap boundary→commit (CHAPTER ADVANCE): dir=$direction start=$startDisplayPage renderPC=$renderPageCount",
+            )
             commitPageTurn(startDisplayPage, direction, readerPageIndexSetter)
         } else {
+            AppLog.info(
+                "ReaderTap",
+                "turnPageByTap stop: dir=$direction start=$startDisplayPage (no prev/next)",
+            )
             pageDelegateState.stopScroll()
         }
     }

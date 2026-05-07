@@ -37,6 +37,33 @@ class FontRepository @Inject constructor(
     /** 仅匹配 .ttf / .otf，与 Legado FontSelectDialog.fontRegex 对齐（不含 .ttc 集合字体）。 */
     private val fontRegex = Regex("(?i).*\\.[ot]tf")
 
+    /**
+     * 内置 family key → assets/fonts/ 下的资源文件名映射。
+     *
+     * 拉丁字体（CrimsonPro / Inter / CormorantGaramond）已直接打包到 assets。
+     * 中文字体（思源宋体 / 思源黑体 / 楷体 / 仿宋）由于完整 ttf 体积巨大（单文件 60MB+），
+     * 不直接打包；需通过 `scripts/build-font-subsets.sh` 用 pyftsubset 生成常用汉字
+     * 子集后放入 `app/src/main/assets/fonts/`。文件缺失时由 [resolveTypeface]
+     * 走系统 fallback（保持衬线/无衬线的视觉差异，让用户切换肉眼可见）。
+     */
+    private val assetFontFiles: Map<String, String> = mapOf(
+        "noto_serif_sc" to "NotoSerifSC.ttf",
+        "noto_sans_sc"  to "NotoSansSC.ttf",
+        "kaiti"         to "Kaiti.ttf",
+        "fangsong"      to "FangSong.ttf",
+        "crimson_pro"   to "CrimsonPro.ttf",
+        "inter"         to "Inter.ttf",
+        "cormorant"     to "CormorantGaramond.ttf",
+    )
+
+    /**
+     * assets/fonts/ 加载结果缓存。Map 整体替换实现"读不加锁"。
+     * - 命中：缓存 [Typeface]，避免每次切字体都重新 IO + 解码 ttf
+     * - 未命中：缓存 null sentinel，避免反复抛 RuntimeException
+     */
+    @Volatile
+    private var assetTypefaceCache: Map<String, Typeface?> = emptyMap()
+
     // ─── 列表 ──────────────────────────────────────────────────────────────
 
     /** App 字库：扫 filesDir/fonts/。返回按文件名排序。IO 操作，请在 Dispatchers.IO 调度。 */
@@ -146,14 +173,49 @@ class FontRepository @Inject constructor(
         if (!customFontPath.isNullOrBlank()) {
             tryLoadFontFile(customFontPath)?.let { return it }
         }
+        // 优先：assets/fonts 里打包的真子集字体（拉丁已有，中文需用户跑子集化脚本生成）
+        loadAssetTypeface(fontFamily)?.let { return it }
+        // 系统 fallback：保留默认 noto_serif_sc → SERIF（用户习惯的阅读体验）；
+        // noto_sans_sc / inter 走 SANS_SERIF 让"宋体↔黑体"切换肉眼可见有差异。
         return when (fontFamily) {
-            "noto_sans_sc" -> Typeface.SANS_SERIF
-            "noto_serif_sc", "kaiti", "fangsong" -> Typeface.SERIF
-            "crimson_pro" -> Typeface.SERIF
-            "inter" -> Typeface.SANS_SERIF
+            "noto_sans_sc", "inter" -> Typeface.SANS_SERIF
+            "noto_serif_sc", "kaiti", "fangsong",
+            "crimson_pro", "cormorant" -> Typeface.SERIF
             "system", "" -> Typeface.DEFAULT
             else -> Typeface.DEFAULT
         }
+    }
+
+    /**
+     * 尝试从 `assets/fonts/${file}` 加载 Typeface。命中 / 失败结果都进 [assetTypefaceCache]，
+     * 同一 family 后续调用走内存（O(1)），避免每次切字体都解码一次 ttf。
+     *
+     * `Typeface.createFromAsset` 在资源缺失时——
+     *   - Android Pie+：抛 RuntimeException（被 runCatching 吞）
+     *   - Pre-Pie：返回 [Typeface.DEFAULT]（被 takeIf 过滤）
+     * 两种情况都视为"未命中"返回 null。
+     */
+    private fun loadAssetTypeface(family: String): Typeface? {
+        val cached = assetTypefaceCache
+        if (family in cached) return cached[family]
+
+        val fileName = assetFontFiles[family] ?: return null
+
+        val typeface = runCatching {
+            Typeface.createFromAsset(context.assets, "fonts/$fileName")
+        }.getOrNull()
+            ?.takeIf { it !== Typeface.DEFAULT }
+
+        if (typeface == null) {
+            AppLog.debug(
+                "FontRepository",
+                "asset 'fonts/$fileName' 缺失或加载失败，family=$family 走系统 fallback",
+            )
+        } else {
+            AppLog.debug("FontRepository", "asset 字体加载成功 family=$family file=$fileName")
+        }
+        assetTypefaceCache = cached + (family to typeface)
+        return typeface
     }
 
     /**

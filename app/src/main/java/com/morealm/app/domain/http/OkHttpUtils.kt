@@ -128,10 +128,11 @@ suspend fun OkHttpClient.newCallResponse(
 
 suspend fun OkHttpClient.newCallStrResponse(
     retry: Int = 0,
+    charset: String? = null,
     builder: Request.Builder.() -> Unit
 ): StrResponse {
     return newCallResponse(retry, builder).let {
-        StrResponse(it, it.body?.text() ?: "")
+        StrResponse(it, it.body?.text(charset) ?: "")
     }
 }
 
@@ -147,10 +148,20 @@ suspend fun Call.await(): Response = suspendCancellableCoroutine { block ->
     })
 }
 
+/**
+ * 把 ResponseBody 解码成字符串。charset 优先级：
+ *   1. 显式 [encode] 参数（调用方知道目标编码时强制使用）
+ *   2. Response Content-Type 的 charset（server 主动声明时优先尊重）
+ *   3. UTF-8 fallback（无任何信号时的合理默认）
+ *
+ * 注意：调用方应在已知书源 charset（如 GBK 站）时通过 [encode] 透传，否则若 server 没在
+ * Content-Type 里声明 charset（典型老站），UTF-8 fallback 解码 GBK bytes 会得到中文乱码。
+ */
 fun ResponseBody.text(encode: String? = null): String {
     val responseBytes = bytes()
     encode?.let {
-        return String(responseBytes, Charset.forName(it))
+        return runCatching { String(responseBytes, Charset.forName(it)) }
+            .getOrElse { String(responseBytes, Charsets.UTF_8) }
     }
     contentType()?.charset()?.let { charset ->
         return String(responseBytes, charset)

@@ -7,17 +7,11 @@ import com.morealm.app.domain.entity.rule.ContentRule
 import com.morealm.app.domain.entity.rule.ExploreRule
 import com.morealm.app.domain.entity.rule.SearchRule
 import com.morealm.app.domain.entity.rule.TocRule
-import com.script.rhino.RhinoScriptEngine
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import org.mozilla.javascript.Context
-import org.mozilla.javascript.NativeArray
-import org.mozilla.javascript.NativeJSON
-import org.mozilla.javascript.NativeObject
-import org.mozilla.javascript.Undefined
 
 /**
  * 书源导入器 - 解析 JSON 格式书源并转换为 [BookSource] 实体。
@@ -64,9 +58,16 @@ object BookSourceImporter {
             return emptyList()
         }
 
-        // 检测是否为 JS 书源文件（非 JSON 格式）
+        // MoRealm 仅支持 Legado / yuedu 风格 JSON 书源。整文件 JS 书源
+        // （SkyBook / OpenSchedule 的 export default { meta, search(ctx)... } lifecycle 模型，
+        // 或 Legado 全 JS 书源）都不是规则模型，运行时全靠 JS runtime —— 移植成本远超收益。
+        // 检测到 .js 内容直接报错，让用户找 JSON 格式的等价书源。
         if (isJsSource(raw)) {
-            return importFromJs(raw)
+            val msg = "MoRealm 不支持 JS 格式书源（含 SkyBook / OpenSchedule lifecycle 模型 + " +
+                "Legado 全 JS 书源），仅支持 Legado / yuedu 风格 JSON 书源。请导入 .json 格式书源。"
+            AppLog.warn("SourceImport", msg)
+            lastImportError = msg
+            return emptyList()
         }
 
         // 先用低层 JsonElement 解析，方便分辨数组 / 对象 / 包装。
@@ -85,102 +86,19 @@ object BookSourceImporter {
     /**
      * 判断输入是否为 JS 书源文件。
      * JS 书源特征：不以 `[` 或 `{` 开头（排除 JSON），
-     * 包含 JS 关键字如 var/let/const/function 声明。
+     * 包含 JS 关键字如 var/let/const/function/import/export 声明。
      */
     private fun isJsSource(raw: String): Boolean {
         val firstChar = raw.firstOrNull() ?: return false
         if (firstChar == '[' || firstChar == '{') return false
-        // 常见 JS 书源开头模式
-        val jsPatterns = arrayOf("var ", "let ", "const ", "function ", "//", "/*")
+        // 常见 JS 书源开头模式（含 ES Module 语法）
+        val jsPatterns = arrayOf(
+            "var ", "let ", "const ", "function ", "//", "/*", "import ", "export ",
+        )
         val firstLine = raw.lineSequence().firstOrNull { it.isNotBlank() } ?: return false
         return jsPatterns.any { firstLine.trimStart().startsWith(it) }
     }
 
-    /** JS 书源文件中常见的结果变量名。 */
-    private val JS_RESULT_VARS = arrayOf(
-        "bookSources", "sources", "bookSource", "result", "data",
-    )
-
-    /**
-     * 执行 JS 书源文件，期望返回值为 JSON 字符串或 JS 数组/对象。
-     * JS 文件最终需要产出一个书源数组（或单个书源对象），
-     * 通常通过最后一个表达式返回，或赋值给约定变量 `bookSources` / `result`。
-     */
-    private fun importFromJs(jsCode: String): List<BookSource> {
-        AppLog.info("SourceImport", "检测到 JS 书源文件，执行中...")
-
-        // 先尝试直接执行，取最后一个表达式的值
-        val directResult = try {
-            RhinoScriptEngine.eval(jsCode)
-        } catch (e: Exception) {
-            val msg = "JS 执行失败: ${e.message}"
-            AppLog.warn("SourceImport", msg)
-            lastImportError = msg
-            return emptyList()
-        }
-
-        // 优先用直接返回值
-        var jsonStr = jsResultToJson(directResult)
-
-        // 如果直接返回值无效，尝试读取约定变量
-        if (jsonStr == null) {
-            for (varName in JS_RESULT_VARS) {
-                val varResult = try {
-                    RhinoScriptEngine.eval("$jsCode;\n$varName")
-                } catch (_: Exception) {
-                    continue
-                }
-                jsonStr = jsResultToJson(varResult)
-                if (jsonStr != null) {
-                    AppLog.info("SourceImport", "从变量 '$varName' 获取到书源数据")
-                    break
-                }
-            }
-        }
-
-        if (jsonStr == null) {
-            val msg = "JS 执行结果无法转为书源 (返回类型: ${directResult?.javaClass?.simpleName})"
-            AppLog.warn("SourceImport", msg)
-            lastImportError = msg
-            return emptyList()
-        }
-
-        val element = try {
-            json.parseToJsonElement(jsonStr)
-        } catch (e: Exception) {
-            val msg = "JS 返回值 JSON 解析失败: ${e.message}"
-            AppLog.warn("SourceImport", msg)
-            lastImportError = msg
-            return emptyList()
-        }
-        return decodeElement(element)
-    }
-
-    /**
-     * 将 Rhino JS 执行结果转为 JSON 字符串。
-     * 支持：String/ConsString 直接返回、NativeArray/NativeObject 用 JSON.stringify 序列化。
-     */
-    private fun jsResultToJson(result: Any?): String? {
-        if (result == null || result is Undefined) return null
-        // 如果 JS 直接返回了字符串（已经是 JSON）
-        if (result is CharSequence) {
-            val trimmed = result.toString().trim()
-            if (trimmed.startsWith("[") || trimmed.startsWith("{")) return trimmed
-            return null
-        }
-        // NativeArray / NativeObject → JSON.stringify
-        if (result is NativeArray || result is NativeObject) {
-            val cx = Context.enter()
-            try {
-                val scope = RhinoScriptEngine.topLevel
-                val jsonStr = NativeJSON.stringify(cx, scope, result, null, null)
-                return jsonStr?.toString()
-            } finally {
-                Context.exit()
-            }
-        }
-        return null
-    }
 
     /**
      * 递归处理 [JsonElement]：

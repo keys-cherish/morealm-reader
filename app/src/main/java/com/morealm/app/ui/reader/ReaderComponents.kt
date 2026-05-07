@@ -33,6 +33,9 @@ import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.ui.theme.toComposeColor
 import com.morealm.app.presentation.reader.PageTurnMode
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // ── Top Bar ─────────────────────────────────────────────
 
@@ -42,7 +45,12 @@ fun ReaderTopBar(
     onBack: () -> Unit,
     onExport: () -> Unit = {},
     onBookmark: () -> Unit = {},
-    /** 顶栏「生效规则」按钮 — 打开 EffectiveReplacesDialog (#5)。 */
+    /** 顶栏「书签列表」按钮 — 打开书签面板（与「添加书签」相邻，#2 反馈）。 */
+    onBookmarkList: () -> Unit = {},
+    /**
+     * #5：「当前章生效规则」按钮 — 反馈认为属于低频操作，已收纳到右侧 ⋮ 溢出菜单，
+     * 不再占顶栏主行图标位。保留 callback 以兼容现有调用方。
+     */
     onEffectiveReplaces: () -> Unit = {},
     /** 顶栏「阅读设置」— 打开底部设置面板，方便用户从右上角快速进入。 */
     onSettings: () -> Unit = {},
@@ -88,17 +96,8 @@ fun ReaderTopBar(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(
-                onClick = onEffectiveReplaces,
-                modifier = Modifier.semantics {
-                    contentDescription = "当前章生效规则"
-                    role = Role.Button
-                },
-            ) {
-                Icon(Icons.Default.FilterAlt, "生效规则",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(20.dp))
-            }
+            // #2：添加书签 + 书签列表 相邻放置，避免「添加在顶栏，查看在底部章节面板」
+            // 两端跑的体感问题。
             IconButton(
                 onClick = onBookmark,
                 modifier = Modifier.semantics {
@@ -106,7 +105,18 @@ fun ReaderTopBar(
                     role = Role.Button
                 },
             ) {
-                Icon(Icons.Default.BookmarkAdd, "书签",
+                Icon(Icons.Default.BookmarkAdd, "添加书签",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp))
+            }
+            IconButton(
+                onClick = onBookmarkList,
+                modifier = Modifier.semantics {
+                    contentDescription = "书签列表"
+                    role = Role.Button
+                },
+            ) {
+                Icon(Icons.Default.Bookmarks, "书签列表",
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(20.dp))
             }
@@ -134,6 +144,12 @@ fun ReaderTopBar(
                         modifier = Modifier.size(20.dp))
                 }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    // #5：低频「当前生效规则」收纳到溢出菜单
+                    DropdownMenuItem(
+                        text = { Text("当前生效规则") },
+                        leadingIcon = { Icon(Icons.Default.FilterAlt, null) },
+                        onClick = { showMenu = false; onEffectiveReplaces() },
+                    )
                     DropdownMenuItem(
                         text = { Text("导出为 TXT") },
                         leadingIcon = { Icon(Icons.Default.FileDownload, null) },
@@ -156,13 +172,49 @@ fun ReaderControlBar(
     onTts: () -> Unit, onSettings: () -> Unit, onChapterSelect: () -> Unit,
     onSearch: () -> Unit = {},
     onAutoPage: () -> Unit = {},
+    /**
+     * #3 进度条拖动跳转：松手时调一次。
+     *
+     * 参数：
+     *  - `chapterIdx`：目标章节下标 [0, totalChapters)
+     *  - `withinChapterPercent`：章内进度 0..100（用作 ReaderViewModel.loadChapter
+     *    的 restoreProgress 参数，等价于 ReaderProgressController 的 scrollProgress）。
+     *
+     * 默认 no-op 让旧调用方仍能编译，但会回退到只读进度条体验。
+     *
+     * 历史：原签名是 `(Int) -> Unit` 只跳章。后来按用户反馈改成全书 0-100%
+     * 拖动（静读天下 / Moon+ Reader 风格），单条 Slider 同时承载章 + 章内位置。
+     */
+    onSeekFullBook: (chapterIdx: Int, withinChapterPercent: Int) -> Unit = { _, _ -> },
+    /**
+     * 拖动时拿目标章节标题用于预览气泡。lambda 接收章节下标返回标题文本，
+     * 让 ControlBar 不必直接持有 List<BookChapter>。
+     */
+    getChapterTitle: (Int) -> String = { "" },
 ) {
     val moColors = LocalMoRealmColors.current
     // Combine chapter progress with scroll progress for a smooth overall %
     val chapterFraction = if (totalChapters > 0) currentChapter.toFloat() / totalChapters else 0f
     val scrollFraction = if (totalChapters > 0) scrollProgress / 100f / totalChapters else 0f
-    val progress = (chapterFraction + scrollFraction).coerceIn(0f, 1f)
+    val baseProgress = (chapterFraction + scrollFraction).coerceIn(0f, 1f)
     val barShape = MaterialTheme.shapes.extraLarge
+
+    // ── #3 拖动状态 ──
+    // 拖动期间 [seekValue] != null：滑块视觉、预览气泡都用它；松手后清空，回到 base。
+    // sliderValue ∈ 0..1 表示全书进度。映射规则：
+    //   rawProgress = slider * totalChapters
+    //   targetChapter = floor(rawProgress)        // [0, totalChapters)
+    //   withinChapterPct = (rawProgress - targetChapter) * 100  // [0, 100)
+    var seekValue: Float? by remember { mutableStateOf(null) }
+    val sliderValue = seekValue ?: baseProgress
+    val rawProgress = sliderValue * totalChapters
+    val previewIdx = if (totalChapters > 0)
+        rawProgress.toInt().coerceIn(0, totalChapters - 1)
+    else 0
+    val previewWithinPct = if (totalChapters > 0)
+        ((rawProgress - previewIdx) * 100f).toInt().coerceIn(0, 99)
+    else 0
+    val previewBookPct = (sliderValue * 100f).coerceIn(0f, 100f)
 
     // Floating pill bar like HTML prototype's .r-bar
     Box(
@@ -224,16 +276,30 @@ fun ReaderControlBar(
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(18.dp))
                 }
-                // Center: progress
+                // Center: progress / 拖动预览
                 Column(
                     modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text(
-                        "${chapterTitle.ifBlank { "第${currentChapter + 1}章" }} · $readProgress",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    )
+                    if (seekValue != null && totalChapters > 0) {
+                        // #3 拖动时实时显示「全书 X.X% · 第N章 · 章内Y%」
+                        val previewTitle = getChapterTitle(previewIdx).ifBlank { "第${previewIdx + 1}章" }
+                        Text(
+                            "→ ${"%.1f".format(previewBookPct)}% · ${previewTitle.take(14)} · 章内${previewWithinPct}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else {
+                        Text(
+                            "${chapterTitle.ifBlank { "第${currentChapter + 1}章" }} · $readProgress",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 IconButton(
                     onClick = onTts,
@@ -275,28 +341,41 @@ fun ReaderControlBar(
                         modifier = Modifier.size(18.dp))
                 }
             }
-            // Progress bar with prev/next chapter
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (totalChapters > 1) {
+            // ── #3 章节进度条（可拖动） ──
+            // 单章节情况下不渲染 Slider（valueRange 0..0 不合法），保留旧的小提示就够用。
+            if (totalChapters > 1) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text("上一章",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
                         modifier = Modifier.clickable(onClick = onPrevChapter)
                             .padding(vertical = 4.dp, horizontal = 2.dp),
                     )
-                }
-                LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier.weight(1f).height(3.dp)
-                        .padding(horizontal = 8.dp)
-                        .clip(MaterialTheme.shapes.extraSmall),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                )
-                if (totalChapters > 1) {
+                    Slider(
+                        value = sliderValue,
+                        onValueChange = { seekValue = it },
+                        onValueChangeFinished = {
+                            seekValue?.let { v ->
+                                val raw = (v * totalChapters).coerceIn(0f, totalChapters.toFloat())
+                                val idx = raw.toInt().coerceIn(0, totalChapters - 1)
+                                val withinPct = ((raw - idx) * 100f).toInt().coerceIn(0, 99)
+                                // 注意：即使章号没变也要触发 — 用户可能在本章内拖位置。
+                                // 旧实现 `if (idx != currentChapter)` 会吃掉章内 seek。
+                                onSeekFullBook(idx, withinPct)
+                            }
+                            seekValue = null
+                        },
+                        valueRange = 0f..1f,
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor = MaterialTheme.colorScheme.primary,
+                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                            inactiveTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                        ),
+                    )
                     Text("下一章",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
@@ -304,6 +383,16 @@ fun ReaderControlBar(
                             .padding(vertical = 4.dp, horizontal = 2.dp),
                     )
                 }
+            } else {
+                // 单章场景仅画细线进度条做装饰
+                LinearProgressIndicator(
+                    progress = { baseProgress },
+                    modifier = Modifier.fillMaxWidth().height(3.dp)
+                        .padding(horizontal = 8.dp)
+                        .clip(MaterialTheme.shapes.extraSmall),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                )
             }
         }
     }
@@ -361,12 +450,27 @@ fun ReaderSettingsPanel(
     onChineseConvertModeChange: (Int) -> Unit = {},
     footerRight: String = "page_progress",
     onFooterRightChange: (String) -> Unit = {},
+    /**
+     * #1：还原默认排版参数（字号/行距/段距/页边距/字体）。
+     * 仅触发 [com.morealm.app.presentation.reader.ReaderSettingsController.resetCurrentStyleParams]，
+     * 不动配色 / customCss / 背景图。
+     */
+    onResetStyle: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val moColors = LocalMoRealmColors.current
     var fontSize by remember { mutableFloatStateOf(currentFontSize) }
     var lineHeight by remember { mutableFloatStateOf(currentLineHeight) }
     var selectedFont by remember { mutableStateOf(currentFont) }
+
+    // ── #7 防抖：段距 / 行距 chip 触发的重排开销大（整章重新分页 + 缓存失效），
+    //   连点会形成 N 个并发布局任务，最后一次完成时其他被丢弃 → 用户看到「点了
+    //   半天没生效」。state 立刻改保证 chip 视觉即时反馈，setter 通过可取消 Job
+    //   延后 ~160ms 派发；新点击 cancel 老 Job，最终只有最后一次值进入 Room →
+    //   排版引擎。160ms 足以合并连点，又不让用户感觉「卡了半秒」。
+    val debounceScope = rememberCoroutineScope()
+    var lineHeightJob by remember { mutableStateOf<Job?>(null) }
+    var paraSpaceJob by remember { mutableStateOf<Job?>(null) }
 
     Surface(
         modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
@@ -384,11 +488,41 @@ fun ReaderSettingsPanel(
                 .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
                 .align(Alignment.CenterHorizontally))
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
+
+            // ── #1 还原默认 — 一行右对齐紧凑按钮 ──
+            //
+            // 放在面板顶部、drag handle 之下：用户拖参数翻车想"重置"时第一眼看到。
+            // 用 TextButton + 小字号 + 右对齐，避免抢主操作区的视觉权重。
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = onResetStyle,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Icon(
+                        Icons.Default.RestartAlt, null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "还原默认",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
 
             // ── Reader Style Presets ──
             if (readerStyles.isNotEmpty()) {
-                Text("阅读样式", style = MaterialTheme.typography.labelMedium,
+                // #4：原「阅读样式」与下方「主题」名字撞，改为「排版预设」表明此处只切排版
+                Text("排版预设", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                 Spacer(Modifier.height(8.dp))
                 Row(
@@ -644,7 +778,15 @@ fun ReaderSettingsPanel(
                 listOf(1.5f to "紧凑", 1.8f to "适中", 2.0f to "宽松", 2.4f to "超宽").forEach { (v, l) ->
                     FilterChip(
                         selected = lineHeight == v,
-                        onClick = { lineHeight = v; onLineHeightChange(v) },
+                        onClick = {
+                            lineHeight = v
+                            // #7 取消上一个未派发的 setter，仅 160ms 后再写
+                            lineHeightJob?.cancel()
+                            lineHeightJob = debounceScope.launch {
+                                delay(160)
+                                onLineHeightChange(v)
+                            }
+                        },
                         label = { Text(l) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
@@ -663,7 +805,15 @@ fun ReaderSettingsPanel(
                 listOf(0.5f to "紧凑", 1.0f to "适中", 1.4f to "宽松", 2.0f to "超宽").forEach { (v, l) ->
                     FilterChip(
                         selected = paraSpace == v,
-                        onClick = { paraSpace = v; onParagraphSpacingChange(v) },
+                        onClick = {
+                            paraSpace = v
+                            // #7 同上：取消上一个再延后派发
+                            paraSpaceJob?.cancel()
+                            paraSpaceJob = debounceScope.launch {
+                                delay(160)
+                                onParagraphSpacingChange(v)
+                            }
+                        },
                         label = { Text(l) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
@@ -735,9 +885,14 @@ fun ReaderSettingsPanel(
 
             // ── Theme ──
             if (allThemes.isNotEmpty()) {
-                Text("主题", style = MaterialTheme.typography.labelMedium,
+                // #4：与上方「排版预设」做对照，改为「配色主题」明确语义。
+                Text("配色主题", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                 Spacer(Modifier.height(6.dp))
+                // #4：选中标签原本只在卡片下方居中显示「当前主题名」一行，
+                // 用户容易误以为「整组卡片都叫这个名字」。改为每张卡下面都显示自己的
+                // 名字（与上面「排版预设」对齐）；选中卡名字用主色 + 加粗即可，
+                // 不再额外画底部一行汇总。
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxWidth(),
@@ -747,47 +902,53 @@ fun ReaderSettingsPanel(
                         val bgColor = theme.readerBackground.toComposeColor()
                         val fgColor = theme.readerTextColor.toComposeColor()
                         val acColor = theme.accentColor.toComposeColor()
-                        Box(
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
-                                .size(40.dp)
-                                .clip(MaterialTheme.shapes.small)
-                                .background(bgColor)
-                                .then(
-                                    if (isActive) Modifier.background(
-                                        androidx.compose.ui.graphics.Color.Transparent
-                                    ) else Modifier
-                                )
                                 .semantics {
-                                    contentDescription = "主题：${theme.name}"
+                                    contentDescription = "配色主题：${theme.name}"
                                     role = Role.Button
                                 }
                                 .clickable { onThemeChange(theme.id) },
-                            contentAlignment = Alignment.Center,
                         ) {
-                            Text(
-                                "文",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = fgColor,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            if (isActive) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .fillMaxWidth()
-                                        .height(3.dp)
-                                        .background(acColor, RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(bgColor),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "文",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = fgColor,
+                                    fontWeight = FontWeight.Bold,
                                 )
+                                if (isActive) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .fillMaxWidth()
+                                            .height(3.dp)
+                                            .background(
+                                                acColor,
+                                                RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp),
+                                            ),
+                                    )
+                                }
                             }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                theme.name,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = if (isActive) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1,
+                            )
                         }
                     }
                 }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    allThemes.find { it.id == activeThemeId }?.name ?: "",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                )
             }
 
             Spacer(Modifier.height(16.dp))

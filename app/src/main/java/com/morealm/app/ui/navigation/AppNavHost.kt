@@ -1,5 +1,6 @@
 ﻿package com.morealm.app.ui.navigation
 
+import android.net.Uri
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -120,24 +121,38 @@ fun MoRealmNavHost(
             modifier = Modifier.padding(innerPadding),
         ) {
             composable("main_tabs") {
+                // ── 节日彩蛋：当天首次进主页弹一次 ──
+                //
+                // 进程级防重（HolidayPresenter.checkedThisSession） + DataStore lastShownDate
+                // 双层去重，配置变化、tab 切换、横竖屏旋转都不会重弹。
+                val holidayPresenter: com.morealm.app.presentation.holiday.HolidayPresenter =
+                    hiltViewModel()
+                val activeHoliday by holidayPresenter.activeHoliday.collectAsStateWithLifecycle()
+                LaunchedEffect(Unit) { holidayPresenter.checkOnce() }
+                activeHoliday?.let { h ->
+                    com.morealm.app.ui.holiday.HolidayPopup(
+                        holiday = h,
+                        onDismiss = { holidayPresenter.dismiss() },
+                    )
+                }
+
                 val columns = when {
                     windowSizeClass.widthSizeClass >= WindowWidthSizeClass.Expanded -> 5
                     windowSizeClass.widthSizeClass >= WindowWidthSizeClass.Medium -> 4
                     else -> 3
                 }
                 // Stabilize lambdas to avoid recomposition of child screens
-                val onBookClick = remember { { bookId: String -> navController.safeNavigate("reader/$bookId") } }
-                val onBookLongClick = remember { { bookId: String -> navController.safeNavigate("detail/$bookId") } }
+                val onBookClick = remember { { bookId: String -> navController.navigateToReader(bookId) } }
+                val onBookLongClick = remember { { bookId: String -> navController.navigateToDetail(bookId) } }
                 // Smart router: WEB books go to the detail page so the user can confirm
                 // before reading (Legado-parity); local files open straight in the reader.
                 val onBookOpen = remember {
                     { book: com.morealm.app.domain.entity.Book ->
-                        val route = if (book.format == com.morealm.app.domain.entity.BookFormat.WEB) {
-                            "detail/${book.id}"
+                        if (book.format == com.morealm.app.domain.entity.BookFormat.WEB) {
+                            navController.navigateToDetail(book.id)
                         } else {
-                            "reader/${book.id}"
+                            navController.navigateToReader(book.id)
                         }
-                        navController.safeNavigate(route)
                     }
                 }
                 val onSearchTab = remember(switchTab) { { switchTab(1) } }
@@ -264,7 +279,7 @@ fun MoRealmNavHost(
                         BottomTab.Discover -> SearchScreen(
                             onBack = onSearchBack,
                             onNavigateReader = { bookId ->
-                                navController.navigate("reader/$bookId")
+                                navController.navigateToReader(bookId)
                             },
                         )
                         BottomTab.Listen -> ListenScreen(
@@ -374,7 +389,7 @@ fun MoRealmNavHost(
                 com.morealm.app.ui.profile.BookmarksScreen(
                     onBack = { navController.safePopBackStack() },
                     onOpenBook = { bookId, _ ->
-                        navController.safeNavigate("reader/$bookId")
+                        navController.navigateToReader(bookId)
                     },
                 )
             }
@@ -410,7 +425,7 @@ fun MoRealmNavHost(
                 CacheBookScreen(
                     onBack = { navController.safePopBackStack() },
                     onOpenReader = { bookId ->
-                        navController.safeNavigate("reader/$bookId")
+                        navController.navigateToReader(bookId)
                     },
                 )
             }
@@ -479,8 +494,8 @@ fun MoRealmNavHost(
                         bookId = bookId,
                         onBack = { navController.safePopBackStackOrHome() },
                         onNavigateToBook = { targetBookId ->
-                            navController.safeNavigate("reader/$targetBookId") {
-                                popUpTo("reader/$bookId") { inclusive = true }
+                            navController.navigateToReader(targetBookId) {
+                                popUpTo("reader/${Uri.encode(bookId)}") { inclusive = true }
                             }
                         },
                         onNavigateToReplaceRule = { ruleId ->
@@ -502,7 +517,7 @@ fun MoRealmNavHost(
                 BookDetailScreen(
                     bookId = bookId,
                     onBack = { navController.safePopBackStack() },
-                    onRead = { navController.safeNavigate("reader/$bookId") },
+                    onRead = { navController.navigateToReader(bookId) },
                 )
             }
         }
@@ -584,6 +599,28 @@ fun MoRealmNavHost(
         )
         } // Box
     }
+}
+
+/**
+ * 走 reader/detail 路由前必须 Uri.encode bookId。
+ *
+ * Legado 搬家来的 Book.id 直接是完整 URL（如 https://m.qingrenyouxi.com/111/111173/）；
+ * Navigation Compose 用 path 段匹配路由，未编码的 `/`、`?`、`,`、`{` 会让
+ * `reader/{bookId}` 匹配失败并抛 IllegalArgumentException。统一在拼路由这一步
+ * 编码；composable 接收侧 entry.arguments?.getString("bookId") 自带 URL 解码。
+ */
+private fun NavController.navigateToReader(
+    bookId: String,
+    builder: (androidx.navigation.NavOptionsBuilder.() -> Unit)? = null,
+) {
+    safeNavigate("reader/${Uri.encode(bookId)}", builder)
+}
+
+private fun NavController.navigateToDetail(
+    bookId: String,
+    builder: (androidx.navigation.NavOptionsBuilder.() -> Unit)? = null,
+) {
+    safeNavigate("detail/${Uri.encode(bookId)}", builder)
 }
 
 /**

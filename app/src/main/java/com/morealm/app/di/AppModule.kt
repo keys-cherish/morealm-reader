@@ -503,6 +503,21 @@ private val MIGRATION_27_28 = object : Migration(27, 28) {
     }
 }
 
+/**
+ * v28 → v29 jsScript 字段曾在工作区临时存在，配套整文件 JS 书源（lifecycle 模型）的导入支持。
+ * 后续放弃该方向（与 Legado 规则模型不兼容、维护负担过大），从未 commit / push 到 main。
+ *
+ * **重要修正**：曾经在此处用 `fallbackToDestructiveMigrationFrom(29)` 给开发期残留的
+ * v29 DB 开 destructive 口子。但 Android Auto Backup 会跨 applicationId 还原
+ * 老 DB（debug 包新装也可能拿到 v29），命中后 onDestructiveMigration 静默清空表，
+ * 加上旧实现里 callback 调 restoreFromBackup 形成「清空-恢复-再清空」死循环。
+ *
+ * 现在的策略（参考 Legado）：
+ *   - **不开 fallback**。遇到 v29 这种异常版本，Room 直接 throw，app 启动崩溃，
+ *     **DB 文件原封不动**——用户能从 db_backup/ 或 WebDav 手动恢复，绝不静默丢数据。
+ *   - 真要手动恢复用 `db_backup/` 里的备份，或者重装能识别 v29 的旧版本 build。
+ */
+
 private val MIGRATION_9_10 = object : Migration(9, 10) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // book_sources 表结构完全重构，删除旧表并重建
@@ -598,15 +613,78 @@ private fun restoreFromBackup(context: Context): Boolean {
     }
 }
 
+/**
+ * 直接打开 SQLite 文件读 user_version——不走 Room、不触发 migration 校验。
+ *
+ * 用途：在 Room.databaseBuilder.build() **之前**判断当前 DB 文件 schema 版本，
+ * 决定是否要先调 [SnapshotManager.preserveAsPreSchemaSnapshot]。
+ *
+ * 失败返回 -1（DB 文件不存在 / corrupt / 无法打开）。
+ */
+internal fun readSqliteUserVersionSafely(context: Context, dbName: String): Int {
+    return try {
+        val dbFile = context.getDatabasePath(dbName)
+        if (!dbFile.exists()) return -1
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            dbFile.absolutePath,
+            null,
+            android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+        ).use { it.version }
+    } catch (e: Exception) {
+        AppLog.warn("DB", "readSqliteUserVersionSafely failed: ${e.message}")
+        -1
+    }
+}
+
+/**
+ * 当前 Room schema 版本。与 [AppDatabase] @Database(version = N) 保持一致。
+ * 用于 [readSqliteUserVersionSafely] 比较「当前 DB 文件版本 vs 代码版本」，决定
+ * 是否要在 Room 打开前 [SnapshotManager.preserveAsPreSchemaSnapshot]。
+ *
+ * 提到 top-level 而不是放 [AppModule] object 内部，方便其他模块（如
+ * [com.morealm.app.domain.db.recovery.RecoveryGuard]）直接 import 用。
+ */
+internal const val APP_DB_SCHEMA_VERSION = 28
+
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
 
     @Provides
     @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
-        // Backup before Room opens (covers both upgrade and downgrade)
+    fun provideDatabase(
+        @ApplicationContext context: Context,
+        snapshotManager: com.morealm.app.domain.db.snapshot.SnapshotManager,
+    ): AppDatabase {
+        // ── DB 升级前的双保险 ──
+        //
+        // 1) 物理 .db 文件备份（已有逻辑，保留最近 2 份在 db_backup/）。
+        //    优点：恢复快（直接 swap 文件）。缺点：跨 schema 版本不能恢复。
         backupDatabaseBeforeMigration(context)
+        //
+        // 2) JSON 全量快照「升级前紧急副本」：把当前最新 latest snapshot 文件复制成
+        //    snapshot_pre_v<priorVersion>.json。priorVersion 来自 SQLite 文件直接读取
+        //    user_version（不走 Room，避免触发 migration）。
+        //    优点：跨 schema 版本能恢复。缺点：只能恢复到上次 daily snapshot 时点。
+        //
+        //    触发条件：priorVersion 有效（>= 1）且不等于当前 [APP_DB_SCHEMA_VERSION]
+        //    —— 包含两种危险路径：
+        //      a) 升级（priorVersion < current）：新版 migration 可能写坏数据
+        //      b) 降级（priorVersion > current）：Room 不支持降级会 throw，
+        //         先 preserve 保住老数据，用户能从 RecoveryActivity 选 pre_v 文件
+        //         恢复到当前 schema。
+        //    首次安装（priorVersion = -1）跳过；同版本启动跳过。
+        runCatching {
+            val priorVersion = readSqliteUserVersionSafely(context, "morealm.db")
+            if (priorVersion >= 1 && priorVersion != APP_DB_SCHEMA_VERSION) {
+                AppLog.info(
+                    "DB",
+                    "Schema version change detected: $priorVersion → $APP_DB_SCHEMA_VERSION." +
+                        " Preserving pre-schema snapshot.",
+                )
+                snapshotManager.preserveAsPreSchemaSnapshot(priorVersion)
+            }
+        }.onFailure { AppLog.warn("DB", "preserve pre-schema snapshot failed: ${it.message}") }
 
         return Room.databaseBuilder(context, AppDatabase::class.java, "morealm.db")
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
@@ -626,11 +704,33 @@ object AppModule {
                 MIGRATION_26_27,
                 MIGRATION_27_28,
             )
-            // On downgrade: try restore from backup, otherwise keep tables as-is
+            // 不再开 fallbackToDestructiveMigrationFrom(29)。
+            //
+            // 历史 bug：曾给开发期残留的 v29 DB 开口子，但配合 onDestructiveMigration
+            // 里硬调 restoreFromBackup 文件 swap，触发了「清空-恢复-再清空」70 次循环，
+            // 用户数据被实际清空（参考 git log + 注释说明）。
+            //
+            // 现策略（Legado 路线）：宁可启动崩溃也绝不静默清数据。遇到任何版本不匹配，
+            // Room 自己 throw IllegalStateException，DB 文件原样保留在 /databases/，
+            // 用户能用 adb / 文件管理器把 db 拖出来研究恢复，或从 db_backup/ 选历史备份。
+            // On destructive migration: 只记录、不自动 restore。
+            //
+            // 历史 bug：曾在此回调里调用 restoreFromBackup(context) 试图把备份 .db 文件
+            // copy 回 dbFile。但此时 Room 已经持有 connection、表已经被清空 —— 文件层面
+            // hot swap 不能挽回 Room 的内部状态，下次 query 仍然 schema mismatch，再次
+            // 触发 destructive，又调 restore，又被清空…… 形成「清空-恢复-再清空」死循环
+            // （日志里看到 70 次 destructive，每次都真的清空一次数据）。
+            //
+            // 现在的策略：destructive 触发后**不再自动 restore**，只打 error 日志。
+            // 用户启动后看到空数据 → 知道出事了 → 自己去 db_backup/ 目录或 WebDav
+            // 手动恢复。宁可启动后看到空白要求人工恢复，也不要静默循环清数据。
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
-                    AppLog.error("DB", "Destructive migration triggered! Attempting restore...")
-                    restoreFromBackup(context)
+                    AppLog.error(
+                        "DB",
+                        "Destructive migration triggered. Data has been wiped." +
+                            " Manual restore required: db_backup/ or WebDav.",
+                    )
                 }
             })
             .build()
@@ -657,6 +757,18 @@ object AppModule {
     // HttpTts 自定义朗读源 DAO —— 之前 AppDatabase 已声明 abstract fun，但 Hilt provider
     // 落了；TtsService / ListenViewModel 现在要 @Inject 拿这个 DAO 选源、加载、试听。
     @Provides fun provideHttpTtsDao(db: AppDatabase): HttpTtsDao = db.httpTtsDao()
+
+    /**
+     * JSON 全量快照管理器。Singleton——它是无状态对象（路径 + Json 配置），
+     * 复用一个实例即可，避免 RecoveryActivity / Application / Settings 各拿各的导致
+     * filesDir 句柄竞争。
+     */
+    @Provides
+    @Singleton
+    fun provideSnapshotManager(
+        @ApplicationContext context: Context,
+    ): com.morealm.app.domain.db.snapshot.SnapshotManager =
+        com.morealm.app.domain.db.snapshot.SnapshotManager(context)
 
     @Provides
     @Singleton

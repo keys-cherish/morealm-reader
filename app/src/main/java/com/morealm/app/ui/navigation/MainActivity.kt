@@ -22,6 +22,20 @@ class MainActivity : ComponentActivity() {
 
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 在任何 Hilt 注入触发 AppDatabase 之前，先检测是否需要进入恢复流程。
+        // - 如果 SQLite user_version > 当前 schema → Room 一旦打开就 throw，必须先跳走
+        // - 如果存在 recovery_pending marker → 上轮恢复未完成，直接进 RecoveryActivity 接力
+        // 注意：必须在 super.onCreate / hiltViewModel() / setContent 之前 ——
+        // 后者会触发 ViewModel 创建链 → DAO 注入 → DB 打开。
+        com.morealm.app.domain.db.recovery.RecoveryGuard.shouldEnterRecovery(this)?.let { reason ->
+            startActivity(
+                com.morealm.app.ui.recovery.RecoveryActivity.newIntent(this, reason)
+            )
+            super.onCreate(savedInstanceState)
+            finish()
+            return
+        }
+
         updateContinueReadingRequest(intent)
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)

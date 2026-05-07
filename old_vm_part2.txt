@@ -1,0 +1,260 @@
+            }
+        }
+    }
+
+    private suspend fun searchSingleSource(searchId: Int, source: BookSource, keyword: String, timeoutMs: Long) {
+        if (!isCurrentSearch(searchId)) return
+        updateSourceStatus(searchId, source.bookSourceUrl, SourceStatus.SEARCHING)
+        try {
+            val searchBooks = withTimeout(timeoutMs) {
+                searchRepo.searchOnlineSource(source, keyword)
+            }
+            if (!isCurrentSearch(searchId)) return
+            val mapped = searchBooks.map { sb ->
+                SearchResult(
+                    title = sb.name,
+                    author = sb.author,
+                    coverUrl = sb.coverUrl,
+                    bookUrl = sb.bookUrl,
+                    sourceName = decodeHtmlEntities(sb.originName.ifBlank { source.bookSourceName }),
+                    sourceUrl = sb.origin,
+                    sourceType = sb.type,
+                    intro = sb.intro ?: "",
+                    kind = sb.kind,
+                    wordCount = sb.wordCount,
+                    latestChapter = sb.latestChapterTitle,
+                    searchBook = sb,
+                )
+            }.filter { result ->
+                // 只把 Legado 默认文本书源送入小说阅读器，并过滤掉标题和作者都不包含关键词的结果。
+                result.sourceType == TEXT_BOOK_SOURCE_TYPE &&
+                    (result.title.contains(keyword, ignoreCase = true) ||
+                    result.author.contains(keyword, ignoreCase = true)
+                    )
+            }
+            if (mapped.isNotEmpty()) {
+                mergeResults(searchId, mapped, keyword)
+            }
+            updateSourceStatus(searchId, source.bookSourceUrl, SourceStatus.DONE)
+        } catch (e: TimeoutCancellationException) {
+            updateSourceStatus(searchId, source.bookSourceUrl, SourceStatus.FAILED, "超时")
+            AppLog.warn("Search", "${decodeHtmlEntities(source.bookSourceName)} timeout")
+        } catch (e: Exception) {
+            val message = e.toSearchErrorMessage()
+            updateSourceStatus(searchId, source.bookSourceUrl, SourceStatus.FAILED, message)
+            if (e is IOException) {
+                AppLog.warn("Search", "${decodeHtmlEntities(source.bookSourceName)} failed: ${e.message}")
+            } else {
+                AppLog.warn("Search", "${decodeHtmlEntities(source.bookSourceName)} failed: ${e.message}", e)
+            }
+        }
+    }
+
+    private suspend fun mergeResults(searchId: Int, newItems: List<SearchResult>, keyword: String) {
+        mergeMutex.withLock {
+            if (!isCurrentSearch(searchId)) return@withLock
+            val current = ArrayList(_results.value)
+            for (item in newItems) {
+                val existing = current.find {
+                    (it.title == item.title && it.author == item.author) ||
+                    (it.bookUrl.isNotBlank() && it.bookUrl == item.bookUrl)
+                }
+                if (existing != null) {
+                    // Prefer the result with more info (cover, intro)
+                    if (item.coverUrl != null && existing.coverUrl == null ||
+                        item.intro.length > existing.intro.length) {
+                        current[current.indexOf(existing)] = item
+                    }
+                } else {
+                    current.add(item)
+                }
+            }
+            val sorted = current.sortedWith(
+                compareByDescending<SearchResult> {
+                    it.title == keyword
+                }.thenByDescending {
+                    it.title.startsWith(keyword)
+                }.thenByDescending {
+                    it.title.contains(keyword)
+                }.thenByDescending {
+                    it.author == keyword
+                }.thenByDescending {
+                    it.coverUrl != null
+                }.thenByDescending {
+                    it.intro.length
+                }
+            )
+            _results.value = sorted
+        }
+    }
+
+    private fun isCurrentSearch(searchId: Int): Boolean = searchGeneration.get() == searchId
+
+    private fun updateSourceStatus(searchId: Int, sourceUrl: String, status: SourceStatus, errorMessage: String? = null) {
+        _sourceProgress.update { progress ->
+            if (!isCurrentSearch(searchId)) return@update progress
+            progress.map {
+                if (it.sourceUrl == sourceUrl) {
+                    it.copy(status = status, errorMessage = errorMessage)
+                } else {
+                    it
+                }
+            }
+        }
+    }
+
+    private fun markUnfinishedSourcesFailed(searchId: Int, message: String) {
+        _sourceProgress.update { progress ->
+            if (!isCurrentSearch(searchId)) return@update progress
+            markUnfinished(progress, message)
+        }
+    }
+
+    private fun markUnfinishedSourcesFailed(message: String) {
+        _sourceProgress.update { progress -> markUnfinished(progress, message) }
+    }
+
+    private fun markUnfinished(progress: List<SourceSearchProgress>, message: String): List<SourceSearchProgress> {
+        return progress.map {
+            when (it.status) {
+                SourceStatus.WAITING, SourceStatus.SEARCHING -> it.copy(
+                    status = SourceStatus.FAILED,
+                    errorMessage = message,
+                )
+                SourceStatus.DONE, SourceStatus.FAILED -> it
+            }
+        }
+    }
+
+    /**
+     * Add an online search result to the local shelf as a web book.
+     * If the book already exists (same bookUrl + sourceUrl), return its id.
+     * Returns the bookId via callback for immediate navigation.
+     *
+     * 仅在「真正新加」时通过 [_shelfAddedEvents] 发射事件 —— 已在书架的书第二次
+     * 点击不弹 Snackbar，避免误以为加了第二次。withDownload=false 表示这是
+     * "点搜索结果直接进阅读器"路径，UI 决定 Snackbar 文案。
+     */
+    fun addToShelfAndRead(result: SearchResult, onBookReady: (String) -> Unit) {
+        addToShelfInternal(result, withDownload = false, onBookReady = onBookReady)
+    }
+
+    fun addToShelf(result: SearchResult) {
+        addToShelfAndRead(result) { /* no-op navigation */ }
+    }
+
+    /**
+     * Add to shelf and immediately start downloading all chapters.
+     * 与 [addToShelfAndRead] 调同一私有实现，但传 withDownload=true 让 Snackbar
+     * 显示「已加入书架并开始缓存」文案；撤销时同步停止下载。
+     */
+    fun addToShelfAndDownload(result: SearchResult) {
+        addToShelfInternal(result, withDownload = true) { bookId ->
+            cacheRepo.startDownload(bookId, result.sourceUrl)
+        }
+    }
+
+    /**
+     * 加书核心逻辑。三个公开入口（[addToShelfAndRead] / [addToShelf] /
+     * [addToShelfAndDownload]）都委托到这里，确保 ShelfAddedEvent 的发射时机
+     * 单一可控（仅在 [bookRepo.insert] 成功后、回调之前）。
+     */
+    private fun addToShelfInternal(
+        result: SearchResult,
+        withDownload: Boolean,
+        onBookReady: (String) -> Unit,
+    ) {
+        if (result.sourceType != TEXT_BOOK_SOURCE_TYPE) {
+            AppLog.warn("Search", "Blocked non-text source result: ${result.title} from ${result.sourceName}")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val existing = bookRepo.findByBookUrl(result.bookUrl, result.sourceUrl)
+                if (existing != null) {
+                    AppLog.info("Search", "Already on shelf: ${result.title}")
+                    withContext(Dispatchers.Main) { onBookReady(existing.id) }
+                    return@launch
+                }
+                val bookId = java.util.UUID.randomUUID().toString()
+                val rawBook = Book(
+                    id = bookId,
+                    title = result.title,
+                    author = result.author,
+                    coverUrl = result.coverUrl,
+                    sourceUrl = result.sourceUrl,
+                    sourceId = result.sourceUrl,
+                    bookUrl = result.bookUrl,
+                    tocUrl = result.searchBook?.tocUrl?.takeIf { it.isNotBlank() },
+                    origin = result.sourceUrl,
+                    originName = result.sourceName,
+                    description = result.intro.ifBlank { null },
+                    kind = result.kind?.takeIf { it.isNotBlank() },
+                    wordCount = result.wordCount?.takeIf { it.isNotBlank() },
+                    format = BookFormat.WEB,
+                    addedAt = System.currentTimeMillis(),
+                )
+                val book = rawBook.copy(folderId = autoGroupClassifier.classify(rawBook))
+                bookRepo.insert(book)
+                AppLog.info("Search", "Added to shelf: ${result.title} from ${result.sourceName}")
+                // 加书事件 — UI 端订阅后弹 Snackbar 反馈+撤销。emit 在 onBookReady
+                // 之前，让 SearchScreen 在用户被 navigate 走之前就先收到事件
+                // （加上 SharedFlow.replay=1 + UI 时间戳过滤，跨 navigate 也能补显示）。
+                _shelfAddedEvents.emit(
+                    ShelfAddedEvent(
+                        bookId = bookId,
+                        title = result.title,
+                        withDownload = withDownload,
+                    )
+                )
+                // 实时同步 toc：触发后台单本刷新，让 totalChapters / lastChapter 字段立即落库。
+                // ShelfRefreshController.refreshOne 在 oldTotal == 0 时跳过 lastCheckCount 写入，
+                // 所以新书首屏不会蹦出"N 新"红字徽章。
+                refreshController.refresh(listOf(book), parallelism = 1)
+                withContext(Dispatchers.Main) { onBookReady(bookId) }
+            } catch (e: Exception) {
+                AppLog.error("Search", "Failed to add to shelf: ${e.message}", e)
+            }
+        }
+    }
+
+    /**
+     * 撤销加书。删除 [bookId] 对应记录；若 [stopDownload]=true 同步停止当前缓存
+     * 任务（CacheBookService 是单例，stopDownload 没有 bookId 维度，简单粗暴
+     * stop 当前下载即可——撤销动作发生在加书后短时间内，命中率高，误伤其他下载
+     * 的概率低）。
+     *
+     * 删除走 [bookRepo.deleteById]，由 Repository 内部级联清理章节 / 缓存等
+     * 关联数据。失败不抛 — UI 已经 dismiss Snackbar，再弹错也意义不大；日志兜底。
+     */
+    fun undoAddToShelf(bookId: String, stopDownload: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (stopDownload) {
+                    runCatching { cacheRepo.stopDownload() }
+                }
+                bookRepo.deleteById(bookId)
+                AppLog.info("Search", "Undo addToShelf: removed bookId=$bookId")
+            } catch (e: Exception) {
+                AppLog.warn("Search", "Undo addToShelf failed: ${e.message}", e)
+            }
+        }
+    }
+
+    private fun decodeHtmlEntities(value: String): String {
+        if (value.isBlank()) return value
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            Html.fromHtml(value, Html.FROM_HTML_MODE_LEGACY).toString()
+        } else {
+            @Suppress("DEPRECATION")
+            Html.fromHtml(value).toString()
+        }
+    }
+
+    private fun Exception.toSearchErrorMessage(): String {
+        return when (this) {
+            is IOException -> message?.take(80)?.let { "网络错误：$it" } ?: "网络错误"
+            else -> message?.take(80) ?: this::class.java.simpleName
+        }
+    }
+}

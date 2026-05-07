@@ -295,15 +295,37 @@ fun LazyScrollRenderer(
                 lineIdx = i
             } else break
         }
-        val offsetPx = targetParagraph.linePositions
+        val rawOffsetPx = targetParagraph.linePositions
             .getOrNull(lineIdx)
             ?.toInt()
             ?.coerceAtLeast(0)
             ?: 0
+        // ── 视野锚位补偿（书签 / 续读 / 搜索高亮可见性）──
+        //
+        // 朴素 scrollToItem(idx, rawOffsetPx) 把目标行贴 viewport 顶，用户跳进来
+        // 第一眼看不到高亮（要么贴到状态栏边、要么被 ReaderTopBar 遮）。让锚点落
+        // 在视野**正中**，目标段在阅读舒适区，前后文都保留一段上下文。
+        //
+        // 实现：把 rawOffsetPx 减掉 viewport 高的 1/2。LazyListState.scrollToItem
+        // 的 scrollOffset 允许负值（语义：在 item 顶之前还要往上多滚 |x| px，露出
+        // 前一段的尾部）。Compose 1.6+ 行为一致；遇到 list 最顶端时 LazyColumn 自然
+        // clamp 到 0 不会越界。
+        //
+        // viewport 高从 layoutInfo 取。首帧 layoutInfo 可能还没 measure（viewport=0），
+        // fallback 到 0：等价于老行为「贴顶」，下一次跳转视野有了再生效。这一帧的
+        // 不完美比卡死强。
+        //
+        // 历史值：曾是 viewport / 3（仿静读天下"上 1/3"）。用户反馈搜索跳转后命中
+        // 段在屏幕偏上"看不到"，统一改为 1/2（书签/续读/TOC/搜索均居中）。
+        val viewportHeight = (listState.layoutInfo.viewportEndOffset -
+            listState.layoutInfo.viewportStartOffset).coerceAtLeast(0)
+        val anchorOffset = viewportHeight / 2
+        val offsetPx = rawOffsetPx - anchorOffset
         listState.scrollToItem(targetIdx, offsetPx)
         AppLog.info(
             "BookmarkDebug",
             "LazyScroll JUMP scrollToItem(item=$targetIdx, offset=${offsetPx}px)" +
+                " rawOffset=${rawOffsetPx}px anchorOffset=${anchorOffset}px viewport=${viewportHeight}px" +
                 " char-level chIdx=$jumpChapterIndex chPos=$jumpChapterPosition" +
                 " paragraphNum=${pos.paragraphNum} charOffsetInPara=${pos.charOffset}" +
                 " lineIdx=$lineIdx token=$jumpToken paragraphs.size=${paragraphs.size}",

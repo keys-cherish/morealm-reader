@@ -120,7 +120,10 @@ class AppPreferences @Inject constructor(
         val HEADSET_BUTTON_PAGE = booleanPreferencesKey("headset_button_page")
         val VOLUME_KEY_LONG_PRESS = stringPreferencesKey("volume_key_long_press") // off|page|chapter
         val RESUME_LAST_READ = booleanPreferencesKey("resume_last_read")
+        val SHELF_SORT_MODE = stringPreferencesKey("shelf_sort_mode") // title|recent|addTime|format
         val LONG_PRESS_UNDERLINE = booleanPreferencesKey("long_press_underline")
+        /** 节日彩蛋去重：今天的彩蛋已弹过则跳过。值 = LocalDate.toString()（"2026-04-19"）。 */
+        val LAST_HOLIDAY_SHOWN_DATE = stringPreferencesKey("last_holiday_shown_date")
         val SCREEN_TIMEOUT = intPreferencesKey("screen_timeout") // 0=system, -1=never, else seconds
         val SHOW_STATUS_BAR = booleanPreferencesKey("show_status_bar")
         val SHOW_CHAPTER_NAME = booleanPreferencesKey("show_chapter_name")
@@ -393,8 +396,16 @@ class AppPreferences @Inject constructor(
     val resumeLastRead: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.RESUME_LAST_READ] ?: false }
 
+    /** 书架排序模式持久化。默认 "title"（自然排序），与 ShelfViewModel.sortBooks 的 else 分支对齐。 */
+    val shelfSortMode: Flow<String> = context.dataStore.data
+        .map { it[Keys.SHELF_SORT_MODE] ?: "title" }
+
     val longPressUnderline: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.LONG_PRESS_UNDERLINE] ?: true }
+
+    /** 节日彩蛋去重：返回上次弹窗的日期字符串；空串表示从未弹过。 */
+    val lastHolidayShownDate: Flow<String> = context.dataStore.data
+        .map { it[Keys.LAST_HOLIDAY_SHOWN_DATE] ?: "" }
 
     val screenTimeout: Flow<Int> = context.dataStore.data
         .map { it[Keys.SCREEN_TIMEOUT] ?: -1 }
@@ -655,7 +666,9 @@ class AppPreferences @Inject constructor(
     suspend fun setVolumeKeyReverse(enabled: Boolean) = update(Keys.VOLUME_KEY_REVERSE, enabled)
     suspend fun setHeadsetButtonPage(enabled: Boolean) = update(Keys.HEADSET_BUTTON_PAGE, enabled)
     suspend fun setVolumeKeyLongPress(mode: String) = update(Keys.VOLUME_KEY_LONG_PRESS, mode)
+    suspend fun setLastHolidayShownDate(date: String) = update(Keys.LAST_HOLIDAY_SHOWN_DATE, date)
     suspend fun setResumeLastRead(enabled: Boolean) = update(Keys.RESUME_LAST_READ, enabled)
+    suspend fun setShelfSortMode(mode: String) = update(Keys.SHELF_SORT_MODE, mode)
     suspend fun setLongPressUnderline(enabled: Boolean) = update(Keys.LONG_PRESS_UNDERLINE, enabled)
     suspend fun setScreenTimeout(seconds: Int) = update(Keys.SCREEN_TIMEOUT, seconds)
     suspend fun setShowStatusBar(show: Boolean) = update(Keys.SHOW_STATUS_BAR, show)

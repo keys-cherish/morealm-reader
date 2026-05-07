@@ -344,7 +344,7 @@ class AnalyzeUrl(
         }
         return runCatching {
             runBlocking(coroutineContext) {
-                okHttpClient.newCallStrResponse {
+                okHttpClient.newCallStrResponse(charset = charset) {
                     url(urlStr)
                     addHeaders(requestHeaders)
                     val contentType = requestHeaders["Content-Type"]
@@ -708,7 +708,7 @@ class AnalyzeUrl(
         }
         return concurrentRateLimiter.withLimit {
             setCookie()
-            val strResponse = okHttpClient.newCallStrResponse(retry) {
+            val strResponse = okHttpClient.newCallStrResponse(retry, charset) {
                 addHeaders(headerMap)
                 when (method) {
                     RequestMethod.POST -> {

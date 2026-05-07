@@ -442,6 +442,16 @@ class SimulationReadView(context: Context) : android.view.View(context) {
                 directionSet = true
                 setBitmaps()
                 isMoved = true
+                // Lock the curl corner once at slop break — matches Legado
+                // SimulationPageDelegate.setDirection(). Without this lock,
+                // every ACTION_MOVE recomputes cornerY from the live touch
+                // point, so a finger drifting across the screen midline
+                // flips the bezier surface direction repeatedly — visible
+                // to the user as "only the screen corners curl, the middle
+                // stays flat". Mapping startY to the nearest top/bottom
+                // edge keeps the curl axis stable for the whole drag.
+                val cornerX = if (isNext) width.toFloat() else 0f
+                drawHelper.calcCornerXY(cornerX, mapTouchY(y))
             }
         }
 
@@ -453,18 +463,40 @@ class SimulationReadView(context: Context) : android.view.View(context) {
             } else {
                 x - startX < 0
             }
-            // Adjust touchY for mid-screen drags (Legado SimulationPageDelegate.onTouch ACTION_MOVE)
-            val adjustedY = if (isNext) {
-                if (drawHelper.mCornerY > 0) {
-                    y.coerceAtMost(height.toFloat() - 1f)
-                } else {
-                    y.coerceAtLeast(1f)
-                }
-            } else y
-
-            drawHelper.setDirectionAware(x, adjustedY, isNext)
+            // touchX follows the finger; touchY is mapped to the locked
+            // edge for mid-screen drags so the curl visibly anchors to a
+            // page corner instead of the phantom midline.
+            drawHelper.setTouchPoint(x, mapTouchY(y))
             drawHelper.calcPoints()
             invalidate()
+        }
+    }
+
+    /**
+     * Map a raw finger Y to the touch Y the simulation engine should use,
+     * based on where the drag *started* and which way it's going. Ported
+     * from Legado [io.legado.app.ui.book.read.page.delegate.SimulationPageDelegate.onTouch]
+     * ACTION_MOVE branch — the rule that lets users start a page turn from
+     * anywhere on screen without the curl jumping between top and bottom.
+     *
+     * Rules (startY relative to view height h):
+     * - PREV (drag right): always animate from bottom edge → return h.
+     * - NEXT and startY in (h/3, h/2): upper-mid → snap touchY to top (1f).
+     * - NEXT and startY in [h/2, 2h/3): lower-mid → snap touchY to bottom (h).
+     * - Otherwise (startY in top or bottom third) → follow finger as-is.
+     *
+     * The PREV-always-bottom rule matches Legado's behavior: previous-page
+     * pulls always animate from the lower-left, regardless of where the
+     * finger started.
+     */
+    private fun mapTouchY(rawY: Float): Float {
+        val h = height.toFloat()
+        if (h <= 0f) return rawY
+        if (!isNext) return h
+        return when {
+            startY > h / 3f && startY < h / 2f -> 1f
+            startY >= h / 2f && startY < h * 2f / 3f -> h
+            else -> rawY
         }
     }
 
@@ -599,16 +631,25 @@ class SimulationReadView(context: Context) : android.view.View(context) {
             "PageTurnFlicker",
             "[3s] setBitmaps START isNext=$isNext viewWxH=${w}x$h",
         )
+        // Reuse idleBitmap as curBitmap when its dimensions match: it's the
+        // exact frame currently on screen and the same content the bezier
+        // curl needs for the front face. Saves one full-screen ARGB_8888
+        // allocation (~10MB) + drawBgBitmap blit + full text re-render at
+        // every gesture start. Visible especially on devices with a custom
+        // background image, where each renderPageToBitmap call also pays
+        // for a full-screen bitmap-to-bitmap copy.
+        val idle = idleBitmap
+        val reuseIdle = idle != null && !idle.isRecycled && idle.width == w && idle.height == h
+        curBitmap = if (reuseIdle) idle else provider(0, w, h)
         if (isNext) {
-            curBitmap = provider(0, w, h)
             nextBitmap = provider(1, w, h)
         } else {
-            curBitmap = provider(0, w, h)
             prevBitmap = provider(-1, w, h)
         }
         AppLog.debug(
             "PageTurnFlicker",
             "[3s] setBitmaps END curId=${curBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
+                " curReuseIdle=$reuseIdle" +
                 " prevId=${prevBitmap?.let { System.identityHashCode(it) } ?: "null"}" +
                 " nextId=${nextBitmap?.let { System.identityHashCode(it) } ?: "null"}",
         )

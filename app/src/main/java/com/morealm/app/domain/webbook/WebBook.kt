@@ -6,7 +6,9 @@ import com.morealm.app.domain.analyzeRule.AnalyzeUrl
 import com.morealm.app.domain.analyzeRule.RuleData
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.SearchBook
+import com.morealm.app.domain.http.BackstageWebView
 import com.morealm.app.domain.http.StrResponse
+import com.morealm.app.core.log.AppLog
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 
@@ -237,11 +239,12 @@ object WebBook {
     ): StrResponse {
         val checkJs = bookSource.loginCheckJs
         return runCatching {
-            val initial = if (jsStr != null || sourceRegex != null) {
+            val raw = if (jsStr != null || sourceRegex != null) {
                 analyzeUrl.getStrResponseAwait(jsStr = jsStr, sourceRegex = sourceRegex)
             } else {
                 analyzeUrl.getStrResponseAwait()
             }
+            val initial = bypassCloudflareIfBlocked(raw, analyzeUrl, bookSource)
             if (!checkJs.isNullOrBlank()) {
                 analyzeUrl.evalJS(checkJs, initial) as StrResponse
             } else {
@@ -261,5 +264,50 @@ object WebBook {
                 throw throwable
             }
         }
+    }
+
+    /**
+     * Cloudflare 拦截自动 fallback —— OkHttp 直连被 CF 403 时，用 [BackstageWebView]
+     * 拿浏览器壳内的最终 HTML（WebView 会通过 cf JS challenge 拿 cf_clearance cookie，
+     * 之后请求自然放行）。仅当满足下列**全部**条件时触发，避免误伤普通 403：
+     *   - 响应 code == 403
+     *   - header 含 `cf-ray`（CF 边缘节点必带）
+     *   - bookSourceType == 0（普通网页源；漫画 / 音频源结构不同不掺和）
+     *   - analyzeUrl.url 非空（构造时已解析出最终 URL）
+     *
+     * 失败（WebView 加载超时 / 仍然空）时**返回原 403 response**，让上层正常报错；
+     * 不抛异常，避免把"CF 被拦"放大成搜索路径整体崩溃。
+     *
+     * 历史背景：飘天网（piaotia.com）等 CF 保护站点，OkHttp 任何 UA 都拿 403；
+     * Legado 用户能用是因为已通过浏览器拿过 cf_clearance。MoRealm 自动 fallback
+     * 让用户首次就能搜出书。
+     */
+    private suspend fun bypassCloudflareIfBlocked(
+        response: StrResponse,
+        analyzeUrl: AnalyzeUrl,
+        bookSource: BookSource,
+    ): StrResponse {
+        if (response.code() != 403) return response
+        if (response.header("cf-ray").isNullOrBlank()) return response
+        if (bookSource.bookSourceType != 0) return response
+        val targetUrl = analyzeUrl.url.ifBlank { return response }
+
+        AppLog.info(
+            "WebBook",
+            "CF block detected source='${bookSource.bookSourceName}' code=403" +
+                " cf-ray=${response.header("cf-ray")}; fallback BackstageWebView url=$targetUrl",
+        )
+        return runCatching {
+            BackstageWebView(
+                url = targetUrl,
+                headerMap = analyzeUrl.headerMap.takeIf { it.isNotEmpty() },
+                persistCookie = true,
+            ).getStrResponse()
+        }.onFailure {
+            AppLog.warn(
+                "WebBook",
+                "CF fallback BackstageWebView failed for '${bookSource.bookSourceName}': ${it.message}",
+            )
+        }.getOrDefault(response)
     }
 }

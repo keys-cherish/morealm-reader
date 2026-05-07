@@ -1009,6 +1009,15 @@ fun CanvasRenderer(
             // → Int.MAX_VALUE 在 layout streaming 早期也能给出稳定上限。
             val targetDisplay = coordinator.lastSettledDisplayPage
                 .coerceIn(0, safeDisplayMax)
+            // 切样式时 currentChapterKey 会因 readerStyle.hashCode() / fontSizePx 变 → 走这条
+            // sameChapter reflow 分支。打点观察 pagerState.currentPage 是否跟 targetDisplay
+            // 错位，错位幅度多大，决定 scrollToPage 的视觉表现是否被用户感知为"翻页"。
+            AppLog.debug(
+                "StyleSwitch",
+                "reflow same-chapter ch=$chapterIndex pagerCurrent=${pagerState.currentPage}" +
+                    " target=$targetDisplay safeMax=$safeDisplayMax renderPC=$renderPageCount" +
+                    " willScroll=${pagerState.currentPage != targetDisplay}",
+            )
             if (pagerState.currentPage != targetDisplay) {
                 // 对齐时把这一次 settle 标记成"忽略"，避免 scrollToPage 完成后
                 // 紧跟着的 onPageSettled(targetDisplay) 仍触发 saveProgress 写回
@@ -1039,7 +1048,10 @@ fun CanvasRenderer(
             queryLength = selection.queryLength,
         ) ?: return@LaunchedEffect
         selectedTextPage = textChapter.getPage(range.pageIndex)
-        selectionState.setSelection(range.start, range.end)
+        // 不再走 selectionState.setSelection —— 那会留下永久蓝色选区 + 弹光标手柄/选区菜单。
+        // 用户搜索的视觉反馈交给上面 LaunchedEffect(restoreToken, chapter) 里基于
+        // initialChapterPosition 触发的 [RevealHighlight]：命中段会出现 ~1.2s 的浅色
+        // 段落级高亮然后自然褪到透明，符合"高亮一下然后消失"的预期，不留尾巴。
         readerPageIndex = range.pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         if (pageAnimType != PageAnimType.SCROLL) {
             pagerState.scrollToPage(pageFactory.displayIndexForCurrentPage(range.pageIndex).coerceIn(0, renderPageCount - 1))
@@ -1574,6 +1586,19 @@ fun CanvasRenderer(
                                     2 to 2 -> tapActionBottomRight  // BR
                                     else -> "menu"
                                 }
+                                // 诊断：用户报告"点屏直接跳下一章"。把 9-zone 命中、各
+                                // 角落的 tapAction 配置、最终 action、以及当前 PageAnim
+                                // 类型一并打印，方便定位是 zone 误判（通常 row/col 计算错）
+                                // 还是用户把某角配成了 next_chapter。仅 info 级，按需关。
+                                AppLog.info(
+                                    "ReaderTap",
+                                    "tap zone row=$row col=$tapColumn action=$action " +
+                                        "offset=(${offset.x.toInt()},${offset.y.toInt()}) " +
+                                        "size=(${w.toInt()}x${h.toInt()}) " +
+                                        "anim=$pageAnimType corners=[TL=$tapActionTopLeft," +
+                                        "TR=$tapActionTopRight,BL=$tapActionBottomLeft," +
+                                        "BR=$tapActionBottomRight]"
+                                )
                                 if (action == "menu") {
                                     onTapCenter()
                                     return@detectTapGestures

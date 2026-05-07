@@ -25,6 +25,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.LightMode
@@ -39,6 +41,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -567,6 +570,11 @@ fun ReaderScreen(
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
                 onVisiblePageChanged = { index, title, progress, chapterPosition ->
                     viewModel.onVisiblePageChanged(index, title, progress, chapterPosition)
+                    // #6: 翻页 / 滚动 / 跳页都把当前可见段位置同步给 TTS controller，
+                    //     这样下一次「朗读当前页」从这里起读而非章首。
+                    //     不写在 onVisibleReadAloudPosition 里是因为只有滚动模式经过那个回调，
+                    //     页面翻页路径不会触发 → TTS 读会回退到 chapterPosition=-1 → 0。
+                    viewModel.updateVisibleReadAloudPosition(index, chapterPosition)
                 },
                 onNextChapter = { viewModel.nextChapter() },
                 onPrevChapter = { viewModel.prevChapter() },
@@ -719,6 +727,12 @@ fun ReaderScreen(
                     exportLauncher.launch(fileName)
                 },
                 onBookmark = { addBookmarkWithToast() },
+                // #2: 顶栏新增「书签列表」按钮，点开直接跳到书签 tab，
+                //     用户从「添加」到「查找」不再要绕到底部菜单切 tab。
+                onBookmarkList = {
+                    viewModel.hideControls()
+                    showBookmarks = true
+                },
                 onEffectiveReplaces = { viewModel.showEffectiveReplacesDialog() },
                 onSettings = {
                     viewModel.hideControls()
@@ -780,6 +794,15 @@ fun ReaderScreen(
                         0 -> 5; 5 -> 10; 10 -> 15; 15 -> 30; else -> 0
                     }
                     viewModel.setAutoPageInterval(next)
+                },
+                // #3 全书拖动：(章号, 章内%) → loadChapter restoreProgress
+                onSeekFullBook = { idx, withinPct ->
+                    viewModel.hideControls()
+                    viewModel.loadChapter(idx, restoreProgress = withinPct)
+                },
+                // #3 拖动预览：取目标章节标题（包含 TXT 自动分章 displayTitle 逻辑）
+                getChapterTitle = { idx ->
+                    chapters.getOrNull(idx)?.displayTitle(book) ?: ""
                 },
             )
         }
@@ -894,6 +917,8 @@ fun ReaderScreen(
                 onChineseConvertModeChange = viewModel::setChineseConvertMode,
                 footerRight = ftrRight,
                 onFooterRightChange = { viewModel.settings.setHeaderFooter("footerRight", it) },
+                // #1 还原默认排版参数
+                onResetStyle = { viewModel.settings.resetCurrentStyleParams() },
                 onDismiss = viewModel::hideSettingsPanel,
             )
         }
@@ -958,6 +983,13 @@ fun ReaderScreen(
             },
             onChapterClick = { chapterIndex ->
                 showChapterList = false
+                val clicked = chapters.getOrNull(chapterIndex)
+                com.morealm.app.core.log.AppLog.info(
+                    "ChapterIdxDebug",
+                    "onChapterClick listIdx=$chapterIndex" +
+                        " ch.index=${clicked?.index} ch.title=\"${clicked?.title}\"" +
+                        " ch.url=${clicked?.url}",
+                )
                 viewModel.loadChapter(chapterIndex)
             },
             onAddBookmark = { addBookmarkWithToast() },
@@ -981,6 +1013,7 @@ fun ReaderScreen(
             isSearching = viewModel.searching.collectAsStateWithLifecycle().value,
             moColors = moColors,
             onSearch = { query -> viewModel.searchFullText(query) },
+            onSearchInChapter = { query -> viewModel.searchInChapter(query) },
             onResultClick = { result ->
                 showFullSearch = false
                 viewModel.clearSearchResults()
@@ -1292,11 +1325,15 @@ private fun ChapterBookmarkPanel(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
+                                    // #8：非当前章用 primary.copy(0.7)，跟当前章同色系不同明度，
+                                    // 视觉上像主题色"超链接列表"，强化"每行都可点"的暗示。
+                                    // 当前章保持 primary 实色 + bold + ▶ 区分；过去用
+                                    // onSurface.copy(0.6) 的中性灰让用户看着像不可点。
                                     Text(
                                         ch.displayTitle(book),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = if (isCurrent) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                                         fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -1388,6 +1425,7 @@ private fun FullTextSearchPanel(
     isSearching: Boolean,
     moColors: MoRealmColors,
     onSearch: (String) -> Unit,
+    onSearchInChapter: (String) -> Unit,
     onResultClick: (ReaderSearchController.SearchResult) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1399,6 +1437,8 @@ private fun FullTextSearchPanel(
         modifier = modifier,
     ) {
         var searchQuery by remember { mutableStateOf("") }
+        // false=全书 true=仅当前章。共用 _searchResults，UI 区分由本地 state 决定。
+        var inChapterMode by remember { mutableStateOf(false) }
         Surface(
             modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f),
             color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f),
@@ -1412,18 +1452,50 @@ private fun FullTextSearchPanel(
                         .align(Alignment.CenterHorizontally)
                 )
                 Spacer(Modifier.height(8.dp))
-                Text("全文搜索", style = MaterialTheme.typography.titleSmall,
+                Text(if (inChapterMode) "章内搜索" else "全文搜索", style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(horizontal = 16.dp))
                 Spacer(Modifier.height(8.dp))
+                // 范围切换：FilterChip 取代 SegmentedButton（依赖更轻、风格统一）。
+                // 切换时立即清空旧结果，避免显示上一个范围的命中（视觉混乱）。
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = !inChapterMode,
+                        onClick = { if (inChapterMode) { inChapterMode = false; searchQuery = "" } },
+                        label = { Text("全书", style = MaterialTheme.typography.labelSmall) },
+                    )
+                    FilterChip(
+                        selected = inChapterMode,
+                        onClick = { if (!inChapterMode) { inChapterMode = true; searchQuery = "" } },
+                        label = { Text("当前章", style = MaterialTheme.typography.labelSmall) },
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                // 当前模式下的搜索动作 —— 支持回车（IME Search）和点击放大镜两条路径，
+                // 用户敲完关键词直接 Enter 即可，不必再点按钮。
+                val triggerSearch: () -> Unit = {
+                    if (searchQuery.isNotBlank()) {
+                        if (inChapterMode) onSearchInChapter(searchQuery) else onSearch(searchQuery)
+                    }
+                }
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = { Text("输入关键词搜索全书", style = MaterialTheme.typography.bodySmall) },
+                    placeholder = {
+                        Text(
+                            if (inChapterMode) "在当前章节中查找" else "输入关键词搜索全书",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { triggerSearch() }),
                     trailingIcon = {
-                        IconButton(onClick = { onSearch(searchQuery) }) {
+                        IconButton(onClick = triggerSearch) {
                             if (isSearching) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
                             else Icon(Icons.Default.Search, "搜索", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                         }
@@ -1443,7 +1515,7 @@ private fun FullTextSearchPanel(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 ) {
-                    items(searchResults, key = { "sr_${it.chapterIndex}_${it.snippet.hashCode()}" }) { result ->
+                    items(searchResults, key = { "sr_${it.chapterIndex}_${it.queryIndexInChapter}_${it.snippet.hashCode()}" }) { result ->
                         Row(
                             modifier = Modifier.fillMaxWidth()
                                 .clickable { onResultClick(result) }

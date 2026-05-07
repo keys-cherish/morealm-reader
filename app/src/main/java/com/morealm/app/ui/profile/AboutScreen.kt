@@ -165,6 +165,13 @@ fun AboutScreen(
 
         Spacer(Modifier.height(16.dp))
 
+        // ── 创立纪念区 ──
+        // 基准日：2026-04-19 = 首个 commit "MoRealm e-book reader v1.0.0-alpha1"。
+        // 显示已陪伴天数 + 当天彩蛋（命中纪念日时高亮）。
+        AnniversarySection()
+
+        Spacer(Modifier.height(16.dp))
+
         // Changelog entry
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -285,4 +292,101 @@ private fun FeatureRow(
         },
         colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
     )
+}
+
+/**
+ * 创立纪念区。
+ *
+ * # 基准日
+ * 2026-04-19 — git 首个 commit「MoRealm e-book reader v1.0.0-alpha1」。这一天作为
+ * MoRealm 项目的"诞生日"。
+ *
+ * # 显示
+ *  - 已陪伴 X 天（[ChronoUnit.DAYS] 直接算今天到基准的差）
+ *  - 当天命中创立纪念日（同月同日）时高亮 + 显示彩蛋祝福
+ *  - 距下个纪念日还有 N 天（永远向前看一年）
+ *
+ * 与节日彩蛋系统独立：纪念日不出现在 [com.morealm.app.domain.holiday.HolidayCatalog]
+ * 里，因为彩蛋走当天首启自动弹，纪念日属于"主动查"场景，强行弹会打扰。
+ */
+@Composable
+private fun AnniversarySection() {
+    val today = remember { java.time.LocalDate.now() }
+    val founding = remember { java.time.LocalDate.of(2026, 4, 19) }
+    val daysTogether = remember(today, founding) {
+        java.time.temporal.ChronoUnit.DAYS.between(founding, today).coerceAtLeast(0)
+    }
+    val isAnniversaryToday = today.monthValue == founding.monthValue &&
+        today.dayOfMonth == founding.dayOfMonth &&
+        today != founding  // 第 0 周年不算
+    val nextAnniversary = remember(today, founding) {
+        var next = founding.withYear(today.year)
+        if (!next.isAfter(today)) next = next.plusYears(1)
+        next
+    }
+    val daysToNext = java.time.temporal.ChronoUnit.DAYS.between(today, nextAnniversary)
+    val anniversaryYears = today.year - founding.year + (if (today < founding.withYear(today.year)) -1 else 0)
+
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(
+            containerColor = if (isAnniversaryToday)
+                MaterialTheme.colorScheme.primaryContainer
+            else
+                MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Cake,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "创立纪念",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "首个版本：2026 年 4 月 19 日 · v1.0.0-alpha1",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "已陪伴你 $daysTogether 天",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            if (isAnniversaryToday) {
+                Spacer(Modifier.height(12.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        "🎂 今天是 MoRealm $anniversaryYears 周年。谢谢你一直在。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
+            } else if (daysToNext <= 30) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "距下次纪念日还有 $daysToNext 天",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
 }

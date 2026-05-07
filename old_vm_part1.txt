@@ -1,0 +1,250 @@
+package com.morealm.app.presentation.search
+
+import android.os.Build
+import android.text.Html
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.morealm.app.domain.entity.Book
+import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.entity.BookFormat
+import com.morealm.app.domain.entity.SearchBook
+import com.morealm.app.domain.preference.AppPreferences
+import com.morealm.app.domain.repository.AutoGroupClassifier
+import com.morealm.app.domain.repository.BookRepository
+import com.morealm.app.domain.repository.SearchRepository
+import com.morealm.app.core.log.AppLog
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.atomic.AtomicInteger
+import javax.inject.Inject
+import java.io.IOException
+
+private const val TEXT_BOOK_SOURCE_TYPE = 0
+// SOURCE_SEARCH_TIMEOUT_MS / SEARCH_PARALLELISM 已迁移到 AppPreferences —
+// 用户可在「设置 → 搜索设置」里调。搜索入口处通过 prefs.getSearchParallelism()
+// 一次性快照，搜索期间不响应配置变更。
+
+data class SearchResult(
+    val title: String,
+    val author: String = "",
+    val coverUrl: String? = null,
+    val bookUrl: String = "",
+    val sourceName: String = "",
+    val sourceUrl: String = "",
+    val sourceType: Int = TEXT_BOOK_SOURCE_TYPE,
+    val intro: String = "",
+    val kind: String? = null,
+    val wordCount: String? = null,
+    val latestChapter: String? = null,
+    val searchBook: SearchBook? = null,
+)
+
+data class SourceSearchProgress(
+    val sourceUrl: String,
+    val sourceName: String,
+    val status: SourceStatus,
+    val errorMessage: String? = null,
+)
+
+enum class SourceStatus { WAITING, SEARCHING, DONE, FAILED }
+
+/**
+ * 「加入书架」事件 — 由 [SearchViewModel.addToShelfAndRead] /
+ * [SearchViewModel.addToShelfAndDownload] 在 [bookRepo] 写入成功后发射；
+ * UI 端订阅后弹 Snackbar「已加入书架·《title》[撤销]」。
+ *
+ * 设计点：
+ *  - SharedFlow.replay = 1 让用户从阅读器返回 SearchScreen 时能补看上一次反馈；
+ *    UI 用 [timestamp] 做 60s 过滤，避免 replay 出"半小时前的"陈旧 Snackbar。
+ *  - 已经存在的书重复点击不 emit —— Snackbar 只在「真正新加」时弹。
+ *  - [withDownload] 区分文案 / 撤销时是否同步 stopDownload。
+ */
+data class ShelfAddedEvent(
+    val bookId: String,
+    val title: String,
+    val withDownload: Boolean,
+    val timestamp: Long = System.currentTimeMillis(),
+)
+
+@HiltViewModel
+class SearchViewModel @Inject constructor(
+    private val searchRepo: SearchRepository,
+    private val bookRepo: BookRepository,
+    private val prefs: AppPreferences,
+    private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
+    private val autoGroupClassifier: AutoGroupClassifier,
+    private val searchHistoryRepo: com.morealm.app.domain.repository.SearchKeywordRepository,
+    /**
+     * 加书后立刻拉 toc：保证 totalChapters 第一时间填上，免得用户看到一本"0 章"的书。
+     * 进入书详情/阅读页时也不再被迫先发一次同步请求。
+     */
+    private val refreshController: com.morealm.app.presentation.shelf.ShelfRefreshController,
+) : ViewModel() {
+
+    private val _query = MutableStateFlow("")
+    val query: StateFlow<String> = _query.asStateFlow()
+
+    private val _localResults = MutableStateFlow<List<Book>>(emptyList())
+    val localResults: StateFlow<List<Book>> = _localResults.asStateFlow()
+
+    private val _results = MutableStateFlow<List<SearchResult>>(emptyList())
+    val results: StateFlow<List<SearchResult>> = _results.asStateFlow()
+
+    private val _sourceProgress = MutableStateFlow<List<SourceSearchProgress>>(emptyList())
+    val sourceProgress: StateFlow<List<SourceSearchProgress>> = _sourceProgress.asStateFlow()
+
+    private val _sourceCount = MutableStateFlow(0)
+    val sourceCount: StateFlow<Int> = _sourceCount.asStateFlow()
+
+    private val _isSearching = MutableStateFlow(false)
+    val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+
+    /**
+     * 加书事件流 —— UI 订阅后用 Snackbar 反馈。replay=1 让用户跳到阅读器再返回时
+     * 仍能看到（UI 自己用 timestamp 过滤陈旧事件）。详见 [ShelfAddedEvent]。
+     */
+    private val _shelfAddedEvents = MutableSharedFlow<ShelfAddedEvent>(
+        replay = 1,
+        extraBufferCapacity = 0,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val shelfAddedEvents: SharedFlow<ShelfAddedEvent> = _shelfAddedEvents.asSharedFlow()
+
+    private var searchJob: Job? = null
+    private val searchGeneration = AtomicInteger(0)
+    private val mergeMutex = Mutex()
+
+    val disclaimerAccepted: StateFlow<Boolean> = prefs.disclaimerAccepted
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    /**
+     * 搜索历史 Flow —— 由 [com.morealm.app.domain.repository.SearchKeywordRepository] 暴露，
+     * UI 端在输入框聚焦且 query 为空时下拉显示。Lazily 启动让没人观察时不维持订阅，
+     * 减少冷启动 IO；首次 collect 时才会拉一次 DB。
+     */
+    val searchHistory: StateFlow<List<com.morealm.app.domain.entity.SearchKeyword>> =
+        searchHistoryRepo.observeAll()
+            .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    /** 删除单条历史；UI 长按 / 滑动删除调它。 */
+    fun deleteHistory(word: String) {
+        viewModelScope.launch(Dispatchers.IO) { searchHistoryRepo.delete(word) }
+    }
+
+    /** 清空所有历史；UI 二次确认后调用。 */
+    fun clearHistory() {
+        viewModelScope.launch(Dispatchers.IO) { searchHistoryRepo.clear() }
+    }
+
+    /**
+     * 撤销「清空历史」：UI 在清空前 snapshot 列表，用户点 Snackbar 的「撤销」时
+     * 调本方法重新写入。Repo 层走 upsert 保留原计数和时间戳。
+     */
+    fun restoreHistory(keywords: List<com.morealm.app.domain.entity.SearchKeyword>) {
+        if (keywords.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) { searchHistoryRepo.restoreAll(keywords) }
+    }
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            val count = searchRepo.getEnabledSources()
+                .count { it.bookSourceType == TEXT_BOOK_SOURCE_TYPE }
+            _sourceCount.value = count
+        }
+    }
+
+    fun acceptDisclaimer() {
+        viewModelScope.launch { prefs.setDisclaimerAccepted() }
+    }
+
+    fun cancelSearch() {
+        searchGeneration.incrementAndGet()
+        searchJob?.cancel()
+        searchJob = null
+        markUnfinishedSourcesFailed("搜索已取消")
+        _isSearching.value = false
+    }
+
+    fun search(keyword: String) {
+        if (keyword.isBlank()) return
+        // 历史记录入库 —— 与搜索流程并行，不阻塞用户操作；写库失败不会冒泡。
+        // 放在 generation/job 重置之前，避免一次连续搜索把同一关键词重复 record。
+        viewModelScope.launch(Dispatchers.IO) { searchHistoryRepo.record(keyword) }
+        val searchId = searchGeneration.incrementAndGet()
+        searchJob?.cancel()
+        _query.value = keyword
+        _results.value = emptyList()
+        _localResults.value = emptyList()
+        _sourceProgress.value = emptyList()
+        _isSearching.value = true
+
+        searchJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val localBooks = searchRepo.searchLocalBooks(keyword)
+                if (!isCurrentSearch(searchId)) return@launch
+                _localResults.value = localBooks
+                AppLog.info("Search", "Local: ${localBooks.size} results for '$keyword'")
+
+                val allSources = searchRepo.getEnabledSources()
+                if (!isCurrentSearch(searchId)) return@launch
+                val skipped = allSources.filter { it.bookSourceType != TEXT_BOOK_SOURCE_TYPE }
+                if (skipped.isNotEmpty()) {
+                    AppLog.info(
+                        "Search",
+                        "Skipped ${skipped.size} non-text sources: ${skipped.joinToString { decodeHtmlEntities(it.bookSourceName) }}",
+                    )
+                }
+                val sources = allSources.filter { it.bookSourceType == TEXT_BOOK_SOURCE_TYPE }
+                if (sources.isEmpty()) {
+                    if (isCurrentSearch(searchId)) _isSearching.value = false
+                    return@launch
+                }
+
+                _sourceProgress.value = sources.map {
+                    SourceSearchProgress(
+                        sourceUrl = it.bookSourceUrl,
+                        sourceName = decodeHtmlEntities(it.bookSourceName),
+                        status = SourceStatus.WAITING,
+                    )
+                }
+                AppLog.info("Search", "Searching '$keyword' across ${sources.size} sources")
+
+                val parallelism = prefs.getSearchParallelism()
+                val timeoutMs = prefs.getSourceSearchTimeoutMs()
+                val semaphore = Semaphore(parallelism.coerceAtMost(sources.size).coerceAtLeast(1))
+                supervisorScope {
+                    val sourceJobs = sources.map { source ->
+                        launch {
+                            semaphore.withPermit {
+                                searchSingleSource(searchId, source, keyword, timeoutMs)
+                            }
+                        }
+                    }
+                    sourceJobs.joinAll()
+                }
+                AppLog.info("Search", "Search complete: ${_results.value.size} online results")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                markUnfinishedSourcesFailed(searchId, "搜索已取消")
+                throw e
+            } finally {
+                if (isCurrentSearch(searchId)) {
+                    markUnfinishedSourcesFailed(searchId, "搜索已结束")
+                    _isSearching.value = false
+                    searchJob = null
+                }
+            }
+        }
+    }

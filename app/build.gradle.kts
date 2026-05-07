@@ -185,7 +185,10 @@ dependencies {
     implementation(libs.quick.transfer.core)
     implementation("org.apache.commons:commons-text:1.12.0")
 
-    // Rhino JS Engine
+    // Rhino JS Engine — 跑 Legado 书源规则里的内嵌 JS 表达式（@js:.../`<js>...</js>` /
+    // ruleSearch/ruleContent 里的 evalJS 段）。MoRealm 不支持 SkyBook / OpenSchedule
+    // 风格的整文件 JS 书源（lifecycle 函数模型，与 jsoup 规则模型不兼容），所以不需要
+    // 引入 cash QuickJS / dokar3 quickjs-kt 这类 ES2020+ JS runtime。
     implementation("org.mozilla:rhino:1.8.1")
 
     // Image
