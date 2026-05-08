@@ -24,6 +24,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import com.morealm.app.core.text.cleanContentForTts
 import javax.inject.Inject
@@ -363,22 +365,69 @@ class ReaderViewModel @Inject constructor(
 
     fun setChineseConvertMode(mode: Int) {
         if (mode == settings.chineseConvertMode.value) return
-        viewModelScope.launch {
-            settings.setChineseConvertMode(mode)
-            // 等 stateIn 反映新值再 reload，避免 chineseConvertMode() lambda
-            // 在 IO 协程里读到旧值（DataStore 写入 → Flow emit → stateIn StateFlow.value
-            // 更新存在跨线程延迟，旧路径直接 loadChapter 会 race 拿到旧 mode）。
-            settings.chineseConvertMode.first { it == mode }
-            // 清旧 mode 转过的预加载（StateFlow + @Volatile 双轨），
-            // 否则同步翻页直接消费旧 PreloadedReaderChapter，呈现
-            // "切完繁简翻下一页又变回去" 的反效果。
-            chapter.clearPreloadedChapters()
-            chapter.loadChapter(
-                chapter.currentChapterIndex.value,
-                restoreProgress = progress.scrollProgress.value,
-                restoreChapterPosition = progress.visiblePage.value.chapterPosition,
-            )
+        // ── Anchor 锁：连点期间共用同一个起始位置 ──────────────────────────
+        // 用户连点繁→简→繁 时每次都会 loadChapter(restoreChapterPosition=visiblePage.chapterPosition)。
+        // 但 LazyScroll 模式下 restoreProgress JUMP 后 visible 段的 chapterPosition
+        // 会退到 page 起点（譬如 2842 → 2587）——不是用户实际看到的位置。下次切换
+        // 时 anchor 已经是退过一次的值，反复累计 → 用户每点一次繁简，章内位置就
+        // 退一点（日志 22:28:40~52 段一连串 loadChapter 的 pos 从 2842 一路掉到
+        // 106，就是这个累计回退）。
+        //
+        // 修复：第一次进入时拍快照，连点期间共用；anchorClearJob 延迟 2 秒后清，
+        // 用户停止操作 2 秒才允许下一次重新拍快照。新点击会 cancel 上次的 clear job
+        // 重新延后 2 秒——只要用户连点不停，anchor 就保留为最初的精确位置。
+        anchorClearJob?.cancel()
+        if (chineseConvertAnchor == null) {
+            chineseConvertAnchor = progress.scrollProgress.value to progress.visiblePage.value.chapterPosition
         }
+        viewModelScope.launch {
+            // 串行化：用户连点繁→简→繁 时 viewModelScope 会启动多个并行
+            // coroutine，每个跑一遍 setChineseConvertMode + first { it == mode } +
+            // clearPreloaded + loadChapter；并行执行会让多个 chapterLoadJob 互相
+            // cancel 但中间还可能 publish 旧 mode 的 _chapterContent / _renderedChapter
+            // 一帧（race），UI 短暂显示旧 mode 内容（"切了又变回去"）。
+            // Mutex 保证多次点击按到达顺序排队执行，最后一次胜出。
+            chineseConvertMutex.withLock {
+                if (mode == settings.chineseConvertMode.value) return@withLock
+                val (anchorProg, anchorPos) = chineseConvertAnchor
+                    ?: (progress.scrollProgress.value to progress.visiblePage.value.chapterPosition)
+                settings.setChineseConvertMode(mode)
+                // 等 stateIn 反映新值再 reload，避免 chineseConvertMode() lambda
+                // 在 IO 协程里读到旧值（DataStore 写入 → Flow emit → stateIn StateFlow.value
+                // 更新存在跨线程延迟，旧路径直接 loadChapter 会 race 拿到旧 mode）。
+                settings.chineseConvertMode.first { it == mode }
+                // 清旧 mode 转过的预加载（StateFlow + @Volatile 双轨），
+                // 否则同步翻页直接消费旧 PreloadedReaderChapter，呈现
+                // "切完繁简翻下一页又变回去" 的反效果。
+                chapter.clearPreloadedChapters()
+                chapter.loadChapter(
+                    chapter.currentChapterIndex.value,
+                    restoreProgress = anchorProg,
+                    restoreChapterPosition = anchorPos,
+                )
+            }
+        }
+        // 启动 / 重置「2 秒静默后清 anchor」的 timer。同 setChineseConvertMode
+        // 的连续调用都会先 cancel 上次的 clear job 再启动新的，相当于 debounce。
+        anchorClearJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(ANCHOR_RETENTION_MS)
+            chineseConvertAnchor = null
+        }
+    }
+
+    /** 串行化 [setChineseConvertMode]——见函数内注释。 */
+    private val chineseConvertMutex = Mutex()
+    /** 连点期间共享的 (scrollProgress%, chapterPosition) 锚点；停滞 2 秒后清。 */
+    private var chineseConvertAnchor: Pair<Int, Int>? = null
+    /** 延迟清 [chineseConvertAnchor] 的 job——每次新点击 cancel 重启。 */
+    private var anchorClearJob: kotlinx.coroutines.Job? = null
+    private companion object {
+        /**
+         * Anchor 静默保留时长：用户停止繁简切换 2 秒后再清 anchor，下次新点击
+         * 才允许重新从 progress 拍快照。2 秒覆盖一般用户「确认效果再点下一次」
+         * 的节奏，又不会让 anchor 长时间陈旧（用户真停下来 → 下次切换从最新位置开始）。
+         */
+        const val ANCHOR_RETENTION_MS = 2_000L
     }
 
     fun setReaderBrightness(value: Float) { _readerBrightness.value = value }

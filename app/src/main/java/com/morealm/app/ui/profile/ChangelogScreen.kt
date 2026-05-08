@@ -193,10 +193,53 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.1",
+        date = "2026-05-07",
+        title = "稳态优化 · 进度条 / 边距 / 繁简 / 搜索",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            // ── 阅读器·进度与滑块 ──
+            ChangelogItem(ChangeType.FIX, "拖底部进度条松手后 thumb 不再先回弹再恢复（seek preview 延迟到 ViewModel 真值流到再清，覆盖本地 + 网络章节加载窗口）"),
+            ChangelogItem(ChangeType.FIX, "上下 / 左右 / 段距 slider 松手「弹回再回来」消失（preview 改为等 StateFlow emit 到目标值再清空）"),
+
+            // ── 阅读器·SCROLL 模式（边距实时 + 反 reset 风暴）──
+            ChangelogItem(ChangeType.FIX, "SCROLL 模式拖底部进度条到当前章不同位置不再清窗口重 fetch（同章 reload 走 requestJumpWithinWindow 轻路径，杜绝 230 段反复 clear 的体感「拖动没反应」）"),
+            ChangelogItem(ChangeType.FIX, "上下 / 左右 / 段距 slider 实时反映到正文 — 修复滚动模式下间距失效（ChapterWindowSource.relayoutAll 用最新 layoutInputs 重排已加载章节）"),
+            ChangelogItem(ChangeType.FIX, "阅读器顶栏 top bar 间距过大问题修复"),
+
+            // ── 阅读器·繁简切换 ──
+            ChangelogItem(ChangeType.FIX, "连点繁→简→繁 时章内位置不再累计回退（anchor 锁，停止操作 2 秒后清；连点期间共用首次快照）"),
+            ChangelogItem(ChangeType.FIX, "并发繁简切换造成「切完又变回去」修复（Mutex 串行化，按到达顺序排队，最后一次胜出）"),
+            ChangelogItem(ChangeType.FIX, "繁简转换异常不再静默吞错（quick-transfer s2t / t2s 失败时打 warn 日志保留排查线索）"),
+
+            // ── 阅读器·搜索 / 跳转 ──
+            ChangelogItem(ChangeType.FIX, "修复全文搜索闪退"),
+            ChangelogItem(ChangeType.FIX, "修复书内搜索"),
+            ChangelogItem(ChangeType.NEW, "正文支持目录链接跳转 — 章节内引用其它章节的链接可直接点开"),
+
+            // ── 书源 / 数据导入 ──
+            ChangelogItem(ChangeType.FIX, "修复部分书源乱码问题"),
+            ChangelogItem(ChangeType.FIX, "修复从 Legado 移植数据时闪退"),
+
+            // ── 设置·恢复出厂 ──
+            ChangelogItem(ChangeType.IMPROVE, "「一键还原」从「轻还原」扩展为完整出厂：颜色 / 字体 / 字号 / 行距 / 段距 / 边距 / 翻页方式 / 翻页动画 / 屏幕方向 / 划词可选 / 繁简模式 / 状态栏 / 章节名 / 时间电量 / 屏幕亮度 / 音量键 / 耳机键 / 4 个 tap zone / 6 个 header & footer slot / 标题对齐 / 阅读区背景图 / 选区菜单顺序"),
+            ChangelogItem(ChangeType.IMPROVE, "5 个内置预设（preset_paper 等）执行恢复出厂时一并刷回出厂参数，防止用户曾改过预设后 active 切换仍带着旧值"),
+
+            // ── 书架 ──
+            ChangelogItem(ChangeType.NEW, "书架列表 / 网格视图切换持久化到 DataStore — 重启 App 保留上次选择"),
+            ChangelogItem(ChangeType.IMPROVE, "书名自然排序（按数字顺序）— 「第2章 / 第10章 / 第11章」不再被字典序排成「第10章 / 第11章 / 第2章」"),
+
+            // ── UI / 文案 ──
+            ChangelogItem(ChangeType.IMPROVE, "「收纳」菜单语义调整，更贴近用户对该入口功能的直觉"),
+
+            // ── 关于页 ──
+            ChangelogItem(ChangeType.NEW, "新增「贡献者」入口（关于页内）— 基于 assets/contributors.json 列出社区贡献成员，含维度标签 / 加入时间 / 链接，配合根目录 CONTRIBUTING.md 入榜规则"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.0",
         date = "2026-05-01",
         title = "正式版 · 阅读 / 听书 / 同步全栈完成",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             // ── Edge TTS 升级（远程音色 / 鉴权 / 缓存 / 引擎重构） ──
             ChangelogItem(ChangeType.NEW, "Edge TTS 接入远程音色：自动拉取 zh / en / ja / ... 共 600+ 语音，带 24h voices.json 缓存与失败回退到内置音色"),

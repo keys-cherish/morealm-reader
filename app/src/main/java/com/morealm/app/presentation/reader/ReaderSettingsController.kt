@@ -135,9 +135,9 @@ class ReaderSettingsController(
             .map { (fam, uri) -> fontRepo.resolveTypeface(fam, uri) }
             .stateIn(scope, SharingStarted.Eagerly, Typeface.DEFAULT)
 
-    val paragraphSpacing: StateFlow<Float> = activeStyle
-        .map { it?.paragraphSpacing?.toFloat() ?: 8f }
-        .stateIn(scope, SharingStarted.Eagerly, 8f)
+    val paragraphSpacing: StateFlow<Int> = activeStyle
+        .map { it?.paragraphSpacing ?: 8 }
+        .stateIn(scope, SharingStarted.Eagerly, 8)
 
     val marginHorizontal: StateFlow<Int> = activeStyle
         .map { it?.paddingLeft ?: 24 }
@@ -277,7 +277,7 @@ class ReaderSettingsController(
 
     fun setLineHeight(height: Float) = updateStyle { it.copy(lineHeight = height) }
 
-    fun setParagraphSpacing(value: Float) = updateStyle { it.copy(paragraphSpacing = value.toInt()) }
+    fun setParagraphSpacing(value: Int) = updateStyle { it.copy(paragraphSpacing = value) }
 
     fun setMarginHorizontal(value: Int) = updateStyle { it.copy(paddingLeft = value, paddingRight = value) }
 
@@ -294,33 +294,88 @@ class ReaderSettingsController(
     }
 
     /**
-     * #1 还原默认排版参数。
+     * #1 「恢复出厂」一键回退所有阅读相关设置到内置默认值。
      *
-     * 仅重置「排版相关」字段（字号/行距/段距/页边距/字体），保留：
-     *  - 颜色（bg/text + day/night 各四套）：用户切换样式预设时已经选过配色，
-     *    一键还原不该把配色也带走，否则用户会误以为「样式没了」。
-     *  - id / name / sortOrder / isBuiltin：标识字段不动。
-     *  - customCss / customBgImage：另有"清除"入口，避免和这里语义重叠。
+     * 范围（**用户期望「一切皆还原为起点」，不再是历史的「轻还原」**）：
+     *  - **ReaderStyle**：当前 active style 全字段重置为 [ReaderStyle] 默认值（含
+     *    bg/text 颜色、字体、字号、行距、段距、对齐、indent、padding、自定义 css/bg
+     *    图等）。同时把 5 个 builtin preset 重置回 [ReaderStyle.defaults]，防御
+     *    用户曾经改过 preset 内部参数。
+     *  - **active style id** 切回 `preset_paper`（首次启动时的默认）。
+     *  - **DataStore prefs**（阅读器范围）：pageTurnMode / pageAnim / 屏幕方向 /
+     *    划词可选 / 繁简模式 / 状态栏开关 / 章节名 & 时间电量 / 屏幕亮度永亮 /
+     *    音量键 & 耳机键 & 长按 / 4 个 tap zone / 6 个 header/footer slot /
+     *    标题对齐 / day & night 阅读区背景图 / 选区菜单顺序。
      *
-     * 走 [updateStyle] → upsert 落 Room，`activeStyle` StateFlow 自动驱动 UI 重排。
+     * **不动**的范围：
+     *  - TTS 引擎 / 速度 / voice 等（属于"读"功能，与排版无关）
+     *  - WebDav / 备份 / 全局背景图 / shelf 排序等（属于全局应用设置）
+     *  - 用户自定义的非 builtin styles（保留在 styleRepo 里，只是 active 切回 preset_paper）
+     *
+     * 注意：updateStyle 走 IO 协程异步写 Room；`prefs.set*` 走自己的 IO 协程。
+     * 调用方点完按钮后 ~50ms 内 StateFlow 全部 emit，CanvasRenderer 自然重排版。
      */
-    fun resetCurrentStyleParams() = updateStyle { current ->
-        val d = ReaderStyle(id = current.id) // 拿默认值
-        current.copy(
-            textSize = d.textSize,
-            fontFamily = d.fontFamily,
-            textBold = d.textBold,
-            letterSpacing = d.letterSpacing,
-            lineHeight = d.lineHeight,
-            paragraphSpacing = d.paragraphSpacing,
-            paragraphIndent = d.paragraphIndent,
-            textAlign = d.textAlign,
-            paddingTop = d.paddingTop,
-            paddingBottom = d.paddingBottom,
-            paddingLeft = d.paddingLeft,
-            paddingRight = d.paddingRight,
-        ).also {
-            AppLog.info("Settings", "resetCurrentStyleParams: id=${current.id}")
+    fun resetAllToFactoryDefaults() {
+        scope.launch(Dispatchers.IO) {
+            val current = activeStyle.value
+            // 当前 active style 字段全重置（保留 id / sortOrder / isBuiltin 等身份字段，
+            // 用 ReaderStyle(id = ...) 拿默认值再 copy 身份字段）。
+            if (current != null) {
+                val d = ReaderStyle(id = current.id)
+                styleRepo.upsert(
+                    d.copy(
+                        name = current.name,
+                        sortOrder = current.sortOrder,
+                        isBuiltin = current.isBuiltin,
+                    ),
+                )
+            }
+            // 5 个 builtin preset 强制刷回 defaults——防御用户曾经在某个 preset 上
+            // 自己改过 paragraphSpacing/textSize 等：用户期望的"出厂"不只是当前 active，
+            // 也包含切到其它 preset 时仍是出厂值。
+            styleRepo.upsertAll(ReaderStyle.defaults())
+
+            // active id 回到 preset_paper（与冷启动首次默认一致）。
+            _activeStyleId.value = "preset_paper"
+            prefs.setActiveReaderStyle("preset_paper")
+
+            // ── 阅读相关 prefs 全面 reset 到默认值 ─────────────────────────
+            prefs.setPageTurnMode(PageTurnMode.SCROLL.key)
+            prefs.setPageAnim("slide")
+            prefs.setScreenOrientation(-1)
+            prefs.setTextSelectable(true)
+            prefs.setChineseConvertMode(0)
+            prefs.setShowChapterName(true)
+            prefs.setShowTimeBattery(true)
+            prefs.setShowStatusBar(false)
+            prefs.setScreenTimeout(-1)
+            prefs.setVolumeKeyPage(true)
+            prefs.setVolumeKeyReverse(false)
+            prefs.setHeadsetButtonPage(false)
+            prefs.setVolumeKeyLongPress("off")
+            prefs.setTitleAlign(0)
+            prefs.setReaderBgImageDay("")
+            prefs.setReaderBgImageNight("")
+
+            // 4 个 tap zone：默认值与 ReaderSettingsController 各 StateFlow 的初值对齐
+            // (topLeft="prev" / topRight="next" / bottomLeft="prev" / bottomRight="next")。
+            prefs.setTapAction(AppPreferences.Keys.TAP_ACTION_TOP_LEFT, "prev")
+            prefs.setTapAction(AppPreferences.Keys.TAP_ACTION_TOP_RIGHT, "next")
+            prefs.setTapAction(AppPreferences.Keys.TAP_ACTION_BOTTOM_LEFT, "prev")
+            prefs.setTapAction(AppPreferences.Keys.TAP_ACTION_BOTTOM_RIGHT, "next")
+
+            // 6 个 header/footer slot：默认值同 controller 各 StateFlow 初值。
+            prefs.setHeaderFooter(AppPreferences.Keys.HEADER_LEFT, "chapter")
+            prefs.setHeaderFooter(AppPreferences.Keys.HEADER_CENTER, "none")
+            prefs.setHeaderFooter(AppPreferences.Keys.HEADER_RIGHT, "none")
+            prefs.setHeaderFooter(AppPreferences.Keys.FOOTER_LEFT, "battery_time")
+            prefs.setHeaderFooter(AppPreferences.Keys.FOOTER_CENTER, "none")
+            prefs.setHeaderFooter(AppPreferences.Keys.FOOTER_RIGHT, "page_progress")
+
+            // 选区菜单：恢复 DEFAULT 顺序与可见性。
+            prefs.setSelectionMenuConfig(com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT)
+
+            AppLog.info("Settings", "resetAllToFactoryDefaults: completed")
         }
     }
 

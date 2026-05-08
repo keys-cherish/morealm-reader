@@ -1,0 +1,18 @@
+{
+  "contributors": [
+    {
+      "id": "guangban-zhen",
+      "name": "光坂镇",
+      "tags": ["Code", "Design"],
+      "contribution": "MoRealm 项目主理人，从零搭建阅读引擎、TTS 与书源系统",
+      "joinedAt": "2026-04-19",
+      "links": [
+        {
+          "platform": "github",
+          "handle": "@keys-cherish",
+          "url": "https://github.com/keys-cherish"
+        }
+      ]
+    }
+  ]
+}

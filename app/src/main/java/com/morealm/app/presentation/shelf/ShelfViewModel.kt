@@ -121,6 +121,20 @@ class ShelfViewModel @Inject constructor(
         viewModelScope.launch { prefs.setShelfSortMode(mode) }
     }
 
+    /**
+     * 书架视图模式（"grid" / "list"）— 持久化到 [AppPreferences.shelfViewMode]，重启
+     * App 后恢复。旧实现用 ShelfScreen 内的 `rememberSaveable` 仅活在 Bundle 里，冷
+     * 启动会回退到默认 "grid"，用户切到列表视图后下次打开又得手动切。
+     *
+     * Eagerly 立即拉首值，避免首帧用 "grid" 默认值绘制后再切到 "list" 的视觉跳。
+     */
+    val shelfViewMode: StateFlow<String> = prefs.shelfViewMode
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "grid")
+
+    fun setShelfViewMode(mode: String) {
+        viewModelScope.launch { prefs.setShelfViewMode(mode) }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val books: StateFlow<List<Book>> = sortMode.flatMapLatest { sort ->
         bookRepo.getAllBooks().map { list ->
