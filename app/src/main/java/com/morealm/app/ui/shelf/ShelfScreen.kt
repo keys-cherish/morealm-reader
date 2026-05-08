@@ -87,7 +87,11 @@ fun ShelfScreen(
     val groupNames by viewModel.groupNames.collectAsStateWithLifecycle()
     val moColors = LocalMoRealmColors.current
     var showImportMenu by remember { mutableStateOf(false) }
-    var isListView by rememberSaveable { mutableStateOf(false) }
+    // 视图模式从 ViewModel 取持久化值（DataStore 读到的最近一次用户选择）。
+    // 旧实现用 rememberSaveable 仅 Bundle 持久，冷启动回退到默认；现在切换写入
+    // AppPreferences，下次进入应用直接看到上次的视图模式。
+    val shelfViewMode by viewModel.shelfViewMode.collectAsStateWithLifecycle()
+    val isListView = shelfViewMode == "list"
     // Folder navigation state: null = root (show all groups + ungrouped)
     var currentFolderId by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -436,7 +440,7 @@ fun ShelfScreen(
                                 )
                             },
                             onClick = {
-                                isListView = !isListView
+                                viewModel.setShelfViewMode(if (isListView) "grid" else "list")
                                 showOverflowMenu = false
                             },
                         )

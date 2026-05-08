@@ -161,7 +161,10 @@ fun ReaderScreen(
      * 不写 Room、不触 StateFlow。`null` 表示该方向"未在拖动中"，回退到上面的 StateFlow 值。
      *
      * 拖动 onValueChange   → 写 preview，触发 CanvasRenderer 重组与重新分页
-     * 拖动 onValueChangeFinished → 写 Room（持久化）+ 清空 preview（让单一来源回到 StateFlow）
+     * 拖动 onValueChangeFinished → 写 Room；preview **不立刻清**，等下面的
+     *     LaunchedEffect 看到 StateFlow 已经反映目标值后再清——避免「立刻清 →
+     *     effective 掉回 StateFlow 旧值 → 一帧后 StateFlow emit 新值」造成 thumb
+     *     先弹回旧位置再跳到新位置（用户看到「松手回弹然后恢复」）。
      */
     var marginPreviewH by remember { mutableStateOf<Int?>(null) }
     var marginPreviewT by remember { mutableStateOf<Int?>(null) }
@@ -169,6 +172,25 @@ fun ReaderScreen(
     val effectiveMarginH = marginPreviewH ?: marginHorizontal
     val effectiveMarginT = marginPreviewT ?: marginTopVal
     val effectiveMarginB = marginPreviewB ?: marginBottomVal
+    // 清 preview 的延迟逻辑：当 StateFlow 真值流到等于 preview 时，preview 已经
+    // 没有意义（effective 值不变），此时清 preview 让单一来源回到 StateFlow，
+    // 用户视觉上没有任何跳动。提交后 Room 写入 + activeStyle emit 通常 < 50ms，
+    // 体感上就是「松手即定」。
+    LaunchedEffect(marginHorizontal, marginPreviewH) {
+        if (marginPreviewH != null && marginHorizontal == marginPreviewH) {
+            marginPreviewH = null
+        }
+    }
+    LaunchedEffect(marginTopVal, marginPreviewT) {
+        if (marginPreviewT != null && marginTopVal == marginPreviewT) {
+            marginPreviewT = null
+        }
+    }
+    LaunchedEffect(marginBottomVal, marginPreviewB) {
+        if (marginPreviewB != null && marginBottomVal == marginPreviewB) {
+            marginPreviewB = null
+        }
+    }
     val autoPageInterval by viewModel.autoPageInterval.collectAsStateWithLifecycle()
     // ttsChapterPosition 不在这里 collect —— 段切高频更新会触发整个 ReaderScreen
     // 重组（贴文里的「重组风暴」）。下沉到 [ReadAloudPositionScope] 这个 leaf
@@ -888,19 +910,18 @@ fun ReaderScreen(
                 onMarginHorizontalPreview = { marginPreviewH = it },
                 onMarginHorizontalCommit = { v ->
                     viewModel.settings.setMarginHorizontal(v)
-                    marginPreviewH = null
+                    // preview 不立刻清——靠上面的 LaunchedEffect 等 StateFlow 真值
+                    // 流到 v 后再清，避免松手时 thumb 弹回旧值。
                 },
                 marginTop = effectiveMarginT,
                 onMarginTopPreview = { marginPreviewT = it },
                 onMarginTopCommit = { v ->
                     viewModel.settings.setMarginTop(v)
-                    marginPreviewT = null
                 },
                 marginBottom = effectiveMarginB,
                 onMarginBottomPreview = { marginPreviewB = it },
                 onMarginBottomCommit = { v ->
                     viewModel.settings.setMarginBottom(v)
-                    marginPreviewB = null
                 },
                 customCss = customCss,
                 onCustomCssChange = viewModel.settings::setCustomCss,
@@ -918,7 +939,7 @@ fun ReaderScreen(
                 footerRight = ftrRight,
                 onFooterRightChange = { viewModel.settings.setHeaderFooter("footerRight", it) },
                 // #1 还原默认排版参数
-                onResetStyle = { viewModel.settings.resetCurrentStyleParams() },
+                onResetStyle = { viewModel.settings.resetAllToFactoryDefaults() },
                 onDismiss = viewModel::hideSettingsPanel,
             )
         }

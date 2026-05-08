@@ -163,6 +163,14 @@ fun ReaderTopBar(
 
 // ── Bottom Control Bar (HTML prototype style: floating pill) ──
 
+/**
+ * Seek preview 保留时长——见 LaunchedEffect(pendingChapter) 内部注释。
+ * 900ms 是经验值，覆盖本地 + 一般网络章节的 loadChapter + LazyScroll restore
+ * + scrollProgress emit 全程。极慢章节超过这个值时 seekValue 会先被清，slider
+ * 短暂回到 baseProgress（已部分恢复）—— 比错位回弹温和。
+ */
+private const val SEEK_PREVIEW_RETENTION_MS = 900L
+
 @Composable
 fun ReaderControlBar(
     currentChapter: Int, totalChapters: Int, chapterTitle: String,
@@ -200,12 +208,17 @@ fun ReaderControlBar(
     val barShape = MaterialTheme.shapes.extraLarge
 
     // ── #3 拖动状态 ──
-    // 拖动期间 [seekValue] != null：滑块视觉、预览气泡都用它；松手后清空，回到 base。
+    // 拖动期间 [seekValue] != null：滑块视觉、预览气泡都用它；松手后**不立刻清**，
+    // 等下面的 LaunchedEffect 看到 currentChapter 已经切到拖动目标 [pendingChapter]
+    // 之后再清——避免「立刻清 → sliderValue 退回 baseProgress 旧值 → 几百 ms 后
+    // currentChapter 才到位」造成 thumb 短暂弹回老位置（用户看到「松手回弹然后
+    // 恢复」）。loadChapter 是异步的，preview 必须撑到真值跟上。
     // sliderValue ∈ 0..1 表示全书进度。映射规则：
     //   rawProgress = slider * totalChapters
     //   targetChapter = floor(rawProgress)        // [0, totalChapters)
     //   withinChapterPct = (rawProgress - targetChapter) * 100  // [0, 100)
     var seekValue: Float? by remember { mutableStateOf(null) }
+    var pendingChapter: Int? by remember { mutableStateOf(null) }
     val sliderValue = seekValue ?: baseProgress
     val rawProgress = sliderValue * totalChapters
     val previewIdx = if (totalChapters > 0)
@@ -215,6 +228,24 @@ fun ReaderControlBar(
         ((rawProgress - previewIdx) * 100f).toInt().coerceIn(0, 99)
     else 0
     val previewBookPct = (sliderValue * 100f).coerceIn(0f, 100f)
+
+    // 当用户松手发起 seek 后，等 [SEEK_PREVIEW_RETENTION_MS] 让 viewModel 跑完
+     // loadChapter + LazyScroll restoreProgress JUMP + scrollProgress emit 一整套，
+     // 然后再清 seekValue / pendingChapter。期间 sliderValue 保持 = seekValue
+     // （用户拖到的位置），thumb 不会先跳回 baseProgress 再跳到目标——前者就是
+     // bug「松手回弹然后恢复」/「拖动没反应」的根因（SCROLL 模式下
+     // visiblePage.chapterIndex 在 LazyScroll JUMP 那一刻就流到目标章，
+     // 但 scrollProgress 还是 0%，baseProgress = chapterFraction + 0 → thumb
+     // 跳到目标章首；几十 ms 后 scrollProgress 才到 withinPct）。900ms 覆盖
+     // 大部分本地 + 网络章节加载；连点 seek 时新点击会重启延迟，旧 coroutine
+     // 被 cancel，seekValue 始终保持为最近一次拖动到的位置。
+    LaunchedEffect(pendingChapter) {
+        if (pendingChapter != null) {
+            kotlinx.coroutines.delay(SEEK_PREVIEW_RETENTION_MS)
+            seekValue = null
+            pendingChapter = null
+        }
+    }
 
     // Floating pill bar like HTML prototype's .r-bar
     Box(
@@ -364,9 +395,12 @@ fun ReaderControlBar(
                                 val withinPct = ((raw - idx) * 100f).toInt().coerceIn(0, 99)
                                 // 注意：即使章号没变也要触发 — 用户可能在本章内拖位置。
                                 // 旧实现 `if (idx != currentChapter)` 会吃掉章内 seek。
+                                pendingChapter = idx
                                 onSeekFullBook(idx, withinPct)
                             }
-                            seekValue = null
+                            // seekValue 不在这里清——上面的 LaunchedEffect 等
+                            // currentChapter == pendingChapter 后再清，避免 thumb
+                            // 弹回旧位置再跳到新位置。
                         },
                         valueRange = 0f..1f,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
@@ -422,8 +456,8 @@ fun ReaderSettingsPanel(
     onThemeChange: (String) -> Unit = {},
     brightness: Float = -1f,
     onBrightnessChange: (Float) -> Unit = {},
-    paragraphSpacing: Float = 1.4f,
-    onParagraphSpacingChange: (Float) -> Unit = {},
+    paragraphSpacing: Int = 8,
+    onParagraphSpacingChange: (Int) -> Unit = {},
     marginHorizontal: Int = 24,
     /** 拖动中：实时反馈给渲染器但**不持久化**。每帧都触发，由 ReaderScreen 维护 preview state。 */
     onMarginHorizontalPreview: (Int) -> Unit = {},
@@ -451,26 +485,16 @@ fun ReaderSettingsPanel(
     footerRight: String = "page_progress",
     onFooterRightChange: (String) -> Unit = {},
     /**
-     * #1：还原默认排版参数（字号/行距/段距/页边距/字体）。
-     * 仅触发 [com.morealm.app.presentation.reader.ReaderSettingsController.resetCurrentStyleParams]，
-     * 不动配色 / customCss / 背景图。
+     * #1：「恢复出厂」一键回退所有阅读相关设置。
+     * 触发 [com.morealm.app.presentation.reader.ReaderSettingsController.resetAllToFactoryDefaults]，
+     * 范围包含排版、配色、自定义 CSS / 背景图、繁简、动画、屏幕方向、tap zone 等。
      */
     onResetStyle: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val moColors = LocalMoRealmColors.current
     var fontSize by remember { mutableFloatStateOf(currentFontSize) }
-    var lineHeight by remember { mutableFloatStateOf(currentLineHeight) }
     var selectedFont by remember { mutableStateOf(currentFont) }
-
-    // ── #7 防抖：段距 / 行距 chip 触发的重排开销大（整章重新分页 + 缓存失效），
-    //   连点会形成 N 个并发布局任务，最后一次完成时其他被丢弃 → 用户看到「点了
-    //   半天没生效」。state 立刻改保证 chip 视觉即时反馈，setter 通过可取消 Job
-    //   延后 ~160ms 派发；新点击 cancel 老 Job，最终只有最后一次值进入 Room →
-    //   排版引擎。160ms 足以合并连点，又不让用户感觉「卡了半秒」。
-    val debounceScope = rememberCoroutineScope()
-    var lineHeightJob by remember { mutableStateOf<Job?>(null) }
-    var paraSpaceJob by remember { mutableStateOf<Job?>(null) }
 
     Surface(
         modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp),
@@ -490,10 +514,12 @@ fun ReaderSettingsPanel(
 
             Spacer(Modifier.height(12.dp))
 
-            // ── #1 还原默认 — 一行右对齐紧凑按钮 ──
+            // ── #1 恢复出厂 — 一行右对齐紧凑按钮 ──
             //
-            // 放在面板顶部、drag handle 之下：用户拖参数翻车想"重置"时第一眼看到。
+            // 放在面板顶部、drag handle 之下：用户拖参数翻车想"重置一切"时第一眼看到。
             // 用 TextButton + 小字号 + 右对齐，避免抢主操作区的视觉权重。
+            // 范围：所有 ReaderStyle 字段 + 所有阅读相关 prefs（详见
+            // [com.morealm.app.presentation.reader.ReaderSettingsController.resetAllToFactoryDefaults]）。
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
@@ -510,7 +536,7 @@ fun ReaderSettingsPanel(
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        "还原默认",
+                        "恢复出厂",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -772,21 +798,17 @@ fun ReaderSettingsPanel(
             Spacer(Modifier.height(16.dp))
 
             // ── Line height ──
+            // chip selected 直接对入参 currentLineHeight 比对，去掉 local state +
+            // debounce —— 之前的 lineHeightJob 防抖结合 local state（无 key）会让
+            // chip 选中态与外部 StateFlow 不同步，且段距走相同模式被 #6 修复时一并
+            // 简化为「立即派发，单一来源真值流」。
             Text("行距", style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(1.5f to "紧凑", 1.8f to "适中", 2.0f to "宽松", 2.4f to "超宽").forEach { (v, l) ->
                     FilterChip(
-                        selected = lineHeight == v,
-                        onClick = {
-                            lineHeight = v
-                            // #7 取消上一个未派发的 setter，仅 160ms 后再写
-                            lineHeightJob?.cancel()
-                            lineHeightJob = debounceScope.launch {
-                                delay(160)
-                                onLineHeightChange(v)
-                            }
-                        },
+                        selected = currentLineHeight == v,
+                        onClick = { onLineHeightChange(v) },
                         label = { Text(l) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
@@ -798,22 +820,17 @@ fun ReaderSettingsPanel(
             Spacer(Modifier.height(16.dp))
 
             // ── Paragraph spacing ──
-            var paraSpace by remember { mutableFloatStateOf(paragraphSpacing) }
+            // chip 值是 px (Int)，直接对应 ReaderStyle.paragraphSpacing。selected 直接
+            // 比对入参，无需 local state——避免「local 与入参不同步导致选中错位」。
+            // 旧实现用 0.5/1.0/1.4/2.0f 倍率值，setter 走 toInt 后变成 0/1/1/2，
+            // 「适中」和「宽松」在 Room 里是同一个值，是 bug 6 段距部分的根因。
             Text("段间距", style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(0.5f to "紧凑", 1.0f to "适中", 1.4f to "宽松", 2.0f to "超宽").forEach { (v, l) ->
+                listOf(4 to "紧凑", 8 to "适中", 16 to "宽松", 24 to "超宽").forEach { (v, l) ->
                     FilterChip(
-                        selected = paraSpace == v,
-                        onClick = {
-                            paraSpace = v
-                            // #7 同上：取消上一个再延后派发
-                            paraSpaceJob?.cancel()
-                            paraSpaceJob = debounceScope.launch {
-                                delay(160)
-                                onParagraphSpacingChange(v)
-                            }
-                        },
+                        selected = paragraphSpacing == v,
+                        onClick = { onParagraphSpacingChange(v) },
                         label = { Text(l) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
