@@ -1,0 +1,15 @@
+{
+  "_comment": "MoRealm 更新检查 manifest。App 通过 jsdelivr CDN (https://cdn.jsdelivr.net/gh/keys-cherish/morealm-reader@main/update.json) 拉取本文件做版本检查，免 GitHub API 限流；失败 fallback 到 GitHub Releases API。每次发版需要更新本文件并 commit 到 main。",
+  "latestVersion": "1.1",
+  "tagName": "v1.1",
+  "title": "MoRealm 1.1",
+  "body": "稳态优化版本：进度条 thumb 弹回 / SCROLL 模式 reset 风暴 / 边距实时 / 繁简连点位置回退 / 全文搜索 + 书内搜索闪退 / Legado 数据导入闪退 / 一键还原扩展为完整出厂 / 列表网格视图持久化 / 书名自然排序 / 贡献者页面 / top bar 间距过大 / 收纳菜单语义。",
+  "githubUrl": "https://github.com/keys-cherish/morealm-reader/releases/tag/v1.1",
+  "isPrerelease": false,
+  "publishedAt": "2026-05-08",
+  "pan123": {
+    "shareUrl": "https://1816008118.share.123pan.cn/123pan/s0bLVv-ExYxd",
+    "password": "",
+    "label": "123 网盘"
+  }
+}
