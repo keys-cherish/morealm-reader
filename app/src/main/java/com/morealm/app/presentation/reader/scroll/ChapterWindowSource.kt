@@ -146,6 +146,15 @@ class ChapterWindowSource(
     val chapterCharSizes: SnapshotStateMap<Int, Int> = mutableStateMapOf()
 
     /**
+     * 各章 chapterFetcher 拉到的原始正文 —— relayoutAll 时复用，避免重新走 IO 与
+     * replace rules / 繁简转换链路。trim 时与 [chapterByIdx] 同步释放。
+     *
+     * 用普通 [MutableMap] 即可：上层不需要订阅这个 map 的变更，relayout 完成后
+     * 通过替换 [paragraphs] / [chapterByIdx] 触发重组。
+     */
+    private val chapterRawContent: MutableMap<Int, String> = mutableMapOf()
+
+    /**
      * 命令式跳转请求（书签 / TOC 跳转）—— 上层 LazyScrollSection 监听此字段、
      * 转发到 LazyScrollRenderer 的 jumpChapterIndex / Position / Token。
      *
@@ -210,6 +219,7 @@ class ChapterWindowSource(
                 paragraphs.clear()
                 loadedChapters.clear()
                 chapterByIdx.clear()
+                chapterRawContent.clear()
                 _pendingJump = null
                 // 立刻塞个 LOADING 占位，避免 LazyColumn 看到空 list 退到 ReaderLoadingCover
                 paragraphs.add(loadingScrollParagraph(chapterIdx, placeholderHeight, System.nanoTime()))
@@ -281,6 +291,119 @@ class ChapterWindowSource(
     /** 上层消费完 [pendingJump] 后调用清空，避免重复触发。 */
     fun consumePendingJump() {
         _pendingJump = null
+    }
+
+    /**
+     * 同章 reload 的轻路径 —— 当用户在已加载章节内拖底部进度条 / 跳书签到当前章
+     * 不同位置时调用。**不**调 [resetTo]（避免 paragraphs.clear + 重 fetch + 重排版
+     * 风暴），仅写入 [pendingJump]，让 LazyScrollSection 的 jump effect 把 LazyColumn
+     * 滚到目标段。
+     *
+     * 调用前提：`chapterIdx in [loadedChapters]`，否则该跳转无段落可锚（应走 [resetTo]）。
+     *
+     * 修复的 bug：用户拖底部 slider 时 ReaderViewModel.loadChapter(idx, restoreToken=新值)
+     * 触发 CanvasRenderer 的 `LaunchedEffect(chapterIndex, restoreToken)` → 旧实现
+     * 不论窗口是否已包含该章一律调 resetTo。日志（temp/MoRealm_log_20260507_225012.txt
+     * 22:50:05~08）显示 3 秒内 5 次 resetTo，每次 clear 230 段重 fetch 两章。slider
+     * thumb 位置依赖 baseProgress，restoreProgress 完成时 scrollProgress=0%、视口稳
+     * 定后才到目标 88%，反复弹动让用户感觉 "拖动没反应"。
+     */
+    fun requestJumpWithinWindow(chapterIdx: Int, chapterPos: Int) {
+        if (chapterIdx !in loadedChapters) {
+            AppLog.debug(
+                "ChapterWindow",
+                "requestJumpWithinWindow skipped: ch=$chapterIdx not in window=${loadedChapters.toList()}",
+            )
+            return
+        }
+        _pendingJump = PendingJump(
+            chapterIdx = chapterIdx,
+            chapterPos = chapterPos,
+            token = System.nanoTime(),
+        )
+        AppLog.debug(
+            "ChapterWindow",
+            "requestJumpWithinWindow: ch=$chapterIdx pos=$chapterPos (no clear, light path)",
+        )
+    }
+
+    /**
+     * LayoutInputs 变化（用户改字号 / 行距 / 上下左右边距 / 段距 / 自定义 CSS / 标题
+     * 对齐 / 分屏 / 屏幕旋转等）时，对窗口里**所有**已加载章节用最新 [chapterLayouter]
+     * 重新排版，并把对应 [paragraphs] 段落原地替换。
+     *
+     * 修复的 bug：旧路径下 SCROLL 模式调边距 slider 时，`LaunchedEffect(layoutInputs)`
+     * 仅 attach 新 layouter；[chapterByIdx] 缓存的 TextChapter 是按旧 padding 排出来
+     * 的，[paragraphs] 也是旧版 ScrollParagraph。LazyColumn 继续渲染旧高度 / 旧换行 →
+     * 用户感觉 "边距不实时变化"。
+     *
+     * ## 视口锚定
+     *
+     * 不调 scrollToItem，让 LazyListState 自己按 ScrollParagraph.key 自动锚定。
+     * key 由 `chapterIndex + paraIdx + generationId` 拼接 —— relayout 后段落的
+     * chapterIndex / paraIdx 不变，但 generationId 变了，LazyColumn 视为「新 item」
+     * 不会做位置插值。代价是相对位置可能稍有漂移（段高度变了），但用户主动改边距时
+     * 期望的是「边距立即变」而非「绝对位置不动」，这是可接受的折中；硬要保位置需要
+     * 在 relayout 后跑一次定位补偿，复杂度不值。
+     *
+     * ## 复用 raw content
+     *
+     * 走 [chapterRawContent] 缓存，避开 [chapterFetcher] 的 IO + replace rules + 繁简
+     * 转换。每章排版工作量与首次 layoutChapterAsync 相同，但全部走 Default 调度器，
+     * UI 主线程仅在 [windowMutex] 内做 list mutate，单帧约 1-2 ms。
+     *
+     * ## 重入与并发
+     *
+     * - layouter 未 attach 时直接 return（不应该发生，调用方在 attach 后调）
+     * - 用 [windowMutex] 串行化每章 mutate，与 [appendNext] / [prependPrev] / [resetTo]
+     *   抢同一把锁 —— 极端情况下 relayout 中段如果用户也滑到边界触发 append，append 会
+     *   等到 relayout 当前章持锁段结束再跑，新 append 用最新 layouter，结果一致
+     * - in-flight loadAndInsertChapter 的 layouter 是 attach 时的快照（持有的局部
+     *   `layouter` val），它完成后写入的 chapterByIdx 可能是旧 padding 版。relayoutAll
+     *   覆盖时把它们一并刷成新版本，最终一致。
+     */
+    suspend fun relayoutAll() {
+        val layouter = chapterLayouter ?: run {
+            AppLog.debug("ChapterWindow", "relayoutAll skipped: layouter not attached yet")
+            return
+        }
+        if (loadedChapters.isEmpty()) return
+        val omit = omitChapterTitleProvider()
+        val chSize = chapterCountProvider()
+        val targets = loadedChapters.toList()
+        AppLog.debug("ChapterWindow", "relayoutAll begin: targets=$targets omit=$omit chSize=$chSize")
+        for (chIdx in targets) {
+            val raw = chapterRawContent[chIdx]
+            if (raw == null) {
+                AppLog.debug("ChapterWindow", "relayoutAll skip ch=$chIdx: raw not cached (still loading?)")
+                continue
+            }
+            val title = chapterTitleProvider(chIdx)
+            val newTc = withContext(Dispatchers.Default) {
+                try {
+                    layouter(title, raw, chIdx, chSize, omit)
+                } catch (e: Exception) {
+                    AppLog.warn("ChapterWindow", "relayoutAll layout failed ch=$chIdx: ${e.message}", e)
+                    null
+                }
+            } ?: continue
+            val gen = System.nanoTime()
+            val newParas = newTc.toScrollParagraphs(omit, gen)
+            if (newParas.isEmpty()) continue
+            windowMutex.withLock {
+                val firstIdx = paragraphs.indexOfFirst { it.chapterIndex == chIdx }
+                if (firstIdx < 0) {
+                    // 在我们等 layouter 出结果时这章被 trim 了 —— 放弃
+                    return@withLock
+                }
+                paragraphs.removeAll { it.chapterIndex == chIdx }
+                paragraphs.addAll(firstIdx, newParas)
+                chapterByIdx[chIdx] = newTc
+                chapterCharSizes[chIdx] = newTc.getContent().length.coerceAtLeast(1)
+            }
+            AppLog.debug("ChapterWindow", "relayoutAll ch=$chIdx → ${newParas.size} paras (gen=$gen)")
+        }
+        AppLog.debug("ChapterWindow", "relayoutAll done; window=${loadedChapters.toList()} totalParas=${paragraphs.size}")
     }
 
     /** 章节查询 —— 给 LazyScrollSection 显示标题用 */
@@ -448,9 +571,10 @@ class ChapterWindowSource(
             val insertParaIdx = computeInsertParagraphIndex(chapterIdx)
             paragraphs.addAll(insertParaIdx, newParas)
 
-            // 更新 loadedChapters / chapterByIdx / chapterCharSizes
+            // 更新 loadedChapters / chapterByIdx / chapterCharSizes / chapterRawContent
             chapterByIdx[chapterIdx] = tc
             chapterCharSizes[chapterIdx] = tc.getContent().length.coerceAtLeast(1)
+            chapterRawContent[chapterIdx] = raw
             if (chapterIdx !in loadedChapters) {
                 // SnapshotStateList 不支持 in-place sort，重建
                 val merged = (loadedChapters.toList() + chapterIdx).sorted()
@@ -532,6 +656,7 @@ class ChapterWindowSource(
 
             paragraphs.removeAll { it.chapterIndex == farthest }
             chapterByIdx.remove(farthest)
+            chapterRawContent.remove(farthest)
             loadedChapters.remove(farthest)
             AppLog.debug(
                 "ChapterWindow",

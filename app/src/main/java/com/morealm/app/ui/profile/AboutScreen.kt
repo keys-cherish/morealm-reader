@@ -1,8 +1,11 @@
 package com.morealm.app.ui.profile
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -44,11 +47,18 @@ private val QQ_GROUP_ID: String = BuildConfig.QQ_GROUP_ID
 /** UI 上是否显示具体群号；为空表示构建未配置群号。 */
 private val hasGroupId: Boolean get() = QQ_GROUP_ID.isNotEmpty()
 
+/**
+ * 项目主页 URL。公开仓库链接，硬编码即可（与 QQ 群号那种敏感信息不同）。
+ * 维护者改名 / 迁移仓库时同步改这里。
+ */
+private const val PROJECT_HOME_URL = "https://github.com/keys-cherish/morealm-reader"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AboutScreen(
     onBack: () -> Unit,
     onNavigateChangelog: () -> Unit = {},
+    onNavigateContributors: () -> Unit = {},
 ) {
     val moColors = LocalMoRealmColors.current
     val context = LocalContext.current
@@ -198,6 +208,86 @@ fun AboutScreen(
                     )
                     Text(
                         "查看版本迭代记录",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                }
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // 贡献者入口 — 跳转 ContributorsScreen 展示完整名单
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+            onClick = onNavigateContributors,
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.Group,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "贡献者",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        "一起把墨境做得更好",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                }
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // 项目主页 — GitHub 仓库链接，公开常量直接 hardcode 在文件顶部 PROJECT_HOME_URL。
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+            onClick = remember(context) { { openProjectHome(context) } },
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.Code,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "项目主页",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        PROJECT_HOME_URL.removePrefix("https://"),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     )
@@ -388,5 +478,23 @@ private fun AnniversarySection() {
                 )
             }
         }
+    }
+}
+
+/**
+ * 跳转到项目主页（外部浏览器）。
+ *
+ * 没装浏览器（极少见，但 Android Auto / 部分定制 ROM 会缺）→ Toast 兜底，
+ * 不让用户面对一个静默失败的按钮。
+ */
+private fun openProjectHome(context: Context) {
+    try {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_HOME_URL))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, "未找到可打开链接的浏览器", Toast.LENGTH_SHORT).show()
+    } catch (_: Exception) {
+        Toast.makeText(context, "打开主页失败", Toast.LENGTH_SHORT).show()
     }
 }

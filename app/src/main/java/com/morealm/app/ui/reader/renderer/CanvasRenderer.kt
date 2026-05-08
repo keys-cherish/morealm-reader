@@ -586,6 +586,7 @@ fun CanvasRenderer(
     LaunchedEffect(chapterWindow, layoutInputs) {
         if (chapterWindow == null) return@LaunchedEffect
         val provider = layoutInputs.provider
+        val firstAttach = chapterWindow.chapterLayouter == null
         chapterWindow.chapterLayouter = { title, content, idx, chSize, omit ->
             try {
                 provider.layoutChapter(
@@ -600,6 +601,13 @@ fun CanvasRenderer(
                 null
             }
         }
+        // 首次 attach（用户进入阅读器 / 切书）时 loadedChapters 还没填，relayout 没东西
+        // 可做。后续 layoutInputs 变化（用户在设置面板拖字号 / 上下左右边距 slider /
+        // 改行距 / 改自定义 CSS 等）走这条分支，把已加载章节按新 padding 重排版 +
+        // 替换 paragraphs，让用户看到边距实时跟随。
+        if (!firstAttach && chapterWindow.loadedChapters.isNotEmpty()) {
+            chapterWindow.relayoutAll()
+        }
     }
 
     // ── SCROLL 重架：chapterIndex / restoreToken 变化触发 windowSource.resetTo ──
@@ -611,8 +619,11 @@ fun CanvasRenderer(
         if (chapterWindow == null) return@LaunchedEffect
         if (pageAnimType != PageAnimType.SCROLL) return@LaunchedEffect
         if (chapterIndex < 0) return@LaunchedEffect
-        // 已经包含且 chapterPos 也对得上的窗口不重置（避免无意义 clear）
-        if (chapterIndex in chapterWindow.loadedChapters && initialChapterPosition == 0) {
+        // 同章 reload（用户拖底部进度条到当前章不同位置 / 章内书签跳转）走轻路径：
+        // 不 clear 窗口、不重 fetch，只更新 pendingJump 让 LazyScroll 滚到新位置。
+        // 修复 resetTo 风暴见 [ChapterWindowSource.requestJumpWithinWindow] 注释。
+        if (chapterIndex in chapterWindow.loadedChapters) {
+            chapterWindow.requestJumpWithinWindow(chapterIndex, initialChapterPosition)
             return@LaunchedEffect
         }
         AppLog.debug("CanvasRenderer", "windowSource.resetTo(chIdx=$chapterIndex, chPos=$initialChapterPosition, token=$restoreToken)")
@@ -630,10 +641,17 @@ fun CanvasRenderer(
             onCurTextChapterReady(chapterIndex, cachedChapter)
             return@LaunchedEffect
         }
-        // Cache miss: 节流一帧（16ms）。拖动 padding 滑块时 key 高频变化，
-        // LaunchedEffect 在新 key 到来时会取消旧 coroutine（含此 delay），
-        // 保证只有"用户手指停下/即将停下"那一刻的 key 真正进入分页流水线。
-        kotlinx.coroutines.delay(16L)
+        // Cache miss: 立即 attempt layout——layoutChapterAsync 第一页就绪时
+        // (onPageReady index=0) 会立刻 publish textChapter，UI 自然实时更新。
+        // 旧实现这里有 16ms 节流，意图是「拖动 padding 滑块时 key 高频变化，
+        // 节流让只有手指停下那刻的 key 进入流水线」——但实测效果是「拖动期间
+        // layoutInputs 不停被新 key cancel，textChapter 永不更新，正文僵在
+        // 拖动开始前的状态」（用户报告：「设置左右；上下；边距；正文不实时
+        // 变化」）。删掉节流后，每次 padding 变化都尽早 attempt layout；新 key
+        // 到来仍会 cancel 旧 layout 协程，但只要用户拖动间有 ~50ms 暂停，
+        // layoutChapterAsync 就能出第一页 publish。配合下面的 placeholder
+        // fallback（仅首次进入退到 placeholder，否则保留旧 textChapter），
+        // 不会引入「拖动闪屏」。
         // 仅在还没有任何可显示布局时才退到 placeholder（首次进入），
         // 否则保留旧 textChapter 直到 layoutChapterAsync 出第一页 —— 消除拖动闪屏。
         if (textChapter == null || textChapter?.pages.isNullOrEmpty()) {

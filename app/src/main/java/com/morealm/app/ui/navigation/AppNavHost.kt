@@ -39,6 +39,7 @@ import com.morealm.app.ui.profile.AppearanceScreen
 import com.morealm.app.ui.profile.BackupExportScreen
 import com.morealm.app.ui.profile.BackupImportScreen
 import com.morealm.app.ui.profile.ChangelogScreen
+import com.morealm.app.ui.profile.ContributorsScreen
 import com.morealm.app.ui.profile.DonateScreen
 import com.morealm.app.ui.profile.ProfileScreen
 import com.morealm.app.ui.profile.RemoteBookScreen
@@ -86,7 +87,7 @@ fun MoRealmNavHost(
     }
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "source_manage" || route == "reading_settings" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route == "legado_import" || route == "appearance" || route.startsWith("theme_editor")
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "contributors" || route == "source_manage" || route == "reading_settings" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route == "legado_import" || route == "appearance" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -327,6 +328,7 @@ fun MoRealmNavHost(
                 AboutScreen(
                     onBack = { navController.safePopBackStack() },
                     onNavigateChangelog = { navController.safeNavigate("changelog") },
+                    onNavigateContributors = { navController.safeNavigate("contributors") },
                 )
             }
 
@@ -336,6 +338,10 @@ fun MoRealmNavHost(
 
             composable("changelog") {
                 ChangelogScreen(onBack = { navController.safePopBackStack() })
+            }
+
+            composable("contributors") {
+                ContributorsScreen(onBack = { navController.safePopBackStack() })
             }
 
             composable("donate") {
