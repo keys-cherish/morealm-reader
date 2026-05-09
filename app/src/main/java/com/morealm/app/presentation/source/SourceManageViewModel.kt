@@ -88,6 +88,64 @@ class BookSourceManageViewModel @Inject constructor(
     }
 
     /**
+     * 书源导出结果（一次性事件）：[Result.success] 携带导出条数，failure 携带异常。
+     * UI 在 collect 后弹 Snackbar 给反馈。SharedFlow + extraBuffer=1 让 UI 在
+     * 启动 export 之前订阅与之后订阅都不丢消息（typical case 是先 collect 再点导出）。
+     */
+    private val _exportResult = kotlinx.coroutines.flow.MutableSharedFlow<Result<Int>>(extraBufferCapacity = 1)
+    val exportResult: kotlinx.coroutines.flow.SharedFlow<Result<Int>> = _exportResult.asSharedFlow()
+
+    /** 导出专用 Json 配置：与 [BookSource] 的 jsonParser 不同，**关闭 encodeDefaults**，
+     *  让默认值字段不出现在 JSON 里——这样导出 JSON 体积更小、与 Legado 原生导出风格
+     *  一致（其他人/其他 App 看到时不会被一堆空 ""、0、false 字段淹没）。
+     *  prettyPrint 让用户用文本编辑器直接看也好读。
+     */
+    private val exportJson = kotlinx.serialization.json.Json {
+        encodeDefaults = false
+        prettyPrint = true
+        ignoreUnknownKeys = true
+    }
+
+    /**
+     * 把书源列表导出为 Legado 兼容 JSON 数组写到 [uri]（SAF CreateDocument 拿到的）。
+     *
+     * @param uri SAF 选中的目标位置；调用方负责通过 ActivityResultContracts.CreateDocument 拿到
+     * @param urls 要导出的书源 [BookSource.bookSourceUrl] 集合；null / 空集 = 导出全部
+     *
+     * 实现要点：
+     *  - 序列化用 [List<BookSource>] 直接 encode（BookSource 自身是 @Serializable）
+     *  - 写文件走 [Context.contentResolver.openOutputStream]，对 SAF / file:// / content:// 都通用
+     *  - 失败/成功都 emit 到 [exportResult]，UI 单一订阅源
+     *
+     * 不返回结果，由 [exportResult] 异步 emit；这样 UI 可以在 launch SAF 之前就订阅好。
+     */
+    fun exportToUri(uri: android.net.Uri, urls: Collection<String>?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val all = sources.value
+                val list = if (urls.isNullOrEmpty()) all
+                else all.filter { it.bookSourceUrl in urls }
+                if (list.isEmpty()) {
+                    _exportResult.tryEmit(Result.failure(IllegalStateException("没有可导出的书源")))
+                    return@launch
+                }
+                val text = exportJson.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(BookSource.serializer()),
+                    list,
+                )
+                context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                    out.write(text.toByteArray(Charsets.UTF_8))
+                } ?: throw IllegalStateException("无法打开输出流")
+                AppLog.info("SourceExport", "Exported ${list.size} source(s) to $uri")
+                _exportResult.tryEmit(Result.success(list.size))
+            } catch (e: Exception) {
+                AppLog.error("SourceExport", "Export failed", e)
+                _exportResult.tryEmit(Result.failure(e))
+            }
+        }
+    }
+
+    /**
      * 批量启用 / 停用一组 URL 对应的书源。供分组 header 的"全启用 / 全停用"菜单调用。
      *
      * - 按 `bookSourceUrl` 主键查找当前内存里的 [BookSource] 行，filter 掉本来就处于
@@ -149,6 +207,15 @@ class BookSourceManageViewModel @Inject constructor(
     fun deleteSource(source: BookSource) {
         viewModelScope.launch(Dispatchers.IO) {
             sourceRepo.delete(source)
+        }
+    }
+
+    fun deleteSources(urls: Collection<String>) {
+        if (urls.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val toDelete = sources.value.filter { it.bookSourceUrl in urls }
+            toDelete.forEach { sourceRepo.delete(it) }
+            AppLog.info("SourceManage", "批量删除 ${toDelete.size} 个书源")
         }
     }
 

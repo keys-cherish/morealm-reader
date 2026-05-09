@@ -1,6 +1,7 @@
 package com.morealm.app.presentation.theme
 
 import android.content.Context
+import android.content.res.Configuration
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -12,18 +13,15 @@ import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
-import java.util.Calendar
 import javax.inject.Inject
 
 @HiltViewModel
@@ -38,6 +36,13 @@ class ThemeViewModel @Inject constructor(
     /** Synchronously pick the correct initial theme to avoid dark→light flash.
      *  Reads from SharedPreferences (instant) instead of guessing by time. */
     private val initialTheme: ThemeEntity = run {
+        val followSystem = prefs.getFollowSystemThemeSync()
+        if (followSystem) {
+            // 「跟随系统」开启时冷启动直接按 OS uiMode 决定日/夜，不读保存的 themeId
+            // —— 否则上次手动选的主题会先一闪然后被切回系统色。
+            val sysIsNight = isSystemInNightMode()
+            return@run if (sysIsNight) BuiltinThemes.moRealm else BuiltinThemes.paper
+        }
         val savedId = prefs.getActiveThemeIdSync()
         val builtin = BuiltinThemes.all().find { it.id == savedId }
         if (builtin != null) {
@@ -55,8 +60,15 @@ class ThemeViewModel @Inject constructor(
     val allThemes: StateFlow<List<ThemeEntity>> = themeRepo.getAllThemes()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    val autoNightMode: StateFlow<Boolean> = prefs.autoNightMode
-        .stateIn(viewModelScope, SharingStarted.Eagerly, prefs.getAutoNightModeSync())
+    /**
+     * 「跟随系统主题」开关。true = 系统切到暗色自动用夜间内置主题，反之用日间。
+     * UI 侧（[com.morealm.app.ui.profile.ProfileScreen]）暴露一个开关。
+     *
+     * 旧版「时间自动夜间（22:00-06:00）」已下线 —— 旧 [autoNightMode] flow 字段保留
+     * 仅做向后兼容，业务侧不再读取。
+     */
+    val followSystemTheme: StateFlow<Boolean> = prefs.followSystemTheme
+        .stateIn(viewModelScope, SharingStarted.Eagerly, prefs.getFollowSystemThemeSync())
 
     val customCss: StateFlow<String> = prefs.customCss
         .stateIn(viewModelScope, SharingStarted.Lazily, "")
@@ -68,43 +80,37 @@ class ThemeViewModel @Inject constructor(
     init {
         viewModelScope.launch(Dispatchers.IO) {
             themeRepo.ensureBuiltinThemes()
-            applyAutoThemeIfNeeded()
         }
-        // 跟随系统时间持续切换：之前 applyAutoThemeIfNeeded 只在启动时跑一次，
-        // 用户在 App 里跨过 22:00 / 06:00 不会自动切换。这里加一个分钟级 polling，
-        // auto 关闭时 applyAutoThemeIfNeeded 会立即 return，几乎零开销。
-        // viewModelScope 在 ViewModel 销毁时自动取消，不需要手动管理生命周期。
+    }
+
+    /**
+     * 应用「跟随系统」状态：根据 [systemIsDark] 把当前主题切到对应日/夜内置主题。
+     * MainActivity 在 setContent 顶层用 isSystemInDarkTheme() 拿到值，每次系统暗色
+     * 模式变化会触发 LaunchedEffect 调用本函数。
+     *
+     * 关键开关 [followSystemTheme] 关闭时直接 return —— 用户手动选主题就让他/她
+     * 选什么就保留什么，不被系统色覆盖。
+     */
+    fun applySystemDarkModeIfFollowing(systemIsDark: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
-            // 等到下一个整分对齐再开始，让"22:00 准点切换"看起来更可靠。
-            val now = Calendar.getInstance()
-            val msToNextMinute = 60_000L - (now.get(Calendar.SECOND) * 1000L +
-                now.get(Calendar.MILLISECOND))
-            delay(msToNextMinute.coerceAtLeast(1_000L))
-            while (isActive) {
-                applyAutoThemeIfNeeded()
-                delay(60_000L)
-            }
-        }
-    }
-
-    /** Apply time-based theme on startup if auto mode is enabled */
-    private suspend fun applyAutoThemeIfNeeded() {
-        val auto = autoNightMode.value
-        if (!auto) return
-        val shouldBeNight = isNightTime()
-        val current = activeTheme.value
-        val currentIsNight = current?.isNightTheme ?: true
-        if (shouldBeNight != currentIsNight) {
-            val targetId = if (shouldBeNight) BuiltinThemes.moRealm.id else BuiltinThemes.paper.id
+            if (!followSystemTheme.value) return@launch
+            val current = activeTheme.value
+            val currentIsNight = current?.isNightTheme ?: true
+            if (systemIsDark == currentIsNight) return@launch
+            val targetId = if (systemIsDark) BuiltinThemes.moRealm.id else BuiltinThemes.paper.id
             themeRepo.activateTheme(targetId)
-            AppLog.info("Theme", "Auto day/night → $targetId (hour=${Calendar.getInstance().get(Calendar.HOUR_OF_DAY)})")
+            AppLog.info("Theme", "Follow system → $targetId (systemDark=$systemIsDark)")
         }
     }
 
-    /** Manual toggle — disables auto mode so user choice persists across restarts */
+    /**
+     * Manual toggle — turns OFF follow-system so user choice persists across system
+     * mode changes. 老接口名称（toggleDayNight）保留不变；外部调用方（书架顶栏 sun/moon
+     * 按钮）不必改。
+     */
     fun toggleDayNight() {
         viewModelScope.launch(Dispatchers.IO) {
-            prefs.setAutoNightMode(false)
+            prefs.setFollowSystemTheme(false)
             val current = activeTheme.value
             val targetId = if (current?.isNightTheme == true) {
                 BuiltinThemes.paper.id
@@ -117,15 +123,21 @@ class ThemeViewModel @Inject constructor(
 
     fun switchTheme(themeId: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            prefs.setAutoNightMode(false)
+            // 用户主动选具体主题 = 关掉跟随系统（同 [toggleDayNight]）。否则下次系统
+            // 切到暗色又会被覆盖回 moRealm，用户的选择失效。
+            prefs.setFollowSystemTheme(false)
             themeRepo.activateTheme(themeId)
         }
     }
 
-    fun setAutoNightMode(enabled: Boolean) {
+    fun setFollowSystemTheme(enabled: Boolean, systemIsDark: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
-            prefs.setAutoNightMode(enabled)
-            if (enabled) applyAutoThemeIfNeeded()
+            prefs.setFollowSystemTheme(enabled)
+            if (enabled) {
+                // 立即应用一次：用户从「关」拨到「开」时，主题应该立刻和系统对齐，
+                // 不要等下一次系统暗色变化才生效。
+                applySystemDarkModeIfFollowing(systemIsDark)
+            }
         }
     }
 
@@ -179,14 +191,14 @@ class ThemeViewModel @Inject constructor(
         }
     }
 
-    private fun isNightTime(): Boolean {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        return hour < 6 || hour >= 22
+    private fun isSystemInNightMode(): Boolean {
+        val uiMode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        return uiMode == Configuration.UI_MODE_NIGHT_YES
     }
 
     /** Warm color intensity based on time of day (0.0 = none, 1.0 = full warm) */
     fun getWarmColorIntensity(): Float {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
         return when {
             hour in 22..23 -> (hour - 21).toFloat() / 3f  // 22:00→0.33, 23:00→0.67
             hour in 0..5 -> 1.0f                            // Full warm at night

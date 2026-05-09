@@ -262,6 +262,52 @@ class ShelfViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 批量删除分组（连同分组里的书一起从 DB 删除，但保留本地文件 / 封面文件以支持撤销）。
+     *
+     * 与单选 [deleteFolder] 的差异：
+     *  - 不调 [coverStorage.deleteCover]，分组封面 file 保留 → 撤销时显示完整
+     *  - auto: 前缀的分组照样写 ignore，避免下次"立即整理"又把它建回来；
+     *    [restoreFolders] 会把对应 ignore 移除。
+     *  - 与 batchDeleteSoft 同一思路（DB 立删，文件延迟），让 Snackbar 撤销期内零代价恢复。
+     */
+    fun batchDeleteFolders(folderIds: Set<String>) {
+        if (folderIds.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            folderIds.forEach { fid ->
+                val group = groupRepo.getById(fid)
+                if (group?.auto == true && fid.startsWith("auto:")) {
+                    prefs.addAutoFolderIgnored(fid.removePrefix("auto:"))
+                }
+                bookRepo.deleteFolder(fid)
+            }
+            AppLog.info("Shelf", "Batch deleted ${folderIds.size} folders (covers retained)")
+        }
+    }
+
+    /**
+     * 撤销批量删除分组：先 re-insert groups，再 re-insert 该批 books。
+     * auto: 分组同时把上一步写进 prefs 的 ignored tagId 撤掉，
+     * 否则下次"立即整理"还会把分组吃掉。
+     */
+    fun restoreFolders(groups: List<BookGroup>, books: List<Book>) {
+        if (groups.isEmpty() && books.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                groups.forEach { g ->
+                    groupRepo.insert(g)
+                    if (g.auto && g.id.startsWith("auto:")) {
+                        prefs.removeAutoFolderIgnored(g.id.removePrefix("auto:"))
+                    }
+                }
+                if (books.isNotEmpty()) bookRepo.insertAll(books)
+                AppLog.info("Shelf", "Restored ${groups.size} folders + ${books.size} books")
+            } catch (e: Exception) {
+                AppLog.warn("Shelf", "Restore folders failed: ${e.message}")
+            }
+        }
+    }
+
     fun batchDelete(bookIds: Set<String>) {
         viewModelScope.launch(Dispatchers.IO) {
             bookIds.forEach { id ->

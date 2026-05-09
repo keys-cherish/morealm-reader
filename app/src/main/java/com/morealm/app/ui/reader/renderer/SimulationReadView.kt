@@ -114,6 +114,17 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     private var idleBitmap: Bitmap? = null
 
     /**
+     * 是否已有可用的 idle bitmap。SimulationPager 的 update lambda 在切换翻页模式
+     * 进入仿真时用这个判断「是否首次进入」——首次进入（[idleBitmap]==null）需要强制走
+     * 渲染路径，即使 displayPage 暂时越界 pages.indices；否则在
+     * `displayPage in pages.indices` guard 拦截下 idleBitmap 永远是 null，View
+     * onDraw 只画 bgMeanColor → 视觉表现是「切到仿真必白屏」。
+     *
+     * 需求来自：用户在 SLIDE / 滚动模式正常阅读 → 切到仿真 → 第一帧白屏。
+     */
+    fun hasIdleBitmap(): Boolean = idleBitmap != null
+
+    /**
      * Cross-chapter flicker防御：当动画刚结束 ([onAnimStop] commit 路径) 时把
      * `prev/nextBitmap`（动画中露出的"对侧页"）直接 promote 为 `idleBitmap`
      * 并把这个标志拉起，**拒绝所有外部 [setIdleBitmap] 覆盖**直到下一次
@@ -202,6 +213,22 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         lastIdleKey = key
         idleBitmap = bitmap
         if (!isMoved && !isRunning) postInvalidate()
+    }
+
+    /**
+     * 主题 / 字号 / 字体 / 字色 等"内容签名未变但像素一定变"的参数变化后，由
+     * [SimulationPager.update] 调用 —— 强制解除 [idleBitmapPinned] 并清掉
+     * dedupe key，让随后一次 [setIdleBitmap] 一定能落地。
+     *
+     * 没有这步的旧行为：翻完一页 [onAnimStop] 自动 pin 了 idleBitmap；此时
+     * 用户点日夜间按钮 / 改字号 → SimulationPager 进 update lambda → 调
+     * [setIdleBitmap] → 被 pin 拒绝（"[3b] setIdleBitmap REJECTED (pinned)"）
+     * → 画面停留在旧主题，必须用户再摸一下屏幕（ACTION_DOWN 路径 unpin）
+     * 或退出重进才刷新。
+     */
+    fun unpinIdleBitmap() {
+        idleBitmapPinned = false
+        lastIdleKey = null
     }
 
     // ── Long press detection ──

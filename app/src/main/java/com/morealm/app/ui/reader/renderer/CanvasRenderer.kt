@@ -641,23 +641,41 @@ fun CanvasRenderer(
             onCurTextChapterReady(chapterIndex, cachedChapter)
             return@LaunchedEffect
         }
-        // Cache miss: 立即 attempt layout——layoutChapterAsync 第一页就绪时
-        // (onPageReady index=0) 会立刻 publish textChapter，UI 自然实时更新。
-        // 旧实现这里有 16ms 节流，意图是「拖动 padding 滑块时 key 高频变化，
-        // 节流让只有手指停下那刻的 key 进入流水线」——但实测效果是「拖动期间
-        // layoutInputs 不停被新 key cancel，textChapter 永不更新，正文僵在
-        // 拖动开始前的状态」（用户报告：「设置左右；上下；边距；正文不实时
-        // 变化」）。删掉节流后，每次 padding 变化都尽早 attempt layout；新 key
-        // 到来仍会 cancel 旧 layout 协程，但只要用户拖动间有 ~50ms 暂停，
-        // layoutChapterAsync 就能出第一页 publish。配合下面的 placeholder
-        // fallback（仅首次进入退到 placeholder，否则保留旧 textChapter），
-        // 不会引入「拖动闪屏」。
-        // 仅在还没有任何可显示布局时才退到 placeholder（首次进入），
-        // 否则保留旧 textChapter 直到 layoutChapterAsync 出第一页 —— 消除拖动闪屏。
-        if (textChapter == null || textChapter?.pages.isNullOrEmpty()) {
-            textChapter = placeholderChapter()
-            pageCount = 1
+
+        // ── 区分「首次布局」与「reflow」（根治样式滑块拖动反弹的关键） ──
+        //
+        // 老问题：用户拖字号/边距/行距 slider 时 currentChapterKey 高频变化，本
+        // LaunchedEffect 被 cancel + 重启。重启进入 onPageReady(index=0) 时无脑做
+        //   textChapter = handle.textChapter   // 1 页 incomplete 的新对象
+        //   pageCount   = 1
+        //   onCurTextChapterReady(idx, partial) // 推 pages=1 incomplete 给 ChapterController
+        // → 单向数据流被破坏：UI 看到 pages=44 completed=true → pages=1 incomplete
+        //   → pages=44 completed=true 的反弹；publishCurTextChapter / ProgressTrace
+        //   / safeDisplayMax 跟着震荡，整个 reader 陷入「重排-重组」死循环。
+        //
+        // 根治：reflow 期间完全不动 UI 状态。新章节在后台协程里把 handle.textChapter
+        // 内的 textPages 累积到位（cancelCheck 保证已 cancel 的协程不再 emit），
+        // 直到 onCompleted 触发**一次原子 swap** —— 用户视觉上：旧 44 页布局 →
+        // 新 44 页布局，无中间态。
+        //
+        // 判定 isRelayout：当前已有同章节的**已完成**布局。否则（首次进入 / 跨章
+        // 跳转 / 上次还在流式中被打断）按首次布局走流式 publish，让用户尽早看到
+        // 第一页（对齐 Legado）。
+        val priorChapter = textChapter
+        val isRelayout = priorChapter != null &&
+            priorChapter.chapterIndex == chapterIndex &&
+            priorChapter.isCompleted &&
+            priorChapter.pages.isNotEmpty()
+
+        if (!isRelayout) {
+            // 首次进入或跨章跳转：还没有可显示的真布局，退到 placeholder 占位。
+            // reflow 路径绝对不走这里 —— 旧 textChapter 留在 UI 上不动。
+            if (priorChapter == null || priorChapter.pages.isEmpty()) {
+                textChapter = placeholderChapter()
+                pageCount = 1
+            }
         }
+
         if (content.isBlank()) {
             val chapter = placeholderChapter(chapterTitle.ifBlank { "当前章节暂无正文" }).apply {
                 isCompleted = true
@@ -674,16 +692,25 @@ fun CanvasRenderer(
                 scope = this,
                 omitChapterTitleBlock = omitChapterTitleBlock,
                 onPageReady = { index, _ ->
+                    // reflow 路径下 onPageReady 不动 UI 状态：新 chapter 在 handle
+                    // 内独立累积 pages，直到 onCompleted 才 atomic swap。否则会发生
+                    // pages=44 → pages=1 → pages=2 ... 的回退-再增长（反弹）。
+                    if (isRelayout) return@layoutChapterAsync
                     if (index == 0) {
                         textChapter = handle?.textChapter
                         // Phase 2b: 第一页就绪时立刻推回 cur，让 ScrollRenderer 尽早
                         // 拿到 cur reference（哪怕 isCompleted=false，pages 仍可访问已就绪部分）。
-                        // 对齐 Legado 流式排版思路：边排边可见。
+                        // 对齐 Legado 流式排版思路：边排边可见。仅首次布局走这条路径。
                         handle?.textChapter?.let { onCurTextChapterReady(chapterIndex, it) }
                     }
                     pageCount = handle?.textChapter?.pageSize?.coerceAtLeast(1) ?: 1
                 },
                 onCompleted = {
+                    // 首次布局 + reflow 都走这里做最终 swap。Compose 的 mutableStateOf
+                    // 比对 reference，handle.textChapter 是新对象，必触发一次重组；
+                    // pageCount 由 N（旧）→ M（新）也是单次 Int 变化。所有下游
+                    // （pageFactory remember key、publishCurTextChapter、safeDisplayMax）
+                    // 看到的都是「稳态 → 稳态」一步切换，不会反弹。
                     textChapter = handle?.textChapter
                     pageCount = handle?.textChapter?.pageSize?.coerceAtLeast(1) ?: 1
                     // 把当前章节最终布局也存入 LRU：来回拖到相同 padding 值时秒回。
