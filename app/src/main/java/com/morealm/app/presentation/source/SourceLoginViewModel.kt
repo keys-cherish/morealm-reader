@@ -181,7 +181,7 @@ class SourceLoginViewModel @Inject constructor(
                 source.putLoginInfo(infoJson)
 
                 val api = makeScriptApi(source)
-                source.login(fieldValues) { bindings ->
+                source.login(fieldValues, preludeJs = SourceLoginScriptApi.LEGACY_JAVA_COMPAT_PRELUDE) { bindings ->
                     bindings["loginExt"] = api
                 }
 
@@ -215,7 +215,7 @@ class SourceLoginViewModel @Inject constructor(
             try {
                 val loginJs = source.getLoginJs() ?: ""
                 val api = makeScriptApi(source)
-                source.evalJS("$loginJs\n$actionJs") { bindings ->
+                source.evalJS("${SourceLoginScriptApi.LEGACY_JAVA_COMPAT_PRELUDE}$loginJs\n$actionJs") { bindings ->
                     bindings["result"] = fieldValues.toMutableMap()
                     bindings["book"] = null
                     bindings["chapter"] = null
@@ -262,7 +262,7 @@ class SourceLoginViewModel @Inject constructor(
         val jsonStr = if (isJs) {
             try {
                 val api = makeScriptApi(source)
-                source.evalJS("${source.getLoginJs() ?: ""}\n$payload") { bindings ->
+                source.evalJS("${SourceLoginScriptApi.LEGACY_JAVA_COMPAT_PRELUDE}${source.getLoginJs() ?: ""}\n$payload") { bindings ->
                     bindings["result"] = mutableMapOf<String, String>()
                     bindings["book"] = null
                     bindings["chapter"] = null

@@ -6,19 +6,23 @@ import android.content.Context
 import androidx.annotation.Keep
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookSource
-import com.morealm.app.domain.http.BackstageWebView
 import kotlinx.coroutines.runBlocking
 
 /**
  * 登录脚本副绑定 API。注入到登录 JS scope 的 key = `loginExt`，配合通用扩展 `java`
  * (= JsExtensions) 一起暴露给登录脚本调用。
  *
- * 设计选择：副绑定而非整体替换 `java`
- * ---------------------------------
- * Legado 的 SourceLoginJsExtensions 是 `class extends RssJsExtensions extends JsExtensions`，
- * 整体替换 `java` 时既保留通用能力又叠加登录扩展。MoRealm 的 [com.morealm.app.domain.analyzeRule.JsExtensions]
- * 是 Kotlin `object`，不能继承——若整体替换 `java` 则丢失 90+ 个通用方法。所以走副绑定
- * 路径，登录脚本里把 `java.upLoginData(...)` 改写为 `loginExt.upLoginData(...)` 即可。
+ * 兼容 Legado 原生书源脚本
+ * -----------------------
+ * Legado 的 SourceLoginJsExtensions 把登录扩展直接挂在 `java` 上，脚本里写
+ * `java.upLoginData(...)`。MoRealm 的 [com.morealm.app.domain.analyzeRule.JsExtensions]
+ * 是 Kotlin `object`（运行时不可继承 / 不可动态加方法），所以没法复刻这一点。
+ * 折中方案：
+ *  - `loginExt` 是本类实例，登录专属方法都在这里
+ *  - [LEGACY_JAVA_COMPAT_PRELUDE] 是一段 prelude JS，在登录脚本执行前跑一遍，通过 JS
+ *    原型链把 `loginExt` 的方法合并到 `java` 上（不改原始 `java` / JsExtensions）。
+ *    效果：Legado 脚本 `java.upLoginData(...)` 零改动跑通；同时 `java.ajax(...)` 之类
+ *    的通用扩展继续走原型链 fallback 到 JsExtensions。
  *
  * 桥接路径
  * --------
@@ -77,16 +81,21 @@ class SourceLoginScriptApi(
     }
 
     /**
-     * 后台 WebView 打开 [url] / 渲染 [html]，等加载完拿 cookie 持久化到 CookieStore（key
-     * 用 source URL）。完成后返回拿到的页面 HTML 给脚本继续处理。
+     * 启交互式浏览器让用户完成登录 / 验证，返回最终页面 HTML 给脚本继续处理。
      *
-     * 与 Legado [SourceLoginJsExtensions.showBrowser] 行为差异：Legado 弹一个 BottomWebViewDialog
-     * 让用户**视觉交互**（输验证码 / 滑滑块）后再回写 cookie；MoRealm 当前是**无 UI**的
-     * 后台 WebView，能覆盖「自动跑 JS 拿 token / 写 cookie」类的源（占多数）；需要用户
-     * 交互完成登录的源（图形验证码 / 扫码登录）暂不支持，后续做交互式 WebView Activity 后补齐。
+     * 对齐 Legado `SourceLoginJsExtensions.showBrowser`：弹 WebView 让用户在真实 UI 里扫码、
+     * 输验证码、滑滑块，关闭时把最新 HTML 回传。MoRealm 走独立 Activity 实现，见
+     * [com.morealm.app.ui.source.ShowBrowserActivity]。
      *
-     * @param preloadJs 页面加载后追加执行的 JS（用于注入辅助逻辑）；null 时只跑默认抓 HTML
-     * @param config Legado 兼容参数（暂未使用，保留签名）
+     * 并发：同一时刻只能开一个（[ShowBrowserSession] 内的 Mutex 串行化）；脚本短时间连调
+     * 两次会自然排队。
+     *
+     * 错误路径：
+     *  - 用户取消 / 系统杀 Activity / 超时 → 收到 null，返回 null 让脚本分支按失败处理
+     *  - Activity 启动失败（权限缺失等）→ 捕获异常返回 null，不抛到脚本
+     *
+     * @param preloadJs 页面 onPageFinished 后追加执行的 JS
+     * @param config Legado 兼容参数（未使用，保留签名）
      */
     @JvmOverloads
     fun showBrowser(
@@ -97,16 +106,22 @@ class SourceLoginScriptApi(
     ): String? {
         if (url.isNullOrBlank() && html.isNullOrBlank()) return null
         return try {
-            // runBlocking 在 IO 协程里安全：BackstageWebView 内部走 main looper Handler，
-            // 不会与当前 IO 线程死锁。登录脚本通常需要同步获得 HTML 后判断结果。
+            com.morealm.app.ui.source.ShowBrowserActivity.launch(
+                context = ctx,
+                url = url,
+                html = html,
+                preloadJs = preloadJs,
+                sourceKey = source.getKey(),
+                title = "登录 ${source.bookSourceName}",
+            )
+            // runBlocking 在脚本所处的 IO 协程里安全：Activity 的 emit 来自 main 线程，
+            // 这里等 RendezvousChannel 的 receive，等待期间不阻塞主线程。超时兜底避免
+            // Activity 极端情况下 emit 丢失导致脚本永挂（Activity.onDestroy 已有兜底 emit，
+            // 这层只是第二道保险）。
             runBlocking {
-                BackstageWebView(
-                    url = url,
-                    html = html,
-                    javaScript = preloadJs,
-                    tag = source.bookSourceUrl,
-                    persistCookie = true,
-                ).getStrResponse().body
+                kotlinx.coroutines.withTimeoutOrNull(5 * 60_000L) {
+                    ShowBrowserSession.awaitResult()
+                }
             }
         } catch (e: Exception) {
             AppLog.warn("LoginApi", "showBrowser failed: ${e.message?.take(80)}")
@@ -114,31 +129,62 @@ class SourceLoginScriptApi(
         }
     }
 
-    // ── refresh* / clearTtsCache：暂为 no-op，留 hook 后续接 EventBus / TTS 缓存 ──
+    // ── refresh* ──
     //
-    // Legado 通过 EventBus 通知书架 / 阅读器 / 听书页刷新。MoRealm 没有同款总线，
-    // 多数登录脚本调这些是为了「让 UI 立刻反映新 cookie」，但 MoRealm 的 cookie 已
-    // 通过 CookieStore 落库，下一次 source 调用自然会带上，所以 no-op 影响很小——
-    // 用户重新进章节即可。后续若用户报告"登录后书架未刷新"再接事件总线。
+    // 登录脚本调 `java.refreshXxx()`（via prelude 转发）或 `loginExt.refreshXxx()`
+    // 时，经 [SourceLoginRefreshBus] 发无参事件。对应页面的 ViewModel 订阅后重拉
+    // 数据。MoRealm cookie 已经通过 CookieStore 落库，事件只是"让 UI 立刻刷新"，
+    // 没有订阅方时静默 drop 也不影响登录正确性（下次打开相关页重新请求即可）。
 
     fun refreshBookInfo() {
-        AppLog.warn("LoginApi", "refreshBookInfo: 暂未实现（cookie 已落库，下次请求自动生效）")
+        SourceLoginRefreshBus.emitBookInfo()
     }
 
     fun refreshBookToc() {
-        AppLog.warn("LoginApi", "refreshBookToc: 暂未实现")
+        SourceLoginRefreshBus.emitBookToc()
     }
 
     fun refreshContent() {
-        AppLog.warn("LoginApi", "refreshContent: 暂未实现")
+        SourceLoginRefreshBus.emitContent()
     }
 
     fun refreshExplore() {
-        AppLog.warn("LoginApi", "refreshExplore: 暂未实现")
+        SourceLoginRefreshBus.emitExplore()
     }
 
     /** 清 HttpTTS 缓存。MoRealm 当前不支持 HttpTTS 类型源，no-op。 */
     fun clearTtsCache() {
         AppLog.warn("LoginApi", "clearTtsCache: HttpTTS 暂不支持")
+    }
+
+    companion object {
+        /**
+         * 兼容 Legado 原生脚本：`java.upLoginData(...)` / `java.reLoginView(...)` /
+         * `java.showBrowser(...)` 等登录专属调用。
+         *
+         * 在登录相关 JS 执行前拼到脚本最前面，用 JS 代理把 `java` 当作主对象，命中时
+         * 优先转发到 `loginExt`，未命中再走原 `java`（= JsExtensions）。这样既不动
+         * Kotlin 单例，也让老书源零改动跑通。
+         *
+         * 原理：脚本内以 `var java = __javaCompat` 影子覆盖 binding 的 `java` —— 局部
+         * 作用域的 var 覆盖 Rhino scope 同名变量，不影响外层 binding。
+         *
+         * 覆盖的方法清单与 [SourceLoginScriptApi] 一一对应，增加新方法时务必补列，否则
+         * Legado 脚本调不到。
+         */
+        const val LEGACY_JAVA_COMPAT_PRELUDE: String =
+            "(function(){" +
+                "if(typeof loginExt==='undefined'||loginExt==null)return;" +
+                "var _orig=java;" +
+                "var names=['upLoginData','reLoginView','copyText','showBrowser'," +
+                "'refreshBookInfo','refreshBookToc','refreshContent','refreshExplore'," +
+                "'clearTtsCache'];" +
+                "var proxy={};" +
+                "for(var k in _orig){try{proxy[k]=_orig[k];}catch(e){}}" +
+                "for(var i=0;i<names.length;i++){(function(n){" +
+                "proxy[n]=function(){return loginExt[n].apply(loginExt,arguments);};" +
+                "})(names[i]);}" +
+                "java=proxy;" +
+            "})();\n"
     }
 }
