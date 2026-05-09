@@ -156,41 +156,10 @@ fun ReaderScreen(
     val marginHorizontal by viewModel.settings.marginHorizontal.collectAsStateWithLifecycle()
     val marginTopVal by viewModel.settings.marginTop.collectAsStateWithLifecycle()
     val marginBottomVal by viewModel.settings.marginBottom.collectAsStateWithLifecycle()
-    /**
-     * 页边距 preview state — 拖动滑块期间的临时值，仅在 Compose state 内流转，
-     * 不写 Room、不触 StateFlow。`null` 表示该方向"未在拖动中"，回退到上面的 StateFlow 值。
-     *
-     * 拖动 onValueChange   → 写 preview，触发 CanvasRenderer 重组与重新分页
-     * 拖动 onValueChangeFinished → 写 Room；preview **不立刻清**，等下面的
-     *     LaunchedEffect 看到 StateFlow 已经反映目标值后再清——避免「立刻清 →
-     *     effective 掉回 StateFlow 旧值 → 一帧后 StateFlow emit 新值」造成 thumb
-     *     先弹回旧位置再跳到新位置（用户看到「松手回弹然后恢复」）。
-     */
-    var marginPreviewH by remember { mutableStateOf<Int?>(null) }
-    var marginPreviewT by remember { mutableStateOf<Int?>(null) }
-    var marginPreviewB by remember { mutableStateOf<Int?>(null) }
-    val effectiveMarginH = marginPreviewH ?: marginHorizontal
-    val effectiveMarginT = marginPreviewT ?: marginTopVal
-    val effectiveMarginB = marginPreviewB ?: marginBottomVal
-    // 清 preview 的延迟逻辑：当 StateFlow 真值流到等于 preview 时，preview 已经
-    // 没有意义（effective 值不变），此时清 preview 让单一来源回到 StateFlow，
-    // 用户视觉上没有任何跳动。提交后 Room 写入 + activeStyle emit 通常 < 50ms，
-    // 体感上就是「松手即定」。
-    LaunchedEffect(marginHorizontal, marginPreviewH) {
-        if (marginPreviewH != null && marginHorizontal == marginPreviewH) {
-            marginPreviewH = null
-        }
-    }
-    LaunchedEffect(marginTopVal, marginPreviewT) {
-        if (marginPreviewT != null && marginTopVal == marginPreviewT) {
-            marginPreviewT = null
-        }
-    }
-    LaunchedEffect(marginBottomVal, marginPreviewB) {
-        if (marginPreviewB != null && marginBottomVal == marginPreviewB) {
-            marginPreviewB = null
-        }
-    }
+    // 设计：边距 slider **松手才生效**——CanvasRenderer 的 reflow 是 onCompleted
+    // 才 atomic swap 的设计，拖动期间高频重排会被取消重启永远完不成；改为松手生效
+    // 后体验明确：thumb 跟手移动 + 数值实时刷新（Slider 内部本地 state），松手内容
+    // 才重排一次。effectiveMargin* 直接 = StateFlow 值，无需 preview 派生。
     val autoPageInterval by viewModel.autoPageInterval.collectAsStateWithLifecycle()
     // ttsChapterPosition 不在这里 collect —— 段切高频更新会触发整个 ReaderScreen
     // 重组（贴文里的「重组风暴」）。下沉到 [ReadAloudPositionScope] 这个 leaf
@@ -530,12 +499,13 @@ fun ReaderScreen(
         // Resolve background image priority:
         // 1. Per-style customBgImage (from reader bottom panel)
         // 2. Global day/night bg image (from Reading Settings)
-        // 3. Per-style bgImageUri/bgImageUriNight
+        //
+        // 老版本有第 3 层 fallback：activeStyle?.bgImageUri / bgImageUriNight。但这
+        // 两个字段在 v29 已经从 ReaderStyle 删除（颜色/背景图职责归 prefs / 主题），
+        // 现在只剩两层。
         val readerBgImage = customBgImage.ifEmpty {
             val globalBg = if (isNight) readerBgImageNight else readerBgImageDay
-            globalBg.ifEmpty {
-                (if (isNight) activeStyle?.bgImageUriNight else activeStyle?.bgImageUri) ?: ""
-            }
+            globalBg
         }
         val themeCss = activeTheme?.customCss.orEmpty()
         val currentStyle = activeStyle
@@ -577,10 +547,10 @@ fun ReaderScreen(
                 fontSize = readerFontSize,
                 lineHeight = readerLineHeight,
                 typeface = readerTypeface,
-                paddingHorizontal = effectiveMarginH,
-                paddingVertical = effectiveMarginT, // legacy fallback；下面 paddingTop/Bottom 优先
-                paddingTop = effectiveMarginT,
-                paddingBottom = effectiveMarginB,
+                paddingHorizontal = marginHorizontal,
+                paddingVertical = marginTopVal, // legacy fallback；下面 paddingTop/Bottom 优先
+                paddingTop = marginTopVal,
+                paddingBottom = marginBottomVal,
                 bgImageUri = readerBgImage,
                 startFromLastPage = navigateDirection < 0,
                 initialProgress = renderedChapter.initialProgress,
@@ -906,20 +876,15 @@ fun ReaderScreen(
                 onBrightnessChange = viewModel::setReaderBrightness,
                 paragraphSpacing = paragraphSpacing,
                 onParagraphSpacingChange = viewModel.settings::setParagraphSpacing,
-                marginHorizontal = effectiveMarginH,
-                onMarginHorizontalPreview = { marginPreviewH = it },
+                marginHorizontal = marginHorizontal,
                 onMarginHorizontalCommit = { v ->
                     viewModel.settings.setMarginHorizontal(v)
-                    // preview 不立刻清——靠上面的 LaunchedEffect 等 StateFlow 真值
-                    // 流到 v 后再清，避免松手时 thumb 弹回旧值。
                 },
-                marginTop = effectiveMarginT,
-                onMarginTopPreview = { marginPreviewT = it },
+                marginTop = marginTopVal,
                 onMarginTopCommit = { v ->
                     viewModel.settings.setMarginTop(v)
                 },
-                marginBottom = effectiveMarginB,
-                onMarginBottomPreview = { marginPreviewB = it },
+                marginBottom = marginBottomVal,
                 onMarginBottomCommit = { v ->
                     viewModel.settings.setMarginBottom(v)
                 },

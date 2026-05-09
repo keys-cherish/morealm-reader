@@ -130,12 +130,23 @@ class ChapterProvider(
         val channel = Channel<TextPage>(Channel.UNLIMITED)
 
         val job = scope.launch(Dispatchers.Default) {
+            // 关键：捕获本协程的 CoroutineContext 给 layoutInternal 用作取消检查。
+            // layoutInternal 是非 suspend 函数（被 sync 路径 [layoutChapter] 共用），
+            // 不能直接 currentCoroutineContext().ensureActive()。改成传 lambda 让
+            // 内部循环周期检查；外部 cancel 时下一个检查点立刻抛 CancellationException
+            // → 中断进一步 onPageReady 回调 → 阻断"已 cancel 的协程仍在向 Compose state
+            // 写 placeholder 页"的回退-重发死循环（用户拖动滑块时 currentChapterKey
+            // 高频变化，老实现下多个被 cancel 的 layoutInternal 仍旧把 pages=1
+            // incomplete 倒灌，触发 publishCurTextChapter 在 pages=N completed=true 与
+            // pages=1 incomplete 之间反弹）。
+            val ctx = coroutineContext
             try {
                 val textPages = arrayListOf<TextPage>()
                 layoutInternal(
                     title, content, chapterIndex, chaptersSize,
                     textChapter, textPages, channel, onPageReady,
                     omitChapterTitleBlock = omitChapterTitleBlock,
+                    cancelCheck = { ctx.ensureActive() },
                 )
                 channel.close()
                 onCompleted?.invoke()
@@ -164,6 +175,22 @@ class ChapterProvider(
         channel: Channel<TextPage>? = null,
         onPageReady: ((Int, TextPage) -> Unit)? = null,
         omitChapterTitleBlock: Boolean = false,
+        /**
+         * 取消检查回调（async 路径必传，sync 路径不传 = no-op）。
+         *
+         * **为什么需要**：[layoutChapterAsync] 走 `scope.launch(Dispatchers.Default)`，
+         * 当 caller 的 [LaunchedEffect] 因 key 变化（如 currentChapterKey 因滑块拖动重算）
+         * 重启时，原协程被 cancel，但 [layoutInternal] 是非 suspend 同步代码，**不会自动
+         * 检查取消**。结果是 cancelled 协程继续把 placeholder 页推给 [onPageReady] / channel
+         * → CanvasRenderer 把 `pages=1, completed=false` 写回 Compose state → ProgressTrace
+         * 0%↔100% 反弹 → reader UI 永不稳态。
+         *
+         * **调用点**：放在外层段落循环顶端 + [finalizePage] 顶端。前者保证还没排到的段落
+         * 立即停手，后者保证不向 UI 倒灌 placeholder 页。`ensureActive()` 抛
+         * [kotlinx.coroutines.CancellationException]，被外层 try/catch 静默吞掉
+         * （`if (e !is CancellationException) onError`）。
+         */
+        cancelCheck: (() -> Unit)? = null,
     ) {
         val stringBuilder = StringBuilder()
         var absStartX = paddingLeft
@@ -173,6 +200,10 @@ class ChapterProvider(
 
         // 内部辅助：完成一页时的处理
         fun finalizePage(page: TextPage) {
+            // 取消检查：如果协程已 cancel，立刻抛 CancellationException，不再触发
+            // onPageReady / channel.trySend → 阻断「cancelled 协程仍在向 Compose
+            // state 写 placeholder」的回退-重发死循环（详见 [cancelCheck] KDoc）。
+            cancelCheck?.invoke()
             page.index = textPages.indexOf(page)
             page.chapterIndex = chapterIndex
             page.chapterSize = chaptersSize
@@ -260,6 +291,9 @@ class ChapterProvider(
 
         // Layout content paragraphs
         for (paragraph in paragraphs) {
+            // 段落级取消检查：长章节一次有数百段，每段开始前查一次 — cancel 后
+            // 不再继续排版下一段。配合 finalizePage 的检查双层防御。
+            cancelCheck?.invoke()
             val para = paragraph.text
             if (paragraph.isChapterTitle) {
                 if (textPages.last().lines.isNotEmpty()) {

@@ -12,6 +12,7 @@ import android.text.TextPaint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.domain.entity.looksLikeAutoSplitTitle
@@ -162,6 +163,23 @@ fun PageCanvas(
     val aloudColorArgb = theme.aloudColor.toArgb()
     val searchColorArgb = theme.searchResultColor.toArgb()
     val bmColorArgb = theme.bookmarkColor.toArgb()
+
+    // 主题 / 字号 / 背景图变化 → 让 canvasRecorder 重录。
+    //
+    // 为什么放在这里：CanvasRenderer 切日/夜间或换字号时 paint 引用会换新（contentPaint
+    // 的 remember key 带 textArgb、titlePaint 带 chapterTitleColor），但没人调
+    // [page.canvasRecorder.invalidate]。下一帧 needRecord() 返回 false → 回放的是旧
+    // paint 颜色 / 旧 bgBitmap → SLIDE / COVER 模式出现"字色与主题对不上"（白天用上次
+    // 夜间的浅色、夜间用上次白天的深色）、"背景图切换不生效"等视觉 bug。SCROLL / 仿真
+    // 各自有独立 bitmap 流，不走这个缓存；但 SLIDE / COVER / NONE 都走 PageCanvas。
+    //
+    // 用 remember 而不是 LaunchedEffect：同步 invalidate 在本次 Canvas {} draw 之前
+    // 生效（needRecord() 立即返回 true），避免异步 side-effect 漏掉一帧造成的闪烁。
+    // key 用 paint 引用 + bgBitmap 引用 —— 同 theme 下引用复用，remember 保留上次
+    // 结果，零额外开销。
+    remember(titlePaint, contentPaint, chapterNumPaint, bgBitmap) {
+        page.canvasRecorder.invalidate()
+    }
 
     // 必须把 page.lines.any { it.isReadAloud } 也算进来：
     // CanvasRenderer 走的是 LaunchedEffect 直接修改 page.lines 的 isReadAloud 字段，

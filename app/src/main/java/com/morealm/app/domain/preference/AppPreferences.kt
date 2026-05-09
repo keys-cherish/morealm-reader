@@ -91,7 +91,21 @@ class AppPreferences @Inject constructor(
          * 异常值 fallback 到 "none"，比 enum ordinal 容错更好。
          */
         val SOURCE_GROUP_MODE = stringPreferencesKey("source_group_mode")
+        /**
+         * 旧版「时间自动夜间」开关。语义已废弃 —— 自动夜间逻辑（22:00-06:00 切换）
+         * 在 v1.x 后被「跟随系统暗色模式」替代，新逻辑见 [FOLLOW_SYSTEM_THEME]。
+         *
+         * 保留 key 仅为向后兼容：旧版本写入的值不会被错误读取。新代码不要再读写这个 key。
+         */
+        @Deprecated("用 FOLLOW_SYSTEM_THEME 取代", level = DeprecationLevel.WARNING)
         val AUTO_NIGHT_MODE = booleanPreferencesKey("auto_night_mode")
+        /**
+         * 主题是否跟随系统暗色模式。true = 系统切到 Dark 自动用夜间内置主题，
+         * 切到 Light 用日间内置主题；false = 用户手动选什么就用什么。默认 false
+         * （新装 / 老用户都不强制开自动切换 —— 老版本「时间自动夜间」永远开着曾让
+         * 用户在傍晚阅读时被强行换主题，新版本默认把主动权交还用户）。
+         */
+        val FOLLOW_SYSTEM_THEME = booleanPreferencesKey("follow_system_theme")
         val SOURCE_FILTER_MIN_WORDS = intPreferencesKey("source_filter_min_words")
         val SOURCE_FILTER_MAX_WORDS = intPreferencesKey("source_filter_max_words")
         /**
@@ -248,6 +262,14 @@ class AppPreferences @Inject constructor(
     fun getAutoNightModeSync(): Boolean =
         themePrefs.getBoolean("auto_night_mode", true)
 
+    /**
+     * 同步读取「跟随系统主题」开关。在 [com.morealm.app.presentation.theme.ThemeViewModel]
+     * 的 init 阶段（首帧前）需要立即知道是否跟系统，避免冷启动时先用本地保存主题
+     * 再被异步切换造成闪屏。默认 false 与 Flow 一致。
+     */
+    fun getFollowSystemThemeSync(): Boolean =
+        themePrefs.getBoolean("follow_system_theme", false)
+
     fun getActiveThemeIsNightSync(): Boolean =
         themePrefs.getBoolean("active_theme_is_night", true)
 
@@ -333,6 +355,14 @@ class AppPreferences @Inject constructor(
 
     val autoNightMode: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.AUTO_NIGHT_MODE] ?: true }
+
+    /**
+     * 跟随系统暗色模式。Flow 用 [SharingStarted.Eagerly] 暴露给 ThemeViewModel，
+     * 系统暗色模式变化时 MainActivity 的 Composable 会读 [androidx.compose.foundation.isSystemInDarkTheme]
+     * 并喂给 ThemeViewModel 切日/夜主题。
+     */
+    val followSystemTheme: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.FOLLOW_SYSTEM_THEME] ?: false }
 
     val webDavUrl: Flow<String> = context.dataStore.data
         .map { it[Keys.WEBDAV_URL] ?: "" }
@@ -591,6 +621,16 @@ class AppPreferences @Inject constructor(
     suspend fun setAutoNightMode(enabled: Boolean) {
         themePrefs.edit().putBoolean("auto_night_mode", enabled).apply()
         update(Keys.AUTO_NIGHT_MODE, enabled)
+    }
+
+    /**
+     * 写入「跟随系统主题」。同时刷 [themePrefs] 让冷启动同步读取生效，
+     * 与 [setAutoNightMode] 同款双写策略 —— 冷启动闪屏判断用同步 SharedPreferences，
+     * 运行时 Flow 走 DataStore，二者必须保持一致。
+     */
+    suspend fun setFollowSystemTheme(enabled: Boolean) {
+        themePrefs.edit().putBoolean("follow_system_theme", enabled).apply()
+        update(Keys.FOLLOW_SYSTEM_THEME, enabled)
     }
     suspend fun setSourceFilterMinWords(min: Int) = update(Keys.SOURCE_FILTER_MIN_WORDS, min)
     suspend fun setSourceFilterMaxWords(max: Int) = update(Keys.SOURCE_FILTER_MAX_WORDS, max)

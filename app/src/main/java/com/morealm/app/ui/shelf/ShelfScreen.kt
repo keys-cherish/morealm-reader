@@ -105,6 +105,10 @@ fun ShelfScreen(
     // Batch selection mode
     var batchMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    // 分组批量选择模式（与 batchMode 互斥）。长按分组进入；只在根目录可用，
+    // 因为分组卡只在根目录显示。两套状态分开：避免 selectedIds 同时混着 bookId / groupId。
+    var folderBatchMode by remember { mutableStateOf(false) }
+    var selectedFolderIds by remember { mutableStateOf(setOf<String>()) }
     // Inline search overlay：showSearch 控制顶部搜索栏可见性，searchQuery 是
     // 当前输入值。声明于此（早于下面 navigateToFolder LaunchedEffect 引用它们的
     // 闭包），避免 Kotlin 向前引用错误。
@@ -124,6 +128,8 @@ fun ShelfScreen(
             currentFolderId = targetFolderId
             batchMode = false
             selectedIds = emptySet()
+            folderBatchMode = false
+            selectedFolderIds = emptySet()
             showSearch = false
             viewModel.setSearchQuery("")
         }
@@ -184,9 +190,12 @@ fun ShelfScreen(
     val folderIds = remember(groupNames) { groupNames.keys.toList() }
 
     // Back handler: return to root when inside a folder
-    BackHandler(enabled = currentFolderId != null || batchMode) {
-        if (batchMode) { batchMode = false; selectedIds = emptySet() }
-        else currentFolderId = null
+    BackHandler(enabled = currentFolderId != null || batchMode || folderBatchMode) {
+        when {
+            folderBatchMode -> { folderBatchMode = false; selectedFolderIds = emptySet() }
+            batchMode -> { batchMode = false; selectedIds = emptySet() }
+            else -> currentFolderId = null
+        }
     }
 
     // Resume last read book on first launch if setting is enabled
@@ -240,10 +249,18 @@ fun ShelfScreen(
 
         TopAppBar(
             title = {
-                if (batchMode) {
-                    Text("已选 ${selectedIds.size} 本", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                } else {
-                    Column {
+                when {
+                    folderBatchMode -> Text(
+                        "已选 ${selectedFolderIds.size} 个分组",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    batchMode -> Text(
+                        "已选 ${selectedIds.size} 本",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    else -> Column {
                         Text(greeting, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Text("享受阅读时光", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
@@ -255,14 +272,51 @@ fun ShelfScreen(
                 titleContentColor = MaterialTheme.colorScheme.onBackground,
             ),
             navigationIcon = {
-                if (batchMode) {
-                    IconButton(onClick = { batchMode = false; selectedIds = emptySet() }) {
+                if (batchMode || folderBatchMode) {
+                    IconButton(onClick = {
+                        batchMode = false; selectedIds = emptySet()
+                        folderBatchMode = false; selectedFolderIds = emptySet()
+                    }) {
                         Icon(Icons.Default.Close, "取消", tint = MaterialTheme.colorScheme.onBackground)
                     }
                 }
             },
             actions = {
-                if (batchMode) {
+                if (folderBatchMode) {
+                    // 分组多选：只提供"删除分组（连同书）"。Snackbar 撤销 5s 内可恢复。
+                    IconButton(
+                        onClick = {
+                            if (selectedFolderIds.isEmpty()) return@IconButton
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val ids = selectedFolderIds
+                            // snapshot 必须在 batchDeleteFolders 之前抓——否则 DB 删完 allBooks/allGroups 流就空了。
+                            val groupsSnapshot = allGroups.filter { it.id in ids }
+                            val booksSnapshot = allBooks.filter { it.folderId in ids }
+                            folderBatchMode = false
+                            selectedFolderIds = emptySet()
+                            if (groupsSnapshot.isEmpty() && booksSnapshot.isEmpty()) return@IconButton
+                            viewModel.batchDeleteFolders(ids)
+                            scope.launch {
+                                val msg = "已删除 ${groupsSnapshot.size} 个分组" +
+                                    (if (booksSnapshot.isNotEmpty()) "（${booksSnapshot.size} 本书）" else "")
+                                val r = snackbarHost.showSnackbar(
+                                    message = msg,
+                                    actionLabel = "撤销",
+                                    duration = SnackbarDuration.Short,
+                                    withDismissAction = true,
+                                )
+                                if (r == SnackbarResult.ActionPerformed) {
+                                    viewModel.restoreFolders(groupsSnapshot, booksSnapshot)
+                                }
+                            }
+                        },
+                        enabled = selectedFolderIds.isNotEmpty(),
+                    ) {
+                        Icon(Icons.Default.Delete, "删除分组",
+                            tint = if (selectedFolderIds.isNotEmpty()) MaterialTheme.colorScheme.error
+                                   else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
+                    }
+                } else if (batchMode) {
                     IconButton(
                         onClick = { if (selectedIds.isNotEmpty()) showMoveToGroupDialog = true },
                         enabled = selectedIds.isNotEmpty(),
@@ -496,25 +550,50 @@ fun ShelfScreen(
         // Manual taps go through onBookOpen (smart router: WEB → detail page first).
         // Auto-resume / continue-reading flows use onBookClick directly to land in reader.
         val bookClick: (String) -> Unit = { id ->
-            if (batchMode) {
-                selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
-            } else {
-                val book = allBooks.find { it.id == id }
-                if (onBookOpen != null && book != null) onBookOpen(book) else onBookClick(id)
+            when {
+                // 分组多选模式下书籍点击不响应：避免错把书加进 selectedFolderIds（语义不同），
+                // 也避免用户在分组多选时不小心打开了一本书。
+                folderBatchMode -> Unit
+                batchMode -> {
+                    selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+                }
+                else -> {
+                    val book = allBooks.find { it.id == id }
+                    if (onBookOpen != null && book != null) onBookOpen(book) else onBookClick(id)
+                }
             }
         }
         val bookLongClick: (String) -> Unit = { id ->
-            if (!batchMode) {
-                val book = allBooks.find { it.id == id }
-                if (book != null && book.format == BookFormat.WEB) {
-                    showCacheBookDialog = book
-                } else if (book != null) {
-                    // 单本书长按：弹"自定义封面 / 进入多选"菜单（默认）；
-                    // WEB 书走原 cache dialog（不变）
-                    bookActionTarget = book
+            when {
+                folderBatchMode -> Unit  // 同 bookClick：分组多选时书籍长按也不响应
+                !batchMode -> {
+                    val book = allBooks.find { it.id == id }
+                    if (book != null && book.format == BookFormat.WEB) {
+                        showCacheBookDialog = book
+                    } else if (book != null) {
+                        // 单本书长按：弹"自定义封面 / 进入多选"菜单（默认）；
+                        // WEB 书走原 cache dialog（不变）
+                        bookActionTarget = book
+                    }
                 }
+                else -> {
+                    selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+                }
+            }
+        }
+        // 分组卡的点击 / 长按：folderBatchMode 时统一 toggle 选中；普通时分别打开 / 弹 dialog。
+        val folderClick: (String) -> Unit = { folderId ->
+            if (folderBatchMode) {
+                selectedFolderIds = if (folderId in selectedFolderIds) selectedFolderIds - folderId else selectedFolderIds + folderId
             } else {
-                selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+                currentFolderId = folderId
+            }
+        }
+        val folderLongClick: (String) -> Unit = { folderId ->
+            if (folderBatchMode) {
+                selectedFolderIds = if (folderId in selectedFolderIds) selectedFolderIds - folderId else selectedFolderIds + folderId
+            } else {
+                showDeleteFolderConfirm = folderId
             }
         }
 
@@ -542,8 +621,9 @@ fun ShelfScreen(
                             bookCount = folderBookCounts[folderId] ?: 0,
                             coverUrl = folderCoverUrls[folderId]?.firstOrNull(),
                             hasUpdate = groupHasUpdate[folderId] == true,
-                            onClick = { currentFolderId = folderId },
-                            onLongClick = { showDeleteFolderConfirm = folderId },
+                            onClick = { folderClick(folderId) },
+                            onLongClick = { folderLongClick(folderId) },
+                            selected = folderBatchMode && folderId in selectedFolderIds,
                         )
                     }
                 }
@@ -574,8 +654,9 @@ fun ShelfScreen(
                             coverUrls = folderCoverUrls[folderId] ?: emptyList(),
                             customCoverUrl = folderGroup?.customCoverUrl,
                             hasUpdate = groupHasUpdate[folderId] == true,
-                            onClick = { currentFolderId = folderId },
-                            onLongClick = { showDeleteFolderConfirm = folderId },
+                            onClick = { folderClick(folderId) },
+                            onLongClick = { folderLongClick(folderId) },
+                            selected = folderBatchMode && folderId in selectedFolderIds,
                         )
                     }
                 }
@@ -643,6 +724,15 @@ fun ShelfScreen(
                 if (currentFolderId == folderId) currentFolderId = null
                 showDeleteFolderConfirm = null
             },
+            onEnterBatchMode = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                folderBatchMode = true
+                selectedFolderIds = setOf(folderId)
+                // 互斥：进分组多选先关掉书籍多选
+                batchMode = false
+                selectedIds = emptySet()
+                showDeleteFolderConfirm = null
+            },
             onDismiss = { showDeleteFolderConfirm = null },
         )
     }
@@ -672,6 +762,9 @@ fun ShelfScreen(
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 batchMode = true
                 selectedIds = setOf(targetBook.id)
+                // 互斥：进书籍多选先关掉分组多选
+                folderBatchMode = false
+                selectedFolderIds = emptySet()
                 bookActionTarget = null
             },
             onDismiss = { bookActionTarget = null },
@@ -764,6 +857,9 @@ fun ShelfScreen(
                         TextButton(onClick = {
                             batchMode = true
                             selectedIds = setOf(book.id)
+                            // 互斥：进书籍多选先关掉分组多选
+                            folderBatchMode = false
+                            selectedFolderIds = emptySet()
                             showCacheBookDialog = null
                         }) { Text("多选") }
                     }
@@ -923,6 +1019,7 @@ private fun ManageFolderDialog(
     onSetCover: () -> Unit,
     onClearCover: () -> Unit,
     onDelete: () -> Unit,
+    onEnterBatchMode: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -993,6 +1090,28 @@ private fun ManageFolderDialog(
                         tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(12.dp))
                     Text("按关键词重新归类", style = MaterialTheme.typography.bodyLarge)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                // 进入分组多选模式：与 BookActionDialog 中"进入多选模式"对齐 —
+                // 长按一个分组，把它选中并切到顶栏的"分组多选"模式，再去逐个点选其他分组。
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEnterBatchMode() }
+                        .padding(vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("多选模式", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "可批量删除分组（连同分组里的书）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        )
+                    }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(

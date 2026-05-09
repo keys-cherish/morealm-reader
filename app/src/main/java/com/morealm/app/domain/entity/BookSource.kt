@@ -15,6 +15,7 @@ import com.morealm.app.domain.entity.rule.TocRule
 import com.morealm.app.domain.analyzeRule.JsExtensions
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.CookieStore
+import com.morealm.app.domain.source.SharedJsScope
 import kotlinx.serialization.builtins.serializer
 import com.script.ScriptBindings
 import com.script.rhino.RhinoScriptEngine
@@ -140,9 +141,21 @@ data class BookSource(
     }
 
     /**
-     * 执行登录脚本，传入用户填写的表单数据
+     * 执行登录脚本，传入用户填写的表单数据。
+     *
+     * 注入的 bindings 与 Legado SourceLoginDialog.login 对齐：
+     *  - `result` = [loginData] 表单值
+     *  - `book` / `chapter` = null（MoRealm 登录入口当前不携带书上下文，与 Legado
+     *    "从书源管理页直接登录"路径一致；如需带书上下文走 SourceLoginActivity 那条路再补）
+     *  - `isLongClick` = false
+     *
+     * [extraBindings] 让调用方追加副绑定（典型：`loginExt = SourceLoginScriptApi(...)`），
+     * 由 ViewModel 在创建时持有 lambda 把 JS 反向通道映射到 SharedFlow。
      */
-    fun login(loginData: Map<String, String> = emptyMap()) {
+    fun login(
+        loginData: Map<String, String> = emptyMap(),
+        extraBindings: ((ScriptBindings) -> Unit)? = null,
+    ) {
         val loginJs = getLoginJs()
         if (!loginJs.isNullOrBlank()) {
             val js = """$loginJs
@@ -154,6 +167,10 @@ data class BookSource(
             """.trimIndent()
             evalJS(js) { bindings ->
                 bindings["result"] = loginData.toMutableMap()
+                bindings["book"] = null
+                bindings["chapter"] = null
+                bindings["isLongClick"] = false
+                extraBindings?.invoke(bindings)
             }
         }
     }
@@ -318,7 +335,16 @@ data class BookSource(
             bindings["cookie"] = CookieStore
             bindings["cache"] = CacheManager
             extraBindings?.invoke(bindings)
-            val scope = RhinoScriptEngine.getRuntimeScope(bindings)
+            // jsLib 里声明的变量（host / 辅助函数等）通过 prototype 链暴露给后续 eval。
+            // 对齐 Legado BaseSource.evalJS：有 sharedScope 就跳过 getRuntimeScope，
+            // 直接把 bindings.prototype 挂成 sharedScope；否则走原 topLevel 路径。
+            val sharedScope = SharedJsScope.getScope(jsLib)
+            val scope = if (sharedScope != null) {
+                bindings.prototype = sharedScope
+                bindings
+            } else {
+                RhinoScriptEngine.getRuntimeScope(bindings)
+            }
             RhinoScriptEngine.eval(jsStr, scope)
         }
     }

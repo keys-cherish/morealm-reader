@@ -451,6 +451,8 @@ fun FolderListItem(
     hasUpdate: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
+    /** 分组多选模式下当前分组是否被选中 — 选中时整行加 primary alpha 0.08 背景。 */
+    selected: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val moColors = LocalMoRealmColors.current
@@ -461,6 +463,10 @@ fun FolderListItem(
         modifier = modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .then(
+                if (selected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f), MaterialTheme.shapes.medium)
+                else Modifier
+            )
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -499,9 +505,22 @@ fun FolderListItem(
                     modifier = Modifier.size(32.dp),
                 )
             }
-            // 红点：分组内任意书有"待读新章节"。8dp 圆点 + 1dp 浅色描边，
-            // 在浅 / 深封面上都能看清；右上角 4dp 内距，不挡封面信息。
-            if (hasUpdate) {
+            // 选中标记 / 红点（互斥；selected 优先级高）：分组多选模式下右上角对勾；
+            // 否则按"分组内任意书有待读新章节"显示红点。
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .size(20.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.Check, null,
+                        tint = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier.size(12.dp))
+                }
+            } else if (hasUpdate) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -557,6 +576,8 @@ fun FolderCard(
     hasUpdate: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
+    /** 分组多选模式下当前分组是否被选中 — 选中时整卡加 primary alpha 0.12 背景，封面右上角显示对勾。 */
+    selected: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val moColors = LocalMoRealmColors.current
@@ -566,6 +587,7 @@ fun FolderCard(
         modifier = modifier
             .clip(MaterialTheme.shapes.medium)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .then(if (selected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)) else Modifier)
             .padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -734,10 +756,23 @@ fun FolderCard(
                 }
             }
             } // end else（非自定义封面分支）
-            // 红点：与 FolderListItem 一致。Box scope 是 FolderCard 顶层封面 Box，
+            // 红点 / 选中标记（互斥；selected 优先级高）：Box scope 是 FolderCard 顶层封面 Box，
             // 所以 align(TopEnd) 落在分组卡封面右上角；customCoverUrl 路径也覆盖到，
             // 因为这一段在 customCoverUrl if/else 之外。
-            if (hasUpdate) {
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .size(22.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.Check, null,
+                        tint = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier.size(14.dp))
+                }
+            } else if (hasUpdate) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)

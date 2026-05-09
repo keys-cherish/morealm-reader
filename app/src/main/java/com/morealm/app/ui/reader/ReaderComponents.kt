@@ -459,15 +459,16 @@ fun ReaderSettingsPanel(
     paragraphSpacing: Int = 8,
     onParagraphSpacingChange: (Int) -> Unit = {},
     marginHorizontal: Int = 24,
-    /** 拖动中：实时反馈给渲染器但**不持久化**。每帧都触发，由 ReaderScreen 维护 preview state。 */
-    onMarginHorizontalPreview: (Int) -> Unit = {},
-    /** 松手：把最终值写入 Room 并清空 preview。仅 onValueChangeFinished 触发，频率极低。 */
+    /**
+     * 松手时回写 prefs 触发 reflow。设计上**不**走"拖动期间实时预览"——
+     * CanvasRenderer 的 reflow 是 onCompleted 才 atomic swap 的设计，拖动期间高频
+     * 重排会被取消重启永远完不成；改为松手生效后体验明确：thumb 跟手移动 + 数值
+     * 实时刷新，松手内容才重排一次。
+     */
     onMarginHorizontalCommit: (Int) -> Unit = {},
     marginTop: Int = 24,
-    onMarginTopPreview: (Int) -> Unit = {},
     onMarginTopCommit: (Int) -> Unit = {},
     marginBottom: Int = 24,
-    onMarginBottomPreview: (Int) -> Unit = {},
     onMarginBottomCommit: (Int) -> Unit = {},
     customCss: String = "",
     onCustomCssChange: (String) -> Unit = {},
@@ -557,13 +558,17 @@ fun ReaderSettingsPanel(
                 ) {
                     readerStyles.forEach { style ->
                         val isActive = style.id == activeStyleId
-                        val bg = style.bgColor.toComposeColor()
-                        val fg = style.textColor.toComposeColor()
+                        // v29 起 ReaderStyle 不再带颜色，瓦片预览改为按 preset 的
+                        // textSize 视觉缩放 "Aa" 字样：
+                        //   - 默认 17 → 12sp、紧凑 15 → 11sp、大字 20 → 14sp
+                        // 直观传达"这是排版差异"而非"颜色差异"。瓦片底色统一用主题
+                        // surfaceContainerHigh，跟当前主题协调。
+                        val previewFontSize = (style.textSize / 1.4f).coerceIn(10f, 16f).sp
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
                                 .semantics {
-                                    contentDescription = "阅读样式：${style.name}"
+                                    contentDescription = "排版预设：${style.name}"
                                     role = Role.Button
                                 }
                                 .clickable { onStyleChange(style.id) },
@@ -572,15 +577,16 @@ fun ReaderSettingsPanel(
                                 modifier = Modifier
                                     .size(42.dp)
                                     .clip(CircleShape)
-                                    .background(bg)
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                                     .then(
                                         if (isActive) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
                                         else Modifier.border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f), CircleShape)
                                     ),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text("文", color = fg,
-                                    style = MaterialTheme.typography.labelSmall,
+                                Text("Aa",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = previewFontSize,
                                     fontWeight = FontWeight.Bold)
                             }
                             Spacer(Modifier.height(4.dp))
@@ -855,7 +861,7 @@ fun ReaderSettingsPanel(
                     modifier = Modifier.width(32.dp))
                 Slider(
                     value = mH.toFloat(),
-                    onValueChange = { mH = it.toInt(); onMarginHorizontalPreview(mH) },
+                    onValueChange = { mH = it.toInt() },
                     onValueChangeFinished = { onMarginHorizontalCommit(mH) },
                     valueRange = 8f..64f, steps = 0,
                     modifier = Modifier.weight(1f),
@@ -871,7 +877,7 @@ fun ReaderSettingsPanel(
                     modifier = Modifier.width(32.dp))
                 Slider(
                     value = mT.toFloat(),
-                    onValueChange = { mT = it.toInt(); onMarginTopPreview(mT) },
+                    onValueChange = { mT = it.toInt() },
                     onValueChangeFinished = { onMarginTopCommit(mT) },
                     valueRange = 8f..64f, steps = 0,
                     modifier = Modifier.weight(1f),
@@ -887,7 +893,7 @@ fun ReaderSettingsPanel(
                     modifier = Modifier.width(32.dp))
                 Slider(
                     value = mB.toFloat(),
-                    onValueChange = { mB = it.toInt(); onMarginBottomPreview(mB) },
+                    onValueChange = { mB = it.toInt() },
                     onValueChangeFinished = { onMarginBottomCommit(mB) },
                     valueRange = 8f..64f, steps = 0,
                     modifier = Modifier.weight(1f),

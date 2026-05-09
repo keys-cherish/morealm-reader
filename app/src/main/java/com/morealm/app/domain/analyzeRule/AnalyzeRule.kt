@@ -1,10 +1,15 @@
 package com.morealm.app.domain.analyzeRule
 
+import android.os.Looper
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.http.BackstageWebView
 import com.script.CompiledScript
 import com.script.ScriptBindings
 import com.script.rhino.RhinoScriptEngine
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import org.apache.commons.text.StringEscapeUtils
 import org.jsoup.nodes.Node
 import org.mozilla.javascript.NativeObject
@@ -207,6 +212,58 @@ class AnalyzeRule(
 
     // ── 获取文本列表 ──
 
+    /**
+     * 通过 [BackstageWebView] 在浏览器壳内执行书源 JS 拿正文（Legado parity）。
+     *
+     * 用于 `@webjs:` 规则：把上一步的 [result] 通过 JS 前缀注入为全局 `var result`，
+     * 然后让书源 JS 在已加载页面（[content] 当 html，[baseUrl] 当 base）中执行。
+     *
+     * 不能在主线程调用 —— BackstageWebView 内部要 post 到主线程并 await，主线程死锁。
+     * 同步 API 内部用 `runBlocking(coroutineContext)` 桥接，与 [ajax] 同款做法。
+     */
+    @Suppress("MemberVisibilityCanBePrivate")
+    fun getWebJsResult(jsStr: String, result: Any?): String {
+        if (Looper.getMainLooper().thread == Thread.currentThread()) {
+            error("webJs must be called on a background thread")
+        }
+        val resultJsLiteral = jsResultLiteral(result)
+        val wrappedJs = "var result = $resultJsLiteral;\n$jsStr"
+        val targetUrl = baseUrl ?: ""
+        val htmlContent = content?.toString()
+        val headers = source?.getHeaderMap(true)
+        val tag = source?.getKey()
+        return kotlin.runCatching {
+            runBlocking(coroutineContext) {
+                BackstageWebView(
+                    url = targetUrl,
+                    html = htmlContent,
+                    javaScript = wrappedJs,
+                    headerMap = headers,
+                    tag = tag,
+                ).getStrResponse().body.orEmpty()
+            }
+        }.getOrElse {
+            AppLog.warn("AnalyzeRule", "webJs eval failed: ${it.message?.take(120)}")
+            ""
+        }
+    }
+
+    private fun jsResultLiteral(result: Any?): String = when (result) {
+        null -> "null"
+        is String -> "\"" + escapeJsString(result) + "\""
+        is List<*> -> result.joinToString(prefix = "[", postfix = "]", separator = ",") {
+            "\"" + escapeJsString(it?.toString().orEmpty()) + "\""
+        }
+        else -> "\"" + escapeJsString(result.toString()) + "\""
+    }
+
+    private fun escapeJsString(s: String): String = s
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+
     @JvmOverloads
     fun getStringList(rule: String?, mContent: Any? = null, isUrl: Boolean = false): List<String>? {
         if (rule.isNullOrEmpty()) return null
@@ -238,6 +295,11 @@ class AnalyzeRule(
                         result = replaceRegex(result.toString(), sourceRule)
                     }
                 }
+            } else if (result is Map<*, *>) {
+                // Legado parity: GSON 解析 JSON 后 LinkedTreeMap 直接键访问。MoRealm
+                // 用 kotlinx.serialization，但这里兜底任意 Map（覆盖 LinkedTreeMap /
+                // HashMap / kotlinx Json $unwrap）。
+                result = (result as Map<*, *>)[ruleList.first().rule]
             } else {
                 for (sourceRule in ruleList) {
                     putRule(sourceRule.putMap)
@@ -246,6 +308,11 @@ class AnalyzeRule(
                     val rule = sourceRule.rule
                     if (rule.isNotEmpty()) {
                         result = when (sourceRule.mode) {
+                            Mode.WebJs -> getWebJsResult(rule, result).let { raw ->
+                                runCatching {
+                                    Json.decodeFromString<List<String>>(raw)
+                                }.getOrNull() ?: raw
+                            }
                             Mode.Js -> evalJS(rule, result)
                             Mode.Json -> getAnalyzeByJSonPath(result).getStringList(rule)
                             Mode.XPath -> getAnalyzeByXPath(result).getStringList(rule)
@@ -320,6 +387,11 @@ class AnalyzeRule(
                 }?.let {
                     replaceRegex(it, sourceRule)
                 }
+            } else if (result is Map<*, *>) {
+                // Legado parity: GSON 解析 JSON 后 LinkedTreeMap 直接键访问。MoRealm
+                // 用 kotlinx.serialization，但这里兜底任意 Map（覆盖 LinkedTreeMap /
+                // HashMap / kotlinx Json $unwrap）。
+                result = (result as Map<*, *>)[ruleList.first().rule]?.toString()
             } else {
                 for (sourceRule in ruleList) {
                     putRule(sourceRule.putMap)
@@ -328,6 +400,7 @@ class AnalyzeRule(
                     val rule = sourceRule.rule
                     if (rule.isNotBlank() || sourceRule.replaceRegex.isEmpty()) {
                         result = when (sourceRule.mode) {
+                            Mode.WebJs -> getWebJsResult(rule, result)
                             Mode.Js -> evalJS(rule, result)
                             Mode.Json -> getAnalyzeByJSonPath(result).getString(rule)
                             Mode.XPath -> getAnalyzeByXPath(result).getString(rule)
@@ -374,6 +447,12 @@ class AnalyzeRule(
                 val rule = sourceRule.rule
                 result = when (sourceRule.mode) {
                     Mode.Regex -> AnalyzeByRegex.getElement(result.toString(), rule.split("&&").filter { it.isNotBlank() }.toTypedArray())
+                    Mode.WebJs -> {
+                        val raw = getWebJsResult(rule, result)
+                        runCatching {
+                            Json.parseToJsonElement(raw)
+                        }.getOrNull() ?: raw
+                    }
                     Mode.Js -> evalJS(rule, result)
                     Mode.Json -> getAnalyzeByJSonPath(result).getObject(rule)
                     Mode.XPath -> getAnalyzeByXPath(result).getElements(rule)
@@ -407,6 +486,15 @@ class AnalyzeRule(
                 val rule = sourceRule.rule
                 result = when (sourceRule.mode) {
                     Mode.Regex -> AnalyzeByRegex.getElements(result.toString(), rule.split("&&").filter { it.isNotBlank() }.toTypedArray())
+                    Mode.WebJs -> {
+                        val raw = getWebJsResult(rule, result)
+                        runCatching {
+                            Json.parseToJsonElement(raw)
+                                .let { je ->
+                                    if (je is JsonArray) je.toList() else listOf(je)
+                                }
+                        }.getOrNull() ?: listOf(raw)
+                    }
                     Mode.Js -> evalJS(rule, result)
                     Mode.Json -> getAnalyzeByJSonPath(result).getList(rule)
                     Mode.XPath -> getAnalyzeByXPath(result).getElements(rule)
@@ -533,6 +621,15 @@ class AnalyzeRule(
             ruleList.add(SourceRule(jsMatcher.group(2) ?: jsMatcher.group(1), Mode.Js))
             start = jsMatcher.end()
         }
+        val webJsMatcher = WebJS_PATTERN.matcher(ruleStr)
+        while (webJsMatcher.find()) {
+            if (webJsMatcher.start() > start) {
+                tmp = ruleStr.substring(start, webJsMatcher.start()).trim { it <= ' ' }
+                if (tmp.isNotEmpty()) ruleList.add(SourceRule(tmp, mMode))
+            }
+            ruleList.add(SourceRule(webJsMatcher.group(1) ?: "", Mode.WebJs))
+            start = webJsMatcher.end()
+        }
         if (ruleStr.length > start) {
             tmp = ruleStr.substring(start).trim { it <= ' ' }
             if (tmp.isNotEmpty()) ruleList.add(SourceRule(tmp, mMode))
@@ -573,6 +670,7 @@ class AnalyzeRule(
         private val evalPattern = Pattern.compile("@get:\\{[^}]+?\\}|\\{\\{[\\w\\W]*?\\}\\}", Pattern.CASE_INSENSITIVE)
         private val regexPattern = Pattern.compile("\\$\\d{1,2}")
         val JS_PATTERN: Pattern = Pattern.compile("<js>([\\w\\W]*?)</js>|@js:([\\w\\W]*)", Pattern.CASE_INSENSITIVE)
+        val WebJS_PATTERN: Pattern = Pattern.compile("@webjs:([\\w\\W]{5,})", Pattern.CASE_INSENSITIVE)
 
         /** JS 编译缓存 — 相同脚本源码只编译一次，所有 AnalyzeRule 实例共享。 */
         private val scriptCache = ConcurrentHashMap<String, CompiledScript?>()
@@ -782,6 +880,6 @@ class AnalyzeRule(
     }
 
     enum class Mode {
-        XPath, Json, Default, Js, Regex
+        XPath, Json, Default, Js, Regex, WebJs
     }
 }
