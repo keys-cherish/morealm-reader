@@ -91,6 +91,16 @@ class BookDetailViewModel @Inject constructor(
                 runCatching { bookRepo.clearLastCheckCount(bookId) }
             }
         }
+
+        // 登录脚本反向刷新通道：登录后脚本调 `java.refreshBookInfo()` 时从 DB 重拉一份，
+        // changeSource 控制器里的持久化 / 刷新路径已经覆盖正常场景，这里只对接登录路径。
+        viewModelScope.launch {
+            com.morealm.app.domain.source.SourceLoginRefreshBus.bookInfo.collect {
+                if (bookId.isNotBlank()) {
+                    _book.value = bookRepo.getById(bookId)
+                }
+            }
+        }
     }
 
     // ── Change-source action delegates ──────────────────────────────────────

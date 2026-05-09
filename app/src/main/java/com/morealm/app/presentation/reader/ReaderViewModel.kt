@@ -214,6 +214,20 @@ class ReaderViewModel @Inject constructor(
                 runCatching { bookRepo.clearLastCheckCount(bookId) }
             }
         }
+
+        // 登录脚本反向刷新通道：登录完成后脚本调 `java.refreshBookToc / refreshContent` 时，
+        // 让当前阅读器立刻重拉目录 / 正文。两条事件都靠当前打开的 book 来决定"哪本书要刷"，
+        // 所以即使多个书的源同时登录，也只有当前书响应。
+        viewModelScope.launch {
+            com.morealm.app.domain.source.SourceLoginRefreshBus.bookToc.collect {
+                chapter.refreshTocFromSource()
+            }
+        }
+        viewModelScope.launch {
+            com.morealm.app.domain.source.SourceLoginRefreshBus.content.collect {
+                chapter.reloadCurrentChapter()
+            }
+        }
     }
 
     // ── Forwarded StateFlows (for backward compatibility with ReaderScreen) ──

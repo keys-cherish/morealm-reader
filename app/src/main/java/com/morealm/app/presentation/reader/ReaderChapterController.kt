@@ -1064,6 +1064,39 @@ class ReaderChapterController(
         // 不在此处 clear hits — 重渲染时会自然刷新
     }
 
+    /**
+     * 登录脚本 `java.refreshBookToc()` 的落点：强制从书源重拉目录并持久化。
+     * 无 web book / book 未加载时静默 no-op。不会重置当前章索引 / 进度。
+     */
+    fun refreshTocFromSource() {
+        val book = _book.value ?: return
+        if (!isWebBook(book)) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val fresh = loadWebBookChapters(book)
+                if (fresh.isNotEmpty()) {
+                    _chapters.value = fresh
+                    bookRepo.saveChapters(bookId, fresh)
+                    if (book.totalChapters != fresh.size) {
+                        bookRepo.update(book.copy(totalChapters = fresh.size))
+                    }
+                    AppLog.info("Chapter", "refreshTocFromSource: ${fresh.size} chapters")
+                }
+            } catch (e: Exception) {
+                AppLog.warn("Chapter", "refreshTocFromSource failed: ${e.message?.take(60)}")
+            }
+        }
+    }
+
+    /**
+     * 登录脚本 `java.refreshContent()` 的落点：重新加载当前章正文（Web book 会走网络）。
+     * 通过走同款 [loadChapter]，命中 loading 状态 + 重排版 + 重 preload。
+     */
+    fun reloadCurrentChapter() {
+        val idx = _currentChapterIndex.value
+        scope.launch(Dispatchers.Main) { loadChapter(idx) }
+    }
+
     private fun publishHits() {
         _hitContentRules.value = hitContentRulesSet.toList()
         _hitTitleRules.value = hitTitleRulesSet.toList()
