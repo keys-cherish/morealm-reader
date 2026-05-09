@@ -151,14 +151,18 @@ data class BookSource(
      *
      * [extraBindings] 让调用方追加副绑定（典型：`loginExt = SourceLoginScriptApi(...)`），
      * 由 ViewModel 在创建时持有 lambda 把 JS 反向通道映射到 SharedFlow。
+     *
+     * [preludeJs] 会拼到脚本最前面。典型用途：`SourceLoginScriptApi.LEGACY_JAVA_COMPAT_PRELUDE`
+     * 让 Legado 原生 `java.upLoginData` 类写法零改动跑通。空串时按老逻辑处理。
      */
     fun login(
         loginData: Map<String, String> = emptyMap(),
+        preludeJs: String = "",
         extraBindings: ((ScriptBindings) -> Unit)? = null,
     ) {
         val loginJs = getLoginJs()
         if (!loginJs.isNullOrBlank()) {
-            val js = """$loginJs
+            val js = """$preludeJs$loginJs
                 if(typeof login=='function'){
                     login.apply(this);
                 } else {
