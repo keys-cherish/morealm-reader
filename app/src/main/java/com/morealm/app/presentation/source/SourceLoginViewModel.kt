@@ -1,11 +1,14 @@
 package com.morealm.app.presentation.source
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.core.error.ErrorMessages
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.source.SourceLoginScriptApi
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +43,7 @@ sealed class LoginUiState {
 @HiltViewModel
 class SourceLoginViewModel @Inject constructor(
     private val sourceRepo: com.morealm.app.domain.repository.SourceRepository,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<LoginUiState>(LoginUiState.Idle)
@@ -88,6 +92,22 @@ class SourceLoginViewModel @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /**
+     * 构造一份注入到 JS scope 的登录扩展。三条路径（[login] / [runActionJs] /
+     * [parseLoginUi]）共用同一工厂，确保脚本调用 `loginExt.upLoginData(...)` /
+     * `loginExt.reLoginView(...)` 时反向通道流向同一对 SharedFlow，UI 才能 collect 到。
+     *
+     * 注意每次调用返回新实例：脚本可能在协程间持久化引用，但 source / SharedFlow
+     * 都是不可变的，新实例不会带来状态分裂。
+     */
+    private fun makeScriptApi(source: BookSource): SourceLoginScriptApi =
+        SourceLoginScriptApi(
+            ctx = context,
+            source = source,
+            onUpUiData = { _uiPatch.tryEmit(it) },
+            onReUiView = { _uiRebuild.tryEmit(it) },
+        )
+
+    /**
      * 批量预算 [sources] 的登录状态 → 写入 [loginStatusMap]。
      */
     fun refreshLoginStatuses(sources: List<BookSource>) {
@@ -117,10 +137,27 @@ class SourceLoginViewModel @Inject constructor(
     fun showLoginDialog(source: BookSource) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 纯URL类型的loginUrl → WebView登录
-                if (source.isLoginUrlPureUrl()) {
+                // 与 Legado SourceLoginActivity.initView 对齐：判定路径**只看
+                // loginUi 是否为空**，不看 loginUrl 形态。
+                //
+                // 老逻辑用 isLoginUrlPureUrl() 判定（loginUrl 是否带 @js: / <js>
+                // 前缀），对裸 JS 代码（如「大灰狼融合 4.0」等源把整段 JS 直接
+                // 写在 loginUrl 字段、不加任何前缀）误判为「纯 URL」，把 JS
+                // 源码喂给 WebView.loadUrl → URL 编码后变成 file:///%20...
+                // 形态的乱码 URL，登录页打不开。
+                //
+                //   - loginUi 非空：表单登录走 Dialog；loginUrl 视为 JS（getLoginJs
+                //     在内部剥前缀，无前缀时整体作 JS）。
+                //   - loginUi 为空：WebView 登录，loginUrl 当 URL。这条路径如果
+                //     loginUrl 是 JS，本身就坏 —— Legado 也坏，不是 MoRealm 独有。
+                if (source.loginUi.isNullOrBlank()) {
+                    val url = source.loginUrl
+                    if (url.isNullOrBlank()) {
+                        _uiState.value = LoginUiState.Error("书源未配置登录入口")
+                        return@launch
+                    }
                     val headerMap = source.getHeaderMap(true)
-                    _uiState.value = LoginUiState.ShowWebView(source, source.loginUrl!!, headerMap)
+                    _uiState.value = LoginUiState.ShowWebView(source, url, headerMap)
                     return@launch
                 }
                 val rows = parseLoginUi(source, source.loginUi)
@@ -143,7 +180,10 @@ class SourceLoginViewModel @Inject constructor(
                 )
                 source.putLoginInfo(infoJson)
 
-                source.login(fieldValues)
+                val api = makeScriptApi(source)
+                source.login(fieldValues) { bindings ->
+                    bindings["loginExt"] = api
+                }
 
                 withContext(Dispatchers.Main) {
                     _uiState.value = LoginUiState.Success("登录成功")
@@ -174,17 +214,13 @@ class SourceLoginViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val loginJs = source.getLoginJs() ?: ""
-                // 反向通道桥：JS 端 loginExt.upUiData(map) / reUiView() 会 emit 到对应 SharedFlow
-                val bridge = SourceLoginJsBridge(
-                    onUpUiData = { patch -> _uiPatch.tryEmit(patch) },
-                    onReUiView = { deltaUp -> _uiRebuild.tryEmit(deltaUp) },
-                )
+                val api = makeScriptApi(source)
                 source.evalJS("$loginJs\n$actionJs") { bindings ->
                     bindings["result"] = fieldValues.toMutableMap()
                     bindings["book"] = null
                     bindings["chapter"] = null
                     bindings["isLongClick"] = false
-                    bindings["loginExt"] = bridge
+                    bindings["loginExt"] = api
                 }
                 _toast.tryEmit("已执行")
             } catch (e: Exception) {
@@ -225,10 +261,13 @@ class SourceLoginViewModel @Inject constructor(
         }
         val jsonStr = if (isJs) {
             try {
+                val api = makeScriptApi(source)
                 source.evalJS("${source.getLoginJs() ?: ""}\n$payload") { bindings ->
                     bindings["result"] = mutableMapOf<String, String>()
                     bindings["book"] = null
                     bindings["chapter"] = null
+                    bindings["isLongClick"] = false
+                    bindings["loginExt"] = api
                 }?.toString() ?: ""
             } catch (e: Exception) {
                 AppLog.warn("SourceLogin", "loginUi JS 求值失败 ${source.bookSourceName}: ${e.message}")

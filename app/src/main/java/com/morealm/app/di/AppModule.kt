@@ -14,7 +14,6 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import java.io.File
 import javax.inject.Singleton
 
 private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -504,6 +503,134 @@ private val MIGRATION_27_28 = object : Migration(27, 28) {
 }
 
 /**
+ * v28 → v29：拆解 ReaderStyle 的"用颜色命名排版"混淆。
+ *
+ * 历史问题：早期 5 个内置 preset（preset_paper/green/blue/warm/ink）以颜色区分，
+ * 排版字段（textSize/lineHeight/spacing 等）全用同一组默认值——名字叫"排版样式"
+ * 实际是"配色方案"，跟 [com.morealm.app.domain.entity.ThemeEntity] 的颜色职责重叠。
+ *
+ * 本次 migration 做两件事：
+ *
+ * 1. **rebuild reader_styles 表，drop 7 个颜色列**
+ *    `bgColor / bgColorNight / bgImageUri / bgImageUriNight / bgAlpha / textColor /`
+ *    `textColorNight` —— 这些字段以后都由主题 [ThemeEntity.readerBackground /`
+ *    `readerTextColor]` 管。SQLite 不直接支持 DROP COLUMN（需 3.35+），用经典
+ *    table-rebuild 路径：CREATE new → INSERT SELECT 留存非颜色字段 → DROP old
+ *    → RENAME new。
+ *
+ * 2. **强刷 5 个 builtin preset 的字段值**让排版差异生效
+ *    用户的 builtin preset row 在 v28 时所有字段都是 default（textSize=18 等），
+ *    切来切去看不到差异。这次 UPDATE 5 个 row 让它们真的有排版差异：
+ *    - preset_paper → "默认" 17/2.0/8
+ *    - preset_green → "紧凑" 15/1.6/4
+ *    - preset_blue  → "宽松" 17/2.4/12
+ *    - preset_warm  → "大字" 20/2.0/8
+ *    - preset_ink   → "文章" 17/2.0/16 + paragraphIndent="    "
+ *    **只动 isBuiltin=1 的行**，用户自定义 preset（isBuiltin=0）的字段值原样保留。
+ *    id 不变所以 prefs 里的 active_reader_style 不需要 migration。
+ *
+ * 注：列定义（NOT NULL / 没 DEFAULT 子句）与 v28 schema 风格一致——Room 在
+ * INSERT 时永远显式传值，不依赖 SQL DEFAULT。schema 校验比对的是列名/类型/notNull，
+ * 列顺序无关。
+ */
+private val MIGRATION_28_29 = object : Migration(28, 29) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `reader_styles_new` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `sortOrder` INTEGER NOT NULL,
+                `textSize` INTEGER NOT NULL,
+                `fontFamily` TEXT NOT NULL,
+                `customFontUri` TEXT,
+                `textBold` INTEGER NOT NULL,
+                `letterSpacing` REAL NOT NULL,
+                `lineHeight` REAL NOT NULL,
+                `paragraphSpacing` INTEGER NOT NULL,
+                `paragraphIndent` TEXT NOT NULL,
+                `textAlign` TEXT NOT NULL,
+                `titleMode` INTEGER NOT NULL,
+                `titleSize` INTEGER NOT NULL,
+                `titleTopSpacing` INTEGER NOT NULL,
+                `titleBottomSpacing` INTEGER NOT NULL,
+                `paddingTop` INTEGER NOT NULL,
+                `paddingBottom` INTEGER NOT NULL,
+                `paddingLeft` INTEGER NOT NULL,
+                `paddingRight` INTEGER NOT NULL,
+                `pageAnim` TEXT NOT NULL,
+                `showHeader` INTEGER NOT NULL,
+                `showFooter` INTEGER NOT NULL,
+                `headerContent` TEXT NOT NULL,
+                `footerContent` TEXT NOT NULL,
+                `customCss` TEXT NOT NULL,
+                `customBgImage` TEXT NOT NULL,
+                `isBuiltin` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO `reader_styles_new` (
+                `id`, `name`, `sortOrder`, `textSize`, `fontFamily`, `customFontUri`,
+                `textBold`, `letterSpacing`, `lineHeight`, `paragraphSpacing`,
+                `paragraphIndent`, `textAlign`, `titleMode`, `titleSize`,
+                `titleTopSpacing`, `titleBottomSpacing`,
+                `paddingTop`, `paddingBottom`, `paddingLeft`, `paddingRight`,
+                `pageAnim`, `showHeader`, `showFooter`, `headerContent`, `footerContent`,
+                `customCss`, `customBgImage`, `isBuiltin`
+            )
+            SELECT
+                `id`, `name`, `sortOrder`, `textSize`, `fontFamily`, `customFontUri`,
+                `textBold`, `letterSpacing`, `lineHeight`, `paragraphSpacing`,
+                `paragraphIndent`, `textAlign`, `titleMode`, `titleSize`,
+                `titleTopSpacing`, `titleBottomSpacing`,
+                `paddingTop`, `paddingBottom`, `paddingLeft`, `paddingRight`,
+                `pageAnim`, `showHeader`, `showFooter`, `headerContent`, `footerContent`,
+                `customCss`, `customBgImage`, `isBuiltin`
+            FROM `reader_styles`
+            """.trimIndent(),
+        )
+        db.execSQL("DROP TABLE `reader_styles`")
+        db.execSQL("ALTER TABLE `reader_styles_new` RENAME TO `reader_styles`")
+
+        // 强刷 5 个 builtin preset 字段——让"5 个排版预设有差异"这个新 UX 期望对老
+        // 用户也成立。只更新 isBuiltin=1 的行，绝对不动用户自定义 preset。
+        db.execSQL(
+            "UPDATE `reader_styles` SET `name`='默认', `textSize`=17, `lineHeight`=2.0," +
+                " `paragraphSpacing`=8, `paddingLeft`=16, `paddingRight`=16," +
+                " `paddingTop`=16, `paddingBottom`=16" +
+                " WHERE `id`='preset_paper' AND `isBuiltin`=1"
+        )
+        db.execSQL(
+            "UPDATE `reader_styles` SET `name`='紧凑', `textSize`=15, `lineHeight`=1.6," +
+                " `paragraphSpacing`=4, `paddingLeft`=12, `paddingRight`=12," +
+                " `paddingTop`=12, `paddingBottom`=12" +
+                " WHERE `id`='preset_green' AND `isBuiltin`=1"
+        )
+        db.execSQL(
+            "UPDATE `reader_styles` SET `name`='宽松', `textSize`=17, `lineHeight`=2.4," +
+                " `paragraphSpacing`=12, `paddingLeft`=24, `paddingRight`=24," +
+                " `paddingTop`=16, `paddingBottom`=16" +
+                " WHERE `id`='preset_blue' AND `isBuiltin`=1"
+        )
+        db.execSQL(
+            "UPDATE `reader_styles` SET `name`='大字', `textSize`=20, `lineHeight`=2.0," +
+                " `paragraphSpacing`=8, `paddingLeft`=16, `paddingRight`=16," +
+                " `paddingTop`=16, `paddingBottom`=16" +
+                " WHERE `id`='preset_warm' AND `isBuiltin`=1"
+        )
+        db.execSQL(
+            "UPDATE `reader_styles` SET `name`='文章', `textSize`=17, `lineHeight`=2.0," +
+                " `paragraphSpacing`=16, `paragraphIndent`='    '," +
+                " `paddingLeft`=20, `paddingRight`=20, `paddingTop`=20, `paddingBottom`=20" +
+                " WHERE `id`='preset_ink' AND `isBuiltin`=1"
+        )
+    }
+}
+
+/**
  * v28 → v29 jsScript 字段曾在工作区临时存在，配套整文件 JS 书源（lifecycle 模型）的导入支持。
  * 后续放弃该方向（与 Legado 规则模型不兼容、维护负担过大），从未 commit / push 到 main。
  *
@@ -557,67 +684,10 @@ private val MIGRATION_9_10 = object : Migration(9, 10) {
 }
 
 /**
- * Auto-backup database before any migration (upgrade or downgrade).
- * Keeps the 2 most recent backups in app internal storage.
- */
-private fun backupDatabaseBeforeMigration(context: Context) {
-    try {
-        val dbFile = context.getDatabasePath("morealm.db")
-        if (!dbFile.exists()) return
-        val backupDir = File(context.filesDir, "db_backup")
-        if (!backupDir.exists()) backupDir.mkdirs()
-        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
-            .format(java.util.Date())
-        val backupFile = File(backupDir, "morealm_$ts.db")
-        dbFile.copyTo(backupFile, overwrite = true)
-        // Also backup WAL/SHM if present
-        val wal = File(dbFile.path + "-wal")
-        val shm = File(dbFile.path + "-shm")
-        if (wal.exists()) wal.copyTo(File(backupFile.path + "-wal"), overwrite = true)
-        if (shm.exists()) shm.copyTo(File(backupFile.path + "-shm"), overwrite = true)
-        // Keep only 2 most recent backups
-        backupDir.listFiles { f -> f.name.endsWith(".db") }
-            ?.sortedByDescending { it.lastModified() }
-            ?.drop(2)
-            ?.forEach { old ->
-                old.delete()
-                File(old.path + "-wal").delete()
-                File(old.path + "-shm").delete()
-            }
-        AppLog.info("DB", "Pre-migration backup: ${backupFile.name}")
-    } catch (e: Exception) {
-        AppLog.error("DB", "Backup failed", e)
-    }
-}
-
-/**
- * Attempt to restore database from the most recent backup.
- * Called when Room detects a downgrade or migration failure.
- */
-private fun restoreFromBackup(context: Context): Boolean {
-    try {
-        val backupDir = File(context.filesDir, "db_backup")
-        val latest = backupDir.listFiles { f -> f.name.endsWith(".db") }
-            ?.maxByOrNull { it.lastModified() } ?: return false
-        val dbFile = context.getDatabasePath("morealm.db")
-        latest.copyTo(dbFile, overwrite = true)
-        val wal = File(latest.path + "-wal")
-        val shm = File(latest.path + "-shm")
-        if (wal.exists()) wal.copyTo(File(dbFile.path + "-wal"), overwrite = true)
-        if (shm.exists()) shm.copyTo(File(dbFile.path + "-shm"), overwrite = true)
-        AppLog.info("DB", "Restored from backup: ${latest.name}")
-        return true
-    } catch (e: Exception) {
-        AppLog.error("DB", "Restore failed", e)
-        return false
-    }
-}
-
-/**
  * 直接打开 SQLite 文件读 user_version——不走 Room、不触发 migration 校验。
  *
- * 用途：在 Room.databaseBuilder.build() **之前**判断当前 DB 文件 schema 版本，
- * 决定是否要先调 [SnapshotManager.preserveAsPreSchemaSnapshot]。
+ * 用途：在 [com.morealm.app.domain.db.recovery.RecoveryGuard.shouldEnterRecovery]
+ * 里判断当前 DB 文件 schema 是否高于代码 schema（降级场景）。
  *
  * 失败返回 -1（DB 文件不存在 / corrupt / 无法打开）。
  */
@@ -637,14 +707,20 @@ internal fun readSqliteUserVersionSafely(context: Context, dbName: String): Int 
 }
 
 /**
- * 当前 Room schema 版本。与 [AppDatabase] @Database(version = N) 保持一致。
- * 用于 [readSqliteUserVersionSafely] 比较「当前 DB 文件版本 vs 代码版本」，决定
- * 是否要在 Room 打开前 [SnapshotManager.preserveAsPreSchemaSnapshot]。
+ * 当前 Room schema 版本 —— 直接引用 [AppDatabase.SCHEMA_VERSION]，**不写死**。
  *
- * 提到 top-level 而不是放 [AppModule] object 内部，方便其他模块（如
- * [com.morealm.app.domain.db.recovery.RecoveryGuard]）直接 import 用。
+ * 历史教训：曾经把这个值手抄成 `const val = 28`，在 v28 → v29 升级 migration 后
+ * 忘记同步常量值，导致 [com.morealm.app.domain.db.recovery.RecoveryGuard] 把
+ * 已经升到 v29 的真实 DB 误判为「降级」 → 死循环弹 RecoveryActivity → 用户点
+ * 恢复后又被错误地反复重启进程。常量与 @Database 注解双源不同步是反复重演的
+ * 隐患，杜绝它的唯一办法就是只让一个真理来源（[AppDatabase.SCHEMA_VERSION]
+ * 这个 const val），由编译器在编译期保证两处一致。
+ *
+ * 用 const val 而不是 by lazy 反射读注解 —— `androidx.room.Database` 的
+ * `@Retention(CLASS)` 让运行时反射拿不到注解；只有走「同一个 const 编译期
+ * 同步」这条路才能既单一来源又零运行期开销。
  */
-internal const val APP_DB_SCHEMA_VERSION = 28
+internal const val APP_DB_SCHEMA_VERSION: Int = AppDatabase.SCHEMA_VERSION
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -654,37 +730,26 @@ object AppModule {
     @Singleton
     fun provideDatabase(
         @ApplicationContext context: Context,
-        snapshotManager: com.morealm.app.domain.db.snapshot.SnapshotManager,
     ): AppDatabase {
-        // ── DB 升级前的双保险 ──
+        // ── 启动主线程零 I/O（对齐 legado）──
         //
-        // 1) 物理 .db 文件备份（已有逻辑，保留最近 2 份在 db_backup/）。
-        //    优点：恢复快（直接 swap 文件）。缺点：跨 schema 版本不能恢复。
-        backupDatabaseBeforeMigration(context)
+        // 历史教训：早期版本在这里无条件 / 或在版本号变化分支里跑 .db 文件 copy（连同
+        // WAL/SHM）+ snapshot.json 副本。但 provideDatabase 是 Hilt @Singleton 在
+        // Application.onCreate 字段注入阶段构造的——**主线程**。DB 一大就阻塞 8s+。
         //
-        // 2) JSON 全量快照「升级前紧急副本」：把当前最新 latest snapshot 文件复制成
-        //    snapshot_pre_v<priorVersion>.json。priorVersion 来自 SQLite 文件直接读取
-        //    user_version（不走 Room，避免触发 migration）。
-        //    优点：跨 schema 版本能恢复。缺点：只能恢复到上次 daily snapshot 时点。
+        // 现策略（参考 legado AppDatabase.kt:60-67）：
+        //   - 升级 → Room migration 链（addMigrations 链全连）自动迁移；
+        //   - 降级 → MainActivity.onCreate 头部已经先跑 [RecoveryGuard.shouldEnterRecovery]
+        //     拦截，跳到 RecoveryActivity 让用户选 snapshot 恢复（**不**走 Room）；
+        //   - 其它启动 → 啥都不做，立即返回 Room.databaseBuilder。
         //
-        //    触发条件：priorVersion 有效（>= 1）且不等于当前 [APP_DB_SCHEMA_VERSION]
-        //    —— 包含两种危险路径：
-        //      a) 升级（priorVersion < current）：新版 migration 可能写坏数据
-        //      b) 降级（priorVersion > current）：Room 不支持降级会 throw，
-        //         先 preserve 保住老数据，用户能从 RecoveryActivity 选 pre_v 文件
-        //         恢复到当前 schema。
-        //    首次安装（priorVersion = -1）跳过；同版本启动跳过。
-        runCatching {
-            val priorVersion = readSqliteUserVersionSafely(context, "morealm.db")
-            if (priorVersion >= 1 && priorVersion != APP_DB_SCHEMA_VERSION) {
-                AppLog.info(
-                    "DB",
-                    "Schema version change detected: $priorVersion → $APP_DB_SCHEMA_VERSION." +
-                        " Preserving pre-schema snapshot.",
-                )
-                snapshotManager.preserveAsPreSchemaSnapshot(priorVersion)
-            }
-        }.onFailure { AppLog.warn("DB", "preserve pre-schema snapshot failed: ${it.message}") }
+        // 数据保护职责完全外移：
+        //   - 跨设备 / 长期备份 → 用户主动触发的 WebDav zip（domain/sync/）；
+        //   - 本地兜底         → 每日 daily snapshot（MoRealmApp.onCreate 在 IO scope 里跑，
+        //                        SnapshotManager.runDailySnapshotIfDue）；
+        //   - 升级翻车回滚     → 出问题时 RecoveryActivity 选 latest snapshot 恢复——
+        //                        latest 本身就代表"上次启动后的最新数据"，无需再 copy 一份
+        //                        pre_v 副本。
 
         return Room.databaseBuilder(context, AppDatabase::class.java, "morealm.db")
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
@@ -703,33 +768,23 @@ object AppModule {
                 MIGRATION_25_26,
                 MIGRATION_26_27,
                 MIGRATION_27_28,
+                MIGRATION_28_29,
             )
-            // 不再开 fallbackToDestructiveMigrationFrom(29)。
+            // 不开 fallbackToDestructiveMigrationFrom。
             //
             // 历史 bug：曾给开发期残留的 v29 DB 开口子，但配合 onDestructiveMigration
-            // 里硬调 restoreFromBackup 文件 swap，触发了「清空-恢复-再清空」70 次循环，
-            // 用户数据被实际清空（参考 git log + 注释说明）。
+            // 里硬调文件 swap 触发了「清空-恢复-再清空」70 次循环，用户数据被实际清空。
             //
-            // 现策略（Legado 路线）：宁可启动崩溃也绝不静默清数据。遇到任何版本不匹配，
-            // Room 自己 throw IllegalStateException，DB 文件原样保留在 /databases/，
-            // 用户能用 adb / 文件管理器把 db 拖出来研究恢复，或从 db_backup/ 选历史备份。
-            // On destructive migration: 只记录、不自动 restore。
-            //
-            // 历史 bug：曾在此回调里调用 restoreFromBackup(context) 试图把备份 .db 文件
-            // copy 回 dbFile。但此时 Room 已经持有 connection、表已经被清空 —— 文件层面
-            // hot swap 不能挽回 Room 的内部状态，下次 query 仍然 schema mismatch，再次
-            // 触发 destructive，又调 restore，又被清空…… 形成「清空-恢复-再清空」死循环
-            // （日志里看到 70 次 destructive，每次都真的清空一次数据）。
-            //
-            // 现在的策略：destructive 触发后**不再自动 restore**，只打 error 日志。
-            // 用户启动后看到空数据 → 知道出事了 → 自己去 db_backup/ 目录或 WebDav
-            // 手动恢复。宁可启动后看到空白要求人工恢复，也不要静默循环清数据。
+            // 现策略（对齐 legado）：宁可启动崩溃也绝不静默清数据。版本不匹配时 Room
+            // 自己 throw IllegalStateException，DB 文件原样保留 —— 用户从 RecoveryActivity
+            // 里选历史 daily snapshot 或 WebDav zip 恢复；onDestructiveMigration
+            // 只记录、不自动 restore，避免重演死循环。
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
                     AppLog.error(
                         "DB",
                         "Destructive migration triggered. Data has been wiped." +
-                            " Manual restore required: db_backup/ or WebDav.",
+                            " Manual restore required: RecoveryActivity / WebDav.",
                     )
                 }
             })

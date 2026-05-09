@@ -3,9 +3,12 @@ package com.morealm.app.ui.source
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -81,6 +84,34 @@ fun BookSourceManageScreen(
     var searchQuery by remember { mutableStateOf("") }
     var editingSource by remember { mutableStateOf<BookSource?>(null) }
 
+    // ── 多选删除态 ────────────────────────────────────────────
+    // selectionMode 决定 TopAppBar 形态、列表项是否显示选中边框、Switch 是否禁用。
+    // selectedUrls 用 rememberSaveable 让旋转 / 进程死亡时保留选择。
+    var selectionMode by rememberSaveable { mutableStateOf(false) }
+    val selectedUrls = rememberSaveable(
+        saver = listSaver<MutableSet<String>, String>(
+            save = { it.toList() },
+            restore = { it.toMutableSet() },
+        ),
+    ) { mutableSetOf() }
+    // selectedUrls 是 MutableSet 而非 State —— 修改它本身不会触发重组。
+    // 用一个 size 投影 state 让 TopAppBar 标题、Delete 按钮 enabled 状态等
+    // 跟着选数走重组；同步更新点都集中在 toggleSelect / exitSelection 两处。
+    var selectedCount by remember { mutableStateOf(selectedUrls.size) }
+    var showBatchDeleteDialog by remember { mutableStateOf(false) }
+    val exitSelection: () -> Unit = {
+        selectionMode = false
+        selectedUrls.clear()
+        selectedCount = 0
+    }
+    val toggleSelect: (String) -> Unit = { url ->
+        if (url in selectedUrls) selectedUrls.remove(url) else selectedUrls.add(url)
+        selectedCount = selectedUrls.size
+        if (selectedCount == 0) selectionMode = false
+    }
+    // 系统返回键优先退出多选态；否则回到上层。
+    BackHandler(enabled = selectionMode) { exitSelection() }
+
     // File picker for importing local JSON files
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.GetContent()
@@ -98,6 +129,28 @@ fun BookSourceManageScreen(
             } catch (e: Exception) {
                 AppLog.error("SourceManage", "读取文件失败", e)
                 Toast.makeText(context, ErrorMessages.forUser("读取文件", e), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 导出 SAF — 触发时携带要导出的 url 集合：null 代表"导出全部"，非空代表"导出选中"。
+    // 用 var 在 launch 前先写入，回调里读取——CreateDocument 的回调是异步的，必须用
+    // state/字段把"上一次点击的导出范围"传过去。重置成 null 防止下次点"导出全部"被
+    // 上一次的"导出选中"集污染。
+    var pendingExportUrls by remember { mutableStateOf<Set<String>?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        uri?.let { viewModel.exportToUri(it, pendingExportUrls) }
+        pendingExportUrls = null
+    }
+    // exportResult 单事件流：成功显示导出条数，失败显示错误。LaunchedEffect 收一次即用。
+    LaunchedEffect(Unit) {
+        viewModel.exportResult.collect { result ->
+            result.onSuccess { count ->
+                Toast.makeText(context, "已导出 $count 个书源", Toast.LENGTH_SHORT).show()
+            }.onFailure { e ->
+                Toast.makeText(context, "导出失败：${e.message?.take(60)}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -152,7 +205,62 @@ fun BookSourceManageScreen(
     Scaffold(
         // UX-10：左缘水平拖动 → 返回
         modifier = Modifier.swipeBackEdge(onBack = onBack),
-        topBar = {
+        topBar = topBar@{
+            if (selectionMode) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            "已选 $selectedCount",
+                            fontWeight = FontWeight.Bold,
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = exitSelection) {
+                            Icon(Icons.Default.Close, "退出多选")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = {
+                            sortedSources.forEach { selectedUrls.add(it.bookSourceUrl) }
+                            selectedCount = selectedUrls.size
+                        }) {
+                            Icon(Icons.Default.SelectAll, "全选")
+                        }
+                        IconButton(
+                            onClick = {
+                                pendingExportUrls = selectedUrls.toSet()
+                                exportLauncher.launch("morealm_sources_${selectedCount}.json")
+                            },
+                            enabled = selectedCount > 0,
+                        ) {
+                            Icon(
+                                Icons.Default.FileDownload,
+                                "导出选中",
+                                tint = if (selectedCount > 0)
+                                    MaterialTheme.colorScheme.onSurface
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                            )
+                        }
+                        IconButton(
+                            onClick = { showBatchDeleteDialog = true },
+                            enabled = selectedCount > 0,
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                "删除选中",
+                                tint = if (selectedCount > 0)
+                                    MaterialTheme.colorScheme.error
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background),
+                )
+                return@topBar
+            }
             TopAppBar(
                 title = { Text("书源管理", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
@@ -256,6 +364,31 @@ fun BookSourceManageScreen(
                     }
                     IconButton(onClick = { showImportDialog = true }) {
                         Icon(Icons.Default.Add, "添加书源")
+                    }
+                    // Overflow 三点菜单：放低频操作，避免顶栏图标过多。当前只有"导出全部"
+                    // 一项；后续如增加"备份/还原书源"等长尾功能继续往这里塞。
+                    var overflowExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { overflowExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, "更多")
+                        }
+                        DropdownMenu(
+                            expanded = overflowExpanded,
+                            onDismissRequest = { overflowExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                leadingIcon = {
+                                    Icon(Icons.Default.FileDownload, null, modifier = Modifier.size(20.dp))
+                                },
+                                text = { Text("导出全部 (${sortedSources.size})") },
+                                enabled = sortedSources.isNotEmpty(),
+                                onClick = {
+                                    overflowExpanded = false
+                                    pendingExportUrls = null  // null = 全部
+                                    exportLauncher.launch("morealm_sources_${sortedSources.size}.json")
+                                },
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -427,11 +560,17 @@ fun BookSourceManageScreen(
                                 source = source,
                                 checkResult = checkResult,
                                 isLoggedIn = isLoggedIn,
+                                selected = source.bookSourceUrl in selectedUrls,
+                                selectionMode = selectionMode,
                                 onToggle = { viewModel.toggleSource(source) },
                                 onEdit = { editingSource = source },
                                 onDelete = { viewModel.deleteSource(source) },
                                 onLogin = { loginViewModel.showLoginDialog(source) },
                                 onLogout = { loginViewModel.logout(source) },
+                                onLongPress = {
+                                    if (!selectionMode) selectionMode = true
+                                    toggleSelect(source.bookSourceUrl)
+                                },
                             )
                         }
                     } else {
@@ -469,11 +608,17 @@ fun BookSourceManageScreen(
                                         source = source,
                                         checkResult = checkResult,
                                         isLoggedIn = isLoggedIn,
+                                        selected = source.bookSourceUrl in selectedUrls,
+                                        selectionMode = selectionMode,
                                         onToggle = { viewModel.toggleSource(source) },
                                         onEdit = { editingSource = source },
                                         onDelete = { viewModel.deleteSource(source) },
                                         onLogin = { loginViewModel.showLoginDialog(source) },
                                         onLogout = { loginViewModel.logout(source) },
+                                        onLongPress = {
+                                            if (!selectionMode) selectionMode = true
+                                            toggleSelect(source.bookSourceUrl)
+                                        },
                                     )
                                 }
                             }
@@ -661,29 +806,60 @@ fun BookSourceManageScreen(
             },
         )
     }
+
+    // ── 多选删除确认弹窗 ──────────────────────────────────────────
+    // 不止是 UX 问题：删书源不可逆，重手操作必须二次确认。
+    if (showBatchDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showBatchDeleteDialog = false },
+            title = { Text("删除选中书源") },
+            text = {
+                Text(
+                    "确定删除选中的 $selectedCount 个书源吗？此操作不可撤销。",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val snapshot = selectedUrls.toList()
+                    viewModel.deleteSources(snapshot)
+                    showBatchDeleteDialog = false
+                    exitSelection()
+                    Toast.makeText(
+                        context,
+                        "已删除 ${snapshot.size} 个书源",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchDeleteDialog = false }) { Text("取消") }
+            },
+        )
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SourceItem(
     source: BookSource,
     checkResult: CheckSource.CheckResult? = null,
     isLoggedIn: Boolean = false,
+    selected: Boolean = false,
+    selectionMode: Boolean = false,
     onToggle: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onLogin: () -> Unit = {},
     onLogout: () -> Unit = {},
+    onLongPress: (() -> Unit)? = null,
 ) {
     val moColors = LocalMoRealmColors.current
     var showMenu by remember { mutableStateOf(false) }
-    // ── 颜色动画降级到绘制层 ──
-    // 之前用 `val bgColor by animateColorAsState(...)` + `Surface(color = bgColor)`：
-    // 每帧 bgColor.value 变化都会让 SourceItem 整个 composable scope 重组（因为
-    // Surface 的 color 参数读取发生在 composition 阶段）。
-    //
-    // 现在保留 State<Color>（不解构 by），把 `.value` 的读取下沉到 drawBehind 的
-    // lambda —— drawBehind 只在 draw phase 触发，不参与 composition / layout，
-    // 颜色过渡的 16ms 帧只会跑 redraw 而非 recompose。
+    // 进入多选态时立即关闭已经打开的菜单，避免"点菜单弹出后紧跟长按进多选"残留
+    LaunchedEffect(selectionMode) { if (selectionMode) showMenu = false }
     val enabledColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val disabledColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
     val bgColorAnim = animateColorAsState(
@@ -691,16 +867,26 @@ private fun SourceItem(
         label = "sourceBg"
     )
     val shape = MaterialTheme.shapes.medium
+    val primary = MaterialTheme.colorScheme.primary
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .drawBehind { drawRect(bgColorAnim.value) },
+            .drawBehind { drawRect(bgColorAnim.value) }
+            .then(
+                if (selected) Modifier.border(2.dp, primary, shape) else Modifier
+            ),
     ) {
         Row(
             modifier = Modifier
-                .clickable { showMenu = !showMenu }
+                .combinedClickable(
+                    onClick = {
+                        if (selectionMode) onLongPress?.invoke()
+                        else showMenu = !showMenu
+                    },
+                    onLongClick = { onLongPress?.invoke() },
+                )
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -761,7 +947,8 @@ private fun SourceItem(
             }
             Switch(
                 checked = source.enabled,
-                onCheckedChange = { onToggle() },
+                onCheckedChange = if (selectionMode) null else { { onToggle() } },
+                enabled = !selectionMode,
                 colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier.padding(start = 8.dp),
             )
@@ -769,6 +956,7 @@ private fun SourceItem(
             if (!source.loginUrl.isNullOrBlank()) {
                 IconButton(
                     onClick = { if (isLoggedIn) onLogout() else onLogin() },
+                    enabled = !selectionMode,
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(

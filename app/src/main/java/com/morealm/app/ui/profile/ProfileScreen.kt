@@ -185,6 +185,40 @@ fun ProfileScreen(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
+                // 「跟随系统」开关 —— 开启后系统暗色模式变化（用户改了 Android
+                // 系统设置 → 显示 → 深色主题，或日落自动切换）会驱动这里在内置
+                // 日间 / 夜间主题之间切。手动点下面任何主题瓦片都会自动关掉这个
+                // 开关（switchTheme 内部会调 setFollowSystemTheme(false)），
+                // 把主题选择权交还用户。
+                run {
+                    val follow by themeViewModel.followSystemTheme.collectAsStateWithLifecycle()
+                    val systemIsDark = androidx.compose.foundation.isSystemInDarkTheme()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("跟随系统主题",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium)
+                            Text(
+                                if (follow) "已开启 · 系统切到${if (systemIsDark) "深色" else "浅色"}时自动切换"
+                                else "关闭 · 用下方瓦片手动选择主题",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            )
+                        }
+                        Switch(
+                            checked = follow,
+                            onCheckedChange = { enabled ->
+                                themeViewModel.setFollowSystemTheme(enabled, systemIsDark)
+                            },
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    Spacer(Modifier.height(12.dp))
+                }
                 Text("点击切换主题，实时预览效果",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))

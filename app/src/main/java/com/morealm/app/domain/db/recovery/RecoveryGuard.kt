@@ -38,6 +38,12 @@ sealed class RecoveryReason {
  *    → 重启 process（[ProcessRestarter.restart]）
  * 2. 新 process 启动 → [RecoveryGuard.shouldEnterRecovery] 检测到 marker
  *    → 跳回 RecoveryActivity → import → 删 marker → 再重启进 MainActivity
+ *
+ * @property attemptCount 当前 marker 已经被尝试 import 的次数。每次进入
+ *   ResumeImport 路径递增；超过 [RecoveryGuard.MAX_RESUME_ATTEMPTS] 时
+ *   [RecoveryGuard.shouldEnterRecovery] 强制丢弃 marker —— 防止 import 反复
+ *   失败 + 进程反复重启造成的死循环（历史 bug：保留字 INDEX 没加反引号导致
+ *   章节插入全失败，旧实现失败也强制 restart，用户被卡在恢复界面）。
  */
 @Serializable
 data class RecoveryMarker(
@@ -45,6 +51,8 @@ data class RecoveryMarker(
     val snapshotFileName: String,
     /** 写入 marker 的时间戳。便于诊断卡死的恢复流程。 */
     val createdAtMs: Long,
+    /** 已尝试 import 的次数。初次写入为 0，每次进入 RecoveryActivity 前 +1。 */
+    val attemptCount: Int = 0,
 )
 
 /**
@@ -60,19 +68,44 @@ object RecoveryGuard {
     private const val MARKER_FILE_NAME = "recovery_pending.json"
     private const val DB_FILE = "morealm.db"
 
+    /**
+     * 同一份 marker 最多允许尝试 import 的次数。超过即视为"恢复永远失败"，
+     * 强制丢弃 marker 让用户重新选快照（或放弃恢复直接进 app 接受空数据）。
+     *
+     * 设这个上限的根本原因：历史 bug 里 SnapshotManager 用 db.insert() 不加反引号，
+     * 遇到保留字 INDEX 永远失败；旧 RecoveryActivity 失败仍 restart，配合这条
+     * 死循环每分钟弹一次恢复界面 —— 用户描述的"动不动闪退"。即使核心 bug 已修，
+     * 也保留这条防御：未来再遇到类似可重复失败的恢复场景，3 次后让用户喘口气。
+     */
+    private const val MAX_RESUME_ATTEMPTS = 3
+
     private val json = Json { ignoreUnknownKeys = true }
 
     /**
      * 启动时检查是否需要进入 RecoveryActivity。
      *
      * 检查顺序（先重要后次要）：
-     * 1. Marker 存在 → ResumeImport（上一轮恢复未完成，必须接着做）
+     * 1. Marker 存在 →
+     *    - 失败次数已达 [MAX_RESUME_ATTEMPTS] → 强制丢弃 marker，下面继续走 step 2
+     *    - 否则 ResumeImport（上一轮恢复未完成，必须接着做）
      * 2. SQLite user_version > 当前 schema → SchemaDowngrade（Room 不能打开降级 DB）
      *
      * 返回 null 表示一切正常，可以进入 MainActivity。
      */
     fun shouldEnterRecovery(context: Context): RecoveryReason? {
-        readMarker(context)?.let { return RecoveryReason.ResumeImport(it) }
+        readMarker(context)?.let { marker ->
+            if (marker.attemptCount >= MAX_RESUME_ATTEMPTS) {
+                AppLog.warn(
+                    "Recovery",
+                    "Marker exceeded max attempts (${marker.attemptCount}/$MAX_RESUME_ATTEMPTS)," +
+                        " discarding to break recovery loop. snapshot=${marker.snapshotFileName}",
+                )
+                clearMarker(context)
+                // fall through to downgrade check
+            } else {
+                return RecoveryReason.ResumeImport(marker)
+            }
+        }
 
         val priorVersion = readSqliteUserVersionSafely(context, DB_FILE)
         if (priorVersion > APP_DB_SCHEMA_VERSION) {
@@ -107,12 +140,45 @@ object RecoveryGuard {
      * 写 marker（即将启动 process 重启前调用）。
      *
      * 用 tmp + rename 原子写入，避免 process 被 kill 时留下半截文件。
+     * 初次写入 attemptCount 固定为 0；后续的 +1 由 [markAttemptStart] 接管。
      */
     fun writeMarker(context: Context, snapshotFileName: String) {
-        val marker = RecoveryMarker(
-            snapshotFileName = snapshotFileName,
-            createdAtMs = System.currentTimeMillis(),
+        writeMarkerInternal(
+            context,
+            RecoveryMarker(
+                snapshotFileName = snapshotFileName,
+                createdAtMs = System.currentTimeMillis(),
+                attemptCount = 0,
+            ),
         )
+    }
+
+    /** 清除 marker（恢复 import 完成后调用）。 */
+    fun clearMarker(context: Context) {
+        markerFile(context).delete()
+    }
+
+    /**
+     * 把 marker 的 [RecoveryMarker.attemptCount] +1 写回。
+     *
+     * 调用时机：RecoveryActivity 在 ResumeImport 路径里**真正开始** import 前调一次。
+     * 这样即使 import 中途抛异常 / process 被 kill，下次启动 [shouldEnterRecovery]
+     * 看到的 attemptCount 已经反映了上次的尝试。配合 [MAX_RESUME_ATTEMPTS] 的硬上限
+     * 切断"总在同一份坏快照上失败"的死循环。
+     *
+     * 返回更新后的 marker（便于 UI 拿来显示当前是第几次尝试）；marker 不存在或读
+     * 失败时返回 null。
+     */
+    fun markAttemptStart(context: Context): RecoveryMarker? {
+        val current = readMarker(context) ?: return null
+        val updated = current.copy(attemptCount = current.attemptCount + 1)
+        runCatching { writeMarkerInternal(context, updated) }
+            .onFailure { AppLog.error("Recovery", "markAttemptStart write failed", it) }
+        return updated
+    }
+
+    /** 实际写入 marker 的原子操作；[writeMarker] 与 [markAttemptStart] 共用。 */
+    private fun writeMarkerInternal(context: Context, marker: RecoveryMarker) {
         val target = markerFile(context)
         val tmp = File(target.parentFile, "${target.name}.tmp")
         tmp.writeText(json.encodeToString(marker))
@@ -121,11 +187,6 @@ object RecoveryGuard {
             tmp.copyTo(target, overwrite = true)
             tmp.delete()
         }
-    }
-
-    /** 清除 marker（恢复 import 完成后调用）。 */
-    fun clearMarker(context: Context) {
-        markerFile(context).delete()
     }
 
     /**
