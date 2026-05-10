@@ -5,10 +5,12 @@ import com.morealm.app.domain.analyzeRule.AnalyzeRule
 import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setCoroutineContext
 import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setNextChapterUrl
 import com.morealm.app.domain.analyzeRule.AnalyzeUrl
+import com.morealm.app.domain.analyzeRule.HtmlFormatter
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.rule.ContentRule
 import kotlinx.coroutines.ensureActive
 import org.apache.commons.text.StringEscapeUtils
+import java.net.URL
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -22,6 +24,9 @@ import kotlin.coroutines.coroutineContext
 object BookContent {
 
     private const val TAG = "BookContent"
+
+    /** Legado AppPattern.useHtmlRegex parity — 标记希望保留原 HTML 不被净化的段。 */
+    private val useHtmlRegex = Regex("<usehtml>.*?</usehtml>", RegexOption.DOT_MATCHES_ALL)
 
     suspend fun analyzeContent(
         bookSource: BookSource,
@@ -130,8 +135,27 @@ object BookContent {
                 AppLog.warn(TAG, "content rule failed: ${e.message?.take(120)}")
                 ""
             }
-            if (content.indexOf('&') > -1) {
-                content = StringEscapeUtils.unescapeHtml4(content)
+            // Legado parity: 先把 <usehtml> 段占位 → HtmlFormatter.formatKeepImg
+            // (清 HTML 标签但保留 img 并 absolute src) → unescapeHtml4 → 还原占位。
+            // 不走这条管道之前 jsoup outerHtml 的 <p>/<br>/<img> 标签会原样进阅读器，
+            // 用户感知就是「本章内容为空」或乱码。
+            if (content.isNotEmpty()) {
+                val useHtmlMap = mutableMapOf<String, String>()
+                content = useHtmlRegex.replace(content) { match ->
+                    val placeholder = "{usehtml_${useHtmlMap.size}}"
+                    useHtmlMap[placeholder] = match.value
+                    placeholder
+                }
+                val redirectUrlObj = try { URL(redirectUrl) } catch (_: Exception) { null }
+                content = HtmlFormatter.formatKeepImg(content, redirectUrlObj)
+                if (content.indexOf('&') > -1) {
+                    content = StringEscapeUtils.unescapeHtml4(content)
+                }
+                if (useHtmlMap.isNotEmpty()) {
+                    useHtmlMap.forEach { (placeholder, original) ->
+                        content = content.replace(placeholder, original)
+                    }
+                }
             }
             val nextUrlRule = contentRule.nextContentUrl
             if (!nextUrlRule.isNullOrEmpty()) {

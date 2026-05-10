@@ -26,6 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -327,7 +329,12 @@ fun CanvasRenderer(
     // 顶/底独立计算；caller 不传时回落到 paddingVertical（向后兼容老调用方）。
     val padTopPx = with(density) { (paddingTop ?: paddingVertical).dp.toPx().toInt() }
     val padBotPx = with(density) { (paddingBottom ?: paddingVertical).dp.toPx().toInt() }
-    val infoBarHeightPx = with(density) { 64.dp.toPx().toInt() }
+    // info bar 实际只承载一行字（章节名 / 时间 / 电量），不需要 64dp。
+    // 6dp + 字号(~14sp≈18dp) + 6dp + 视觉呼吸 ≈ 40dp 已足够，且能省下顶 / 底各
+    // 24dp 的正文区。改前 6.8" 屏顶/底各预留 80dp(=16dp padding+64dp infoBar)，
+    // 加起来 160dp 留白；改后降到 ~112dp，可视区放大 ~6%。下方两个 ReaderInfoBar
+    // 的 .height(40.dp) 必须与本值同步。
+    val infoBarHeightPx = with(density) { 40.dp.toPx().toInt() }
     // ── info bar 是否真有内容 → 决定要不要预留 64dp ──
     //
     // 之前 effectivePadTop/Bottom 一律 +infoBarHeightPx，即使所有 slot 都
@@ -641,23 +648,41 @@ fun CanvasRenderer(
             onCurTextChapterReady(chapterIndex, cachedChapter)
             return@LaunchedEffect
         }
-        // Cache miss: 立即 attempt layout——layoutChapterAsync 第一页就绪时
-        // (onPageReady index=0) 会立刻 publish textChapter，UI 自然实时更新。
-        // 旧实现这里有 16ms 节流，意图是「拖动 padding 滑块时 key 高频变化，
-        // 节流让只有手指停下那刻的 key 进入流水线」——但实测效果是「拖动期间
-        // layoutInputs 不停被新 key cancel，textChapter 永不更新，正文僵在
-        // 拖动开始前的状态」（用户报告：「设置左右；上下；边距；正文不实时
-        // 变化」）。删掉节流后，每次 padding 变化都尽早 attempt layout；新 key
-        // 到来仍会 cancel 旧 layout 协程，但只要用户拖动间有 ~50ms 暂停，
-        // layoutChapterAsync 就能出第一页 publish。配合下面的 placeholder
-        // fallback（仅首次进入退到 placeholder，否则保留旧 textChapter），
-        // 不会引入「拖动闪屏」。
-        // 仅在还没有任何可显示布局时才退到 placeholder（首次进入），
-        // 否则保留旧 textChapter 直到 layoutChapterAsync 出第一页 —— 消除拖动闪屏。
-        if (textChapter == null || textChapter?.pages.isNullOrEmpty()) {
-            textChapter = placeholderChapter()
-            pageCount = 1
+
+        // ── 区分「首次布局」与「reflow」（根治样式滑块拖动反弹的关键） ──
+        //
+        // 老问题：用户拖字号/边距/行距 slider 时 currentChapterKey 高频变化，本
+        // LaunchedEffect 被 cancel + 重启。重启进入 onPageReady(index=0) 时无脑做
+        //   textChapter = handle.textChapter   // 1 页 incomplete 的新对象
+        //   pageCount   = 1
+        //   onCurTextChapterReady(idx, partial) // 推 pages=1 incomplete 给 ChapterController
+        // → 单向数据流被破坏：UI 看到 pages=44 completed=true → pages=1 incomplete
+        //   → pages=44 completed=true 的反弹；publishCurTextChapter / ProgressTrace
+        //   / safeDisplayMax 跟着震荡，整个 reader 陷入「重排-重组」死循环。
+        //
+        // 根治：reflow 期间完全不动 UI 状态。新章节在后台协程里把 handle.textChapter
+        // 内的 textPages 累积到位（cancelCheck 保证已 cancel 的协程不再 emit），
+        // 直到 onCompleted 触发**一次原子 swap** —— 用户视觉上：旧 44 页布局 →
+        // 新 44 页布局，无中间态。
+        //
+        // 判定 isRelayout：当前已有同章节的**已完成**布局。否则（首次进入 / 跨章
+        // 跳转 / 上次还在流式中被打断）按首次布局走流式 publish，让用户尽早看到
+        // 第一页（对齐 Legado）。
+        val priorChapter = textChapter
+        val isRelayout = priorChapter != null &&
+            priorChapter.chapterIndex == chapterIndex &&
+            priorChapter.isCompleted &&
+            priorChapter.pages.isNotEmpty()
+
+        if (!isRelayout) {
+            // 首次进入或跨章跳转：还没有可显示的真布局，退到 placeholder 占位。
+            // reflow 路径绝对不走这里 —— 旧 textChapter 留在 UI 上不动。
+            if (priorChapter == null || priorChapter.pages.isEmpty()) {
+                textChapter = placeholderChapter()
+                pageCount = 1
+            }
         }
+
         if (content.isBlank()) {
             val chapter = placeholderChapter(chapterTitle.ifBlank { "当前章节暂无正文" }).apply {
                 isCompleted = true
@@ -674,16 +699,25 @@ fun CanvasRenderer(
                 scope = this,
                 omitChapterTitleBlock = omitChapterTitleBlock,
                 onPageReady = { index, _ ->
+                    // reflow 路径下 onPageReady 不动 UI 状态：新 chapter 在 handle
+                    // 内独立累积 pages，直到 onCompleted 才 atomic swap。否则会发生
+                    // pages=44 → pages=1 → pages=2 ... 的回退-再增长（反弹）。
+                    if (isRelayout) return@layoutChapterAsync
                     if (index == 0) {
                         textChapter = handle?.textChapter
                         // Phase 2b: 第一页就绪时立刻推回 cur，让 ScrollRenderer 尽早
                         // 拿到 cur reference（哪怕 isCompleted=false，pages 仍可访问已就绪部分）。
-                        // 对齐 Legado 流式排版思路：边排边可见。
+                        // 对齐 Legado 流式排版思路：边排边可见。仅首次布局走这条路径。
                         handle?.textChapter?.let { onCurTextChapterReady(chapterIndex, it) }
                     }
                     pageCount = handle?.textChapter?.pageSize?.coerceAtLeast(1) ?: 1
                 },
                 onCompleted = {
+                    // 首次布局 + reflow 都走这里做最终 swap。Compose 的 mutableStateOf
+                    // 比对 reference，handle.textChapter 是新对象，必触发一次重组；
+                    // pageCount 由 N（旧）→ M（新）也是单次 Int 变化。所有下游
+                    // （pageFactory remember key、publishCurTextChapter、safeDisplayMax）
+                    // 看到的都是「稳态 → 稳态」一步切换，不会反弹。
                     textChapter = handle?.textChapter
                     pageCount = handle?.textChapter?.pageSize?.coerceAtLeast(1) ?: 1
                     // 把当前章节最终布局也存入 LRU：来回拖到相同 padding 值时秒回。
@@ -891,6 +925,18 @@ fun CanvasRenderer(
     // 接管，不再需要 ReaderScrollState 中转 displayOffset。
 
     // Pager state — always start at 0, then jump after layout completes
+    // pageCount 必须用 renderPageCount 而不是 max(render, cache)。
+    //
+    // 之前曾尝试用 maxOf(renderPageCount, cachedPageCount) 修跨章 PREV 闪烁
+    // （让 pager 跨章瞬间就知道目标章总页数，避免 initialPage 被 clamp）。
+    // 但 NEXT 跨章场景下 renderPageCount 可能瞬间是「旧 chapter 的页数」（partial
+    // pageFactory 重建过程），cachedPageCount 是「新 chapter 的页数」，两者
+    // 含义不一致 —— 取 max 让 pager 看到一个不存在的总页数（如旧章 13 页 + 新章
+    // 10 页 → max=13，pager 在 settle 后发出 settledPage=11/12 这种新章不存在
+    // 的页号），触发后续 onPageSettled / commitPageTurn 路径把章节翻乱。
+    //
+    // 跨章 PREV 闪烁应该走「等 publishCurTextChapter 完成再 commit chapterIndex」
+    // 路线，而不是在 pager 层欺骗 pageCount。本次 revert，闪烁问题留待重新设计。
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { renderPageCount })
 
     // Page-turn coordinator — replaces local page-turn functions and state.
@@ -931,8 +977,14 @@ fun CanvasRenderer(
                 readerPageIndex.coerceIn(0, (cap - 1).coerceAtLeast(0))
             }
             startFromLastPage -> {
-                val cachedPageCount = prelayoutCache[currentChapterKey]?.pageSize ?: renderPageCount
-                (cachedPageCount - 1).coerceAtLeast(0)
+                // 上一章末页。prelayoutCache 的 key 已随 currentChapterKey 切到新章，
+                // 所以 cached 就是新章真实页数；renderPageCount 在 REBUILD 这一帧还是
+                // 上一章 pageFactory 的残值（updateDeps 要到 REBUILD 之后才触发），
+                // 不能用它来约束 cached —— 否则 PREV 跨章到 N 页新章时会被旧章
+                // (N-1) 截断，initialPage 错成 N-2，用户看到倒数第二页。
+                val cached = prelayoutCache[currentChapterKey]?.pageSize
+                val cap = cached ?: renderPageCount.coerceAtLeast(1)
+                (cap - 1).coerceAtLeast(0)
             }
             else -> 0
         }
@@ -1047,8 +1099,12 @@ fun CanvasRenderer(
         }
         // 真章节切换：跟 remember 块的逻辑保持等价（startFromLastPage 才跳末页）。
         val initialPage = if (startFromLastPage) {
-            val cachedPageCount = prelayoutCache[currentChapterKey]?.pageSize ?: renderPageCount
-            (cachedPageCount - 1).coerceAtLeast(0)
+            // 与 remember 块同策略：优先 cached（新章真值），renderPageCount 作兜底。
+            // 不再 min 约束——避免 PREV 跨章那一帧 renderPageCount 还是旧章残值
+            // 导致末页被截断。
+            val cached = prelayoutCache[currentChapterKey]?.pageSize
+            val cap = cached ?: renderPageCount.coerceAtLeast(1)
+            (cap - 1).coerceAtLeast(0)
         } else 0
         coordinator.ignoredSettledDisplayPage = initialPage
         coordinator.pendingSettledDirection = null
@@ -1473,7 +1529,13 @@ fun CanvasRenderer(
             .background(backgroundColor)
             .then(
                 if (pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
-                    Modifier.pointerInput(selectionState.isActive, pageAnimType, renderPageCount) {
+                    // pointerInput 的 key 必须包含 chapterIndex/coordinator：coord 是
+                    // remember(chapterIndex, pageAnimType) 的结果，跨章时 coord 实例变，
+                    // 但若 pointerInput key 不含这两者，detectTapGestures 的 suspend loop
+                    // 不会重启 → 闭包里的 coordinator 引用仍指向**旧 coord**，
+                    // 旧 coord 的 pageFactory 也是旧章的 → tap 作用在旧章上，
+                    // 末页 NEXT 被误判、文字显示错乱（user 看到"第 1 章 1/10"实为第 1 章 factory 渲染首页）。
+                    Modifier.pointerInput(selectionState.isActive, pageAnimType, renderPageCount, coordinator) {
                         var totalDragX = 0f
                         var totalDragY = 0f
                         var dragAxis = 0 // 0 unknown, 1 horizontal, 2 vertical
@@ -1549,7 +1611,9 @@ fun CanvasRenderer(
             )
             .then(
                 if (pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
-                    Modifier.pointerInput(selectionState.isActive) {
+                    // 同上一个 pointerInput：key 加 coordinator，跨章时 lambda 重建，
+                    // 闭包里的 coordinator 引用才会更新到新 coord。
+                    Modifier.pointerInput(selectionState.isActive, coordinator) {
                         detectTapGestures(
                             onTap = { offset ->
                                 if (selectionState.isActive) {
@@ -1702,6 +1766,28 @@ fun CanvasRenderer(
             // 注：老 ScrollRenderer 路径已在删除 task #6 中下线，配套的
             // [PageReaderInfoOverlay]（页码/电池/时间状态栏）也一并移除——
             // 滚动模式天然无分页概念，状态栏由翻页模式独占即可。
+            // ── SCROLL 模式当前页号跟踪 ──
+            // 用户报「上下滑动当前页不计数」：旧版本 ReaderInfoBar 写死 pageIndex/pageCount=0
+            // + slot fallback 到 chapter_progress，所以 page/progress/page_progress 三个
+            // slot 在 SCROLL 模式下永远不工作。
+            //
+            // 修复思路：从 LazyScrollSection.onVisiblePageChanged 拿到首段所在章节 idx +
+            // 章内字符 charPos，反查对应章节的 TextChapter.getPageIndexByCharIndex(charPos)
+            // 得到当前页号。pageSize 直接取该章节 .pageSize。
+            //
+            // 用 mutableIntStateOf：高频变化（滚动 60fps），避免 boxing 抖动。
+            // remember(chapterIndex) 让 cur 章切换时 page state 立即归 0，避免新章首屏
+            // 出现"上一章末页页号"的瞬时态。
+            var scrollPageIndex by remember(chapterIndex) { mutableIntStateOf(0) }
+            var scrollPageCount by remember(chapterIndex) {
+                mutableIntStateOf(chapter?.pageSize ?: 0)
+            }
+            // chapter 异步加载完成 / pageSize 在分页期间动态增长 → 跟随 chapter.pageSize 更新。
+            // 不能用 derivedStateOf，因为 chapter 是参数对象引用，pageSize 内部由 synchronized
+            // ArrayList 维护，对 Compose 不可观察；用 LaunchedEffect 兜一次最新值。
+            LaunchedEffect(chapter, chapter?.pageSize, chapterIndex) {
+                scrollPageCount = chapter?.pageSize ?: 0
+            }
             LazyScrollSection(
                 chapter = chapter,
                 prevTextChapter = prevTextChapter,
@@ -1748,7 +1834,26 @@ fun CanvasRenderer(
                 onDeleteHighlight = onDeleteHighlight,
                 onShareHighlight = onShareHighlight,
                 onTapCenter = onTapCenter,
-                onVisiblePageChanged = onVisiblePageChanged,
+                onVisiblePageChanged = { chIdx, title, prog, charPos ->
+                    // 反查首段所在章节的 pageIndex/pageCount，更新底部 InfoBar 的页号显示。
+                    // 滚动跨章时 windowSource 给 prev/cur/next 三章共存，chIdx 不一定 == chapterIndex。
+                    val ch = when (chIdx) {
+                        chapter?.chapterIndex -> chapter
+                        prevTextChapter?.chapterIndex -> prevTextChapter
+                        nextTextChapter?.chapterIndex -> nextTextChapter
+                        else -> null
+                    }
+                    if (ch != null) {
+                        val ps = ch.pageSize
+                        if (ps > 0) {
+                            scrollPageIndex = ch.getPageIndexByCharIndex(charPos)
+                                .coerceAtLeast(0)
+                                .coerceAtMost(ps - 1)
+                            scrollPageCount = ps
+                        }
+                    }
+                    onVisiblePageChanged(chIdx, title, prog, charPos)
+                },
                 onScrollingChanged = { scrollInProgress = it },
                 omitChapterTitleBlock = omitChapterTitleBlock,
                 modifier = Modifier.fillMaxSize(),
@@ -1760,16 +1865,15 @@ fun CanvasRenderer(
             // 流上读，没有"我在哪一章"的视觉锚点。这里复用 [ReaderInfoBar]（同文件
             // private fun）画顶部 + 底部两条，对齐分页模式的体验。
             //
-            // slot 映射：SCROLL 没有"当前页"概念，配置里 page / progress / page_progress
-            // 三个 slot 自动 fallback 到 chapter_progress（X/Y 章），不至于显示
-            // "1/0" 这种坏数据。其它 slot（chapter / time / battery / time_battery /
-            // chapter_progress 等）保持原义。
-            //
-            // currentPage = null：InfoSlotContent 在 progress 分支会用 pageIndex/pageCount
-            // 推算百分比，传 pageCount=0 + 上面 slot 映射后 progress 永远不会被命中 ——
-            // 双重保险，不会进 NaN 路径。
-            fun mapSlotForScroll(s: String): String = when (s) {
-                "page", "progress", "page_progress" -> "chapter_progress"
+            // slot 映射：以前 SCROLL 把 page/progress/page_progress 三个 slot 强制
+            // fallback 到 chapter_progress —— 用户报「上下滑动当前页不计数」根因。
+            // 现已通过 scrollPageIndex/scrollPageCount 跟踪首段所在章节的页号
+            // (见上面 LazyScrollSection.onVisiblePageChanged 包装)，pageSize > 0 时
+            // 这三个 slot 走原义；pageSize = 0（章节加载未完成）时仍 fallback 防御
+            // "1/0" 坏数据。
+            fun mapSlotForScroll(s: String): String = when {
+                scrollPageCount > 0 -> s
+                s == "page" || s == "progress" || s == "page_progress" -> "chapter_progress"
                 else -> s
             }
             val scrollHasBg = readerTheme.bgBitmap != null
@@ -1778,8 +1882,8 @@ fun CanvasRenderer(
                 slotCenter = if (showChapterName) mapSlotForScroll(headerCenter) else "none",
                 slotRight = if (showTimeBattery) mapSlotForScroll(headerRight) else "none",
                 chapterTitle = chapterTitle,
-                pageIndex = 0,
-                pageCount = 0,
+                pageIndex = scrollPageIndex,
+                pageCount = scrollPageCount,
                 currentPage = null,
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
@@ -1808,8 +1912,8 @@ fun CanvasRenderer(
                 slotCenter = mapSlotForScroll(footerCenter),
                 slotRight = mapSlotForScroll(footerRight),
                 chapterTitle = chapterTitle,
-                pageIndex = 0,
-                pageCount = 0,
+                pageIndex = scrollPageIndex,
+                pageCount = scrollPageCount,
                 currentPage = null,
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
@@ -2286,7 +2390,7 @@ private fun PageReaderInfoOverlay(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
-                .height(64.dp)
+                .height(40.dp)
                 .then(
                     if (hasBgImage) Modifier
                     else Modifier.background(
@@ -2297,7 +2401,7 @@ private fun PageReaderInfoOverlay(
                         )
                     )
                 )
-                .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
+                .padding(horizontal = paddingHorizontal.dp, vertical = 6.dp),
         )
         ReaderInfoBar(
             slotLeft = if (showChapterName) footerLeft else "none",
@@ -2316,7 +2420,7 @@ private fun PageReaderInfoOverlay(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .height(64.dp)
+                .height(40.dp)
                 .then(
                     if (hasBgImage) Modifier
                     else Modifier.background(
@@ -2327,7 +2431,7 @@ private fun PageReaderInfoOverlay(
                         )
                     )
                 )
-                .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
+                .padding(horizontal = paddingHorizontal.dp, vertical = 6.dp),
         )
     }
 }
@@ -2486,6 +2590,32 @@ private fun BatteryIcon(
                 color = color,
                 style = androidx.compose.ui.graphics.drawscope.Stroke(width = 0.6.dp.toPx()),
             )
+        } else {
+            // 电池本体内画百分比数字（充电时让位给闪电）。数字以电池本体居中，
+            // fill 区高对比时（level > 50%）用 white，否则用 color 本身。
+            // 字号取 bodyH * 0.75，6.x dp 起步，能放下 100 三位数（22dp 宽设计内）。
+            val text = level.coerceIn(0, 100).toString()
+            // 文字颜色：fill 高（>50%）时用白色压在深色 fill 上，低电时用电池本体颜色
+            // 直接画在空电区（避免低电时白色文字飘在透明区里看不清）。注意 paint
+            // 的 color 字段名跟 BatteryIcon 的 param 同名 → 必须先把 ARGB 算出来再赋值，
+            // 不能在 apply{} 内引用 color（会被 apply receiver 阴影成 paint.color）。
+            val textArgb = if (level > 50) {
+                android.graphics.Color.WHITE
+            } else {
+                color.toArgb()
+            }
+            val nativePaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                this.color = textArgb
+                textSize = bodyH * 0.75f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                textAlign = android.graphics.Paint.Align.CENTER
+            }
+            val cx = (bodyW - strokeW) / 2f
+            val baseline = bodyH / 2f - (nativePaint.fontMetrics.ascent + nativePaint.fontMetrics.descent) / 2
+            drawIntoCanvas { canvas ->
+                canvas.nativeCanvas.drawText(text, cx, baseline, nativePaint)
+            }
         }
     }
 }

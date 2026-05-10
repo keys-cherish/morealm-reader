@@ -10,6 +10,7 @@
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
@@ -30,7 +31,7 @@
             android:alwaysRetainTaskState="true"
             android:exported="true"
             android:launchMode="singleTask"
-            android:configChanges="screenSize|screenLayout|orientation|smallestScreenSize|density"
+            android:configChanges="uiMode|screenSize|screenLayout|orientation|smallestScreenSize|density"
             android:resizeableActivity="true"
             android:windowSoftInputMode="adjustResize">
             <!-- Foldable: allow activity to resize freely across displays -->
@@ -67,6 +68,17 @@
             android:exported="false"
             android:launchMode="singleTask"
             android:configChanges="screenSize|screenLayout|orientation|smallestScreenSize|density" />
+
+        <!--
+            脚本交互式 WebView 入口。仅由书源登录脚本 (SourceLoginScriptApi.showBrowser) 拉起，
+            不暴露给外部 (exported=false)。扫码登录 / 图形验证码 / 滑块验证类场景必须有 UI。
+            launchMode=singleTop 避免用户在登录中途再次触发同一脚本导致栈里堆两个。
+        -->
+        <activity
+            android:name=".ui.source.ShowBrowserActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="uiMode|screenSize|screenLayout|orientation|smallestScreenSize|density" />
 
         <service
             android:name=".service.TtsService"

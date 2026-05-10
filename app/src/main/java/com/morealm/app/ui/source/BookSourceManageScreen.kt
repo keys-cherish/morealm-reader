@@ -3,9 +3,12 @@ package com.morealm.app.ui.source
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,6 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,12 +67,11 @@ fun BookSourceManageScreen(
     val checkProgress by viewModel.checkProgress.collectAsStateWithLifecycle()
     val checkTotal by viewModel.checkTotal.collectAsStateWithLifecycle()
     val checkResults by viewModel.checkResults.collectAsStateWithLifecycle()
-    val loginUiState by loginViewModel.uiState.collectAsStateWithLifecycle()
     // 预算缓存：进屏 + sources 变化时后台跑 evalJS，UI 只 O(1) 查表，
     // 滚动不再卡顿。详见 SourceLoginViewModel.refreshLoginStatuses。
     val loginStatusMap by loginViewModel.loginStatusMap.collectAsStateWithLifecycle()
-    LaunchedEffect(sources) {
-        if (sources.isNotEmpty()) loginViewModel.refreshLoginStatuses(sources)
+    LaunchedEffect(sources, isImporting) {
+        if (!isImporting && sources.isNotEmpty()) loginViewModel.refreshLoginStatuses(sources)
     }
     // 监听 action JS 一次性事件（button / toggle / select 触发后回显结果）
     LaunchedEffect(loginViewModel) {
@@ -80,6 +83,34 @@ fun BookSourceManageScreen(
     var importUrl by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     var editingSource by remember { mutableStateOf<BookSource?>(null) }
+
+    // ── 多选删除态 ────────────────────────────────────────────
+    // selectionMode 决定 TopAppBar 形态、列表项是否显示选中边框、Switch 是否禁用。
+    // selectedUrls 用 SnapshotStateList + rememberSaveable 双保险：
+    //   - SnapshotStateList：Compose 快照系统能追踪增减，LazyColumn item 里
+    //     `url in selectedUrls` 会随之 invalidate，单选 / 全选 UI 即时刷新。
+    //     之前用普通 MutableSet 时，列表大到需要复用 item 的场景下，除最近点过的
+    //     前两三张卡之外不会重绘，描边对不上选中状态。
+    //   - rememberSaveable + listSaver：旋转 / 进程死亡保留选中。
+    var selectionMode by rememberSaveable { mutableStateOf(false) }
+    val selectedUrls = rememberSaveable(
+        saver = listSaver<SnapshotStateList<String>, String>(
+            save = { it.toList() },
+            restore = { mutableStateListOf<String>().apply { addAll(it) } },
+        ),
+    ) { mutableStateListOf<String>() }
+    val selectedCount = selectedUrls.size
+    var showBatchDeleteDialog by remember { mutableStateOf(false) }
+    val exitSelection: () -> Unit = {
+        selectionMode = false
+        selectedUrls.clear()
+    }
+    val toggleSelect: (String) -> Unit = { url ->
+        if (url in selectedUrls) selectedUrls.remove(url) else selectedUrls.add(url)
+        if (selectedUrls.isEmpty()) selectionMode = false
+    }
+    // 系统返回键优先退出多选态；否则回到上层。
+    BackHandler(enabled = selectionMode) { exitSelection() }
 
     // File picker for importing local JSON files
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -98,6 +129,28 @@ fun BookSourceManageScreen(
             } catch (e: Exception) {
                 AppLog.error("SourceManage", "读取文件失败", e)
                 Toast.makeText(context, ErrorMessages.forUser("读取文件", e), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 导出 SAF — 触发时携带要导出的 url 集合：null 代表"导出全部"，非空代表"导出选中"。
+    // 用 var 在 launch 前先写入，回调里读取——CreateDocument 的回调是异步的，必须用
+    // state/字段把"上一次点击的导出范围"传过去。重置成 null 防止下次点"导出全部"被
+    // 上一次的"导出选中"集污染。
+    var pendingExportUrls by remember { mutableStateOf<Set<String>?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        uri?.let { viewModel.exportToUri(it, pendingExportUrls) }
+        pendingExportUrls = null
+    }
+    // exportResult 单事件流：成功显示导出条数，失败显示错误。LaunchedEffect 收一次即用。
+    LaunchedEffect(Unit) {
+        viewModel.exportResult.collect { result ->
+            result.onSuccess { count ->
+                Toast.makeText(context, "已导出 $count 个书源", Toast.LENGTH_SHORT).show()
+            }.onFailure { e ->
+                Toast.makeText(context, "导出失败：${e.message?.take(60)}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -152,7 +205,66 @@ fun BookSourceManageScreen(
     Scaffold(
         // UX-10：左缘水平拖动 → 返回
         modifier = Modifier.swipeBackEdge(onBack = onBack),
-        topBar = {
+        topBar = topBar@{
+            if (selectionMode) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            "已选 $selectedCount",
+                            fontWeight = FontWeight.Bold,
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = exitSelection) {
+                            Icon(Icons.Default.Close, "退出多选")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = {
+                            // 已在 selectedUrls 里的跳过，SnapshotStateList.addAll 不会自动去重。
+                            sortedSources.forEach { s ->
+                                if (s.bookSourceUrl !in selectedUrls) {
+                                    selectedUrls.add(s.bookSourceUrl)
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.SelectAll, "全选")
+                        }
+                        IconButton(
+                            onClick = {
+                                pendingExportUrls = selectedUrls.toSet()
+                                exportLauncher.launch("morealm_sources_${selectedCount}.json")
+                            },
+                            enabled = selectedCount > 0,
+                        ) {
+                            Icon(
+                                Icons.Default.FileDownload,
+                                "导出选中",
+                                tint = if (selectedCount > 0)
+                                    MaterialTheme.colorScheme.onSurface
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                            )
+                        }
+                        IconButton(
+                            onClick = { showBatchDeleteDialog = true },
+                            enabled = selectedCount > 0,
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                "删除选中",
+                                tint = if (selectedCount > 0)
+                                    MaterialTheme.colorScheme.error
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background),
+                )
+                return@topBar
+            }
             TopAppBar(
                 title = { Text("书源管理", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
@@ -256,6 +368,31 @@ fun BookSourceManageScreen(
                     }
                     IconButton(onClick = { showImportDialog = true }) {
                         Icon(Icons.Default.Add, "添加书源")
+                    }
+                    // Overflow 三点菜单：放低频操作，避免顶栏图标过多。当前只有"导出全部"
+                    // 一项；后续如增加"备份/还原书源"等长尾功能继续往这里塞。
+                    var overflowExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { overflowExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, "更多")
+                        }
+                        DropdownMenu(
+                            expanded = overflowExpanded,
+                            onDismissRequest = { overflowExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                leadingIcon = {
+                                    Icon(Icons.Default.FileDownload, null, modifier = Modifier.size(20.dp))
+                                },
+                                text = { Text("导出全部 (${sortedSources.size})") },
+                                enabled = sortedSources.isNotEmpty(),
+                                onClick = {
+                                    overflowExpanded = false
+                                    pendingExportUrls = null  // null = 全部
+                                    exportLauncher.launch("morealm_sources_${sortedSources.size}.json")
+                                },
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -427,11 +564,17 @@ fun BookSourceManageScreen(
                                 source = source,
                                 checkResult = checkResult,
                                 isLoggedIn = isLoggedIn,
+                                selected = source.bookSourceUrl in selectedUrls,
+                                selectionMode = selectionMode,
                                 onToggle = { viewModel.toggleSource(source) },
                                 onEdit = { editingSource = source },
                                 onDelete = { viewModel.deleteSource(source) },
                                 onLogin = { loginViewModel.showLoginDialog(source) },
                                 onLogout = { loginViewModel.logout(source) },
+                                onLongPress = {
+                                    if (!selectionMode) selectionMode = true
+                                    toggleSelect(source.bookSourceUrl)
+                                },
                             )
                         }
                     } else {
@@ -469,11 +612,17 @@ fun BookSourceManageScreen(
                                         source = source,
                                         checkResult = checkResult,
                                         isLoggedIn = isLoggedIn,
+                                        selected = source.bookSourceUrl in selectedUrls,
+                                        selectionMode = selectionMode,
                                         onToggle = { viewModel.toggleSource(source) },
                                         onEdit = { editingSource = source },
                                         onDelete = { viewModel.deleteSource(source) },
                                         onLogin = { loginViewModel.showLoginDialog(source) },
                                         onLogout = { loginViewModel.logout(source) },
+                                        onLongPress = {
+                                            if (!selectionMode) selectionMode = true
+                                            toggleSelect(source.bookSourceUrl)
+                                        },
                                     )
                                 }
                             }
@@ -596,58 +745,11 @@ fun BookSourceManageScreen(
         )
     }
 
-    // Login dialog and state handling
-    when (val state = loginUiState) {
-        is com.morealm.app.presentation.source.LoginUiState.ShowDialog -> {
-            SourceLoginDialog(
-                source = state.source,
-                fields = state.rows,
-                onDismiss = { loginViewModel.dismissDialog() },
-                onLogin = { fieldValues ->
-                    loginViewModel.login(state.source, fieldValues)
-                },
-                onActionJs = { actionJs, currentValues ->
-                    loginViewModel.runActionJs(state.source, actionJs, currentValues)
-                },
-                onNavigateToLog = onNavigateToLog,
-                uiPatchFlow = loginViewModel.uiPatch,
-                uiRebuildFlow = loginViewModel.uiRebuild,
-            )
-        }
-        is com.morealm.app.presentation.source.LoginUiState.ShowWebView -> {
-            WebViewLoginScreen(
-                source = state.source,
-                loginUrl = state.url,
-                headerMap = state.headerMap,
-                onDismiss = { loginViewModel.dismissDialog() },
-                onLoginComplete = {
-                    loginViewModel.dismissDialog()
-                    Toast.makeText(context, "登录完成", Toast.LENGTH_SHORT).show()
-                },
-            )
-        }
-        is com.morealm.app.presentation.source.LoginUiState.Loading -> {
-            AlertDialog(
-                onDismissRequest = {},
-                title = { Text("登录中") },
-                text = { Text(state.message) },
-                confirmButton = {},
-            )
-        }
-        is com.morealm.app.presentation.source.LoginUiState.Success -> {
-            LaunchedEffect(state) {
-                Toast.makeText(context, state.message, Toast.LENGTH_SHORT).show()
-                loginViewModel.dismissDialog()
-            }
-        }
-        is com.morealm.app.presentation.source.LoginUiState.Error -> {
-            LaunchedEffect(state) {
-                Toast.makeText(context, state.message, Toast.LENGTH_LONG).show()
-                loginViewModel.dismissDialog()
-            }
-        }
-        com.morealm.app.presentation.source.LoginUiState.Idle -> {}
-    }
+    // Login dialog and state handling —— 共享 overlay，阅读器、详情页同款。
+    SourceLoginOverlay(
+        loginViewModel = loginViewModel,
+        onNavigateToLog = onNavigateToLog,
+    )
 
     // ── #2 CheckSource 完成弹窗 ──
     val showInvalidDialog by viewModel.showInvalidResultsDialog.collectAsStateWithLifecycle()
@@ -661,29 +763,60 @@ fun BookSourceManageScreen(
             },
         )
     }
+
+    // ── 多选删除确认弹窗 ──────────────────────────────────────────
+    // 不止是 UX 问题：删书源不可逆，重手操作必须二次确认。
+    if (showBatchDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showBatchDeleteDialog = false },
+            title = { Text("删除选中书源") },
+            text = {
+                Text(
+                    "确定删除选中的 $selectedCount 个书源吗？此操作不可撤销。",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val snapshot = selectedUrls.toList()
+                    viewModel.deleteSources(snapshot)
+                    showBatchDeleteDialog = false
+                    exitSelection()
+                    Toast.makeText(
+                        context,
+                        "已删除 ${snapshot.size} 个书源",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchDeleteDialog = false }) { Text("取消") }
+            },
+        )
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SourceItem(
     source: BookSource,
     checkResult: CheckSource.CheckResult? = null,
     isLoggedIn: Boolean = false,
+    selected: Boolean = false,
+    selectionMode: Boolean = false,
     onToggle: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onLogin: () -> Unit = {},
     onLogout: () -> Unit = {},
+    onLongPress: (() -> Unit)? = null,
 ) {
     val moColors = LocalMoRealmColors.current
     var showMenu by remember { mutableStateOf(false) }
-    // ── 颜色动画降级到绘制层 ──
-    // 之前用 `val bgColor by animateColorAsState(...)` + `Surface(color = bgColor)`：
-    // 每帧 bgColor.value 变化都会让 SourceItem 整个 composable scope 重组（因为
-    // Surface 的 color 参数读取发生在 composition 阶段）。
-    //
-    // 现在保留 State<Color>（不解构 by），把 `.value` 的读取下沉到 drawBehind 的
-    // lambda —— drawBehind 只在 draw phase 触发，不参与 composition / layout，
-    // 颜色过渡的 16ms 帧只会跑 redraw 而非 recompose。
+    // 进入多选态时立即关闭已经打开的菜单，避免"点菜单弹出后紧跟长按进多选"残留
+    LaunchedEffect(selectionMode) { if (selectionMode) showMenu = false }
     val enabledColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val disabledColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
     val bgColorAnim = animateColorAsState(
@@ -691,16 +824,26 @@ private fun SourceItem(
         label = "sourceBg"
     )
     val shape = MaterialTheme.shapes.medium
+    val primary = MaterialTheme.colorScheme.primary
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .drawBehind { drawRect(bgColorAnim.value) },
+            .drawBehind { drawRect(bgColorAnim.value) }
+            .then(
+                if (selected) Modifier.border(2.dp, primary, shape) else Modifier
+            ),
     ) {
         Row(
             modifier = Modifier
-                .clickable { showMenu = !showMenu }
+                .combinedClickable(
+                    onClick = {
+                        if (selectionMode) onLongPress?.invoke()
+                        else showMenu = true
+                    },
+                    onLongClick = { onLongPress?.invoke() },
+                )
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -761,33 +904,100 @@ private fun SourceItem(
             }
             Switch(
                 checked = source.enabled,
-                onCheckedChange = { onToggle() },
+                onCheckedChange = if (selectionMode) null else { { onToggle() } },
+                enabled = !selectionMode,
                 colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier.padding(start = 8.dp),
             )
-            // Login button (only show if source has loginUrl)
+            // 登录状态 chip —— 仅当源配了 loginUrl 才显示。
+            //
+            // 为什么从 IconButton 改为 AssistChip：
+            //  - 原实现是一把 Lock/LockOpen 纯图标按钮，挤在 "开关 + 编辑 + 删除" 中间，
+            //    图形对比度低、用户认不出这是"登录"入口（设计走查里用户反馈："看不出小
+            //    锁的作用是登录"）。
+            //  - AssistChip 带文字标签"登录"/"已登录"，语义直白；未登录时 outlined 高对比，
+            //    已登录时带 ✓ + primary tint 次要化（对齐 M3 状态 chip 用法）。
+            //  - selectionMode 下整个 chip 禁用，避免多选中误触发登录流程。
             if (!source.loginUrl.isNullOrBlank()) {
-                IconButton(
-                    onClick = { if (isLoggedIn) onLogout() else onLogin() },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        if (isLoggedIn) Icons.Default.Lock else Icons.Default.LockOpen,
-                        if (isLoggedIn) "已登录" else "未登录",
-                        tint = if (isLoggedIn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                        modifier = Modifier.size(18.dp)
+                Spacer(Modifier.width(6.dp))
+                if (isLoggedIn) {
+                    AssistChip(
+                        onClick = { if (!selectionMode) onLogout() },
+                        enabled = !selectionMode,
+                        label = { Text("已登录", style = MaterialTheme.typography.labelSmall) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(AssistChipDefaults.IconSize),
+                            )
+                        },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            labelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            leadingIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        ),
+                        border = null,
+                    )
+                } else {
+                    AssistChip(
+                        onClick = { if (!selectionMode) onLogin() },
+                        enabled = !selectionMode,
+                        label = { Text("登录", style = MaterialTheme.typography.labelSmall) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.LockOpen,
+                                contentDescription = null,
+                                modifier = Modifier.size(AssistChipDefaults.IconSize),
+                            )
+                        },
                     )
                 }
             }
-            IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.Edit, "编辑",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.size(18.dp))
-            }
-            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.Delete, "删除",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                    modifier = Modifier.size(18.dp))
+            // 编辑 / 删除收进 overflow —— 之前它们各自占一个 32dp IconButton，和"登录"
+            // 并排在行尾，视觉密度过高且和低频场景错配（删除是很低频操作）。改为
+            // MoreVert + DropdownMenu：行点击也展开同款菜单，长按进多选，语义稳定。
+            Spacer(Modifier.width(4.dp))
+            Box {
+                IconButton(
+                    onClick = { if (!selectionMode) showMenu = true },
+                    enabled = !selectionMode,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "更多",
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("编辑") },
+                        leadingIcon = { Icon(Icons.Default.Edit, null) },
+                        onClick = {
+                            showMenu = false
+                            onEdit()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Delete,
+                                null,
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        },
+                        onClick = {
+                            showMenu = false
+                            onDelete()
+                        },
+                    )
+                }
             }
         }
     }

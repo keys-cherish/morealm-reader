@@ -5,10 +5,25 @@ import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
 
 /**
- * Reader style preset — controls all visual aspects of the reading experience.
+ * 阅读样式（排版预设）。
  *
- * Supports multiple presets that users can switch between.
- * Each preset stores day/night variants for background and text color.
+ * 历史包袱：早期版本的 5 个内置 preset（preset_paper / preset_green / 等）以**颜色**
+ * 区分（纸黄/护眼绿/海蓝等），所有"排版"字段全部用同一组默认值——结果"排版样式"
+ * 这个名字纯粹是误称，实际是"配色方案"。
+ *
+ * 重构后（v20）：
+ *  - **删除颜色字段** `bgColor / bgColorNight / textColor / textColorNight /`
+ *    `bgImageUri / bgImageUriNight / bgAlpha`（共 7 个）。颜色完全归 [ThemeEntity]
+ *    管理，阅读区背景图走 [com.morealm.app.domain.preference.AppPreferences]
+ *    的 `READER_BG_IMAGE_DAY / NIGHT` 两个 prefs key。
+ *  - **5 个内置 preset 重定义为真正的排版差异**：默认 / 紧凑 / 宽松 / 大字 / 文章。
+ *    保留原来的 id（preset_paper 等）避免 active_reader_style migration——只换 name
+ *    和排版字段值。老用户切到 preset_green 时从"绿色护眼"变成"紧凑"，UX 跳变不可避免。
+ *  - DB migration v19→v20 在 [com.morealm.app.di.AppModule] 里 drop 7 列 + 强刷
+ *    builtin preset 字段值，让老用户也能看到 5 个 preset 的排版差异（不动用户自定义）。
+ *
+ * 配色不再走本类 —— 用户想换阅读色，到设置 → 主题里挑一套，主题的 readerBackground /
+ * readerTextColor 字段就是阅读区颜色源。
  */
 @Serializable
 @Entity(tableName = "reader_styles")
@@ -17,16 +32,7 @@ data class ReaderStyle(
     val name: String = "默认",
     val sortOrder: Int = 0,
 
-    // ── Background ──
-    val bgColor: String = "#FFFDFBF7",
-    val bgColorNight: String = "#FF0A0A0F",
-    val bgImageUri: String? = null,
-    val bgImageUriNight: String? = null,
-    val bgAlpha: Int = 100,
-
     // ── Text ──
-    val textColor: String = "#FF2D2D2D",
-    val textColorNight: String = "#FFADADAD",
     val textSize: Int = 18,
     val fontFamily: String = "noto_serif_sc",
     val customFontUri: String? = null,
@@ -68,35 +74,46 @@ data class ReaderStyle(
     val isBuiltin: Boolean = false,
 ) {
     companion object {
+        /**
+         * 5 个内置排版预设。**仅排版差异**，颜色由主题决定。id 保留与历史版本一致避免
+         * active_reader_style migration（preset_paper / preset_green / preset_blue /
+         * preset_warm / preset_ink）；name 与字段值随之改成排版语义：
+         *  - **默认** (preset_paper)：通用基线，textSize=17 / lineHeight=2.0 / spacing=8
+         *  - **紧凑** (preset_green)：屏幕小或一次想看多内容，文字密集
+         *  - **宽松** (preset_blue)：阅读舒适度优先，行距段距更大
+         *  - **大字** (preset_warm)：长辈 / 小屏 / 视觉疲劳时用，字号 20
+         *  - **文章** (preset_ink)：模拟文章排版，段首缩进 4 空格 + 段间空行
+         */
         fun defaults(): List<ReaderStyle> = listOf(
             ReaderStyle(
-                id = "preset_paper", name = "纸质",
-                bgColor = "#FFFDFBF7", textColor = "#FF2D2D2D",
-                bgColorNight = "#FF0A0A0F", textColorNight = "#FFADADAD",
+                id = "preset_paper", name = "默认",
+                textSize = 17, lineHeight = 2.0f, paragraphSpacing = 8,
+                paddingLeft = 16, paddingRight = 16, paddingTop = 16, paddingBottom = 16,
                 isBuiltin = true, sortOrder = 0,
             ),
             ReaderStyle(
-                id = "preset_green", name = "护眼",
-                bgColor = "#FFE8F5E9", textColor = "#FF1B5E20",
-                bgColorNight = "#FF0D1A0D", textColorNight = "#FF81C784",
+                id = "preset_green", name = "紧凑",
+                textSize = 15, lineHeight = 1.6f, paragraphSpacing = 4,
+                paddingLeft = 12, paddingRight = 12, paddingTop = 12, paddingBottom = 12,
                 isBuiltin = true, sortOrder = 1,
             ),
             ReaderStyle(
-                id = "preset_blue", name = "海蓝",
-                bgColor = "#FFE3F2FD", textColor = "#FF0D47A1",
-                bgColorNight = "#FF0D1117", textColorNight = "#FF90CAF9",
+                id = "preset_blue", name = "宽松",
+                textSize = 17, lineHeight = 2.4f, paragraphSpacing = 12,
+                paddingLeft = 24, paddingRight = 24, paddingTop = 16, paddingBottom = 16,
                 isBuiltin = true, sortOrder = 2,
             ),
             ReaderStyle(
-                id = "preset_warm", name = "暖黄",
-                bgColor = "#FFFFF8E1", textColor = "#FF5D4037",
-                bgColorNight = "#FF1A1400", textColorNight = "#FFFFCC80",
+                id = "preset_warm", name = "大字",
+                textSize = 20, lineHeight = 2.0f, paragraphSpacing = 8,
+                paddingLeft = 16, paddingRight = 16, paddingTop = 16, paddingBottom = 16,
                 isBuiltin = true, sortOrder = 3,
             ),
             ReaderStyle(
-                id = "preset_ink", name = "墨白",
-                bgColor = "#FFFFFFFF", textColor = "#FF000000",
-                bgColorNight = "#FF000000", textColorNight = "#FFCCCCCC",
+                id = "preset_ink", name = "文章",
+                textSize = 17, lineHeight = 2.0f, paragraphSpacing = 16,
+                paragraphIndent = "    ",
+                paddingLeft = 20, paddingRight = 20, paddingTop = 20, paddingBottom = 20,
                 isBuiltin = true, sortOrder = 4,
             ),
         )

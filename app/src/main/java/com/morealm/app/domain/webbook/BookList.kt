@@ -5,6 +5,7 @@ import com.morealm.app.domain.analyzeRule.AnalyzeRule
 import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setCoroutineContext
 import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setRuleData
 import com.morealm.app.domain.analyzeRule.AnalyzeUrl
+import com.morealm.app.domain.analyzeRule.HtmlFormatter
 import com.morealm.app.domain.analyzeRule.RuleData
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.SearchBook
@@ -196,7 +197,11 @@ object BookList {
             coroutineContext.ensureActive()
             try { searchBook.latestChapterTitle = analyzeRule.getString(ruleLastChapter) } catch (_: Exception) {}
             coroutineContext.ensureActive()
-            try { searchBook.intro = analyzeRule.getString(ruleIntro) } catch (_: Exception) {}
+            try {
+                analyzeRule.getString(ruleIntro).let {
+                    if (it.isNotEmpty()) searchBook.intro = HtmlFormatter.format(it)
+                }
+            } catch (_: Exception) {}
             coroutineContext.ensureActive()
             try {
                 analyzeRule.getString(ruleCoverUrl).let {

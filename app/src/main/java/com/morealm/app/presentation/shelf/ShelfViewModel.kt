@@ -43,8 +43,20 @@ class ShelfViewModel @Inject constructor(
     private val databaseSeeder: com.morealm.app.domain.db.DatabaseSeeder,
     private val sourceRepo: SourceRepository,
     private val coverStorage: com.morealm.app.domain.cover.CoverStorage,
+    private val readStatsRepo: com.morealm.app.domain.repository.ReadStatsRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    // ── 今日阅读时长 ──
+    // 顶栏副文本要显示「今日已阅读 X 小时 Y 分钟」，从 read_stats 表里取今天那条。
+    // 与 ProfileStatsViewModel.todayReadMs 算法一致——都是按本地时区 yyyy-MM-dd 命中。
+    // 进程本地化是必要的：read_stats 写入时也用同一时区算 date 串，跨时区不会
+    // 错位。SharingStarted.Lazily 让 stats 只在 UI 订阅时才打开 DB Flow。
+    val todayReadMs: StateFlow<Long> = readStatsRepo.getRecent(7).map { stats ->
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        stats.find { it.date == today }?.readDurationMs ?: 0L
+    }.stateIn(viewModelScope, SharingStarted.Lazily, 0L)
 
     // ── Extracted Controllers ──
     val import = ShelfImportController(
@@ -259,6 +271,52 @@ class ShelfViewModel @Inject constructor(
             coverStorage.deleteCover(com.morealm.app.domain.cover.CoverKind.GROUP, folderId)
             bookRepo.deleteFolder(folderId)
             AppLog.info("Shelf", "Deleted folder: $folderId")
+        }
+    }
+
+    /**
+     * 批量删除分组（连同分组里的书一起从 DB 删除，但保留本地文件 / 封面文件以支持撤销）。
+     *
+     * 与单选 [deleteFolder] 的差异：
+     *  - 不调 [coverStorage.deleteCover]，分组封面 file 保留 → 撤销时显示完整
+     *  - auto: 前缀的分组照样写 ignore，避免下次"立即整理"又把它建回来；
+     *    [restoreFolders] 会把对应 ignore 移除。
+     *  - 与 batchDeleteSoft 同一思路（DB 立删，文件延迟），让 Snackbar 撤销期内零代价恢复。
+     */
+    fun batchDeleteFolders(folderIds: Set<String>) {
+        if (folderIds.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            folderIds.forEach { fid ->
+                val group = groupRepo.getById(fid)
+                if (group?.auto == true && fid.startsWith("auto:")) {
+                    prefs.addAutoFolderIgnored(fid.removePrefix("auto:"))
+                }
+                bookRepo.deleteFolder(fid)
+            }
+            AppLog.info("Shelf", "Batch deleted ${folderIds.size} folders (covers retained)")
+        }
+    }
+
+    /**
+     * 撤销批量删除分组：先 re-insert groups，再 re-insert 该批 books。
+     * auto: 分组同时把上一步写进 prefs 的 ignored tagId 撤掉，
+     * 否则下次"立即整理"还会把分组吃掉。
+     */
+    fun restoreFolders(groups: List<BookGroup>, books: List<Book>) {
+        if (groups.isEmpty() && books.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                groups.forEach { g ->
+                    groupRepo.insert(g)
+                    if (g.auto && g.id.startsWith("auto:")) {
+                        prefs.removeAutoFolderIgnored(g.id.removePrefix("auto:"))
+                    }
+                }
+                if (books.isNotEmpty()) bookRepo.insertAll(books)
+                AppLog.info("Shelf", "Restored ${groups.size} folders + ${books.size} books")
+            } catch (e: Exception) {
+                AppLog.warn("Shelf", "Restore folders failed: ${e.message}")
+            }
         }
     }
 

@@ -238,6 +238,98 @@ class LegadoImporterTest {
         assertFalse(g.auto) // 用户从 Legado 搬来的视为手动
     }
 
+    // ── filter: 空分组 ──────────────────────────────────────────────────────
+    //
+    // Legado 备份会把所有内置虚拟分组（IdAll/IdLocal/... 这些负数 groupId）
+    // 和用户自己建过但没分书的分组一并写进 bookGroup.json。MoRealm 不希望把
+    // 这些"看着是分组但里面 0 本书"的条目塞给用户（issue 反馈：进首页能看到
+    // 一堆"网络未分组/本地未分组/视频/音频"等空分组）。
+    //
+    // filterNonEmptyBookGroups 就是用来在写库前剔掉它们 —— 这几个 case 把
+    // Legado 几种位掩码场景都摊开测一遍，避免后续重构破坏。
+
+    @Test
+    fun `filterNonEmptyBookGroups should drop builtin virtual groups by negative groupId`() {
+        // Legado 内置虚拟分组：IdAll=-1, IdLocal=-2, IdAudio=-3, IdNetNone=-4,
+        // IdLocalNone=-5, IdVideo=-6, IdError=-11 — 全部应被剔除
+        val groups = listOf(
+            LegadoImporter.LegadoBookGroupDto(groupId = -1L, groupName = "全部"),
+            LegadoImporter.LegadoBookGroupDto(groupId = -2L, groupName = "本地"),
+            LegadoImporter.LegadoBookGroupDto(groupId = -4L, groupName = "网络未分组"),
+            LegadoImporter.LegadoBookGroupDto(groupId = -5L, groupName = "本地未分组"),
+            LegadoImporter.LegadoBookGroupDto(groupId = -11L, groupName = "更新失败"),
+            LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "用户自建"),
+        )
+        // 一本书属于 groupId=1（位掩码 0b1）
+        val books = listOf(LegadoImporter.LegadoBookDto(bookUrl = "u", name = "n", group = 1L))
+        val effective = LegadoImporter.filterNonEmptyBookGroups(books, groups)
+        assertEquals(1, effective.size)
+        assertEquals("用户自建", effective[0].groupName)
+    }
+
+    @Test
+    fun `filterNonEmptyBookGroups should drop user groups with zero book references`() {
+        val groups = listOf(
+            LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "有书的"),
+            LegadoImporter.LegadoBookGroupDto(groupId = 2L, groupName = "空着的"), // 用户建了但没书
+            LegadoImporter.LegadoBookGroupDto(groupId = 4L, groupName = "也是空"),
+        )
+        val books = listOf(
+            LegadoImporter.LegadoBookDto(bookUrl = "u1", name = "b1", group = 1L),
+            LegadoImporter.LegadoBookDto(bookUrl = "u2", name = "b2", group = 1L),
+        )
+        val effective = LegadoImporter.filterNonEmptyBookGroups(books, groups)
+        assertEquals(1, effective.size)
+        assertEquals("有书的", effective[0].groupName)
+    }
+
+    @Test
+    fun `filterNonEmptyBookGroups should recognize bitmask OR of multiple groups`() {
+        // Legado 一本书可以同时属于多个分组：book.group = groupId1 or groupId2
+        // 比如 group=5 (0b101) 表示属于 groupId=1 (0b1) 和 groupId=4 (0b100)
+        val groups = listOf(
+            LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "A"),
+            LegadoImporter.LegadoBookGroupDto(groupId = 2L, groupName = "B"), // 0b10 — 没人引用
+            LegadoImporter.LegadoBookGroupDto(groupId = 4L, groupName = "C"),
+            LegadoImporter.LegadoBookGroupDto(groupId = 8L, groupName = "D"),
+        )
+        val books = listOf(
+            // 同时属于 A(1) 和 C(4)
+            LegadoImporter.LegadoBookDto(bookUrl = "u1", name = "b1", group = 5L),
+            // 只属于 D(8)
+            LegadoImporter.LegadoBookDto(bookUrl = "u2", name = "b2", group = 8L),
+        )
+        val effective = LegadoImporter.filterNonEmptyBookGroups(books, groups)
+        // A / C / D 都该保留，只有 B 被剔除
+        val names = effective.map { it.groupName }.toSet()
+        assertEquals(setOf("A", "C", "D"), names)
+    }
+
+    @Test
+    fun `filterNonEmptyBookGroups should return empty when books list is empty`() {
+        val groups = listOf(
+            LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "孤立分组"),
+        )
+        // 没书 → 没人引用任何分组 → 全部剔除（避免给用户搬一堆空分组）
+        val effective = LegadoImporter.filterNonEmptyBookGroups(emptyList(), groups)
+        assertTrue(effective.isEmpty())
+    }
+
+    @Test
+    fun `filterNonEmptyBookGroups should preserve original order of effective groups`() {
+        val groups = listOf(
+            LegadoImporter.LegadoBookGroupDto(groupId = 4L, groupName = "C", order = 0),
+            LegadoImporter.LegadoBookGroupDto(groupId = 2L, groupName = "B-empty", order = 1),
+            LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "A", order = 2),
+        )
+        val books = listOf(
+            LegadoImporter.LegadoBookDto(bookUrl = "u1", name = "b1", group = 1L or 4L),
+        )
+        val effective = LegadoImporter.filterNonEmptyBookGroups(books, groups)
+        // C 出现在 A 前面（保持入参顺序，不重排）
+        assertEquals(listOf("C", "A"), effective.map { it.groupName })
+    }
+
     // ── mapper: ReplaceRule ──────────────────────────────────────────────────
 
     @Test

@@ -51,6 +51,37 @@ data class TextPos(
 
 enum class PageDirection { NONE, PREV, NEXT }
 
+/**
+ * 阅读方向 / 排版方向。
+ *
+ * - [HORIZONTAL]：传统横排——行从上到下、字从左到右。中文 / 英文默认。
+ * - [VERTICAL_RL]：竖排（右起）——列从右到左、字从上到下。日文常见、古典中文常见。
+ *
+ * 选择影响：
+ *   1. [ChapterProvider.layoutChapter] / [ChapterProvider.layoutChapterAsync]
+ *      的排版算法（横排走 setTypeText / setTypeImage 流，竖排走 setTypeTextVertical 流）。
+ *   2. [com.morealm.app.ui.reader.renderer.PageContentDrawer.drawPageContent]
+ *      的渲染路径（横排按行画、竖排按列从右到左画）。
+ *   3. 在竖排模式下，[TextLine] 与 [TextColumn] 的字段语义被重新解读：
+ *      - [TextLine.lineTop] / [TextLine.lineBottom] 仍是 Y 坐标，但表示「整列」从上到下的范围；
+ *      - 新增 [TextLine.columnLeftX] / [TextLine.columnRightX] 表示「列在页面里的左右 X 边界」；
+ *      - [TextColumn.start] / [TextColumn.end] 在竖排下表示「字在列内的 Y 上下边界」（不是 X）；
+ *      - [TextColumn.rotate90] 仅竖排下生效，true 表示该字符在画时需绕中心 rotate 90°。
+ *
+ * Phase 2（本次实现）只支持 SLIDE/COVER/NONE 翻页模式（HorizontalPager 内每页竖排）。
+ * Phase 3 会扩展 ScrollPager / SimulationReadView 的竖排适配（参见 design doc）。
+ */
+enum class ReadingDirection { HORIZONTAL, VERTICAL_RL }
+
+/**
+ * 偏好字符串 → enum。落库的 prefs.readingDirection 是 "horizontal" / "vertical_rl"，
+ * 这里集中做反序列化避免散落 if/else。
+ */
+fun String?.toReadingDirection(): ReadingDirection = when (this) {
+    "vertical_rl" -> ReadingDirection.VERTICAL_RL
+    else -> ReadingDirection.HORIZONTAL
+}
+
 // ── Column hierarchy ──
 
 sealed interface BaseColumn {
@@ -68,11 +99,30 @@ sealed interface TextBaseColumn : BaseColumn {
 
 data class TextColumn(
     override var charData: String,
+    /**
+     * 主轴坐标起始：
+     *  - 横排：字符的 X 左边界
+     *  - 竖排：字符在列内的 Y 上边界
+     * （二义性是为了让一份字段服务两种排版方向，绘制路径必须根据
+     * `textLine.parent.readingDirection` 才能解释。详见 [ReadingDirection] 文档。）
+     */
     override var start: Float,
+    /**
+     * 主轴坐标终止：
+     *  - 横排：字符的 X 右边界
+     *  - 竖排：字符在列内的 Y 下边界
+     */
     override var end: Float,
     override var selected: Boolean = false,
     override var isSearchResult: Boolean = false,
     override var textLine: TextLine? = null,
+    /**
+     * 仅竖排有效：true 表示画该字符时绕字心 rotate 90°（顺时针）。
+     * 用于「连续 ≥3 个 ASCII 数字/字母」(tate-chu-yoko 长串) / 全角破折号 / 卧排标点
+     * 等需要侧着画的字符。横排忽略。Phase 2 默认 false（基础场景），tate-chu-yoko 表
+     * 与精细标点处理在 Task #5 接入。
+     */
+    var rotate90: Boolean = false,
 ) : TextBaseColumn
 
 data class TextHtmlColumn(
@@ -145,6 +195,18 @@ class TextLine(
     var extraLetterSpacing: Float = 0f
     var extraLetterSpacingOffsetX: Float = 0f
     var exceed: Boolean = false
+
+    // ── 竖排专用 ─────────────────────────────────────────────────────────
+    // 竖排下一个 TextLine 表示「页面上的一列」。lineTop / lineBase / lineBottom
+    // 仍是 Y 坐标（列从上画到下），但 columnLeftX / columnRightX 是列在页面
+    // 里的 X 范围，绘制时画在 (columnLeftX..columnRightX) 区间居中。横排下
+    // 这两个字段保持 0 不参与绘制。
+
+    /** 竖排：列在页面里的左 X 边界（含 padding）。横排忽略。 */
+    var columnLeftX: Float = 0f
+
+    /** 竖排：列在页面里的右 X 边界（columnLeftX + 列宽）。横排忽略。 */
+    var columnRightX: Float = 0f
 
     val charSize: Int get() = columns.sumOf {
         if (it is TextBaseColumn) it.charData.length else 0
@@ -397,6 +459,11 @@ class TextChapter(
     val chapterIndex: Int,
     val title: String,
     val chaptersSize: Int,
+    /**
+     * 整章使用的排版方向。同一章一旦排版完成，方向不再变化——切换偏好需要
+     * 触发整章重排（CanvasRenderer 通过把 readingDirection 纳入 cacheKey 实现）。
+     */
+    val readingDirection: ReadingDirection = ReadingDirection.HORIZONTAL,
 ) {
     private val pageLock = Any()
     private val textPages = arrayListOf<TextPage>()
@@ -595,6 +662,25 @@ class TextChapter(
         val EMPTY = TextChapter(-1, "", 0).apply { isCompleted = true }
     }
 }
+
+/**
+ * 竖排排版下「上下文初始化时一次性算好的几何量」，避免在 setTypeTextVertical 内反复重算。
+ * 使用方便丢给 ChapterProvider 内部用。
+ */
+internal data class VerticalLayoutMetrics(
+    /** 页面正文区域宽（= viewWidth - paddingLeft - paddingRight）。 */
+    val visibleWidth: Int,
+    /** 页面正文区域高（= viewHeight - paddingTop - paddingBottom）。 */
+    val visibleHeight: Int,
+    /** 单字格宽（= contentPaint.textHeight + 列间距），即「列的 X 跨度」。 */
+    val columnWidth: Float,
+    /** 单字格高（= contentPaint.textHeight × 行高比例），即列内字符的 Y 步进。 */
+    val charHeight: Float,
+    /** 一列最多多少个字（visibleHeight / charHeight 取整）。至少 1。 */
+    val charsPerColumn: Int,
+    /** 一页最多多少列（visibleWidth / columnWidth 取整）。至少 1。 */
+    val columnsPerPage: Int,
+)
 
 // ── AsyncLayoutHandle ──
 

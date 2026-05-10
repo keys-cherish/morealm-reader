@@ -11,7 +11,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 
 /**
  * 书源导入器 - 解析 JSON 格式书源并转换为 [BookSource] 实体。
@@ -162,13 +166,38 @@ object BookSourceImporter {
                 emptyList()
             }
         }
-        // 包装：在常见 key 里找数组 / 对象。
+        // ── 第三方书源服务错误 envelope ──────────────────────────────────
+        // shuyuan-api.yiove.com 等导入分享服务在 backend 故障时仍返回 HTTP 200，
+        // body = `{"code":500, "message":"...", "data":null}`。如果不识别会一路
+        // 走到下面 WRAPPER_KEYS 循环，碰到 `"data": null` 递归到 decodeElement，
+        // JsonNull 既不是 Array 也不是 Object 导致报「顶层既不是数组也不是对象」——
+        // 用户根本想不到错误来自上游服务器。这里早识别一下。
+        //
+        // 判定条件：有 code 字段且值是非 0/200 的整数 → 视作错误 envelope，
+        // 把 message 字段透到 UI。Legado 自家书源对象不会有 code 字段，所以不会误判。
+        val codeNum = (obj["code"] as? JsonPrimitive)?.intOrNull
+        if (codeNum != null && codeNum != 0 && codeNum != 200) {
+            val message = (obj["message"] as? JsonPrimitive)?.contentOrNull
+                ?: (obj["msg"] as? JsonPrimitive)?.contentOrNull
+                ?: (obj["error"] as? JsonPrimitive)?.contentOrNull
+            val msg = "上游服务器错误 (code=$codeNum)" +
+                if (!message.isNullOrBlank()) "：$message" else ""
+            AppLog.warn("SourceImport", msg)
+            lastImportError = msg
+            return emptyList()
+        }
+        // 包装：在常见 key 里找数组 / 对象。JsonNull 跳过——常见服务在 "data" / "list"
+        // 字段放 null 表示无数据，不应递归到 else 分支报"顶层既不是数组也不是对象"。
         for (key in WRAPPER_KEYS) {
             val nested = obj[key] ?: continue
+            if (nested is JsonNull) {
+                AppLog.info("SourceImport", "包装键 \"$key\" 值为 null，跳过")
+                continue
+            }
             AppLog.info("SourceImport", "检测到包装键 \"$key\"，解包")
             return decodeElement(nested)
         }
-        val msg = "对象既无 bookSourceUrl，也未找到 ${WRAPPER_KEYS.joinToString("/")}, 等包装键"
+        val msg = "对象既无 bookSourceUrl，也未找到 ${WRAPPER_KEYS.joinToString("/")} 等包装键"
         AppLog.warn("SourceImport", msg)
         lastImportError = msg
         return emptyList()

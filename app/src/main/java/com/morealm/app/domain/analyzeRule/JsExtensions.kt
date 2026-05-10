@@ -688,8 +688,21 @@ object JsExtensions {
             "JsExtensions",
             "startBrowser requested by source '${getSource()?.bookSourceName ?: ""}': $title $url",
         )
-        if (html != null) {
-            webView(html, url, null)
+        // MoRealm 当前没有 Legado 那种交互式 WebView Activity (SourceVerificationDialog)；
+        // 退而用后台 WebView 跑一次页面，让 cookie 通过 onPageFinished 写回 CookieStore
+        // —— 能覆盖「自动跑 JS 写 cookie」类的源；图形验证码 / 扫码登录暂不支持，
+        // 后续做交互式 WebView 时改造此方法。
+        runCatching {
+            runBlocking {
+                com.morealm.app.domain.http.BackstageWebView(
+                    url = url,
+                    html = html,
+                    tag = getSource()?.bookSourceUrl,
+                    persistCookie = true,
+                ).getStrResponse()
+            }
+        }.onFailure {
+            AppLog.warn("JsExtensions", "startBrowser fallback failed: ${it.message?.take(80)}")
         }
     }
 
@@ -708,14 +721,28 @@ object JsExtensions {
     fun startBrowserAwait(url: String, title: String, refetchAfterSuccess: Boolean, html: String?): StrResponse {
         AppLog.warn(
             "JsExtensions",
-            "startBrowserAwait fallback for source '${getSource()?.bookSourceName ?: ""}': $title $url",
+            "startBrowserAwait fallback (no UI) for '${getSource()?.bookSourceName ?: ""}': $title $url",
         )
-        val body = if (html != null) {
-            webView(html, url, null)
-        } else {
-            connect(url).body
+        // 关键变更：旧实现 html 为空时走 connect(url).body 直 GET，**cookie 不会写回**——
+        // 这就是大量 Legado 书源迁过来"以为登录成功实际没登录"的根因。改走 BackstageWebView
+        // 让 onPageFinished 把 cookie 持久化到 CookieStore，下一次请求就能自动带上。
+        // 仍然没有用户交互能力（弹不出可见 WebView），所以图形验证码 / 滑块 / 扫码类源
+        // 还是会失败——这部分等交互式 WebView Activity 落地再补。
+        return runCatching {
+            runBlocking {
+                com.morealm.app.domain.http.BackstageWebView(
+                    url = url,
+                    html = html,
+                    tag = getSource()?.bookSourceUrl,
+                    persistCookie = true,
+                ).getStrResponse()
+            }
+        }.getOrElse { e ->
+            AppLog.warn("JsExtensions", "startBrowserAwait failed, fall back to direct GET: ${e.message?.take(80)}")
+            // BackstageWebView 出错（比如某些源 WebView 挂掉）兜底回直 GET，至少有内容返回
+            // 不至于让脚本因 NPE 全挂；cookie 这次拿不到只能下次再试
+            StrResponse(url, connect(url).body)
         }
-        return StrResponse(url, body)
     }
 
     fun openVideoPlayer(url: String, title: String) {

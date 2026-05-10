@@ -19,6 +19,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -36,6 +37,8 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -63,6 +66,8 @@ import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.entity.displayTitle
 import com.morealm.app.domain.entity.isAutoSplitChapter
 import com.morealm.app.presentation.reader.ReaderSearchController
+import com.morealm.app.presentation.source.SourceLoginViewModel
+import com.morealm.app.ui.source.SourceLoginOverlay
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.ui.theme.MoRealmColors
@@ -95,6 +100,11 @@ fun ReaderScreen(
     onNavigateToFontManager: () -> Unit = {},
     themeViewModel: ThemeViewModel? = null,
     viewModel: ReaderViewModel = hiltViewModel(),
+    /**
+     * 共享的书源登录 VM。走 hiltViewModel() 默认行为：不同调用方传 key 不同，这里不传
+     * key 即 Activity 级单例，和 BookSourceManageScreen / 详情页共用登录状态机。
+     */
+    loginViewModel: SourceLoginViewModel = hiltViewModel(),
 ) {
     val book by viewModel.book.collectAsStateWithLifecycle()
     val chapters by viewModel.chapters.collectAsStateWithLifecycle()
@@ -132,6 +142,13 @@ fun ReaderScreen(
     val showSettings by viewModel.showSettingsPanel.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
+    // ── 排版方向偏好 ──
+    // 唯一被 ReaderScreen 关心的用法：在下方挑选 CanvasRenderer (横排)
+    // 还是 VerticalReaderView (竖排) 渲染。绝不传给 CanvasRenderer——
+    // 横排 6 个翻页动画路径对竖排无感知，避免后期维护地狱（详见
+    // VerticalReaderView 顶部注释）。
+    val readingDirectionStr by viewModel.settings.readingDirection.collectAsStateWithLifecycle()
+    val isVerticalReading = readingDirectionStr == "vertical_rl"
     val fontFamily by viewModel.settings.fontFamily.collectAsStateWithLifecycle()
     val fontSize by viewModel.settings.fontSize.collectAsStateWithLifecycle()
     val lineHeight by viewModel.settings.lineHeight.collectAsStateWithLifecycle()
@@ -140,6 +157,10 @@ fun ReaderScreen(
     val nextBookPrompt by viewModel.nextBookPrompt.collectAsStateWithLifecycle()
     val navigateDirection by viewModel.navigateDirection.collectAsStateWithLifecycle()
     var pageTurnCommand by remember { mutableStateOf<ReaderPageDirection?>(null) }
+    // Compose 的 onKeyEvent 只会从 focused composable 沿 focus traversal 冒泡，
+    // 没有 focusable + requestFocus，物理键盘 / 音量键 / 蓝牙翻页器全部都收不到。
+    // 这里挂在阅读器根 Box 上 + 启动时 requestFocus，是阅读场景下唯一稳的方式。
+    val keyFocus = remember { FocusRequester() }
     val customFontUri by viewModel.settings.customFontUri.collectAsStateWithLifecycle()
     val customFontName by viewModel.settings.customFontName.collectAsStateWithLifecycle()
     val readerTypeface by viewModel.settings.currentTypeface.collectAsStateWithLifecycle()
@@ -156,41 +177,10 @@ fun ReaderScreen(
     val marginHorizontal by viewModel.settings.marginHorizontal.collectAsStateWithLifecycle()
     val marginTopVal by viewModel.settings.marginTop.collectAsStateWithLifecycle()
     val marginBottomVal by viewModel.settings.marginBottom.collectAsStateWithLifecycle()
-    /**
-     * 页边距 preview state — 拖动滑块期间的临时值，仅在 Compose state 内流转，
-     * 不写 Room、不触 StateFlow。`null` 表示该方向"未在拖动中"，回退到上面的 StateFlow 值。
-     *
-     * 拖动 onValueChange   → 写 preview，触发 CanvasRenderer 重组与重新分页
-     * 拖动 onValueChangeFinished → 写 Room；preview **不立刻清**，等下面的
-     *     LaunchedEffect 看到 StateFlow 已经反映目标值后再清——避免「立刻清 →
-     *     effective 掉回 StateFlow 旧值 → 一帧后 StateFlow emit 新值」造成 thumb
-     *     先弹回旧位置再跳到新位置（用户看到「松手回弹然后恢复」）。
-     */
-    var marginPreviewH by remember { mutableStateOf<Int?>(null) }
-    var marginPreviewT by remember { mutableStateOf<Int?>(null) }
-    var marginPreviewB by remember { mutableStateOf<Int?>(null) }
-    val effectiveMarginH = marginPreviewH ?: marginHorizontal
-    val effectiveMarginT = marginPreviewT ?: marginTopVal
-    val effectiveMarginB = marginPreviewB ?: marginBottomVal
-    // 清 preview 的延迟逻辑：当 StateFlow 真值流到等于 preview 时，preview 已经
-    // 没有意义（effective 值不变），此时清 preview 让单一来源回到 StateFlow，
-    // 用户视觉上没有任何跳动。提交后 Room 写入 + activeStyle emit 通常 < 50ms，
-    // 体感上就是「松手即定」。
-    LaunchedEffect(marginHorizontal, marginPreviewH) {
-        if (marginPreviewH != null && marginHorizontal == marginPreviewH) {
-            marginPreviewH = null
-        }
-    }
-    LaunchedEffect(marginTopVal, marginPreviewT) {
-        if (marginPreviewT != null && marginTopVal == marginPreviewT) {
-            marginPreviewT = null
-        }
-    }
-    LaunchedEffect(marginBottomVal, marginPreviewB) {
-        if (marginPreviewB != null && marginBottomVal == marginPreviewB) {
-            marginPreviewB = null
-        }
-    }
+    // 设计：边距 slider **松手才生效**——CanvasRenderer 的 reflow 是 onCompleted
+    // 才 atomic swap 的设计，拖动期间高频重排会被取消重启永远完不成；改为松手生效
+    // 后体验明确：thumb 跟手移动 + 数值实时刷新（Slider 内部本地 state），松手内容
+    // 才重排一次。effectiveMargin* 直接 = StateFlow 值，无需 preview 派生。
     val autoPageInterval by viewModel.autoPageInterval.collectAsStateWithLifecycle()
     // ttsChapterPosition 不在这里 collect —— 段切高频更新会触发整个 ReaderScreen
     // 重组（贴文里的「重组风暴」）。下沉到 [ReadAloudPositionScope] 这个 leaf
@@ -406,6 +396,8 @@ fun ReaderScreen(
             .fillMaxSize()
             .background(moColors.readerBackground)
             .semantics { contentDescription = "阅读器" }
+            .focusRequester(keyFocus)
+            .focusable()
             .onKeyEvent { event ->
                 // 物理按键翻页处理。两个开关分别管两组键：
                 //   - 音量键 (VOLUME_UP/DOWN)：受 volumeKeyPage 管
@@ -517,6 +509,15 @@ fun ReaderScreen(
                 true
             }
     ) {
+        // 阅读器进入 / 任一菜单关闭后重新拿焦点，确保物理键盘 / 音量键 / 蓝牙翻页器
+        // 一直能进 onKeyEvent。搜索 / 书签等弹层会带 EditText 抢焦点，关闭时不会自动还。
+        val anyMenuOpenForFocus = showControls || showSettings || showTtsPanel ||
+            showChapterList || showBookmarks || showFullSearch
+        LaunchedEffect(anyMenuOpenForFocus) {
+            if (!anyMenuOpenForFocus) {
+                runCatching { keyFocus.requestFocus() }
+            }
+        }
         // WebView reader content — handles all touch events internally via JS
         // Resolve reader colors: activeStyle overrides theme defaults
         val isNight = moColors.isNight
@@ -530,12 +531,13 @@ fun ReaderScreen(
         // Resolve background image priority:
         // 1. Per-style customBgImage (from reader bottom panel)
         // 2. Global day/night bg image (from Reading Settings)
-        // 3. Per-style bgImageUri/bgImageUriNight
+        //
+        // 老版本有第 3 层 fallback：activeStyle?.bgImageUri / bgImageUriNight。但这
+        // 两个字段在 v29 已经从 ReaderStyle 删除（颜色/背景图职责归 prefs / 主题），
+        // 现在只剩两层。
         val readerBgImage = customBgImage.ifEmpty {
             val globalBg = if (isNight) readerBgImageNight else readerBgImageDay
-            globalBg.ifEmpty {
-                (if (isNight) activeStyle?.bgImageUriNight else activeStyle?.bgImageUri) ?: ""
-            }
+            globalBg
         }
         val themeCss = activeTheme?.customCss.orEmpty()
         val currentStyle = activeStyle
@@ -556,7 +558,44 @@ fun ReaderScreen(
 
         // Keep the last real reader surface on screen. During initial loading, avoid rendering
         // a synthetic 1/1 empty chapter that shows up as a visible white/loading flicker in LDPlayer.
-        if (displayContent.isNotBlank()) {
+        if (displayContent.isNotBlank() && isVerticalReading) {
+            // ── 竖排版独立路径 ──
+            // 完全跳过 CanvasRenderer / 6 个翻页动画机制，走独立的 VerticalReaderView。
+            // 该组件内部用 HorizontalPager(reverseLayout=true) 自管翻页，drawer 走
+            // drawPageContentVertical（OpenType vert 字形），所有横排专属逻辑（选区 /
+            // 高亮 / TTS / 仿真翻页 / 滚动 / 多列 layout）在 Phase 2 不接入——
+            // 这是「不跟动画耦合」承诺的实现方式。
+            //
+            // ReadAloudPositionScope 也跳过：竖排 Phase 2 不画 TTS 段高亮（drawer
+            // 不支持）。以后做竖排 TTS 时再单独引入对应的位置缩进作用域。
+            com.morealm.app.ui.reader.vertical.VerticalReaderView(
+                chapterTitle = chapters.getOrNull(currentIndex)?.displayTitle(book) ?: renderedChapter.title,
+                chapterIndex = renderedChapter.index,
+                chaptersSize = chapters.size,
+                content = displayContent,
+                backgroundColor = readerBg,
+                textColor = readerFg,
+                accentColor = MaterialTheme.colorScheme.primary,
+                fontSize = readerFontSize,
+                lineHeight = readerLineHeight,
+                typeface = readerTypeface,
+                paddingLeft = marginHorizontal,
+                paddingRight = marginHorizontal,
+                paddingTop = marginTopVal,
+                paddingBottom = marginBottomVal,
+                initialChapterPosition = renderedChapter.initialChapterPosition,
+                restoreToken = renderedChapter.restoreToken,
+                pageAnimType = pageAnim.toPageAnimType(),
+                onProgressRestored = { viewModel.clearNavigateDirection() },
+                onTapCenter = { viewModel.toggleControls() },
+                onProgress = { pct -> viewModel.updateScrollProgress(pct) },
+                onVisiblePageChanged = { idx, title, progress, chapterPosition ->
+                    viewModel.onVisiblePageChanged(idx, title, progress, chapterPosition)
+                },
+                onNextChapter = { viewModel.nextChapter() },
+                onPrevChapter = { viewModel.prevChapter() },
+            )
+        } else if (displayContent.isNotBlank()) {
             // 把 ttsChapterPosition 的 collect 收敛进这个 leaf composable —— 段切
             // 时只重组 [ReadAloudPositionScope] 自己 + 内部 lambda 里的 CanvasRenderer
             // 调用，不再让外层 ReaderScreen 整体 recompose。CanvasRenderer 自身的
@@ -577,10 +616,10 @@ fun ReaderScreen(
                 fontSize = readerFontSize,
                 lineHeight = readerLineHeight,
                 typeface = readerTypeface,
-                paddingHorizontal = effectiveMarginH,
-                paddingVertical = effectiveMarginT, // legacy fallback；下面 paddingTop/Bottom 优先
-                paddingTop = effectiveMarginT,
-                paddingBottom = effectiveMarginB,
+                paddingHorizontal = marginHorizontal,
+                paddingVertical = marginTopVal, // legacy fallback；下面 paddingTop/Bottom 优先
+                paddingTop = marginTopVal,
+                paddingBottom = marginBottomVal,
                 bgImageUri = readerBgImage,
                 startFromLastPage = navigateDirection < 0,
                 initialProgress = renderedChapter.initialProgress,
@@ -818,8 +857,11 @@ fun ReaderScreen(
                     viewModel.setAutoPageInterval(next)
                 },
                 // #3 全书拖动：(章号, 章内%) → loadChapter restoreProgress
+                // 不在这里 hideControls：onSeekFullBook 在拖动期间会被「跨章预览」
+                // (ReaderControlBar 内的 conflate worker) 反复触发，每次都 hide 会让
+                // 整个浮层（菜单栏 + slider）拖到一半消失，用户彻底没法继续拖。
+                // 用户拖完想关 controls 自己点屏幕中央就行。
                 onSeekFullBook = { idx, withinPct ->
-                    viewModel.hideControls()
                     viewModel.loadChapter(idx, restoreProgress = withinPct)
                 },
                 // #3 拖动预览：取目标章节标题（包含 TXT 自动分章 displayTitle 逻辑）
@@ -906,20 +948,15 @@ fun ReaderScreen(
                 onBrightnessChange = viewModel::setReaderBrightness,
                 paragraphSpacing = paragraphSpacing,
                 onParagraphSpacingChange = viewModel.settings::setParagraphSpacing,
-                marginHorizontal = effectiveMarginH,
-                onMarginHorizontalPreview = { marginPreviewH = it },
+                marginHorizontal = marginHorizontal,
                 onMarginHorizontalCommit = { v ->
                     viewModel.settings.setMarginHorizontal(v)
-                    // preview 不立刻清——靠上面的 LaunchedEffect 等 StateFlow 真值
-                    // 流到 v 后再清，避免松手时 thumb 弹回旧值。
                 },
-                marginTop = effectiveMarginT,
-                onMarginTopPreview = { marginPreviewT = it },
+                marginTop = marginTopVal,
                 onMarginTopCommit = { v ->
                     viewModel.settings.setMarginTop(v)
                 },
-                marginBottom = effectiveMarginB,
-                onMarginBottomPreview = { marginPreviewB = it },
+                marginBottom = marginBottomVal,
                 onMarginBottomCommit = { v ->
                     viewModel.settings.setMarginBottom(v)
                 },
@@ -1114,6 +1151,46 @@ fun ReaderScreen(
                 .navigationBarsPadding()
                 .padding(bottom = 8.dp)
         )
+
+        // ── B1：书源登录引导 Snackbar ──
+        //
+        // ReaderChapterController 检测到章节 / 目录加载失败且疑似登录原因时，通过
+        // loginPrompt SharedFlow 推出对应的 BookSource。我们 collect 它，弹
+        // Snackbar 带 "去登录" action 直接拉起 loginViewModel.showLoginDialog，
+        // 把"阅读中发现需登录 → 去哪登录"的几步跳转压缩成一次点击。
+        //
+        // 同源 5s 去抖：否则翻页连遇失败章会连弹 —— 用 lastSourceUrl 记忆上次源，
+        // 同源在 LocalTime 5s 内复发的事件直接丢弃。
+        val snackbarHostState = remember { SnackbarHostState() }
+        val scope = rememberCoroutineScope()
+        LaunchedEffect(Unit) {
+            var lastUrl: String? = null
+            var lastAtMs = 0L
+            viewModel.loginPrompt.collect { source ->
+                val now = System.currentTimeMillis()
+                if (source.bookSourceUrl == lastUrl && now - lastAtMs < 5_000L) return@collect
+                lastUrl = source.bookSourceUrl
+                lastAtMs = now
+                val result = snackbarHostState.showSnackbar(
+                    message = "《${source.bookSourceName}》加载失败，可能需要登录",
+                    actionLabel = "去登录",
+                    duration = SnackbarDuration.Long,
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    scope.launch { loginViewModel.showLoginDialog(source) }
+                }
+            }
+        }
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 48.dp), // 留给 TtsErrorSnackbarHost 的空间
+        )
+
+        // 登录流程 UI —— 直接复用书源管理页同款 overlay，避免阅读器内另起一套。
+        SourceLoginOverlay(loginViewModel = loginViewModel)
     }
 }
 

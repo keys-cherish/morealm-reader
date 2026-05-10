@@ -7,6 +7,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.Book
+import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.Bookmark
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.preference.AppPreferences
@@ -214,6 +215,20 @@ class ReaderViewModel @Inject constructor(
                 runCatching { bookRepo.clearLastCheckCount(bookId) }
             }
         }
+
+        // 登录脚本反向刷新通道：登录完成后脚本调 `java.refreshBookToc / refreshContent` 时，
+        // 让当前阅读器立刻重拉目录 / 正文。两条事件都靠当前打开的 book 来决定"哪本书要刷"，
+        // 所以即使多个书的源同时登录，也只有当前书响应。
+        viewModelScope.launch {
+            com.morealm.app.domain.source.SourceLoginRefreshBus.bookToc.collect {
+                chapter.refreshTocFromSource()
+            }
+        }
+        viewModelScope.launch {
+            com.morealm.app.domain.source.SourceLoginRefreshBus.content.collect {
+                chapter.reloadCurrentChapter()
+            }
+        }
     }
 
     // ── Forwarded StateFlows (for backward compatibility with ReaderScreen) ──
@@ -243,6 +258,14 @@ class ReaderViewModel @Inject constructor(
     /** 同上，title 路径。 */
     val hitTitleRules: StateFlow<List<com.morealm.app.domain.entity.ReplaceRule>> = chapter.hitTitleRules
 
+    /**
+     * 阅读器内触发"去登录"的事件流。ReaderChapterController 检测到章节/目录加载
+     * 失败且疑似登录问题时 emit 出对应源；ReaderScreen collect 后用 Snackbar 把
+     * 入口送到用户眼前，避免用户要返回到书源管理页去找登录。
+     */
+    val loginPrompt: SharedFlow<BookSource> =
+        chapter.loginPrompt
+
     // ── UI-only state (stays in ViewModel) ──
     private val _showControls = MutableStateFlow(false)
     val showControls: StateFlow<Boolean> = _showControls.asStateFlow()
@@ -270,22 +293,41 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    /** 关闭繁简转换 — 等价于 Legado 占位条目的 ✕ 操作。 */
+    /** 关闭繁简转换 — 等价于 Legado 占位条目的 ✕ 操作。
+     *
+     *  ⚠ 走 [setChineseConvertMode](0) 而不是直接 prefs.setChineseConvertMode(0)。
+     *  历史 bug：之前直接写 prefs，cache 不清、chapter 不 reload，dialog 关闭时
+     *  refreshAfterReplaceRulesChanged 跑 loadChapter 又因为 chineseConvertMode()
+     *  lambda 读 stateIn.value 还是 stale 的旧 mode，于是「关闭繁简」点完仍显示
+     *  繁体（或反过来）——用户报的「大概率失灵或相反」其中一个根因。
+     */
     fun disableChineseConvert() {
-        viewModelScope.launch(Dispatchers.IO) { prefs.setChineseConvertMode(0) }
+        setChineseConvertMode(0)
     }
 
     /**
      * 用户在 EffectiveReplacesDialog 内做了任何修改（禁用 / 编辑 / 改繁简） → dismiss 时调一次，
      * 重拉规则缓存并请求重渲染当前章。Legado 等价 viewModel.replaceRuleChanged()。
+     *
+     * 与 [setChineseConvertMode] 共享 [chineseConvertMutex]：dialog 内可能刚刚连点了
+     * 几次 onSetChineseConvertMode（每次走 mutex + reload），dismiss 立即触发的这次
+     * refresh 必须排在那些 reload 之后；否则两个 loadChapter job 可能交叉，
+     * 最终 _chapterContent 是用某次中间 mode 转的内容。
+     *
+     * 即便没有改过繁简（只编辑了替换规则），这里也走 mutex 是无害的——mutex 没人持
+     * 时立刻拿到锁，开销可忽略。
      */
     fun refreshAfterReplaceRulesChanged() {
         viewModelScope.launch(Dispatchers.IO) {
             chapter.refreshReplaceRules()
-            // 重新加载当前章 — 走 loadChapter 同款路径，会清 hit 集合并重跑 applyReplaceRules。
-            val idx = chapter.currentChapterIndex.value
-            withContext(Dispatchers.Main) {
-                chapter.loadChapter(idx)
+            chineseConvertMutex.withLock {
+                // 清预加载——它们是用旧 rules / 旧 mode 转的；不清的话翻下一页
+                // 直接消费旧 PreloadedReaderChapter。
+                chapter.clearPreloadedChapters()
+                val idx = chapter.currentChapterIndex.value
+                withContext(Dispatchers.Main) {
+                    chapter.loadChapter(idx)
+                }
             }
         }
     }
@@ -364,7 +406,16 @@ class ReaderViewModel @Inject constructor(
     fun ttsStop() { tts.ttsStop(); _showTtsPanel.value = false }
 
     fun setChineseConvertMode(mode: Int) {
-        if (mode == settings.chineseConvertMode.value) return
+        // [DIAGNOSTIC 2026-05-10] 临时排查繁简反复切换后仍是繁体的问题，复现后删除。
+        AppLog.info(
+            "ChineseDebug",
+            "setMode ENTRY target=$mode currentSettings=${settings.chineseConvertMode.value} " +
+                "anchor=$chineseConvertAnchor",
+        )
+        if (mode == settings.chineseConvertMode.value) {
+            AppLog.info("ChineseDebug", "setMode OUTER-GUARD-RETURN target=$mode (already at this mode)")
+            return
+        }
         // ── Anchor 锁：连点期间共用同一个起始位置 ──────────────────────────
         // 用户连点繁→简→繁 时每次都会 loadChapter(restoreChapterPosition=visiblePage.chapterPosition)。
         // 但 LazyScroll 模式下 restoreProgress JUMP 后 visible 段的 chapterPosition
@@ -388,7 +439,14 @@ class ReaderViewModel @Inject constructor(
             // 一帧（race），UI 短暂显示旧 mode 内容（"切了又变回去"）。
             // Mutex 保证多次点击按到达顺序排队执行，最后一次胜出。
             chineseConvertMutex.withLock {
-                if (mode == settings.chineseConvertMode.value) return@withLock
+                AppLog.info(
+                    "ChineseDebug",
+                    "setMode LOCK-ACQUIRED target=$mode currentSettings=${settings.chineseConvertMode.value}",
+                )
+                if (mode == settings.chineseConvertMode.value) {
+                    AppLog.info("ChineseDebug", "setMode INNER-GUARD-RETURN target=$mode")
+                    return@withLock
+                }
                 val (anchorProg, anchorPos) = chineseConvertAnchor
                     ?: (progress.scrollProgress.value to progress.visiblePage.value.chapterPosition)
                 settings.setChineseConvertMode(mode)
@@ -396,6 +454,11 @@ class ReaderViewModel @Inject constructor(
                 // 在 IO 协程里读到旧值（DataStore 写入 → Flow emit → stateIn StateFlow.value
                 // 更新存在跨线程延迟，旧路径直接 loadChapter 会 race 拿到旧 mode）。
                 settings.chineseConvertMode.first { it == mode }
+                AppLog.info(
+                    "ChineseDebug",
+                    "setMode SETTINGS-SYNCED target=$mode confirmedSettings=${settings.chineseConvertMode.value}" +
+                        " → loadChapter(idx=${chapter.currentChapterIndex.value}, prog=$anchorProg, pos=$anchorPos)",
+                )
                 // 清旧 mode 转过的预加载（StateFlow + @Volatile 双轨），
                 // 否则同步翻页直接消费旧 PreloadedReaderChapter，呈现
                 // "切完繁简翻下一页又变回去" 的反效果。

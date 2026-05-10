@@ -17,7 +17,8 @@ import com.morealm.app.domain.entity.*
  * ### 加字段 / 加表的标准流程
  *
  * 1. 改 entity（加字段、加表）。
- * 2. 把下面 `version =` 改成 `oldVersion + 1`。
+ * 2. 把下面 [SCHEMA_VERSION] 常量改成 `oldVersion + 1`——`@Database(version=...)`
+ *    自动跟随。
  * 3. 在 [autoMigrations] 数组里加一行：`AutoMigration(from = oldVersion, to = newVersion)`。
  * 4. 跑一次 build。KSP 会在 `app/schemas/<package>/<newVersion>.json` 生成新 schema，
  *    并在 `build/generated/ksp/.../AppDatabase_AutoMigration_${old}_${new}_Impl.java`
@@ -38,6 +39,19 @@ import com.morealm.app.domain.entity.*
  * 跨表数据搬移、字段拆分合并等需要业务逻辑的迁移 —— 此时回退到手写
  * `Migration` 类（[com.morealm.app.di.AppModule] 里 `addMigrations(...)` 注册）。
  * 但**禁止**走 destructive 路径，宁可让 Room 抛异常崩溃，也不能静默清数据。
+ *
+ * ### Schema 版本号的真理来源
+ *
+ * [SCHEMA_VERSION] 是当前 Room schema 版本的**唯一权威来源**：
+ * - `@Database(version = SCHEMA_VERSION)` 直接引用它（注解参数允许引用同 class
+ *   的 `const val`，编译期就解析好）。
+ * - [com.morealm.app.di.APP_DB_SCHEMA_VERSION] 也引用它，给 RecoveryGuard 等
+ *   不持有 db 实例的模块比较 file user_version 用。
+ *
+ * 历史 bug：曾经在 AppModule 里手抄一份 `const val APP_DB_SCHEMA_VERSION = 28`，
+ * v28→v29 升级时忘记同步导致 RecoveryGuard 把已升级的 DB 误判为「降级」 →
+ * 启动死循环弹恢复界面。改用 const val 引用后**编译期保证一致**，再不会双源
+ * 不同步。
  */
 @Database(
     entities = [
@@ -61,14 +75,16 @@ import com.morealm.app.domain.entity.*
         SearchBookCache::class,
         SearchKeyword::class,
     ],
-    version = 28,
+    version = AppDatabase.SCHEMA_VERSION,
     exportSchema = true,
     autoMigrations = [
-        // 从 v29 起新增条目都走这里。手写 MIGRATION_X_Y（已注册在 AppModule
-        // addMigrations 里）覆盖了 v1~v28 的历史路径，不动它们。
+        // 手写 MIGRATION_X_Y（已注册在 AppModule addMigrations 里）覆盖了 v1~v29 的
+        // 历史路径，不动它们。其中 v28→v29 因为同时 drop 列 + 业务 UPDATE，走手写
+        // Migration 而非 AutoMigration——AutoMigration spec 只能 @DeleteColumn drop 列，
+        // 没法附带业务 UPDATE 5 个 builtin row。
         //
         // 例（占位示例，实际加字段时取消注释）：
-        // AutoMigration(from = 28, to = 29),
+        // AutoMigration(from = 29, to = 30),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -91,4 +107,13 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun cookieDao(): CookieDao
     abstract fun searchBookCacheDao(): SearchBookCacheDao
     abstract fun searchKeywordDao(): SearchKeywordDao
+
+    companion object {
+        /**
+         * 当前 Room schema 版本。**改这里就够了** —— `@Database(version=...)` 通过
+         * 注解直接引用，外部模块（[com.morealm.app.di.APP_DB_SCHEMA_VERSION]）也
+         * 通过 const val 编译期同步。
+         */
+        const val SCHEMA_VERSION = 29
+    }
 }

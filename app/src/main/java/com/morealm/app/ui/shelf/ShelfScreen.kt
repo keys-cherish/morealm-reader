@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -105,6 +106,10 @@ fun ShelfScreen(
     // Batch selection mode
     var batchMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    // 分组批量选择模式（与 batchMode 互斥）。长按分组进入；只在根目录可用，
+    // 因为分组卡只在根目录显示。两套状态分开：避免 selectedIds 同时混着 bookId / groupId。
+    var folderBatchMode by remember { mutableStateOf(false) }
+    var selectedFolderIds by remember { mutableStateOf(setOf<String>()) }
     // Inline search overlay：showSearch 控制顶部搜索栏可见性，searchQuery 是
     // 当前输入值。声明于此（早于下面 navigateToFolder LaunchedEffect 引用它们的
     // 闭包），避免 Kotlin 向前引用错误。
@@ -124,6 +129,8 @@ fun ShelfScreen(
             currentFolderId = targetFolderId
             batchMode = false
             selectedIds = emptySet()
+            folderBatchMode = false
+            selectedFolderIds = emptySet()
             showSearch = false
             viewModel.setSearchQuery("")
         }
@@ -184,9 +191,12 @@ fun ShelfScreen(
     val folderIds = remember(groupNames) { groupNames.keys.toList() }
 
     // Back handler: return to root when inside a folder
-    BackHandler(enabled = currentFolderId != null || batchMode) {
-        if (batchMode) { batchMode = false; selectedIds = emptySet() }
-        else currentFolderId = null
+    BackHandler(enabled = currentFolderId != null || batchMode || folderBatchMode) {
+        when {
+            folderBatchMode -> { folderBatchMode = false; selectedFolderIds = emptySet() }
+            batchMode -> { batchMode = false; selectedIds = emptySet() }
+            else -> currentFolderId = null
+        }
     }
 
     // Resume last read book on first launch if setting is enabled
@@ -240,13 +250,42 @@ fun ShelfScreen(
 
         TopAppBar(
             title = {
-                if (batchMode) {
-                    Text("已选 ${selectedIds.size} 本", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                } else {
-                    Column {
-                        Text(greeting, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("享受阅读时光", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
+                when {
+                    folderBatchMode -> Text(
+                        "已选 ${selectedFolderIds.size} 个分组",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    batchMode -> Text(
+                        "已选 ${selectedIds.size} 本",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    else -> {
+                        // 副文本从静态"享受阅读时光"改成今日阅读时长。
+                        //   - 0 分钟：保留原有问候副文本，避免显示"今日已阅读 0 分钟"过于冷淡
+                        //   - 1-59 分钟：显示分钟数
+                        //   - 60+ 分钟：显示"X 小时 Y 分钟"或仅"X 小时"（整点）
+                        val todayMs by viewModel.todayReadMs.collectAsStateWithLifecycle()
+                        val subtitle = remember(todayMs) {
+                            if (todayMs <= 0L) {
+                                "享受阅读时光"
+                            } else {
+                                val totalMin = (todayMs / 60_000L).toInt()
+                                val h = totalMin / 60
+                                val m = totalMin % 60
+                                when {
+                                    h == 0 -> "今日已阅读 $m 分钟"
+                                    m == 0 -> "今日已阅读 $h 小时"
+                                    else -> "今日已阅读 $h 小时 $m 分钟"
+                                }
+                            }
+                        }
+                        Column {
+                            Text(greeting, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Text(subtitle, style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
+                        }
                     }
                 }
             },
@@ -255,14 +294,51 @@ fun ShelfScreen(
                 titleContentColor = MaterialTheme.colorScheme.onBackground,
             ),
             navigationIcon = {
-                if (batchMode) {
-                    IconButton(onClick = { batchMode = false; selectedIds = emptySet() }) {
+                if (batchMode || folderBatchMode) {
+                    IconButton(onClick = {
+                        batchMode = false; selectedIds = emptySet()
+                        folderBatchMode = false; selectedFolderIds = emptySet()
+                    }) {
                         Icon(Icons.Default.Close, "取消", tint = MaterialTheme.colorScheme.onBackground)
                     }
                 }
             },
             actions = {
-                if (batchMode) {
+                if (folderBatchMode) {
+                    // 分组多选：只提供"删除分组（连同书）"。Snackbar 撤销 5s 内可恢复。
+                    IconButton(
+                        onClick = {
+                            if (selectedFolderIds.isEmpty()) return@IconButton
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val ids = selectedFolderIds
+                            // snapshot 必须在 batchDeleteFolders 之前抓——否则 DB 删完 allBooks/allGroups 流就空了。
+                            val groupsSnapshot = allGroups.filter { it.id in ids }
+                            val booksSnapshot = allBooks.filter { it.folderId in ids }
+                            folderBatchMode = false
+                            selectedFolderIds = emptySet()
+                            if (groupsSnapshot.isEmpty() && booksSnapshot.isEmpty()) return@IconButton
+                            viewModel.batchDeleteFolders(ids)
+                            scope.launch {
+                                val msg = "已删除 ${groupsSnapshot.size} 个分组" +
+                                    (if (booksSnapshot.isNotEmpty()) "（${booksSnapshot.size} 本书）" else "")
+                                val r = snackbarHost.showSnackbar(
+                                    message = msg,
+                                    actionLabel = "撤销",
+                                    duration = SnackbarDuration.Short,
+                                    withDismissAction = true,
+                                )
+                                if (r == SnackbarResult.ActionPerformed) {
+                                    viewModel.restoreFolders(groupsSnapshot, booksSnapshot)
+                                }
+                            }
+                        },
+                        enabled = selectedFolderIds.isNotEmpty(),
+                    ) {
+                        Icon(Icons.Default.Delete, "删除分组",
+                            tint = if (selectedFolderIds.isNotEmpty()) MaterialTheme.colorScheme.error
+                                   else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
+                    }
+                } else if (batchMode) {
                     IconButton(
                         onClick = { if (selectedIds.isNotEmpty()) showMoveToGroupDialog = true },
                         enabled = selectedIds.isNotEmpty(),
@@ -318,43 +394,8 @@ fun ShelfScreen(
                     )
                 }
                 val isOrganizing by viewModel.isOrganizing.collectAsStateWithLifecycle()
-                // ── 排序按钮 ──
-                var showSortMenu by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { showSortMenu = true }) {
-                        Icon(
-                            Icons.Default.SortByAlpha,
-                            contentDescription = "排序方式",
-                            tint = MaterialTheme.colorScheme.onBackground,
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showSortMenu,
-                        onDismissRequest = { showSortMenu = false },
-                    ) {
-                        listOf(
-                            "recent" to "最近阅读",
-                            "addTime" to "导入时间",
-                            "title" to "书名排序",
-                            "format" to "格式分类",
-                        ).forEach { (key, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    viewModel.setSortMode(key)
-                                    showSortMenu = false
-                                },
-                                trailingIcon = {
-                                    if (sortMode == key) Icon(
-                                        Icons.Default.Check, null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                },
-                            )
-                        }
-                    }
-                }
+                // 排序按钮已移到「我的书架」标题行，与切换视图按钮并列；
+                // 顶栏不再放排序入口，避免重复。详见 ShelfShelfTitleRow。
                 Box {
                     IconButton(onClick = { showImportMenu = true }) {
                         Icon(Icons.Default.Add, "导入", tint = MaterialTheme.colorScheme.onBackground)
@@ -430,20 +471,7 @@ fun ShelfScreen(
                                 showOverflowMenu = false
                             },
                         )
-                        DropdownMenuItem(
-                            text = { Text(if (isListView) "切换为网格视图" else "切换为列表视图") },
-                            leadingIcon = {
-                                Icon(
-                                    if (isListView) Icons.Default.GridView
-                                    else Icons.AutoMirrored.Filled.ViewList,
-                                    null,
-                                )
-                            },
-                            onClick = {
-                                viewModel.setShelfViewMode(if (isListView) "grid" else "list")
-                                showOverflowMenu = false
-                            },
-                        )
+                        // 切换视图入口已移到「我的书架」标题行，避免重复。
                         DropdownMenuItem(
                             text = { Text("搜索书架") },
                             leadingIcon = { Icon(Icons.Default.Search, null) },
@@ -490,31 +518,140 @@ fun ShelfScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
+
+            // ── "我的书架"标题行 ──
+            // 在「继续阅读」卡片下方，「书籍列表」上方，作为视觉锚点+控制条。
+            // 排序 / 切换视图入口集中在此（顶栏不再放，overflow 也不再放，避免
+            // 同一动作多入口）。线性矢量图标 (AutoMirrored.Outlined / Outlined)
+            // 匹配图 3 极简轻量风格。
+            //
+            // batchMode / folderBatchMode 下隐藏：批量模式的视觉重心是顶栏的
+            // 选中数 + 删除/移动按钮，标题行此时多余甚至干扰。
+            if (!batchMode && !folderBatchMode) {
+                var showShelfSortMenu by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        // 字号从 titleLarge → titleMedium，权重 Bold → SemiBold。
+                        // 顶栏 greeting 已经是 titleLarge.bold 占主视觉位，这里若再用
+                        // 同级会喧宾夺主；降一档让标题做"分隔锚点"而不是"主标题"。
+                        "我的书架",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.92f),
+                        modifier = Modifier.weight(1f),
+                    )
+                    // 排序入口（线性矢量 Sort 图标，3 条递减线，匹配图 3）
+                    Box {
+                        IconButton(
+                            onClick = { showShelfSortMenu = true },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.Sort,
+                                contentDescription = "排序方式",
+                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showShelfSortMenu,
+                            onDismissRequest = { showShelfSortMenu = false },
+                        ) {
+                            listOf(
+                                "recent" to "最近阅读",
+                                "addTime" to "导入时间",
+                                "title" to "书名排序",
+                                "format" to "格式分类",
+                            ).forEach { (key, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        viewModel.setSortMode(key)
+                                        showShelfSortMenu = false
+                                    },
+                                    trailingIcon = {
+                                        if (sortMode == key) Icon(
+                                            Icons.Default.Check, null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    // 切换视图按钮 —— 当前 list → 显示 GridView 图标（提示"切到 grid"），反之亦然。
+                    // outlined 包没有 GridView/ViewList，用 filled + alpha 0.85 减弱视觉重量
+                    // 来贴近图 3 的线性轻量调性。
+                    IconButton(
+                        onClick = {
+                            viewModel.setShelfViewMode(if (isListView) "grid" else "list")
+                        },
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(
+                            if (isListView) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
+                            contentDescription = if (isListView) "切换为网格视图" else "切换为列表视图",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
+            }
         }
 
         // Helper lambdas for batch mode.
         // Manual taps go through onBookOpen (smart router: WEB → detail page first).
         // Auto-resume / continue-reading flows use onBookClick directly to land in reader.
         val bookClick: (String) -> Unit = { id ->
-            if (batchMode) {
-                selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
-            } else {
-                val book = allBooks.find { it.id == id }
-                if (onBookOpen != null && book != null) onBookOpen(book) else onBookClick(id)
+            when {
+                // 分组多选模式下书籍点击不响应：避免错把书加进 selectedFolderIds（语义不同），
+                // 也避免用户在分组多选时不小心打开了一本书。
+                folderBatchMode -> Unit
+                batchMode -> {
+                    selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+                }
+                else -> {
+                    val book = allBooks.find { it.id == id }
+                    if (onBookOpen != null && book != null) onBookOpen(book) else onBookClick(id)
+                }
             }
         }
         val bookLongClick: (String) -> Unit = { id ->
-            if (!batchMode) {
-                val book = allBooks.find { it.id == id }
-                if (book != null && book.format == BookFormat.WEB) {
-                    showCacheBookDialog = book
-                } else if (book != null) {
-                    // 单本书长按：弹"自定义封面 / 进入多选"菜单（默认）；
-                    // WEB 书走原 cache dialog（不变）
-                    bookActionTarget = book
+            when {
+                folderBatchMode -> Unit  // 同 bookClick：分组多选时书籍长按也不响应
+                !batchMode -> {
+                    val book = allBooks.find { it.id == id }
+                    if (book != null && book.format == BookFormat.WEB) {
+                        showCacheBookDialog = book
+                    } else if (book != null) {
+                        // 单本书长按：弹"自定义封面 / 进入多选"菜单（默认）；
+                        // WEB 书走原 cache dialog（不变）
+                        bookActionTarget = book
+                    }
                 }
+                else -> {
+                    selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+                }
+            }
+        }
+        // 分组卡的点击 / 长按：folderBatchMode 时统一 toggle 选中；普通时分别打开 / 弹 dialog。
+        val folderClick: (String) -> Unit = { folderId ->
+            if (folderBatchMode) {
+                selectedFolderIds = if (folderId in selectedFolderIds) selectedFolderIds - folderId else selectedFolderIds + folderId
             } else {
-                selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+                currentFolderId = folderId
+            }
+        }
+        val folderLongClick: (String) -> Unit = { folderId ->
+            if (folderBatchMode) {
+                selectedFolderIds = if (folderId in selectedFolderIds) selectedFolderIds - folderId else selectedFolderIds + folderId
+            } else {
+                showDeleteFolderConfirm = folderId
             }
         }
 
@@ -542,8 +679,9 @@ fun ShelfScreen(
                             bookCount = folderBookCounts[folderId] ?: 0,
                             coverUrl = folderCoverUrls[folderId]?.firstOrNull(),
                             hasUpdate = groupHasUpdate[folderId] == true,
-                            onClick = { currentFolderId = folderId },
-                            onLongClick = { showDeleteFolderConfirm = folderId },
+                            onClick = { folderClick(folderId) },
+                            onLongClick = { folderLongClick(folderId) },
+                            selected = folderBatchMode && folderId in selectedFolderIds,
                         )
                     }
                 }
@@ -574,8 +712,9 @@ fun ShelfScreen(
                             coverUrls = folderCoverUrls[folderId] ?: emptyList(),
                             customCoverUrl = folderGroup?.customCoverUrl,
                             hasUpdate = groupHasUpdate[folderId] == true,
-                            onClick = { currentFolderId = folderId },
-                            onLongClick = { showDeleteFolderConfirm = folderId },
+                            onClick = { folderClick(folderId) },
+                            onLongClick = { folderLongClick(folderId) },
+                            selected = folderBatchMode && folderId in selectedFolderIds,
                         )
                     }
                 }
@@ -643,6 +782,15 @@ fun ShelfScreen(
                 if (currentFolderId == folderId) currentFolderId = null
                 showDeleteFolderConfirm = null
             },
+            onEnterBatchMode = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                folderBatchMode = true
+                selectedFolderIds = setOf(folderId)
+                // 互斥：进分组多选先关掉书籍多选
+                batchMode = false
+                selectedIds = emptySet()
+                showDeleteFolderConfirm = null
+            },
             onDismiss = { showDeleteFolderConfirm = null },
         )
     }
@@ -672,6 +820,9 @@ fun ShelfScreen(
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 batchMode = true
                 selectedIds = setOf(targetBook.id)
+                // 互斥：进书籍多选先关掉分组多选
+                folderBatchMode = false
+                selectedFolderIds = emptySet()
                 bookActionTarget = null
             },
             onDismiss = { bookActionTarget = null },
@@ -764,6 +915,9 @@ fun ShelfScreen(
                         TextButton(onClick = {
                             batchMode = true
                             selectedIds = setOf(book.id)
+                            // 互斥：进书籍多选先关掉分组多选
+                            folderBatchMode = false
+                            selectedFolderIds = emptySet()
                             showCacheBookDialog = null
                         }) { Text("多选") }
                     }
@@ -923,6 +1077,7 @@ private fun ManageFolderDialog(
     onSetCover: () -> Unit,
     onClearCover: () -> Unit,
     onDelete: () -> Unit,
+    onEnterBatchMode: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -993,6 +1148,28 @@ private fun ManageFolderDialog(
                         tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(12.dp))
                     Text("按关键词重新归类", style = MaterialTheme.typography.bodyLarge)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                // 进入分组多选模式：与 BookActionDialog 中"进入多选模式"对齐 —
+                // 长按一个分组，把它选中并切到顶栏的"分组多选"模式，再去逐个点选其他分组。
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEnterBatchMode() }
+                        .padding(vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("多选模式", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "可批量删除分组（连同分组里的书）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        )
+                    }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(

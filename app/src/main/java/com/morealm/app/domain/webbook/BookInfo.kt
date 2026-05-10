@@ -3,6 +3,7 @@ package com.morealm.app.domain.webbook
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.analyzeRule.AnalyzeRule
 import com.morealm.app.domain.analyzeRule.AnalyzeRule.Companion.setCoroutineContext
+import com.morealm.app.domain.analyzeRule.HtmlFormatter
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.SearchBook
 import kotlinx.coroutines.ensureActive
@@ -83,9 +84,20 @@ object BookInfo {
             } catch (_: Exception) {}
             coroutineContext.ensureActive()
             try {
-                analyzeRule.getString(infoRule.intro).let {
-                    if (it.isNotEmpty()) searchBook.intro = it
+                val raw = analyzeRule.getString(infoRule.intro)
+                val trimmed = raw.trimStart()
+                val formatted = if (
+                    trimmed.startsWith("<usehtml>") ||
+                    trimmed.startsWith("<md>") ||
+                    trimmed.startsWith("<useweb>")
+                ) {
+                    // Legado parity: 这三种前缀让阅读器以 HTML/Markdown/web 渲染原样
+                    // 显示，所以不能在这里被 HtmlFormatter 删标签。
+                    trimmed
+                } else {
+                    HtmlFormatter.format(raw)
                 }
+                if (formatted.isNotEmpty()) searchBook.intro = formatted
             } catch (_: Exception) {}
             coroutineContext.ensureActive()
             try {

@@ -8,6 +8,7 @@ import com.morealm.app.domain.db.ChapterDao
 import com.morealm.app.domain.db.SearchBookCacheDao
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
+import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.repository.AutoGroupClassifier
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.SearchRepository
@@ -26,6 +27,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -76,6 +79,16 @@ class BookDetailViewModel @Inject constructor(
     /** 换源失败提示流（toc 拉空、源被删等）。UI 层订阅后弹 toast。 */
     val changeSourceErrorEvents = changeSource.errorEvents
 
+    /**
+     * 当前书的 BookSource 副本（Web 书才有；本地书恒为 null）。
+     *
+     * UI 用它判断要不要显示"登录源"入口（只有 source.loginUrl 非空才显示），
+     * 以及点击时把 BookSource 直接塞给 SourceLoginViewModel.showLoginDialog。
+     * 因此只需跟 _book.sourceUrl 变化就刷新，避免每次 refresh 都多一次 DB。
+     */
+    private val _currentSource = MutableStateFlow<BookSource?>(null)
+    val currentSource: StateFlow<BookSource?> = _currentSource.asStateFlow()
+
     init {
         viewModelScope.launch(Dispatchers.IO) {
             _book.value = bookRepo.getById(bookId)
@@ -91,6 +104,28 @@ class BookDetailViewModel @Inject constructor(
                 runCatching { bookRepo.clearLastCheckCount(bookId) }
             }
         }
+
+        // book.sourceUrl 变化时同步刷一份 BookSource。放 IO 池里读 DB，避免主线程阻塞。
+        // distinctUntilChanged 按 sourceUrl 比较即可，整个 Book 对象变化频率高但 sourceUrl
+        // 只在换源 / 初始化时变。
+        viewModelScope.launch(Dispatchers.IO) {
+            _book
+                .map { it?.sourceUrl }
+                .distinctUntilChanged()
+                .collect { url ->
+                    _currentSource.value = url?.let { sourceRepo.getByUrl(it) }
+                }
+        }
+
+        // 登录脚本反向刷新通道：登录后脚本调 `java.refreshBookInfo()` 时从 DB 重拉一份，
+        // changeSource 控制器里的持久化 / 刷新路径已经覆盖正常场景，这里只对接登录路径。
+        viewModelScope.launch {
+            com.morealm.app.domain.source.SourceLoginRefreshBus.bookInfo.collect {
+                if (bookId.isNotBlank()) {
+                    _book.value = bookRepo.getById(bookId)
+                }
+            }
+        }
     }
 
     // ── Change-source action delegates ──────────────────────────────────────
@@ -98,6 +133,12 @@ class BookDetailViewModel @Inject constructor(
     fun showSourcePicker() {
         val current = _book.value ?: return
         changeSource.openPicker(current)
+    }
+
+    /** 「刷新」按钮：忽略 30 分钟缓存窗口，强制重跑全源搜索。 */
+    fun refreshSourcePicker() {
+        val current = _book.value ?: return
+        changeSource.refresh(current)
     }
 
     fun hideSourcePicker() {
