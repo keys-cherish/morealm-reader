@@ -359,114 +359,30 @@ fun ReaderControlBar(
             ),
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            // Icon row
+            // ── 章节标题预览：拖动时优先显示 preview；闲时显示当前章 + 进度 ──
+            // 之前在 Icon row 中央，按钮重排后独立成一行放在最顶
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "返回书架"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = onChapterSelect,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "目录"
-                            role = Role.Button
-                        },
-                ) {
-                    @Suppress("DEPRECATION")
-                    Icon(Icons.Default.FormatListBulleted, "目录",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = onSearch,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "全文搜索"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Default.Search, "搜索",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp))
-                }
-                // Center: progress / 拖动预览
-                Column(
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    if (seekValue != null && totalChapters > 0) {
-                        // #3 拖动时实时显示「全书 X.X% · 第N章 · 章内Y%」
-                        val previewTitle = getChapterTitle(previewIdx).ifBlank { "第${previewIdx + 1}章" }
-                        Text(
-                            "→ ${"%.1f".format(previewBookPct)}% · ${previewTitle.take(14)} · 章内${previewWithinPct}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else {
-                        Text(
-                            "${chapterTitle.ifBlank { "第${currentChapter + 1}章" }} · $readProgress",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = onTts,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "朗读"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Default.RecordVoiceOver, "朗读",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = onAutoPage,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "自动翻页"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Default.Timer, "自动翻页",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = onSettings,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "阅读设置"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Default.TextFields, "设置",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp))
+                if (seekValue != null && totalChapters > 0) {
+                    val previewTitle = getChapterTitle(previewIdx).ifBlank { "第${previewIdx + 1}章" }
+                    Text(
+                        "→ ${"%.1f".format(previewBookPct)}% · ${previewTitle.take(14)} · 章内${previewWithinPct}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Text(
+                        "${chapterTitle.ifBlank { "第${currentChapter + 1}章" }} · $readProgress",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
             // ── #3 章节进度条（可拖动） ──
@@ -532,7 +448,10 @@ fun ReaderControlBar(
                             latestSliderValueRef[0] = Float.NaN
                         },
                         valueRange = 0f..1f,
-                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp)
+                            .height(32.dp),  // 控件整体变紧凑（默认 48dp 触摸区被压成 32dp）
                         colors = SliderDefaults.colors(
                             thumbColor = MaterialTheme.colorScheme.primary,
                             activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -556,6 +475,96 @@ fun ReaderControlBar(
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                 )
+            }
+            // ── 按钮 Row：放在进度条之下，按钮尺寸放大方便点击 ──
+            // 之前是 32dp 容器 + 18dp icon 紧凑布局；用户反馈按钮太小不好点。
+            // 改为 44dp 容器 + 22dp icon（接近 Material3 标准触摸目标 48dp）。
+            // 章节标题预览已上移到顶部独立行，这里专注按钮均匀分布。
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "返回书架"
+                            role = Role.Button
+                        },
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp))
+                }
+                IconButton(
+                    onClick = onChapterSelect,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "目录"
+                            role = Role.Button
+                        },
+                ) {
+                    @Suppress("DEPRECATION")
+                    Icon(Icons.Default.FormatListBulleted, "目录",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp))
+                }
+                IconButton(
+                    onClick = onSearch,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "全文搜索"
+                            role = Role.Button
+                        },
+                ) {
+                    Icon(Icons.Default.Search, "搜索",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp))
+                }
+                IconButton(
+                    onClick = onTts,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "朗读"
+                            role = Role.Button
+                        },
+                ) {
+                    Icon(Icons.Default.RecordVoiceOver, "朗读",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp))
+                }
+                IconButton(
+                    onClick = onAutoPage,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "自动翻页"
+                            role = Role.Button
+                        },
+                ) {
+                    Icon(Icons.Default.Timer, "自动翻页",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp))
+                }
+                IconButton(
+                    onClick = onSettings,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "阅读设置"
+                            role = Role.Button
+                        },
+                ) {
+                    Icon(Icons.Default.TextFields, "设置",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp))
+                }
             }
         }
     }
