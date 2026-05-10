@@ -570,12 +570,19 @@ private fun StatItem(value: String, label: String) {
     }
 }
 
+// 时长格式：用国际通用 h/m 缩写代替「小时/分钟」中文长字 ——
+// 统计卡片格子小，长字会换行/截断。Image 12 风格：「9h 53m」
+// 比「9小时53分」更紧凑、信息密度高。
 private fun formatDuration(ms: Long): String {
     val minutes = ms / 60_000
     return when {
-        minutes < 1 -> "0分钟"
-        minutes < 60 -> "${minutes}分钟"
-        else -> "${minutes / 60}小时${minutes % 60}分"
+        minutes < 1 -> "0m"
+        minutes < 60 -> "${minutes}m"
+        else -> {
+            val h = minutes / 60
+            val m = minutes % 60
+            if (m == 0L) "${h}h" else "${h}h ${m}m"
+        }
     }
 }
 

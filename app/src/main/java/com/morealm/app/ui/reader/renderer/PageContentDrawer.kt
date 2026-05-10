@@ -483,6 +483,105 @@ fun drawPageContent(
     }
 }
 
+/**
+ * 竖排（VERTICAL_RL）页面绘制——layout 阶段已经把每列的几何放进
+ * [TextLine.columnLeftX] / [TextLine.columnRightX]（X 范围）和每个 [TextColumn]
+ * 的 `start`/`end`（在该列内的 Y 范围）。本函数只负责"按 layout 已经决定的位置画字符"。
+ *
+ * # 字形选用：OpenType `vert` 特性优先，旋转矩阵作 fallback
+ *
+ * 现代中文/日文字体内部都内置两套标点字形（`「」` 横排版 vs `﹁﹂` 竖排版、
+ * 句号和顿号在角上 vs 居中等）。通过给 paint 设置 `fontFeatureSettings = "'vert' on, 'vrt2' on"`，
+ * Android 的 HarfBuzz text shaper 会在 GSUB 阶段自动把横排字形替换成竖排字形——
+ * 没有额外的 Canvas 仿射变换开销，基线对齐由字体自己保证，视觉效果远优于
+ * 用 `canvas.rotate(90)` 物理旋转横排字形。
+ *
+ * 物理旋转仅作为 fallback：layout 阶段如果显式标记了 [TextColumn.rotate90]
+ * （连续 ≥3 个 ASCII 数字字母 tate-chu-yoko 长串、或老旧字体没有 vert 特性的
+ * 全角破折号），drawer 会 save/translate/rotate(90)/restore 把那个字符侧着画。
+ * Phase 2 的 `layoutInternalVertical` 暂未填充 rotate90（Task #5 接入）。
+ *
+ * # 不支持的视觉路径（Phase 2 限制）
+ *
+ * 横排 [drawPageContent] 内的 search-result / selection / user-highlight / TTS-aloud
+ * highlight / 章号末行装饰条 / 字色 override / 图片栏，竖排都**不**复用——它们都按
+ * 横排几何（line.lineTop/Bottom + col.start/end 都是 X）写，强行复用会画错位置。
+ * 这些视觉在 Phase 3 / Task #5 引入竖排专用绘制路径。
+ */
+internal fun drawPageContentVertical(
+    canvas: android.graphics.Canvas,
+    page: TextPage,
+    titlePaint: TextPaint,
+    contentPaint: TextPaint,
+    chapterNumPaint: TextPaint? = null,
+    hasBookmark: Boolean = false,
+    bmColorArgb: Int = DEFAULT_BOOKMARK_COLOR.toArgb(),
+    @Suppress("UNUSED_PARAMETER") canvasWidth: Float = 0f,
+) {
+    val highlightPaint = sharedHighlightPaint
+    val paddingTop = page.paddingTop
+
+    // 共享 paint 实例 —— 给三个 paint 都临时打开 vert 特性，画完恢复，避免影响
+    // 其他横排路径或后续帧。
+    val originalContentFeatures = contentPaint.fontFeatureSettings
+    val originalTitleFeatures = titlePaint.fontFeatureSettings
+    val originalChapterNumFeatures = chapterNumPaint?.fontFeatureSettings
+    contentPaint.fontFeatureSettings = "'vert' on, 'vrt2' on"
+    titlePaint.fontFeatureSettings = "'vert' on, 'vrt2' on"
+    chapterNumPaint?.let { it.fontFeatureSettings = "'vert' on, 'vrt2' on" }
+
+    try {
+        for (line in page.lines) {
+            // line 在竖排里就是「一列」。columnLeftX/RightX 给出 X 范围，
+            // col.start/end 给出 Y 范围。
+            val paint = when {
+                line.isChapterNum && chapterNumPaint != null -> chapterNumPaint
+                line.isTitle -> titlePaint
+                else -> contentPaint
+            }
+            val centerX = (line.columnLeftX + line.columnRightX) / 2f
+            for (col in line.columns) {
+                if (col is TextBaseColumn) {
+                    // 字符画在列中心 X。Y 用 col.start + paint.textSize（baseline 偏移近似）。
+                    // paint.textSize 对应 ascent 区域，把字符 baseline 落在 col.start + textSize
+                    // 大致让字符上半在 col.start 之上、下半在之下，符合视觉重心。
+                    val charWidth = paint.measureText(col.charData)
+                    val charX = centerX - charWidth / 2f
+                    val charY = paddingTop + col.start + paint.textSize
+                    if (col is TextColumn && col.rotate90) {
+                        // Fallback：layout 显式要求物理旋转（tate-chu-yoko 长串等）。
+                        canvas.save()
+                        canvas.translate(centerX, charY - paint.textSize / 2f)
+                        canvas.rotate(90f)
+                        canvas.drawText(col.charData, -charWidth / 2f, paint.textSize / 2f, paint)
+                        canvas.restore()
+                    } else {
+                        canvas.drawText(col.charData, charX, charY, paint)
+                    }
+                }
+            }
+        }
+
+        // 书签三角——竖排里阅读起点在右上角，把书签三角放到左上角对应「翻到下一页方向」的视觉锚点。
+        // 横排里它在右上（页右上 = 翻页方向起点），竖排里页面左上 = 翻页方向起点（左滑翻页 / 列从右到左）。
+        if (hasBookmark) {
+            highlightPaint.color = bmColorArgb
+            sharedBookmarkPath.apply {
+                rewind()
+                moveTo(0f, 0f)
+                lineTo(BOOKMARK_TRIANGLE_SIZE, 0f)
+                lineTo(0f, BOOKMARK_TRIANGLE_SIZE)
+                close()
+            }
+            canvas.drawPath(sharedBookmarkPath, highlightPaint)
+        }
+    } finally {
+        contentPaint.fontFeatureSettings = originalContentFeatures
+        titlePaint.fontFeatureSettings = originalTitleFeatures
+        chapterNumPaint?.let { it.fontFeatureSettings = originalChapterNumFeatures }
+    }
+}
+
 fun drawRecordedPageContent(
     canvas: android.graphics.Canvas,
     page: TextPage,

@@ -1766,6 +1766,28 @@ fun CanvasRenderer(
             // 注：老 ScrollRenderer 路径已在删除 task #6 中下线，配套的
             // [PageReaderInfoOverlay]（页码/电池/时间状态栏）也一并移除——
             // 滚动模式天然无分页概念，状态栏由翻页模式独占即可。
+            // ── SCROLL 模式当前页号跟踪 ──
+            // 用户报「上下滑动当前页不计数」：旧版本 ReaderInfoBar 写死 pageIndex/pageCount=0
+            // + slot fallback 到 chapter_progress，所以 page/progress/page_progress 三个
+            // slot 在 SCROLL 模式下永远不工作。
+            //
+            // 修复思路：从 LazyScrollSection.onVisiblePageChanged 拿到首段所在章节 idx +
+            // 章内字符 charPos，反查对应章节的 TextChapter.getPageIndexByCharIndex(charPos)
+            // 得到当前页号。pageSize 直接取该章节 .pageSize。
+            //
+            // 用 mutableIntStateOf：高频变化（滚动 60fps），避免 boxing 抖动。
+            // remember(chapterIndex) 让 cur 章切换时 page state 立即归 0，避免新章首屏
+            // 出现"上一章末页页号"的瞬时态。
+            var scrollPageIndex by remember(chapterIndex) { mutableIntStateOf(0) }
+            var scrollPageCount by remember(chapterIndex) {
+                mutableIntStateOf(chapter?.pageSize ?: 0)
+            }
+            // chapter 异步加载完成 / pageSize 在分页期间动态增长 → 跟随 chapter.pageSize 更新。
+            // 不能用 derivedStateOf，因为 chapter 是参数对象引用，pageSize 内部由 synchronized
+            // ArrayList 维护，对 Compose 不可观察；用 LaunchedEffect 兜一次最新值。
+            LaunchedEffect(chapter, chapter?.pageSize, chapterIndex) {
+                scrollPageCount = chapter?.pageSize ?: 0
+            }
             LazyScrollSection(
                 chapter = chapter,
                 prevTextChapter = prevTextChapter,
@@ -1812,7 +1834,26 @@ fun CanvasRenderer(
                 onDeleteHighlight = onDeleteHighlight,
                 onShareHighlight = onShareHighlight,
                 onTapCenter = onTapCenter,
-                onVisiblePageChanged = onVisiblePageChanged,
+                onVisiblePageChanged = { chIdx, title, prog, charPos ->
+                    // 反查首段所在章节的 pageIndex/pageCount，更新底部 InfoBar 的页号显示。
+                    // 滚动跨章时 windowSource 给 prev/cur/next 三章共存，chIdx 不一定 == chapterIndex。
+                    val ch = when (chIdx) {
+                        chapter?.chapterIndex -> chapter
+                        prevTextChapter?.chapterIndex -> prevTextChapter
+                        nextTextChapter?.chapterIndex -> nextTextChapter
+                        else -> null
+                    }
+                    if (ch != null) {
+                        val ps = ch.pageSize
+                        if (ps > 0) {
+                            scrollPageIndex = ch.getPageIndexByCharIndex(charPos)
+                                .coerceAtLeast(0)
+                                .coerceAtMost(ps - 1)
+                            scrollPageCount = ps
+                        }
+                    }
+                    onVisiblePageChanged(chIdx, title, prog, charPos)
+                },
                 onScrollingChanged = { scrollInProgress = it },
                 omitChapterTitleBlock = omitChapterTitleBlock,
                 modifier = Modifier.fillMaxSize(),
@@ -1824,16 +1865,15 @@ fun CanvasRenderer(
             // 流上读，没有"我在哪一章"的视觉锚点。这里复用 [ReaderInfoBar]（同文件
             // private fun）画顶部 + 底部两条，对齐分页模式的体验。
             //
-            // slot 映射：SCROLL 没有"当前页"概念，配置里 page / progress / page_progress
-            // 三个 slot 自动 fallback 到 chapter_progress（X/Y 章），不至于显示
-            // "1/0" 这种坏数据。其它 slot（chapter / time / battery / time_battery /
-            // chapter_progress 等）保持原义。
-            //
-            // currentPage = null：InfoSlotContent 在 progress 分支会用 pageIndex/pageCount
-            // 推算百分比，传 pageCount=0 + 上面 slot 映射后 progress 永远不会被命中 ——
-            // 双重保险，不会进 NaN 路径。
-            fun mapSlotForScroll(s: String): String = when (s) {
-                "page", "progress", "page_progress" -> "chapter_progress"
+            // slot 映射：以前 SCROLL 把 page/progress/page_progress 三个 slot 强制
+            // fallback 到 chapter_progress —— 用户报「上下滑动当前页不计数」根因。
+            // 现已通过 scrollPageIndex/scrollPageCount 跟踪首段所在章节的页号
+            // (见上面 LazyScrollSection.onVisiblePageChanged 包装)，pageSize > 0 时
+            // 这三个 slot 走原义；pageSize = 0（章节加载未完成）时仍 fallback 防御
+            // "1/0" 坏数据。
+            fun mapSlotForScroll(s: String): String = when {
+                scrollPageCount > 0 -> s
+                s == "page" || s == "progress" || s == "page_progress" -> "chapter_progress"
                 else -> s
             }
             val scrollHasBg = readerTheme.bgBitmap != null
@@ -1842,8 +1882,8 @@ fun CanvasRenderer(
                 slotCenter = if (showChapterName) mapSlotForScroll(headerCenter) else "none",
                 slotRight = if (showTimeBattery) mapSlotForScroll(headerRight) else "none",
                 chapterTitle = chapterTitle,
-                pageIndex = 0,
-                pageCount = 0,
+                pageIndex = scrollPageIndex,
+                pageCount = scrollPageCount,
                 currentPage = null,
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
@@ -1872,8 +1912,8 @@ fun CanvasRenderer(
                 slotCenter = mapSlotForScroll(footerCenter),
                 slotRight = mapSlotForScroll(footerRight),
                 chapterTitle = chapterTitle,
-                pageIndex = 0,
-                pageCount = 0,
+                pageIndex = scrollPageIndex,
+                pageCount = scrollPageCount,
                 currentPage = null,
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
