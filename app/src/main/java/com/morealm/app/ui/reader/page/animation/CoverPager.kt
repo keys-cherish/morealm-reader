@@ -6,6 +6,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -52,13 +53,22 @@ internal fun CoverPager(
     onPageSettled: (Int) -> Unit = {},
     pageContent: @Composable (Int) -> Unit,
 ) {
+    // LaunchedEffect(pagerState) 只在 pagerState 变化时重启，而 pagerState 整个
+    // Reader 共享 → 跨章时 effect 不重启，其闭包里 collect 的 onPageSettled 还是
+    // **旧 lambda**。旧 lambda 通过 Kotlin closure 持有**旧** coordinator 实例
+    // 引用（coordinator 是 remember(chapterIndex,pageAnimType) 的产物），跨章后
+    // 用户已经在新章但 settled 事件仍打进旧 coord → lastSettled 被写 0 → 视觉
+    // 上章号正确但页码跳回首页，再 NEXT 因为 coord/factory 对不上位结果进到
+    // 章 N+1 中间某页（用户观察到的"第 1 章 10/10 → 第 1 章 1/10 → 第 2 章 4/9"）。
+    // rememberUpdatedState 让 effect 始终调到最新 lambda。
+    val currentOnPageSettled = rememberUpdatedState(onPageSettled)
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.isScrollInProgress }
             .distinctUntilChanged()
             .filter { !it }
             .map { pagerState.currentPage }
             .distinctUntilChanged()
-            .collect(onPageSettled)
+            .collect { currentOnPageSettled.value(it) }
     }
     HorizontalPager(
         state = pagerState,

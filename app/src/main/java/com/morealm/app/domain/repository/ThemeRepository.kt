@@ -42,6 +42,10 @@ class ThemeRepository @Inject constructor(
     suspend fun getCustomThemesSnapshot(): List<ThemeEntity> =
         themeDao.getAllSync().filter { !it.isBuiltin }
 
+    /** 直接按 ID 取主题。供 ViewModel 在「跟随系统」场景下校验用户配的日 / 夜默认
+     *  主题是否仍然存在（自定义主题可能被用户删除），不存在时由调用方 fallback。 */
+    suspend fun getThemeById(id: String): ThemeEntity? = themeDao.getById(id)
+
     suspend fun activateTheme(themeId: String) {
         themeDao.deactivateAll()
         themeDao.activate(themeId)

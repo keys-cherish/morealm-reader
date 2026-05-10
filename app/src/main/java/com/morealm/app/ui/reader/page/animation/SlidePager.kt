@@ -6,6 +6,7 @@ import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -45,13 +46,18 @@ internal fun SlidePager(
     onPageSettled: (Int) -> Unit = {},
     pageContent: @Composable (Int) -> Unit,
 ) {
+    // rememberUpdatedState：LaunchedEffect 的 key 只有 pagerState（共享永不变），
+    // 跨章时 effect 不重启；闭包里直接 collect(onPageSettled) 会冻在旧 lambda ——
+    // 旧 lambda 持有的是跨章前的 coordinator 实例，settled 事件被写进死 coord，
+    // 触发"章号正确但页码/内容错位"的一次性视觉 glitch。见 CoverPager 同位修复。
+    val currentOnPageSettled = rememberUpdatedState(onPageSettled)
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.isScrollInProgress }
             .distinctUntilChanged()
             .filter { !it }                            // idle 边沿
             .map { pagerState.currentPage }
             .distinctUntilChanged()                    // 连续 settle 同一页时去重
-            .collect(onPageSettled)
+            .collect { currentOnPageSettled.value(it) }
     }
     HorizontalPager(
         state = pagerState,
@@ -76,13 +82,14 @@ internal fun VerticalSlidePager(
     onPageSettled: (Int) -> Unit = {},
     pageContent: @Composable (Int) -> Unit,
 ) {
+    val currentOnPageSettled = rememberUpdatedState(onPageSettled)
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.isScrollInProgress }
             .distinctUntilChanged()
             .filter { !it }
             .map { pagerState.currentPage }
             .distinctUntilChanged()
-            .collect(onPageSettled)
+            .collect { currentOnPageSettled.value(it) }
     }
     VerticalPager(
         state = pagerState,

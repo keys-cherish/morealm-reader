@@ -327,7 +327,12 @@ fun CanvasRenderer(
     // 顶/底独立计算；caller 不传时回落到 paddingVertical（向后兼容老调用方）。
     val padTopPx = with(density) { (paddingTop ?: paddingVertical).dp.toPx().toInt() }
     val padBotPx = with(density) { (paddingBottom ?: paddingVertical).dp.toPx().toInt() }
-    val infoBarHeightPx = with(density) { 64.dp.toPx().toInt() }
+    // info bar 实际只承载一行字（章节名 / 时间 / 电量），不需要 64dp。
+    // 6dp + 字号(~14sp≈18dp) + 6dp + 视觉呼吸 ≈ 40dp 已足够，且能省下顶 / 底各
+    // 24dp 的正文区。改前 6.8" 屏顶/底各预留 80dp(=16dp padding+64dp infoBar)，
+    // 加起来 160dp 留白；改后降到 ~112dp，可视区放大 ~6%。下方两个 ReaderInfoBar
+    // 的 .height(40.dp) 必须与本值同步。
+    val infoBarHeightPx = with(density) { 40.dp.toPx().toInt() }
     // ── info bar 是否真有内容 → 决定要不要预留 64dp ──
     //
     // 之前 effectivePadTop/Bottom 一律 +infoBarHeightPx，即使所有 slot 都
@@ -918,6 +923,18 @@ fun CanvasRenderer(
     // 接管，不再需要 ReaderScrollState 中转 displayOffset。
 
     // Pager state — always start at 0, then jump after layout completes
+    // pageCount 必须用 renderPageCount 而不是 max(render, cache)。
+    //
+    // 之前曾尝试用 maxOf(renderPageCount, cachedPageCount) 修跨章 PREV 闪烁
+    // （让 pager 跨章瞬间就知道目标章总页数，避免 initialPage 被 clamp）。
+    // 但 NEXT 跨章场景下 renderPageCount 可能瞬间是「旧 chapter 的页数」（partial
+    // pageFactory 重建过程），cachedPageCount 是「新 chapter 的页数」，两者
+    // 含义不一致 —— 取 max 让 pager 看到一个不存在的总页数（如旧章 13 页 + 新章
+    // 10 页 → max=13，pager 在 settle 后发出 settledPage=11/12 这种新章不存在
+    // 的页号），触发后续 onPageSettled / commitPageTurn 路径把章节翻乱。
+    //
+    // 跨章 PREV 闪烁应该走「等 publishCurTextChapter 完成再 commit chapterIndex」
+    // 路线，而不是在 pager 层欺骗 pageCount。本次 revert，闪烁问题留待重新设计。
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { renderPageCount })
 
     // Page-turn coordinator — replaces local page-turn functions and state.
@@ -958,8 +975,14 @@ fun CanvasRenderer(
                 readerPageIndex.coerceIn(0, (cap - 1).coerceAtLeast(0))
             }
             startFromLastPage -> {
-                val cachedPageCount = prelayoutCache[currentChapterKey]?.pageSize ?: renderPageCount
-                (cachedPageCount - 1).coerceAtLeast(0)
+                // 上一章末页。prelayoutCache 的 key 已随 currentChapterKey 切到新章，
+                // 所以 cached 就是新章真实页数；renderPageCount 在 REBUILD 这一帧还是
+                // 上一章 pageFactory 的残值（updateDeps 要到 REBUILD 之后才触发），
+                // 不能用它来约束 cached —— 否则 PREV 跨章到 N 页新章时会被旧章
+                // (N-1) 截断，initialPage 错成 N-2，用户看到倒数第二页。
+                val cached = prelayoutCache[currentChapterKey]?.pageSize
+                val cap = cached ?: renderPageCount.coerceAtLeast(1)
+                (cap - 1).coerceAtLeast(0)
             }
             else -> 0
         }
@@ -1074,8 +1097,12 @@ fun CanvasRenderer(
         }
         // 真章节切换：跟 remember 块的逻辑保持等价（startFromLastPage 才跳末页）。
         val initialPage = if (startFromLastPage) {
-            val cachedPageCount = prelayoutCache[currentChapterKey]?.pageSize ?: renderPageCount
-            (cachedPageCount - 1).coerceAtLeast(0)
+            // 与 remember 块同策略：优先 cached（新章真值），renderPageCount 作兜底。
+            // 不再 min 约束——避免 PREV 跨章那一帧 renderPageCount 还是旧章残值
+            // 导致末页被截断。
+            val cached = prelayoutCache[currentChapterKey]?.pageSize
+            val cap = cached ?: renderPageCount.coerceAtLeast(1)
+            (cap - 1).coerceAtLeast(0)
         } else 0
         coordinator.ignoredSettledDisplayPage = initialPage
         coordinator.pendingSettledDirection = null
@@ -1500,7 +1527,13 @@ fun CanvasRenderer(
             .background(backgroundColor)
             .then(
                 if (pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
-                    Modifier.pointerInput(selectionState.isActive, pageAnimType, renderPageCount) {
+                    // pointerInput 的 key 必须包含 chapterIndex/coordinator：coord 是
+                    // remember(chapterIndex, pageAnimType) 的结果，跨章时 coord 实例变，
+                    // 但若 pointerInput key 不含这两者，detectTapGestures 的 suspend loop
+                    // 不会重启 → 闭包里的 coordinator 引用仍指向**旧 coord**，
+                    // 旧 coord 的 pageFactory 也是旧章的 → tap 作用在旧章上，
+                    // 末页 NEXT 被误判、文字显示错乱（user 看到"第 1 章 1/10"实为第 1 章 factory 渲染首页）。
+                    Modifier.pointerInput(selectionState.isActive, pageAnimType, renderPageCount, coordinator) {
                         var totalDragX = 0f
                         var totalDragY = 0f
                         var dragAxis = 0 // 0 unknown, 1 horizontal, 2 vertical
@@ -1576,7 +1609,9 @@ fun CanvasRenderer(
             )
             .then(
                 if (pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
-                    Modifier.pointerInput(selectionState.isActive) {
+                    // 同上一个 pointerInput：key 加 coordinator，跨章时 lambda 重建，
+                    // 闭包里的 coordinator 引用才会更新到新 coord。
+                    Modifier.pointerInput(selectionState.isActive, coordinator) {
                         detectTapGestures(
                             onTap = { offset ->
                                 if (selectionState.isActive) {
@@ -2313,7 +2348,7 @@ private fun PageReaderInfoOverlay(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
-                .height(64.dp)
+                .height(40.dp)
                 .then(
                     if (hasBgImage) Modifier
                     else Modifier.background(
@@ -2324,7 +2359,7 @@ private fun PageReaderInfoOverlay(
                         )
                     )
                 )
-                .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
+                .padding(horizontal = paddingHorizontal.dp, vertical = 6.dp),
         )
         ReaderInfoBar(
             slotLeft = if (showChapterName) footerLeft else "none",
@@ -2343,7 +2378,7 @@ private fun PageReaderInfoOverlay(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .height(64.dp)
+                .height(40.dp)
                 .then(
                     if (hasBgImage) Modifier
                     else Modifier.background(
@@ -2354,7 +2389,7 @@ private fun PageReaderInfoOverlay(
                         )
                     )
                 )
-                .padding(horizontal = paddingHorizontal.dp, vertical = 8.dp),
+                .padding(horizontal = paddingHorizontal.dp, vertical = 6.dp),
         )
     }
 }

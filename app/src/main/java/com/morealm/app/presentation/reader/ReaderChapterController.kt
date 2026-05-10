@@ -5,6 +5,7 @@ import android.net.Uri
 import com.morealm.app.core.text.sortedNaturalBy
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
+import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.parser.LocalBookParser
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.ReplaceRuleRepository
@@ -15,8 +16,11 @@ import com.morealm.app.domain.webbook.WebBook
 import com.morealm.app.core.log.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -218,10 +222,6 @@ class ReaderChapterController(
             AppLog.debug("ReadBook", "commitChapterShiftNext REJECT at last chapter $curIdx/${chapterList.size}")
             return false
         }
-        val nextCh = _nextTextChapter.value ?: run {
-            AppLog.warn("ReadBook", "commitChapterShiftNext REJECT _nextTextChapter not ready (cur=$curIdx)")
-            return false
-        }
         // next content 必须可取到——否则 _chapterContent 同步无源。
         // 优先从 _nextPreloadedChapter（公开 StateFlow）取，其次 nextChapterCache（@Volatile）。
         val nextPreloaded = _nextPreloadedChapter.value
@@ -229,19 +229,44 @@ class ReaderChapterController(
             nextPreloaded != null && nextPreloaded.index == nextIdx -> nextPreloaded.content
             nextChapterCache != null -> nextChapterCache!!
             else -> {
-                AppLog.warn("ReadBook", "commitChapterShiftNext REJECT next content not cached (cur=$curIdx)")
+                AppLog.warn(
+                    "ReadBook",
+                    "commitChapterShiftNext REJECT next content not cached (cur=$curIdx)" +
+                        " | _nextTextChapter.idx=${_nextTextChapter.value?.chapterIndex}" +
+                        " nextPreloaded.idx=${nextPreloaded?.index} wantNextIdx=$nextIdx" +
+                        " nextCache.len=${nextChapterCache?.length}",
+                )
                 return false
             }
+        }
+        // 仿 legado ReadBook.moveToNextChapter：_nextTextChapter 未就绪时不 REJECT，
+        // 改为推进 index + 置 _curTextChapter = null，由 CanvasRenderer 主路径重排。
+        // 只要 nextContent 已缓存（上面那段 when 保证），视觉上就是「章头标题→加载态
+        // →内容就位」一帧过渡，不再触发 coordinator REBUILD 的整屏闪。
+        val nextCh = _nextTextChapter.value
+        val nextChReady = nextCh != null
+        if (!nextChReady) {
+            AppLog.info(
+                "ReadBook",
+                "commitChapterShiftNext NEXT-NOT-LAID-OUT (cur=$curIdx→$nextIdx) | " +
+                    "fall through to sync shift + async layout (legado-style)" +
+                    " prevCh=${_prevTextChapter.value?.chapterIndex}" +
+                    " curCh=${_curTextChapter.value?.chapterIndex}",
+            )
         }
         // 保存旧 cur 信息——同步赋值会覆盖 _chapterContent，必须先快照。
         val oldCurContent = _chapterContent.value
         val oldCurTitle = chapterList[curIdx].title
 
-        AppLog.info("ReadBook", "commitChapterShiftNext $curIdx → $nextIdx | sync moveToNextChapter")
+        AppLog.info(
+            "ReadBook",
+            "commitChapterShiftNext $curIdx → $nextIdx | sync moveToNextChapter" +
+                (if (nextChReady) "" else " (lazy-layout)"),
+        )
 
         // ── 原子同步腾挪（主线程当帧）——以下 8 个赋值视为「单帧不可分」 ──
         _prevTextChapter.value = _curTextChapter.value
-        _curTextChapter.value = nextCh
+        _curTextChapter.value = nextCh  // nextCh 可能为 null；CanvasRenderer 主路径会排版回填
         _nextTextChapter.value = null
         _currentChapterIndex.value = nextIdx
         _chapterContent.value = nextContent
@@ -273,8 +298,13 @@ class ReaderChapterController(
         scope.launch(Dispatchers.IO) {
             preloadNextChapter(nextIdx + 1)
         }
-        // 异步保存进度
-        onChapterLoaded()
+        // 跨章瞬间不立即 saveProgress——visiblePage.chapterPosition 同步设为 0 + scrollProgress=0
+        // 是「过渡占位」，等 reportProgress 把 chapterPosition 写到真实首页字符位置后，
+        // collector debounce 才能攒出自洽快照。立即 saveProgress 会写出跟 scroll 矛盾的
+        // (chapter=新, position=0, scroll=0) 快照，闪退恢复时定位错误。
+        // 同时 suppress 下一次 collector emit，因为同步改的 (chIdx, scroll, position)
+        // 也是过渡值——等 reportProgress 改 _visiblePage 才允许写。
+        setSuppressNextProgressSave(true)
         return true
     }
 
@@ -301,26 +331,46 @@ class ReaderChapterController(
             AppLog.debug("ReadBook", "commitChapterShiftPrev REJECT at first chapter")
             return false
         }
-        val prevCh = _prevTextChapter.value ?: run {
-            AppLog.warn("ReadBook", "commitChapterShiftPrev REJECT _prevTextChapter not ready (cur=$curIdx)")
-            return false
-        }
         val prevPreloaded = _prevPreloadedChapter.value
         val prevContent: String = when {
             prevPreloaded != null && prevPreloaded.index == prevIdx -> prevPreloaded.content
             prevChapterCache != null -> prevChapterCache!!
             else -> {
-                AppLog.warn("ReadBook", "commitChapterShiftPrev REJECT prev content not cached (cur=$curIdx)")
+                AppLog.warn(
+                    "ReadBook",
+                    "commitChapterShiftPrev REJECT prev content not cached (cur=$curIdx)" +
+                        " | _prevTextChapter.idx=${_prevTextChapter.value?.chapterIndex}" +
+                        " prevPreloaded.idx=${prevPreloaded?.index} wantPrevIdx=$prevIdx" +
+                        " prevCache.len=${prevChapterCache?.length}",
+                )
                 return false
             }
+        }
+        // 仿 legado ReadBook.moveToPrevChapter：_prevTextChapter 未就绪时不 REJECT，
+        // 改为推进 index + 置 _curTextChapter = null，由 CanvasRenderer 主路径重排。
+        // 连点 PREV 不再落回 loadChapter，避免 coordinator REBUILD 整屏闪。
+        val prevCh = _prevTextChapter.value
+        val prevChReady = prevCh != null
+        if (!prevChReady) {
+            AppLog.info(
+                "ReadBook",
+                "commitChapterShiftPrev PREV-NOT-LAID-OUT (cur=$curIdx→$prevIdx) | " +
+                    "fall through to sync shift + async layout (legado-style)" +
+                    " curCh=${_curTextChapter.value?.chapterIndex}" +
+                    " nextCh=${_nextTextChapter.value?.chapterIndex}",
+            )
         }
         val oldCurContent = _chapterContent.value
         val oldCurTitle = chapterList[curIdx].title
 
-        AppLog.info("ReadBook", "commitChapterShiftPrev $curIdx → $prevIdx | sync moveToPrevChapter")
+        AppLog.info(
+            "ReadBook",
+            "commitChapterShiftPrev $curIdx → $prevIdx | sync moveToPrevChapter" +
+                (if (prevChReady) "" else " (lazy-layout)"),
+        )
 
         _nextTextChapter.value = _curTextChapter.value
-        _curTextChapter.value = prevCh
+        _curTextChapter.value = prevCh  // 可能为 null；CanvasRenderer 主路径排版回填
         _prevTextChapter.value = null
         _currentChapterIndex.value = prevIdx
         _chapterContent.value = prevContent
@@ -350,12 +400,33 @@ class ReaderChapterController(
         scope.launch(Dispatchers.IO) {
             preloadPrevChapter(prevIdx - 1)
         }
-        onChapterLoaded()
+        // PREV 跨章同 commitChapterShiftNext：scroll=100 + position=0 是过渡占位，
+        // 等 reportProgress 把 chapterPosition 写到末页真实字符位置（如 1583）才自洽。
+        // 立即 saveProgress 会写出 (chapter=新, position=0, scroll=100, total=新章首) 这种
+        // scroll 跟 position 互相矛盾的快照——闪退恢复时按 lastReadPosition=0 落到章首，
+        // 而不是用户离开时的末页。suppress 下一次 collector emit 给 reportProgress 留窗口。
+        setSuppressNextProgressSave(true)
         return true
     }
 
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
+
+    /**
+     * 登录提示总线：章节 / 目录加载失败且异常像 401/403/"需要登录"时 emit 出对应源。
+     *
+     * ReaderScreen 订阅 → 弹 Snackbar "去登录"，点后走 [com.morealm.app.presentation.source.SourceLoginViewModel.showLoginDialog]。
+     * 这里不直接启 Dialog，是为了保持 controller 的无 UI 纯逻辑层。
+     *
+     * extraBufferCapacity = 2 允许用户连翻两章都失败时两次提示都能到达 UI；replay = 0
+     * 避免进屏时吃到旧事件。**只在源真的配置了 loginUrl 时才 emit**，无登录入口的源
+     * 提示"去登录"没意义只会误导。
+     */
+    private val _loginPrompt = MutableSharedFlow<BookSource>(
+        extraBufferCapacity = 2,
+    )
+    val loginPrompt: SharedFlow<BookSource> =
+        _loginPrompt.asSharedFlow()
 
     @Volatile
     var nextChapterCache: String? = null
@@ -504,6 +575,7 @@ class ReaderChapterController(
                     throw e
                 } catch (e: Exception) {
                     AppLog.error("Chapter", "Failed to load web chapters", e)
+                    shouldPromptLogin(e)?.let { _loginPrompt.tryEmit(it) }
                     publishReaderError(
                         title = "\u4e66\u6e90\u52a0\u8f7d\u5931\u8d25",
                         detail = webReaderErrorDetail(
@@ -619,6 +691,7 @@ class ReaderChapterController(
             throw e
         } catch (e: Exception) {
             AppLog.error("Chapter", "Failed to load book", e)
+            shouldPromptLogin(e)?.let { _loginPrompt.tryEmit(it) }
             _book.value?.takeIf { isWebBook(it) }?.let { book ->
                 publishReaderError(
                     title = "\u4e66\u6e90\u52a0\u8f7d\u5931\u8d25",
@@ -750,6 +823,7 @@ class ReaderChapterController(
             } catch (e: Exception) {
                 if (loadToken != chapterLoadToken) return@launch
                 AppLog.error("Chapter", "Failed to load chapter $index", e)
+                shouldPromptLogin(e)?.let { _loginPrompt.tryEmit(it) }
                 val title = if (isWebBook) "\u6b63\u6587\u52a0\u8f7d\u5931\u8d25" else "\u52a0\u8f7d\u5931\u8d25"
                 val detail = if (isWebBook) {
                     webReaderErrorDetail(
@@ -1181,6 +1255,34 @@ class ReaderChapterController(
             ?.takeIf { it.isNotBlank() }
             ?.take(240)
             ?: fallback
+    }
+
+    /**
+     * 粗启发式判断异常是否"像登录要做"。精准判定需要拿到 HTTP 状态码，但现有
+     * WebBook 抛出的异常大多只有 message 字符串（包 HTTP 状态 / 业务原因 / "请登录"），
+     * 所以采用文本匹配：
+     *  - 401/403 这些明确状态码
+     *  - "login/登录/unauth/forbidden/需要.*会员" 这类业务词
+     *
+     * 宁可漏报不可误报：只有强信号才 emit，否则用户每遇网络抖动都看到"去登录"是噪声。
+     * book 非 web / 源没配 loginUrl 时一律 false。
+     */
+    private suspend fun shouldPromptLogin(e: Throwable): BookSource? {
+        val book = _book.value ?: return null
+        if (!isWebBook(book)) return null
+        val url = book.sourceUrl ?: return null
+        val source = sourceRepo.getByUrl(url) ?: return null
+        if (source.loginUrl.isNullOrBlank()) return null
+        val msg = (e.message ?: "") + " " + (e.cause?.message ?: "")
+        val lower = msg.lowercase()
+        val hit = "401" in msg || "403" in msg ||
+            "unauth" in lower || "forbidden" in lower ||
+            "login" in lower ||
+            "登录" in msg ||          // "登录"
+            "未授权" in msg ||    // "未授权"
+            "会员" in msg ||          // "会员"
+            "登入" in msg             // "登入"
+        return if (hit) source else null
     }
 
     fun webReaderErrorDetail(book: Book, reason: String): String {
