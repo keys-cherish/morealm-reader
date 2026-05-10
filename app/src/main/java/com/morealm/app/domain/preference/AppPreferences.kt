@@ -269,10 +269,25 @@ class AppPreferences @Inject constructor(
     /**
      * 同步读取「跟随系统主题」开关。在 [com.morealm.app.presentation.theme.ThemeViewModel]
      * 的 init 阶段（首帧前）需要立即知道是否跟系统，避免冷启动时先用本地保存主题
-     * 再被异步切换造成闪屏。默认 false 与 Flow 一致。
+     * 再被异步切换造成闪屏。
+     *
+     * 默认值策略：
+     *  - 已显式写过此 key（老用户 / 新用户曾经手动调过开关）→ 用持久化值。
+     *  - 没写过且 active_theme_id 也没写过（真·首次安装）→ 默认 true，跟随系统暗色。
+     *  - 没写过但 active_theme_id 已存在（旧版本升级用户，没经历过这个开关）→ 默认
+     *    false，保留他/她原本手动选择的主题，不强行切到系统色让其困惑。
+     *
+     * 决策被惰性写回 themePrefs，下次冷启动直接命中第一种快路径，不再判断。
      */
-    fun getFollowSystemThemeSync(): Boolean =
-        themePrefs.getBoolean("follow_system_theme", false)
+    fun getFollowSystemThemeSync(): Boolean {
+        if (themePrefs.contains("follow_system_theme")) {
+            return themePrefs.getBoolean("follow_system_theme", false)
+        }
+        val isFreshInstall = !themePrefs.contains("active_theme_id")
+        val resolved = isFreshInstall
+        themePrefs.edit().putBoolean("follow_system_theme", resolved).apply()
+        return resolved
+    }
 
     /**
      * 自定义「跟随系统」时使用的日 / 夜主题 ID。
@@ -376,8 +391,12 @@ class AppPreferences @Inject constructor(
      * 系统暗色模式变化时 MainActivity 的 Composable 会读 [androidx.compose.foundation.isSystemInDarkTheme]
      * 并喂给 ThemeViewModel 切日/夜主题。
      */
+    /**
+     * 「跟随系统主题」开关。Flow 默认值委托给 [getFollowSystemThemeSync]，与冷启动 sync
+     * 路径保持一致，避免「sync 路径决策为 true，Flow 第一次 emit 又拉回 false」的回弹。
+     */
     val followSystemTheme: Flow<Boolean> = context.dataStore.data
-        .map { it[Keys.FOLLOW_SYSTEM_THEME] ?: false }
+        .map { it[Keys.FOLLOW_SYSTEM_THEME] ?: getFollowSystemThemeSync() }
 
     /** 跟随系统模式下，系统在「白天」时应用的目标主题 ID。空串 = 内置 paper。 */
     val autoDayThemeId: Flow<String> = context.dataStore.data
