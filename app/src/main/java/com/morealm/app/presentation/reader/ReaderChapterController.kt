@@ -768,11 +768,30 @@ class ReaderChapterController(
                             LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapter)
                         }
                         val replaced = applyReplaceRules(raw)
-                        com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
+                        // [DIAGNOSTIC 2026-05-10] 临时排查繁简反复切换后仍是繁体的问题。
+                        val capturedMode = chineseConvertMode()
+                        AppLog.info(
+                            "ChineseDebug",
+                            "loadChapter ELSE idx=$index modeRead=$capturedMode replacedLen=${replaced.length}" +
+                                " replacedSample='${replaced.take(20).replace("\n", "\\n")}'",
+                        )
+                        com.morealm.app.core.text.ChineseConverter.convert(replaced, capturedMode)
                     }
                 }
 
-                if (loadToken != chapterLoadToken) return@launch
+                if (loadToken != chapterLoadToken) {
+                    AppLog.info(
+                        "ChineseDebug",
+                        "loadChapter STALE-DROP idx=$index token=$loadToken cur=$chapterLoadToken",
+                    )
+                    return@launch
+                }
+                // [DIAGNOSTIC 2026-05-10] 验证最终 publish 的内容采样
+                AppLog.info(
+                    "ChineseDebug",
+                    "loadChapter PUBLISH idx=$index len=${content.length}" +
+                        " sample='${content.take(20).replace("\n", "\\n")}'",
+                )
 
                 // Publish new chapter content FIRST, before clearing old preloaded data.
                 // This ensures the UI always has valid content to display during the

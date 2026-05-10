@@ -43,8 +43,20 @@ class ShelfViewModel @Inject constructor(
     private val databaseSeeder: com.morealm.app.domain.db.DatabaseSeeder,
     private val sourceRepo: SourceRepository,
     private val coverStorage: com.morealm.app.domain.cover.CoverStorage,
+    private val readStatsRepo: com.morealm.app.domain.repository.ReadStatsRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    // ── 今日阅读时长 ──
+    // 顶栏副文本要显示「今日已阅读 X 小时 Y 分钟」，从 read_stats 表里取今天那条。
+    // 与 ProfileStatsViewModel.todayReadMs 算法一致——都是按本地时区 yyyy-MM-dd 命中。
+    // 进程本地化是必要的：read_stats 写入时也用同一时区算 date 串，跨时区不会
+    // 错位。SharingStarted.Lazily 让 stats 只在 UI 订阅时才打开 DB Flow。
+    val todayReadMs: StateFlow<Long> = readStatsRepo.getRecent(7).map { stats ->
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        stats.find { it.date == today }?.readDurationMs ?: 0L
+    }.stateIn(viewModelScope, SharingStarted.Lazily, 0L)
 
     // ── Extracted Controllers ──
     val import = ShelfImportController(

@@ -287,7 +287,30 @@ internal class PageTurnCoordinator(
         if (target != null) {
             pendingSettledDirection = direction
             pendingTurnStartDisplayPage = startDisplayPage
-            scope.launch { state.animateScrollToPage(target) }
+            scope.launch {
+                runCatching { state.animateScrollToPage(target) }
+                // ── SIMULATION 模式 isRunning 死锁修复 (音量键 / 重复 tap 失灵) ──
+                // SIMULATION 用 SimulationReadView 自管贝塞尔渲染，PagerState 只
+                // 充当"当前页索引"的状态机，没有上层的 isScrollInProgress
+                // snapshotFlow 钩子去触发 [handlePagerSettled]。结果：
+                //   1. startAnim(direction) 设 isRunning = true
+                //   2. animateScrollToPage 完成
+                //   3. handlePagerSettled 永不被调到 → stopScroll 永不执行
+                //   4. isRunning 永远卡 true
+                //   5. 用户后续每次音量键 / tap 走 keyTurnPage → startAnim 看到
+                //      isRunning=true → return false → turnPageByTap 在 line 233
+                //      静默 return（连 ReaderTap ENTRY log 都不打）
+                //
+                // 复现：日志 19:28:26 那次 tap NEXT 成功 → 之后 11+ 次音量 PREV
+                // 全部只有 ReaderKey log 没有 ReaderTap log，与上述链条 100% 吻合。
+                //
+                // 修复：动画 await 完成后手动 stopScroll + 清 pendingSettledDirection。
+                // SLIDE/COVER 不需要因为它们走 handlePagerSettled 自然复位。
+                if (pageAnimType == PageAnimType.SIMULATION) {
+                    pageDelegateState.stopScroll()
+                    pendingSettledDirection = null
+                }
+            }
             AppLog.info(
                 "ReaderTap",
                 "turnPageByTap animate: dir=$direction start=$startDisplayPage target=$target renderPC=$renderPageCount pageCount=$pageCount",
@@ -338,7 +361,16 @@ internal class PageTurnCoordinator(
         if (target != null) {
             pendingSettledDirection = direction
             pendingTurnStartDisplayPage = startDisplayPage
-            scope.launch { state.animateScrollToPage(target) }
+            scope.launch {
+                runCatching { state.animateScrollToPage(target) }
+                // 同 turnPageByTap 修复：SIMULATION 没有 handlePagerSettled 复位，
+                // 必须在这里手动 stopScroll，否则 isRunning 卡 true → 后续 drag/
+                // tap/音量键全失灵。
+                if (pageAnimType == PageAnimType.SIMULATION) {
+                    pageDelegateState.stopScroll()
+                    pendingSettledDirection = null
+                }
+            }
         } else if (
             (direction == ReaderPageDirection.PREV && factory.hasPrev(startDisplayPage)) ||
             (direction == ReaderPageDirection.NEXT && factory.hasNext(startDisplayPage))

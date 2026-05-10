@@ -16,7 +16,33 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+// ── 线性矢量图标（Outlined 系列）—— 让设置行不再"干巴巴"，每行左侧用同款 ──
+// 图标 + 圆角底色块统一视觉节奏。Outlined 比 Filled 更轻、更现代，跟 Material3
+// 的整体审美一致。下面这一组是设置页用到的全部图标，用 alphabetical 排序方便维护。
+import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.outlined.Animation
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.FormatAlignCenter
+import androidx.compose.material.icons.outlined.FormatColorText
+import androidx.compose.material.icons.outlined.Headphones
+import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.RecordVoiceOver
+import androidx.compose.material.icons.outlined.ScreenLockPortrait
+import androidx.compose.material.icons.outlined.SyncAlt
+import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.ViewColumn
+import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.*
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,98 +110,141 @@ fun ReadingSettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
-            // ── 操作 ──
-            SectionHeader("操作")
+            // ── 屏幕交互 ──
+            SectionHeader("屏幕交互")
+            SettingsCard {
+                SettingsClickRow(
+                    icon = Icons.Outlined.Animation,
+                    title = "翻页动画",
+                    value = pageAnimLabel(pageAnim),
+                    onClick = { showAnimDialog = true },
+                )
+                SettingsClickRow(
+                    icon = Icons.Outlined.TouchApp,
+                    title = "轻按页面左侧",
+                    value = if (tapLeftAction == "next") "翻到下一页" else "翻到上一页",
+                    onClick = { showTapLeftDialog = true },
+                )
+            }
 
-            SettingsClickRow(
-                title = "翻页动画",
-                value = pageAnimLabel(pageAnim),
-                onClick = { showAnimDialog = true },
-            )
-            SettingsDivider()
-            SettingsClickRow(
-                title = "轻按页面左侧",
-                value = if (tapLeftAction == "next") "翻到下一页" else "翻到上一页",
-                onClick = { showTapLeftDialog = true },
-            )
-            SettingsDivider()
-            SettingsToggleRow("音量键翻页", volumeKeyPage) { viewModel.setVolumeKeyPage(it) }
-            SettingsDivider()
-            // 仅在开启了"音量键翻页"时显示反转和长按选项，避免页面塞太多无意义条目
-            if (volumeKeyPage) {
+            // ── 实体按键与设备 ──
+            SectionHeader("实体按键与设备")
+            SettingsCard {
                 SettingsToggleRow(
-                    title = "音量键方向反转",
-                    checked = volumeKeyReverse,
-                ) { viewModel.setVolumeKeyReverse(it) }
-                SettingsDivider()
-                SettingsClickRow(
-                    title = "音量键长按",
-                    value = volumeKeyLongPressLabel(volumeKeyLongPress),
-                    onClick = { showLongPressDialog = true },
+                    icon = Icons.Outlined.VolumeUp,
+                    title = "音量键翻页",
+                    checked = volumeKeyPage,
+                    onCheckedChange = { viewModel.setVolumeKeyPage(it) },
                 )
-                SettingsDivider()
-            }
-            SettingsToggleRow(
-                title = "耳机/蓝牙翻页器",
-                checked = headsetButtonPage,
-            ) { viewModel.setHeadsetButtonPage(it) }
-            SettingsDivider()
-            SettingsToggleRow("启动后继续上次阅读", resumeLastRead) { viewModel.setResumeLastRead(it) }
-            SettingsDivider()
-            SettingsToggleRow("长按文字划线", longPressUnderline) { viewModel.setLongPressUnderline(it) }
-            SettingsDivider()
-            // 选区 mini-menu 按钮自定义入口 —— 显示当前主行项数作 hint，
-            // 让用户不打开 dialog 也能瞄一眼当前配置。
-            run {
-                val cfg by viewModel.selectionMenuConfig.collectAsStateWithLifecycle()
-                SettingsClickRow(
-                    title = "选区菜单按钮",
-                    value = "主行 ${cfg.mainCount()}/3",
-                    onClick = {
-                        com.morealm.app.core.log.AppLog.debug(
-                            "SelectionMenu", "open config dialog (current: ${cfg.summary()})",
-                        )
-                        showSelectionMenuDialog = true
-                    },
+                // 仅在开启了"音量键翻页"时显示反转和长按选项，避免页面塞太多无意义条目
+                if (volumeKeyPage) {
+                    SettingsToggleRow(
+                        icon = Icons.Outlined.SyncAlt,
+                        title = "音量键方向反转",
+                        subtitle = "下键翻上一页",
+                        checked = volumeKeyReverse,
+                        onCheckedChange = { viewModel.setVolumeKeyReverse(it) },
+                    )
+                    SettingsClickRow(
+                        icon = Icons.Outlined.Timer,
+                        title = "音量键长按",
+                        value = volumeKeyLongPressLabel(volumeKeyLongPress),
+                        onClick = { showLongPressDialog = true },
+                    )
+                }
+                SettingsToggleRow(
+                    icon = Icons.Outlined.Headphones,
+                    title = "耳机 / 蓝牙翻页器",
+                    checked = headsetButtonPage,
+                    onCheckedChange = { viewModel.setHeadsetButtonPage(it) },
                 )
             }
 
-            Spacer(Modifier.height(16.dp))
+            // ── 启动偏好 ──
+            SectionHeader("启动偏好")
+            SettingsCard {
+                SettingsToggleRow(
+                    icon = Icons.Outlined.PlayCircleOutline,
+                    title = "启动后继续上次阅读",
+                    checked = resumeLastRead,
+                    onCheckedChange = { viewModel.setResumeLastRead(it) },
+                )
+            }
+
+            // ── 选区与高亮 ──
+            SectionHeader("选区与高亮")
+            SettingsCard {
+                SettingsToggleRow(
+                    icon = Icons.Outlined.FormatColorText,
+                    title = "长按文字划线",
+                    checked = longPressUnderline,
+                    onCheckedChange = { viewModel.setLongPressUnderline(it) },
+                )
+                // 选区 mini-menu 按钮自定义入口 —— 显示当前主行项数作 hint
+                run {
+                    val cfg by viewModel.selectionMenuConfig.collectAsStateWithLifecycle()
+                    SettingsClickRow(
+                        icon = Icons.Outlined.Tune,
+                        title = "选区菜单按钮",
+                        value = "主行 ${cfg.mainCount()}/3",
+                        onClick = {
+                            com.morealm.app.core.log.AppLog.debug(
+                                "SelectionMenu", "open config dialog (current: ${cfg.summary()})",
+                            )
+                            showSelectionMenuDialog = true
+                        },
+                    )
+                }
+            }
 
             // ── 阅读界面 ──
             SectionHeader("阅读界面")
-
-            // Phase 1：仅持久化字段，layout / Drawer 暂未响应。Phase 2 落地后此开关
-            // 才会真正改变阅读区排版（日文 / 古典中文常用：列从右到左、字从上到下）。
-            SettingsToggleRow(
-                title = "竖排版（日文 / 古典中文，逐步上线中）",
-                checked = readingDirection == "vertical_rl",
-            ) {
-                viewModel.setReadingDirection(if (it) "vertical_rl" else "horizontal")
+            SettingsCard {
+                // Phase 2 已落地：开关后阅读器整体切换到独立的 VerticalReaderView，
+                // 列从右到左、字从上到下；不影响横排的 6 个翻页动画路径。
+                // Phase 2 限制：暂不支持选区 / 高亮 / TTS aloud / 仿真翻页 / 滚动模式。
+                SettingsToggleRow(
+                    icon = Icons.Outlined.ViewColumn,
+                    title = "竖排版",
+                    subtitle = "日文 / 古典中文",
+                    checked = readingDirection == "vertical_rl",
+                    onCheckedChange = {
+                        viewModel.setReadingDirection(if (it) "vertical_rl" else "horizontal")
+                    },
+                )
+                SettingsClickRow(
+                    icon = Icons.Outlined.ScreenLockPortrait,
+                    title = "屏幕关闭时间",
+                    value = screenTimeoutLabel(screenTimeout),
+                    onClick = { showTimeoutDialog = true },
+                )
+                SettingsToggleRow(
+                    icon = Icons.Outlined.Notifications,
+                    title = "显示系统状态",
+                    checked = showStatusBar,
+                    onCheckedChange = { viewModel.setShowStatusBar(it) },
+                )
+                SettingsToggleRow(
+                    icon = Icons.Outlined.TextFields,
+                    title = "显示章节名",
+                    checked = showChapterName,
+                    onCheckedChange = { viewModel.setShowChapterName(it) },
+                )
+                SettingsToggleRow(
+                    icon = Icons.Outlined.AccessTime,
+                    title = "显示时间电量",
+                    checked = showTimeBattery,
+                    onCheckedChange = { viewModel.setShowTimeBattery(it) },
+                )
+                // 章节标题对齐 — 排版引擎在画第 X 章标题时按这个值决定 startXOffset。
+                // 枚举: 0=左 / 1=中 / 2=右；在阅读器内立即重新排版生效。
+                SettingsClickRow(
+                    icon = Icons.Outlined.FormatAlignCenter,
+                    title = "章节标题对齐",
+                    value = titleAlignLabel(titleAlign),
+                    onClick = { showTitleAlignDialog = true },
+                )
             }
-            SettingsDivider()
-
-            SettingsClickRow(
-                title = "屏幕关闭时间",
-                value = screenTimeoutLabel(screenTimeout),
-                onClick = { showTimeoutDialog = true },
-            )
-            SettingsDivider()
-            SettingsToggleRow("显示系统状态", showStatusBar) { viewModel.setShowStatusBar(it) }
-            SettingsDivider()
-            SettingsToggleRow("显示章节名", showChapterName) { viewModel.setShowChapterName(it) }
-            SettingsDivider()
-            SettingsToggleRow("显示时间电量", showTimeBattery) { viewModel.setShowTimeBattery(it) }
-            SettingsDivider()
-            // 章节标题对齐 — 排版引擎在画第 X 章标题时按这个值决定 startXOffset。
-            // 枚举: 0=左 / 1=中 / 2=右；在阅读器内立即重新排版生效。
-            SettingsClickRow(
-                title = "章节标题对齐",
-                value = titleAlignLabel(titleAlign),
-                onClick = { showTitleAlignDialog = true },
-            )
-
-            Spacer(Modifier.height(16.dp))
 
             // ── 阅读器背景 ──
             SectionHeader("阅读器背景")
@@ -201,28 +270,29 @@ fun ReadingSettingsScreen(
                 }
             }
 
-            BgImageRow(
-                label = "日间背景",
-                imageUri = readerBgDay,
-                onPick = { dayBgLauncher.launch(arrayOf("image/*")) },
-                onClear = { viewModel.setReaderBgImageDay("") },
-            )
-            SettingsDivider()
-            BgImageRow(
-                label = "夜间背景",
-                imageUri = readerBgNight,
-                onPick = { nightBgLauncher.launch(arrayOf("image/*")) },
-                onClear = { viewModel.setReaderBgImageNight("") },
-            )
+            SettingsCard {
+                BgImageRow(
+                    icon = Icons.Outlined.LightMode,
+                    label = "日间背景",
+                    imageUri = readerBgDay,
+                    onPick = { dayBgLauncher.launch(arrayOf("image/*")) },
+                    onClear = { viewModel.setReaderBgImageDay("") },
+                )
+                BgImageRow(
+                    icon = Icons.Outlined.DarkMode,
+                    label = "夜间背景",
+                    imageUri = readerBgNight,
+                    onPick = { nightBgLauncher.launch(arrayOf("image/*")) },
+                    onClear = { viewModel.setReaderBgImageNight("") },
+                )
+            }
 
             Text(
                 "设置后阅读器背景会随日/夜主题自动切换",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
             )
-
-            Spacer(Modifier.height(16.dp))
 
             // ── TXT 章节规则 ──
             SectionHeader("TXT 章节识别")
@@ -304,31 +374,13 @@ fun ReadingSettingsScreen(
             // [AppPreferences.ttsKeepCpuAwake] 的偏好头注释。
             Spacer(Modifier.height(8.dp))
             val ttsKeepCpuAwake by viewModel.ttsKeepCpuAwake.collectAsStateWithLifecycle()
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { viewModel.setTtsKeepCpuAwake(!ttsKeepCpuAwake) }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                    Text("锁屏保活 CPU", style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "开启后耗电略高；仅当锁屏偶发断声时建议开启",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    )
-                }
-                Switch(
+            SettingsCard {
+                SettingsToggleRow(
+                    icon = Icons.Outlined.Lock,
+                    title = "锁屏保活 CPU",
+                    subtitle = "开启后耗电略高；仅当锁屏偶发断声时建议开启",
                     checked = ttsKeepCpuAwake,
                     onCheckedChange = { viewModel.setTtsKeepCpuAwake(it) },
-                    colors = SwitchDefaults.colors(
-                        checkedTrackColor = MaterialTheme.colorScheme.primary,
-                        checkedThumbColor = MaterialTheme.colorScheme.surface,
-                    ),
                 )
             }
 
@@ -383,67 +435,133 @@ fun ReadingSettingsScreen(
 }
 
 // ── Helper composables ──
+//
+// 视觉重构（Image 15 设计参考）：
+//   - SectionHeader：subtle gray label, 24dp left padding 与 Card 的 16dp 形成
+//     "section header 退一格" 的层次
+//   - SettingsCard：把同 section 的多行包成一张 surfaceContainer 卡片，去掉行间 Divider
+//   - RowIcon：左侧 36dp 圆角块 + 20dp Outlined 矢量图标，统一节奏
+//   - SettingsClickRow / SettingsToggleRow：必传 icon，可选 subtitle
+//
+// 旧 SettingsDivider 已删除——卡片+行内自然 padding 取代了行间分割线。
 
 @Composable
 private fun SectionHeader(title: String) {
     Text(
         title,
-        style = MaterialTheme.typography.bodySmall,
+        style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.padding(start = 24.dp, end = 16.dp, top = 18.dp, bottom = 8.dp),
     )
 }
 
+/**
+ * Section 内的卡片包裹器。同 section 的所有 Row 组合成一张圆角卡片，
+ * 内部 Row 自管 padding，不需要 Divider。
+ */
 @Composable
-private fun SettingsDivider() {
-    HorizontalDivider(
-        modifier = Modifier.padding(horizontal = 16.dp),
-        color = MaterialTheme.colorScheme.outlineVariant,
-    )
-}
-
-@Composable
-private fun SettingsClickRow(title: String, value: String, onClick: () -> Unit) {
-    Row(
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
     ) {
-        Text(title, style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(value, style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-            Spacer(Modifier.width(4.dp))
-            Icon(Icons.Default.ChevronRight, null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f))
-        }
+        Column(
+            modifier = Modifier.padding(vertical = 4.dp),
+            content = content,
+        )
+    }
+}
+
+/**
+ * 行首图标块 —— 36dp 圆角方形容器 + 20dp Outlined 矢量图标，
+ * 统一所有设置行的视觉节奏（对应 Image 15 设计）。底色用 surfaceVariant 半透明
+ * 让图标在卡片背景上有微妙的"凹陷"感，不喧宾夺主。
+ */
+@Composable
+private fun RowIcon(icon: ImageVector) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon, null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
 
 @Composable
-private fun SettingsToggleRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    val moColors = LocalMoRealmColors.current
+private fun SettingsClickRow(
+    icon: ImageVector,
+    title: String,
+    value: String,
+    subtitle: String? = null,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RowIcon(icon)
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface)
+            if (subtitle != null) {
+                Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f))
+            }
+        }
+        Text(value, style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+    }
+}
+
+@Composable
+private fun SettingsToggleRow(
+    icon: ImageVector,
+    title: String,
+    checked: Boolean,
+    subtitle: String? = null,
+    onCheckedChange: (Boolean) -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onCheckedChange(!checked) }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface)
+        RowIcon(icon)
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface)
+            if (subtitle != null) {
+                Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f))
+            }
+        }
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
                 checkedTrackColor = MaterialTheme.colorScheme.primary,
-                checkedThumbColor = MaterialTheme.colorScheme.surface,
+                checkedThumbColor = Color.White,
             ),
         )
     }
@@ -608,6 +726,7 @@ private fun ScreenTimeoutDialog(current: Int, onSelect: (Int) -> Unit, onDismiss
 
 @Composable
 private fun BgImageRow(
+    icon: ImageVector,
     label: String,
     imageUri: String,
     onPick: () -> Unit,
@@ -618,9 +737,13 @@ private fun BgImageRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onPick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // 行首图标 —— 与其他 SettingsRow 视觉一致；BgImageRow 还有 thumbnail，
+        // 在图标后再画 thumbnail 形成「身份图标 → 内容预览」的双重提示
+        RowIcon(icon)
+        Spacer(Modifier.width(12.dp))
         // Thumbnail preview
         if (hasImage) {
             Image(

@@ -349,7 +349,20 @@ data class BookSource(
             } else {
                 RhinoScriptEngine.getRuntimeScope(bindings)
             }
-            RhinoScriptEngine.eval(jsStr, scope)
+            try {
+                RhinoScriptEngine.eval(jsStr, scope)
+            } catch (e: Exception) {
+                // 把书源名打到 log——RhinoScriptEngine 看不到 source 实例，但定位
+                // 「哪个源的 JS 触发栈溢出 / 抛错」对运维至关重要。脚本前 80 字符
+                // 也 dump 出来，配合 logcat tag=RhinoEngine 的栈帧能精确定位是
+                // loginUrl / loginCheckJs / jsLib / header @js 哪一段。
+                com.morealm.app.core.log.AppLog.warn(
+                    "BookSource.evalJS",
+                    "evalJS failed [source='${bookSourceName}' url='${bookSourceUrl}']: " +
+                        "${e.message?.take(120)} | jsHead='${jsStr.take(80).replace("\n", "\\n")}'",
+                )
+                throw e
+            }
         }
     }
 
