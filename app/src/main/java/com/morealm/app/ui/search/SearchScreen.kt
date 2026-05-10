@@ -742,19 +742,43 @@ private fun OnlineResultItem(
                     overflow = TextOverflow.Ellipsis,
                 )
 
-                // 5. 底栏：来源 · 字数 · 下载
+                // 5. 底栏：来源 chip · 字数 · 下载
+                //
+                // 来源标签从「裸文字」升级为 chip：浅色容器衬底，让来源信息从书名/作者
+                // /简介里跳出来形成独立"属性槽"。
+                //
+                //   - 文本源：primary 容器 (alpha=0.12) + primary 文字色
+                //   - 非文本源：error 容器 (alpha=0.10) + error 文字色（保持告警语义）
+                //
+                // 容器形状：extraSmall (圆角 4dp)，与 SourceTag/MoreSourceTag 一致，
+                // 整页搜索结果视觉系统统一。chip 包裹宽度 + 单独 Spacer.weight(1f)
+                // 把 wordCount/IconButton 推到右侧，避免 chip 被拉满整行。
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val sourceLabel = if (isTextSource) result.sourceName
                                       else "${result.sourceName} · ${sourceTypeLabel(result.sourceType)}"
-                    Text(
-                        sourceLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isTextSource) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.error,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
+                    val chipBg = if (isTextSource) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                    } else {
+                        MaterialTheme.colorScheme.error.copy(alpha = 0.10f)
+                    }
+                    val chipFg = if (isTextSource) MaterialTheme.colorScheme.primary
+                                 else MaterialTheme.colorScheme.error
+                    Surface(
+                        shape = MaterialTheme.shapes.extraSmall,
+                        color = chipBg,
+                        modifier = Modifier.weight(1f, fill = false),
+                    ) {
+                        Text(
+                            sourceLabel,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = chipFg,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
                     val wordCount = result.searchBook?.wordCount?.takeIf { it.isNotBlank() }
                     if (wordCount != null) {
                         Text(

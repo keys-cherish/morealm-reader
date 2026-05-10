@@ -142,6 +142,13 @@ fun ReaderScreen(
     val showSettings by viewModel.showSettingsPanel.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
+    // ── 排版方向偏好 ──
+    // 唯一被 ReaderScreen 关心的用法：在下方挑选 CanvasRenderer (横排)
+    // 还是 VerticalReaderView (竖排) 渲染。绝不传给 CanvasRenderer——
+    // 横排 6 个翻页动画路径对竖排无感知，避免后期维护地狱（详见
+    // VerticalReaderView 顶部注释）。
+    val readingDirectionStr by viewModel.settings.readingDirection.collectAsStateWithLifecycle()
+    val isVerticalReading = readingDirectionStr == "vertical_rl"
     val fontFamily by viewModel.settings.fontFamily.collectAsStateWithLifecycle()
     val fontSize by viewModel.settings.fontSize.collectAsStateWithLifecycle()
     val lineHeight by viewModel.settings.lineHeight.collectAsStateWithLifecycle()
@@ -551,7 +558,44 @@ fun ReaderScreen(
 
         // Keep the last real reader surface on screen. During initial loading, avoid rendering
         // a synthetic 1/1 empty chapter that shows up as a visible white/loading flicker in LDPlayer.
-        if (displayContent.isNotBlank()) {
+        if (displayContent.isNotBlank() && isVerticalReading) {
+            // ── 竖排版独立路径 ──
+            // 完全跳过 CanvasRenderer / 6 个翻页动画机制，走独立的 VerticalReaderView。
+            // 该组件内部用 HorizontalPager(reverseLayout=true) 自管翻页，drawer 走
+            // drawPageContentVertical（OpenType vert 字形），所有横排专属逻辑（选区 /
+            // 高亮 / TTS / 仿真翻页 / 滚动 / 多列 layout）在 Phase 2 不接入——
+            // 这是「不跟动画耦合」承诺的实现方式。
+            //
+            // ReadAloudPositionScope 也跳过：竖排 Phase 2 不画 TTS 段高亮（drawer
+            // 不支持）。以后做竖排 TTS 时再单独引入对应的位置缩进作用域。
+            com.morealm.app.ui.reader.vertical.VerticalReaderView(
+                chapterTitle = chapters.getOrNull(currentIndex)?.displayTitle(book) ?: renderedChapter.title,
+                chapterIndex = renderedChapter.index,
+                chaptersSize = chapters.size,
+                content = displayContent,
+                backgroundColor = readerBg,
+                textColor = readerFg,
+                accentColor = MaterialTheme.colorScheme.primary,
+                fontSize = readerFontSize,
+                lineHeight = readerLineHeight,
+                typeface = readerTypeface,
+                paddingLeft = marginHorizontal,
+                paddingRight = marginHorizontal,
+                paddingTop = marginTopVal,
+                paddingBottom = marginBottomVal,
+                initialChapterPosition = renderedChapter.initialChapterPosition,
+                restoreToken = renderedChapter.restoreToken,
+                pageAnimType = pageAnim.toPageAnimType(),
+                onProgressRestored = { viewModel.clearNavigateDirection() },
+                onTapCenter = { viewModel.toggleControls() },
+                onProgress = { pct -> viewModel.updateScrollProgress(pct) },
+                onVisiblePageChanged = { idx, title, progress, chapterPosition ->
+                    viewModel.onVisiblePageChanged(idx, title, progress, chapterPosition)
+                },
+                onNextChapter = { viewModel.nextChapter() },
+                onPrevChapter = { viewModel.prevChapter() },
+            )
+        } else if (displayContent.isNotBlank()) {
             // 把 ttsChapterPosition 的 collect 收敛进这个 leaf composable —— 段切
             // 时只重组 [ReadAloudPositionScope] 自己 + 内部 lambda 里的 CanvasRenderer
             // 调用，不再让外层 ReaderScreen 整体 recompose。CanvasRenderer 自身的

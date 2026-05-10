@@ -74,7 +74,6 @@ fun AppLogScreen(onBack: () -> Unit) {
     val crashFiles = remember { mutableStateOf(AppLog.getCrashFiles()) }
     var selectedCrashFile by remember { mutableStateOf<File?>(null) }
     var crashContent by remember { mutableStateOf("") }
-    var recordLog by remember { mutableStateOf(AppLog.isRecordLogEnabled()) }
 
     // Tag filter — null 表示「全部」。可选 tag 列表从当前 logs 动态推算，
     // 这样新出现的 tag（比如临时埋点 PageTurnFlicker）会自动出现在 chip 行
@@ -281,26 +280,6 @@ fun AppLogScreen(onBack: () -> Unit) {
                     Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 }
             )
-
-            // RecordLog toggle
-            Row(
-                modifier = Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("详细日志记录", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    modifier = Modifier.weight(1f))
-                Switch(
-                    checked = recordLog,
-                    onCheckedChange = {
-                        recordLog = it
-                        AppLog.setRecordLog(it)
-                    },
-                    modifier = Modifier.height(32.dp),
-                )
-            }
 
             // ── 日志清理面板 ──
             // 折叠的标题条 + 展开后的 4 个 slider + 立即清理按钮。
@@ -683,7 +662,7 @@ private fun LogListTab(
                             onLongClick = { onItemLongPress(record) },
                         )
                         .background(rowBg, MaterialTheme.shapes.extraSmall)
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (selectionMode) {
@@ -695,21 +674,57 @@ private fun LogListTab(
                         Spacer(Modifier.width(4.dp))
                     }
                     Column(Modifier.weight(1f)) {
+                        // 第一行：[Level chip] + tag(加粗) + (Spacer) + time 右对齐
+                        // 视觉重点前移 — 用户扫日志时第一眼看 level 和 tag，时间次要靠右。
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(timeFmt.format(Date(record.time)),
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontFamily = FontFamily.Monospace),
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
-                            Spacer(Modifier.width(6.dp))
-                            Text(record.level.label,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = color)
-                            Spacer(Modifier.width(6.dp))
-                            Text(record.tag,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                            Surface(
+                                shape = MaterialTheme.shapes.extraSmall,
+                                color = color.copy(alpha = 0.18f),
+                            ) {
+                                Text(
+                                    record.level.label.uppercase(),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    ),
+                                    color = color,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                record.tag,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = true),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                timeFmt.format(Date(record.time)),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                            )
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        // message：WARN 及以上染对应色（用户图 1 的 ERROR 红字效果），
+                        // INFO/DEBUG/VERBOSE 用 onSurface 默认，避免大批量普通日志全染色
+                        // 反而失去重点。
+                        val messageColor = if (record.level.priority >= LogLevel.WARN.priority) {
+                            color
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
                         }
                         Text(record.message,
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = messageColor,
                             maxLines = if (selected == record) Int.MAX_VALUE else 2,
                             overflow = TextOverflow.Ellipsis)
                         if (selected == record && record.throwable != null) {

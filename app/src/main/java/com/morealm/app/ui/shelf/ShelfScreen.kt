@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -260,10 +261,31 @@ fun ShelfScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                     )
-                    else -> Column {
-                        Text(greeting, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("享受阅读时光", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
+                    else -> {
+                        // 副文本从静态"享受阅读时光"改成今日阅读时长。
+                        //   - 0 分钟：保留原有问候副文本，避免显示"今日已阅读 0 分钟"过于冷淡
+                        //   - 1-59 分钟：显示分钟数
+                        //   - 60+ 分钟：显示"X 小时 Y 分钟"或仅"X 小时"（整点）
+                        val todayMs by viewModel.todayReadMs.collectAsStateWithLifecycle()
+                        val subtitle = remember(todayMs) {
+                            if (todayMs <= 0L) {
+                                "享受阅读时光"
+                            } else {
+                                val totalMin = (todayMs / 60_000L).toInt()
+                                val h = totalMin / 60
+                                val m = totalMin % 60
+                                when {
+                                    h == 0 -> "今日已阅读 $m 分钟"
+                                    m == 0 -> "今日已阅读 $h 小时"
+                                    else -> "今日已阅读 $h 小时 $m 分钟"
+                                }
+                            }
+                        }
+                        Column {
+                            Text(greeting, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Text(subtitle, style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
+                        }
                     }
                 }
             },
@@ -372,43 +394,8 @@ fun ShelfScreen(
                     )
                 }
                 val isOrganizing by viewModel.isOrganizing.collectAsStateWithLifecycle()
-                // ── 排序按钮 ──
-                var showSortMenu by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { showSortMenu = true }) {
-                        Icon(
-                            Icons.Default.SortByAlpha,
-                            contentDescription = "排序方式",
-                            tint = MaterialTheme.colorScheme.onBackground,
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showSortMenu,
-                        onDismissRequest = { showSortMenu = false },
-                    ) {
-                        listOf(
-                            "recent" to "最近阅读",
-                            "addTime" to "导入时间",
-                            "title" to "书名排序",
-                            "format" to "格式分类",
-                        ).forEach { (key, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    viewModel.setSortMode(key)
-                                    showSortMenu = false
-                                },
-                                trailingIcon = {
-                                    if (sortMode == key) Icon(
-                                        Icons.Default.Check, null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                },
-                            )
-                        }
-                    }
-                }
+                // 排序按钮已移到「我的书架」标题行，与切换视图按钮并列；
+                // 顶栏不再放排序入口，避免重复。详见 ShelfShelfTitleRow。
                 Box {
                     IconButton(onClick = { showImportMenu = true }) {
                         Icon(Icons.Default.Add, "导入", tint = MaterialTheme.colorScheme.onBackground)
@@ -484,20 +471,7 @@ fun ShelfScreen(
                                 showOverflowMenu = false
                             },
                         )
-                        DropdownMenuItem(
-                            text = { Text(if (isListView) "切换为网格视图" else "切换为列表视图") },
-                            leadingIcon = {
-                                Icon(
-                                    if (isListView) Icons.Default.GridView
-                                    else Icons.AutoMirrored.Filled.ViewList,
-                                    null,
-                                )
-                            },
-                            onClick = {
-                                viewModel.setShelfViewMode(if (isListView) "grid" else "list")
-                                showOverflowMenu = false
-                            },
-                        )
+                        // 切换视图入口已移到「我的书架」标题行，避免重复。
                         DropdownMenuItem(
                             text = { Text("搜索书架") },
                             leadingIcon = { Icon(Icons.Default.Search, null) },
@@ -543,6 +517,90 @@ fun ShelfScreen(
                     book = book, onClick = { onBookClick(book.id) },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
+            }
+
+            // ── "我的书架"标题行 ──
+            // 在「继续阅读」卡片下方，「书籍列表」上方，作为视觉锚点+控制条。
+            // 排序 / 切换视图入口集中在此（顶栏不再放，overflow 也不再放，避免
+            // 同一动作多入口）。线性矢量图标 (AutoMirrored.Outlined / Outlined)
+            // 匹配图 3 极简轻量风格。
+            //
+            // batchMode / folderBatchMode 下隐藏：批量模式的视觉重心是顶栏的
+            // 选中数 + 删除/移动按钮，标题行此时多余甚至干扰。
+            if (!batchMode && !folderBatchMode) {
+                var showShelfSortMenu by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        // 字号从 titleLarge → titleMedium，权重 Bold → SemiBold。
+                        // 顶栏 greeting 已经是 titleLarge.bold 占主视觉位，这里若再用
+                        // 同级会喧宾夺主；降一档让标题做"分隔锚点"而不是"主标题"。
+                        "我的书架",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.92f),
+                        modifier = Modifier.weight(1f),
+                    )
+                    // 排序入口（线性矢量 Sort 图标，3 条递减线，匹配图 3）
+                    Box {
+                        IconButton(
+                            onClick = { showShelfSortMenu = true },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.Sort,
+                                contentDescription = "排序方式",
+                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showShelfSortMenu,
+                            onDismissRequest = { showShelfSortMenu = false },
+                        ) {
+                            listOf(
+                                "recent" to "最近阅读",
+                                "addTime" to "导入时间",
+                                "title" to "书名排序",
+                                "format" to "格式分类",
+                            ).forEach { (key, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        viewModel.setSortMode(key)
+                                        showShelfSortMenu = false
+                                    },
+                                    trailingIcon = {
+                                        if (sortMode == key) Icon(
+                                            Icons.Default.Check, null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    // 切换视图按钮 —— 当前 list → 显示 GridView 图标（提示"切到 grid"），反之亦然。
+                    // outlined 包没有 GridView/ViewList，用 filled + alpha 0.85 减弱视觉重量
+                    // 来贴近图 3 的线性轻量调性。
+                    IconButton(
+                        onClick = {
+                            viewModel.setShelfViewMode(if (isListView) "grid" else "list")
+                        },
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(
+                            if (isListView) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
+                            contentDescription = if (isListView) "切换为网格视图" else "切换为列表视图",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
             }
         }
 

@@ -406,7 +406,16 @@ class ReaderViewModel @Inject constructor(
     fun ttsStop() { tts.ttsStop(); _showTtsPanel.value = false }
 
     fun setChineseConvertMode(mode: Int) {
-        if (mode == settings.chineseConvertMode.value) return
+        // [DIAGNOSTIC 2026-05-10] 临时排查繁简反复切换后仍是繁体的问题，复现后删除。
+        AppLog.info(
+            "ChineseDebug",
+            "setMode ENTRY target=$mode currentSettings=${settings.chineseConvertMode.value} " +
+                "anchor=$chineseConvertAnchor",
+        )
+        if (mode == settings.chineseConvertMode.value) {
+            AppLog.info("ChineseDebug", "setMode OUTER-GUARD-RETURN target=$mode (already at this mode)")
+            return
+        }
         // ── Anchor 锁：连点期间共用同一个起始位置 ──────────────────────────
         // 用户连点繁→简→繁 时每次都会 loadChapter(restoreChapterPosition=visiblePage.chapterPosition)。
         // 但 LazyScroll 模式下 restoreProgress JUMP 后 visible 段的 chapterPosition
@@ -430,7 +439,14 @@ class ReaderViewModel @Inject constructor(
             // 一帧（race），UI 短暂显示旧 mode 内容（"切了又变回去"）。
             // Mutex 保证多次点击按到达顺序排队执行，最后一次胜出。
             chineseConvertMutex.withLock {
-                if (mode == settings.chineseConvertMode.value) return@withLock
+                AppLog.info(
+                    "ChineseDebug",
+                    "setMode LOCK-ACQUIRED target=$mode currentSettings=${settings.chineseConvertMode.value}",
+                )
+                if (mode == settings.chineseConvertMode.value) {
+                    AppLog.info("ChineseDebug", "setMode INNER-GUARD-RETURN target=$mode")
+                    return@withLock
+                }
                 val (anchorProg, anchorPos) = chineseConvertAnchor
                     ?: (progress.scrollProgress.value to progress.visiblePage.value.chapterPosition)
                 settings.setChineseConvertMode(mode)
@@ -438,6 +454,11 @@ class ReaderViewModel @Inject constructor(
                 // 在 IO 协程里读到旧值（DataStore 写入 → Flow emit → stateIn StateFlow.value
                 // 更新存在跨线程延迟，旧路径直接 loadChapter 会 race 拿到旧 mode）。
                 settings.chineseConvertMode.first { it == mode }
+                AppLog.info(
+                    "ChineseDebug",
+                    "setMode SETTINGS-SYNCED target=$mode confirmedSettings=${settings.chineseConvertMode.value}" +
+                        " → loadChapter(idx=${chapter.currentChapterIndex.value}, prog=$anchorProg, pos=$anchorPos)",
+                )
                 // 清旧 mode 转过的预加载（StateFlow + @Volatile 双轨），
                 // 否则同步翻页直接消费旧 PreloadedReaderChapter，呈现
                 // "切完繁简翻下一页又变回去" 的反效果。

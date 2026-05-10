@@ -12,12 +12,29 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.*
+// ── 阅读控制栏底部按钮线性矢量图标 (Image 16 设计) ────────────────────
+// 全部走 Outlined 系列让底栏视觉更轻、更现代；TTS 按钮从「人 + 声波」
+// (RecordVoiceOver) 换成传统麦克风形状 (Mic)，和大多数音频/朗读类 App 对齐。
+// 注意：Icons.Outlined.* 与 Icons.Default.* (= Icons.Filled.*) 是扩展属性，
+// 不能用 `import ... as Alias` 重命名当独立标识符用——只能用完整路径
+// `Icons.Outlined.Xxx`。这里只 import 包让属性可被解析；引用时写完整路径。
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -181,6 +198,9 @@ fun ReaderTopBar(
 private const val POST_SEEK_SETTLE_MS = 200L
 private const val SEEK_PREVIEW_TIMEOUT_MS = 8_000L
 
+// Slider 的 thumb/track 自定义 slot 是 ExperimentalMaterial3Api。
+// 嵌入百分比 track ([EmbeddedPercentTrack]) + 细线 thumb 必须用这个槽位。
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderControlBar(
     currentChapter: Int, totalChapters: Int, chapterTitle: String,
@@ -351,7 +371,10 @@ fun ReaderControlBar(
             .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .clip(barShape)
-            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.88f))
+            // 不透明 surfaceContainer —— 用户反馈 0.88 还是能看到背景文字（深色模式
+            // 下背景是高对比度文字时透出感很明显），1.0 完全不透明。Image 21 vs 20
+            // 对比就是这个修复。
+            .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable(
                 indication = null,
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
@@ -376,32 +399,35 @@ fun ReaderControlBar(
                         overflow = TextOverflow.Ellipsis,
                     )
                 } else {
+                    // ── 章节标题 + 章内进度 ──
+                    // 去掉「· 分隔符」（用户反馈：分隔符让人误以为两者是同级信息）。
+                    // 章名 onSurface 0.7 偏白；进度 (5/71) 用 0.4 灰色 → 视觉上自然分级，
+                    // 章名是主信息，进度是辅信息。
                     Text(
-                        "${chapterTitle.ifBlank { "第${currentChapter + 1}章" }} · $readProgress",
+                        text = chapterTitle.ifBlank { "第${currentChapter + 1}章" },
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = readProgress,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                        maxLines = 1,
                     )
                 }
             }
             // ── #3 章节进度条（可拖动） ──
             // 单章节情况下不渲染 Slider（valueRange 0..0 不合法），保留旧的小提示就够用。
             if (totalChapters > 1) {
-                // Slider 上方居中显示当前进度百分比（拖动时跟随 sliderValue 变化），
-                // 让用户能直接看到"我现在在哪"——之前只有 chapterTitle 没全书 %。
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "${"%.1f".format(previewBookPct)}%",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (seekValue != null) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                    )
-                }
+                // 旧版本 Slider 上方独立 Row 显示「33.8%」—— 用户反馈：
+                //   1. 单独占一行，浪费控制栏纵向空间
+                //   2. 紧挨着「序章 Prologue · 5/71」让人误以为是章内进度
+                // 改成把百分比嵌入 Slider 自身的 track（混合反差色：经过紫色显白，
+                // 没经过显暗紫），既省一行空间，也让百分比天然贴在「全书进度条」上，
+                // 视觉上明确归属为「全书进度」。详见 [EmbeddedPercentTrack]。
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -412,6 +438,10 @@ fun ReaderControlBar(
                         modifier = Modifier.clickable(onClick = onPrevChapter)
                             .padding(vertical = 4.dp, horizontal = 2.dp),
                     )
+                    val barColor = MaterialTheme.colorScheme.primary
+                    val trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                    val textOnEmpty = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                    val textOnFilled = Color.White
                     Slider(
                         value = sliderValue,
                         onValueChange = {
@@ -451,7 +481,27 @@ fun ReaderControlBar(
                         modifier = Modifier
                             .weight(1f)
                             .padding(horizontal = 8.dp)
-                            .height(32.dp),  // 控件整体变紧凑（默认 48dp 触摸区被压成 32dp）
+                            .height(28.dp),  // 略矮于旧版 32dp，让 EmbeddedPercentTrack 的圆角条贴满高度
+                        thumb = {
+                            // 完全隐藏 thumb —— 用户反馈白色细线在填充段末尾形成视觉割裂
+                            // (Image 21)，看起来像两段拼接而不是连续胶囊。隐藏后填充段
+                            // 用自身的右侧圆角自然结束（Image 20 设计）。
+                            //
+                            // 触摸交互不受影响：Slider 的拖动手势绑定整个 modifier 区域，
+                            // 不依赖 thumb 视觉存在。用户照常可以在胶囊上任意位置按下拖动。
+                            Box(modifier = Modifier.size(0.dp))
+                        },
+                        track = {
+                            EmbeddedPercentTrack(
+                                fraction = sliderValue.coerceIn(0f, 1f),
+                                text = "%.1f%%".format(previewBookPct),
+                                isDragging = seekValue != null,
+                                barColor = barColor,
+                                trackColor = trackColor,
+                                textOnEmpty = textOnEmpty,
+                                textOnFilled = textOnFilled,
+                            )
+                        },
                         colors = SliderDefaults.colors(
                             thumbColor = MaterialTheme.colorScheme.primary,
                             activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -495,7 +545,7 @@ fun ReaderControlBar(
                             role = Role.Button
                         },
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(22.dp))
                 }
@@ -508,8 +558,7 @@ fun ReaderControlBar(
                             role = Role.Button
                         },
                 ) {
-                    @Suppress("DEPRECATION")
-                    Icon(Icons.Default.FormatListBulleted, "目录",
+                    Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, "目录",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(22.dp))
                 }
@@ -522,7 +571,7 @@ fun ReaderControlBar(
                             role = Role.Button
                         },
                 ) {
-                    Icon(Icons.Default.Search, "搜索",
+                    Icon(Icons.Outlined.Search, "搜索",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(22.dp))
                 }
@@ -535,7 +584,9 @@ fun ReaderControlBar(
                             role = Role.Button
                         },
                 ) {
-                    Icon(Icons.Default.RecordVoiceOver, "朗读",
+                    // 麦克风图标 + primary tint —— 仍是激活态视觉重心，跟其他 outlined
+                    // 灰色按钮形成对比；image 16 的 mic 也是这个走法。
+                    Icon(Icons.Outlined.Mic, "朗读",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(22.dp))
                 }
@@ -548,7 +599,7 @@ fun ReaderControlBar(
                             role = Role.Button
                         },
                 ) {
-                    Icon(Icons.Default.Timer, "自动翻页",
+                    Icon(Icons.Outlined.Timer, "自动翻页",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(22.dp))
                 }
@@ -561,11 +612,130 @@ fun ReaderControlBar(
                             role = Role.Button
                         },
                 ) {
-                    Icon(Icons.Default.TextFields, "设置",
+                    Icon(Icons.Outlined.TextFields, "设置",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(22.dp))
                 }
             }
+        }
+    }
+}
+
+/**
+ * 进度条 track —— 把全书进度百分比文字嵌入到 Slider 自身的 track 里，
+ * 用「混合反差色」让文字在「填充段」和「空白段」上都清晰可读。
+ *
+ * # 视觉效果
+ *
+ * ```
+ *   ┌──────────────────────┐
+ *   │█████████ 33.8% ░░░░░░│
+ *   └──────────────────────┘
+ *      ↑ 反白处       ↑ 反黑处
+ * ```
+ *
+ *   - 文字在 track 正中 (Alignment.Center)
+ *   - 跨过紫色填充段时显示 [textOnFilled]（白）
+ *   - 跨过空白段时显示 [textOnEmpty]（暗紫）
+ *
+ * # 实现技巧（双层 + clipRect）
+ *
+ * 单层文字无法在两种背景上都对比清晰——纯白看不见空白段，纯暗看不见填充段。
+ * 解法：渲染同一份文字两遍，**两遍的位置完全相同**（都 Center 对齐到同一个
+ * 父 Box），但用 `Modifier.drawWithContent` 配合 [clipRect] 把第二遍裁剪到只
+ * 在「已填充」区域可见。
+ *
+ *   - 底层：textOnEmpty 颜色，全幅显示——空白段看到的就是它
+ *   - 上层：textOnFilled 颜色，clipRect 裁到 fraction 宽度——只在填充段盖住底层
+ *
+ * 这样不论 fraction 是 0 / 50% / 100%，文字始终清晰、不需要根据进度切换颜色。
+ *
+ * # 与 SliderState 的关系
+ *
+ * 调用方在 [ReaderControlBar] 里通过 Slider 的 `track = { ... }` 槽位调用本函数，
+ * 显式传入 fraction（已是 0..1 的 sliderValue）—— 不读 SliderState 的原因：
+ *
+ *   - SliderState 只在 SliderState 版本的 Slider 里可用，本文件用 (value, onValueChange)
+ *     legacy 签名，slot 收到的也是 SliderState 但语义稍有不同
+ *   - 显式传入避免假如 valueRange 不是 0..1 时 fraction 计算分歧
+ */
+@Composable
+private fun EmbeddedPercentTrack(
+    fraction: Float,
+    text: String,
+    isDragging: Boolean,
+    barColor: Color,
+    trackColor: Color,
+    textOnEmpty: Color,
+    textOnFilled: Color,
+) {
+    val barHeight = 24.dp
+    val shape = RoundedCornerShape(barHeight / 2)
+    // ── 渐变填充：起点稍亮（混白 22%），终点 barColor 纯色 ──
+    // 之前填充段是纯色 barColor 一片，视觉扁平 —— 用户反馈"没渐变；没感觉"。
+    // 加横向渐变让填充段在深色背景下有立体光感（从亮到正常），模拟"凸起胶囊"
+    // 的高光效果。混白比例 22% 在深色 / 浅色主题下都不至于过曝。
+    val gradientStart = lerp(barColor, Color.White, 0.22f)
+    val fillBrush = remember(barColor, gradientStart) {
+        Brush.horizontalGradient(colors = listOf(gradientStart, barColor))
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(barHeight)
+            .clip(shape)
+            .background(trackColor),
+        contentAlignment = Alignment.Center,
+    ) {
+        // ① 填充段 —— "独立胶囊"：自己 clip 圆角 + 渐变背景
+        //
+        // 旧实现没有自己的 clip：填充段的左侧贴外层 Box 的圆角"借用"了胶囊形，
+        // 但右侧（fraction × width 处）是直角 → 视觉上是"嵌在外胶囊里"而不是
+        // "独立胶囊浮在 track 上"。用户反馈图 3 那种"突出圆角"的设计感就是
+        // 让填充段两端都圆角 = 独立胶囊。改法：填充段加 clip(shape) 自带胶囊
+        // 圆角，背景换 fillBrush 渐变。
+        if (fraction > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                    .fillMaxHeight()
+                    .align(Alignment.CenterStart)
+                    .clip(shape)
+                    .background(fillBrush),
+            )
+        }
+        // ② 文字底层（在空白段上显色）—— 暗紫，全幅显示
+        Text(
+            text = text,
+            color = textOnEmpty,
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontFeatureSettings = "tnum",  // 数字等宽防抖
+                fontWeight = if (isDragging) FontWeight.Bold else FontWeight.SemiBold,
+            ),
+        )
+        // ③ 文字上层（在填充段上显色）—— 白色，clipRect 裁到 fraction 宽度
+        // drawWithContent + clipRect 是 Compose 里实现"按几何区域反色显示"的标准手法，
+        // 比叠两个 Box + 各自 fillMaxWidth(fraction) 居中要简单一档（后者两个 Box 的
+        // 文字"中心"会跟着各自的容器宽度走 → 两层文字位置不一致 → 文字看起来"撕裂"）。
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .drawWithContent {
+                    val clipWidth = size.width * fraction.coerceIn(0f, 1f)
+                    clipRect(0f, 0f, clipWidth, size.height) {
+                        this@drawWithContent.drawContent()
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = text,
+                color = textOnFilled,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontFeatureSettings = "tnum",
+                    fontWeight = if (isDragging) FontWeight.Bold else FontWeight.SemiBold,
+                ),
+            )
         }
     }
 }

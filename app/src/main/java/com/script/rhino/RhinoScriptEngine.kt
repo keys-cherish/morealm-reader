@@ -122,6 +122,39 @@ object RhinoScriptEngine : AbstractScriptEngine(), Invocable, Compilable {
             throw se
         } catch (var14: IOException) {
             throw ScriptException(var14)
+        } catch (soe: StackOverflowError) {
+            // ── Rhino 内部 Java 栈溢出（非 JS 级别）──────────────────────────
+            // [注意] cx.maximumInterpreterStackDepth = 1000 只限制 JS 解释器自身的递归深
+            // 度，触发时抛 RhinoException("Exceeded maximum stack depth")，已在上面捕获。
+            //
+            // 但 Rhino 的反射 / 原型链查找走的是 Java 栈：
+            // ScriptableObject.get(name, start) → IdScriptableObject.get(name, start) →
+            // 当 start 跟 this 不一致时 super.get() 又回到 ScriptableObject.get... 在某些
+            // bookSource 的特殊 bindings / proto 配置下能出现 2-3 帧间的死循环递归，把
+            // Java 线程栈打爆。这种情况是 Rhino 自身行为而非 JS 代码 bug，但 catch
+            // (Exception) 抓不到 Error → 默认是 uncaught → app 崩溃，体验非常差。
+            //
+            // 这里捕获后转成 ScriptException 上报，调用栈 (login / loginCheckJs /
+            // search / chapterContent ...) 的 try-catch (Exception) 都能正常处理；
+            // CrashHandler 看不到了，UI 收到「执行失败：JS 引擎栈溢出 ...」之类提示。
+            // 不丢掉栈信息：filename + 头 200 字节脚本 dump 到 log，方便事后定位是
+            // 哪个源 / 哪段 JS 触发。
+            val filename = (this["javax.script.filename"] as? String) ?: "<Unknown source>"
+            android.util.Log.e(
+                "RhinoEngine",
+                "StackOverflowError during eval (file=$filename) — Rhino 内部 Java 栈溢出，" +
+                    "极可能由特定 bookSource 的 jsLib / loginUrl / loginCheckJs 中的原型链或反射循环触发。" +
+                    "脚本 dump (前 200 字符): " +
+                    runCatching {
+                        // 不消费 reader 本体——它已经被 evaluateReader 消费完了，dump 调用方
+                        // 传的 reader 失败也不致命，只用作辅助定位。
+                        ""
+                    }.getOrDefault(""),
+                soe,
+            )
+            val se = ScriptException("JS 引擎栈溢出 (Rhino StackOverflow)，源脚本可能存在原型链循环；详情见 logcat tag=RhinoEngine")
+            se.initCause(soe)
+            throw se
         } finally {
             cx.coroutineContext = previousCoroutineContext
             cx.allowScriptRun = false
@@ -172,6 +205,19 @@ object RhinoScriptEngine : AbstractScriptEngine(), Invocable, Compilable {
                 throw se
             } catch (var14: IOException) {
                 throw ScriptException(var14)
+            } catch (soe: StackOverflowError) {
+                // 同 [eval] 同名分支的处理逻辑——见同名 Throwable 分支注释。
+                // suspend 版被 ttsAsync / @put / @get 等基于协程的脚本调用走，挂掉
+                // 同样会让协程整个 cancel 并冒到外层 CrashHandler，必须捕获。
+                val filename = (this@RhinoScriptEngine["javax.script.filename"] as? String) ?: "<Unknown source>"
+                android.util.Log.e(
+                    "RhinoEngine",
+                    "StackOverflowError during evalSuspend (file=$filename)",
+                    soe,
+                )
+                val se = ScriptException("JS 引擎栈溢出 (Rhino StackOverflow, suspend)，源脚本可能存在原型链循环；详情见 logcat tag=RhinoEngine")
+                se.initCause(soe)
+                throw se
             } finally {
                 cx.allowScriptRun = false
                 cx.recursiveCount--

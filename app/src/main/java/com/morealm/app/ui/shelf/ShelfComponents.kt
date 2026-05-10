@@ -327,11 +327,12 @@ fun ContinueReadingCard(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Mini cover
+            // Cover —— 比旧版 48x64 大一圈，对齐 Image 9 设计的视觉权重；
+            // 让封面成为视觉主角而非 18dp 内的小占位
             Box(
                 modifier = Modifier
-                    .size(48.dp, 64.dp)
-                    .clip(MaterialTheme.shapes.extraSmall)
+                    .size(56.dp, 76.dp)
+                    .clip(MaterialTheme.shapes.small)
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center,
             ) {
@@ -340,7 +341,7 @@ fun ContinueReadingCard(
                     AsyncImage(
                         model = ImageRequest.Builder(context)
                             .data(resolveCoverData(book.coverUrl))
-                            .size(96, 128)
+                            .size(112, 152)
                             .crossfade(80)
                             .memoryCachePolicy(CachePolicy.ENABLED)
                             .diskCachePolicy(CachePolicy.ENABLED)
@@ -355,35 +356,59 @@ fun ContinueReadingCard(
                         Icons.AutoMirrored.Filled.MenuBook,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp),
+                        modifier = Modifier.size(28.dp),
                     )
                 }
             }
 
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
+                // ── Top group: 「继续阅读」+ 书名 ──
+                // UX-6 (亲密性): label + title 同组识别信息，行间紧凑；与下方进度条用 10dp 分组
                 Text(
                     "继续阅读",
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
                 )
+                Spacer(Modifier.height(2.dp))
                 Text(
                     book.title,
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // UX-6 (亲密性): "继续阅读"+书名 是一组识别信息, 进度条是状态信息
-                // 4dp 显得识别和状态混作一谈; 8dp 让进度条形成独立的"状态行"
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { book.readProgress },
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                )
+                Spacer(Modifier.height(10.dp))
+
+                // ── Bottom: 进度条 + 百分比同行 ──
+                // 不再单独占一行；通过 Row(spacedBy) 让百分比贴在进度条右侧。
+                // drawStopIndicator = {} 关掉 Material3 1.4 默认的「末端圆点」
+                // —— Image 9 是无圆点的扁平进度条。
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    LinearProgressIndicator(
+                        progress = { book.readProgress },
+                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                        drawStopIndicator = {},
+                    )
+                    // 百分比保留 1 位小数 —— 整数粒度 (33%) 与小数 (33.8%) 信息密度差距大
+                    // 但不到两位 (33.85%) 那么噪。fontFeatureSettings tnum 让数字等宽，
+                    // 防止滚动 32.0/33.5/34.1 时数字宽度抖动 → 进度条宽度也跟着抖。
+                    Text(
+                        text = "%.1f%%".format(book.readProgress * 100f),
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontFeatureSettings = "tnum",
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

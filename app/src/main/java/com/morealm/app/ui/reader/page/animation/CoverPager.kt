@@ -52,6 +52,21 @@ internal fun CoverPager(
     modifier: Modifier = Modifier,
     onPageSettled: (Int) -> Unit = {},
     pageContent: @Composable (Int) -> Unit,
+    /**
+     * 视觉反向排列。竖排右起 (vertical_rl) 走 true。详见 [SlidePager] 同名参数注释。
+     *
+     * COVER 动画在 reverseLayout 下视觉效果会有差异：incoming 页从「视觉左侧」滑入
+     * (因为 pager 的 X 方向反了)，左侧阴影方向也跟着变。Phase 2 不修阴影 —— 视觉
+     * 不完全对称但仍能识别为「上一页被覆盖」效果，比直接 fallback 到 SLIDE 信息密度高。
+     *
+     * 放在 pageContent 后是为了不破坏现有横排路径的位置参数调用。详见 [SlidePager]
+     * 同名参数注释。
+     */
+    reverseLayout: Boolean = false,
+    /**
+     * 是否允许用户拖动。详见 [SlidePager] 同名参数。
+     */
+    userScrollEnabled: Boolean = false,
 ) {
     // LaunchedEffect(pagerState) 只在 pagerState 变化时重启，而 pagerState 整个
     // Reader 共享 → 跨章时 effect 不重启，其闭包里 collect 的 onPageSettled 还是
@@ -73,7 +88,8 @@ internal fun CoverPager(
     HorizontalPager(
         state = pagerState,
         modifier = modifier.fillMaxSize(),
-        userScrollEnabled = false,
+        userScrollEnabled = userScrollEnabled,
+        reverseLayout = reverseLayout,
     ) { pageIndex ->
         val pageOffset = (pagerState.currentPage - pageIndex) +
             pagerState.currentPageOffsetFraction
