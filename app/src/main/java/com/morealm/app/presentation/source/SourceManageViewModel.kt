@@ -36,6 +36,7 @@ class BookSourceManageViewModel @Inject constructor(
     )
 
     val sources: StateFlow<List<BookSource>> = sourceRepo.getAllSources()
+        .onEach { AppLog.debug("SourceManage", "sources emit size=${it.size}") }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /**
@@ -84,6 +85,64 @@ class BookSourceManageViewModel @Inject constructor(
         viewModelScope.launch {
             AppLog.info("SourceManage", "sortAsc set -> $asc")
             prefs.setSourceSortAscending(asc)
+        }
+    }
+
+    /**
+     * 书源导出结果（一次性事件）：[Result.success] 携带导出条数，failure 携带异常。
+     * UI 在 collect 后弹 Snackbar 给反馈。SharedFlow + extraBuffer=1 让 UI 在
+     * 启动 export 之前订阅与之后订阅都不丢消息（typical case 是先 collect 再点导出）。
+     */
+    private val _exportResult = kotlinx.coroutines.flow.MutableSharedFlow<Result<Int>>(extraBufferCapacity = 1)
+    val exportResult: kotlinx.coroutines.flow.SharedFlow<Result<Int>> = _exportResult.asSharedFlow()
+
+    /** 导出专用 Json 配置：与 [BookSource] 的 jsonParser 不同，**关闭 encodeDefaults**，
+     *  让默认值字段不出现在 JSON 里——这样导出 JSON 体积更小、与 Legado 原生导出风格
+     *  一致（其他人/其他 App 看到时不会被一堆空 ""、0、false 字段淹没）。
+     *  prettyPrint 让用户用文本编辑器直接看也好读。
+     */
+    private val exportJson = kotlinx.serialization.json.Json {
+        encodeDefaults = false
+        prettyPrint = true
+        ignoreUnknownKeys = true
+    }
+
+    /**
+     * 把书源列表导出为 Legado 兼容 JSON 数组写到 [uri]（SAF CreateDocument 拿到的）。
+     *
+     * @param uri SAF 选中的目标位置；调用方负责通过 ActivityResultContracts.CreateDocument 拿到
+     * @param urls 要导出的书源 [BookSource.bookSourceUrl] 集合；null / 空集 = 导出全部
+     *
+     * 实现要点：
+     *  - 序列化用 [List<BookSource>] 直接 encode（BookSource 自身是 @Serializable）
+     *  - 写文件走 [Context.contentResolver.openOutputStream]，对 SAF / file:// / content:// 都通用
+     *  - 失败/成功都 emit 到 [exportResult]，UI 单一订阅源
+     *
+     * 不返回结果，由 [exportResult] 异步 emit；这样 UI 可以在 launch SAF 之前就订阅好。
+     */
+    fun exportToUri(uri: android.net.Uri, urls: Collection<String>?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val all = sources.value
+                val list = if (urls.isNullOrEmpty()) all
+                else all.filter { it.bookSourceUrl in urls }
+                if (list.isEmpty()) {
+                    _exportResult.tryEmit(Result.failure(IllegalStateException("没有可导出的书源")))
+                    return@launch
+                }
+                val text = exportJson.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(BookSource.serializer()),
+                    list,
+                )
+                context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                    out.write(text.toByteArray(Charsets.UTF_8))
+                } ?: throw IllegalStateException("无法打开输出流")
+                AppLog.info("SourceExport", "Exported ${list.size} source(s) to $uri")
+                _exportResult.tryEmit(Result.success(list.size))
+            } catch (e: Exception) {
+                AppLog.error("SourceExport", "Export failed", e)
+                _exportResult.tryEmit(Result.failure(e))
+            }
         }
     }
 
@@ -148,7 +207,29 @@ class BookSourceManageViewModel @Inject constructor(
 
     fun deleteSource(source: BookSource) {
         viewModelScope.launch(Dispatchers.IO) {
-            sourceRepo.delete(source)
+            val t0 = System.currentTimeMillis()
+            AppLog.info("SourceManage", "deleteSource ENTRY url=${source.bookSourceUrl} name=${source.bookSourceName}")
+            runCatching { sourceRepo.delete(source) }
+                .onFailure { AppLog.error("SourceManage", "deleteSource FAILED ${source.bookSourceUrl}", it) }
+            AppLog.info("SourceManage", "deleteSource DONE url=${source.bookSourceUrl} dt=${System.currentTimeMillis() - t0}ms")
+        }
+    }
+
+    fun deleteSources(urls: Collection<String>) {
+        if (urls.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val t0 = System.currentTimeMillis()
+            val urlList = urls.toList()
+            AppLog.info(
+                "SourceManage",
+                "deleteSources ENTRY wantUrls=${urls.size} totalSources=${sources.value.size} (batch deleteByUrls)",
+            )
+            runCatching { sourceRepo.deleteByUrls(urlList) }
+                .onFailure { AppLog.error("SourceManage", "deleteSources batch FAILED", it) }
+            AppLog.info(
+                "SourceManage",
+                "deleteSources DONE wantUrls=${urls.size} dt=${System.currentTimeMillis() - t0}ms",
+            )
         }
     }
 
@@ -252,12 +333,14 @@ class BookSourceManageViewModel @Inject constructor(
     private suspend fun importSourcesIncrementally(sources: List<BookSource>) {
         _importProgress.value = ImportProgress(total = sources.size)
         withContext(Dispatchers.IO) {
-            sources.forEachIndexed { index, source ->
-                sourceRepo.insert(source)
+            sources.chunked(200).forEachIndexed { chunkIndex, chunk ->
+                sourceRepo.importAll(chunk)
+                val current = ((chunkIndex + 1) * 200).coerceAtMost(sources.size)
+                val last = chunk.lastOrNull()
                 _importProgress.value = ImportProgress(
-                    current = index + 1,
+                    current = current,
                     total = sources.size,
-                    sourceName = source.bookSourceName.ifBlank { source.bookSourceUrl },
+                    sourceName = last?.bookSourceName?.ifBlank { last.bookSourceUrl }.orEmpty(),
                 )
             }
         }
@@ -288,11 +371,27 @@ class BookSourceManageViewModel @Inject constructor(
     init {
         // Service.results 直接镜像到 _checkResults — Service 跑批前会清空，不需要本地清。
         viewModelScope.launch {
-            CheckSourceService.results.collect { _checkResults.value = it }
+            CheckSourceService.results.collect {
+                // NPE 防御：kotlinx-coroutines / R8 在某些边角情况下会让 StateFlow<T:Any>
+                // 的 FlowCollector.emit 拿到 null sentinel，虽然类型系统保证不可空，
+                // 赋给下游 MutableStateFlow.setValue 时会抛 `Object.getClass()` NPE。
+                // 这里拿到 null 只 warn 跳过，不影响正常路径。
+                @Suppress("SENSELESS_COMPARISON")
+                if (it == null) {
+                    AppLog.warn("SourceManage", "CheckSourceService.results emit NULL, skip")
+                    return@collect
+                }
+                _checkResults.value = it
+            }
         }
         // Service.state 投影到三个进度 flow + 触发 dialog（仅 Done 时）
         viewModelScope.launch {
             CheckSourceService.state.collect { s ->
+                @Suppress("SENSELESS_COMPARISON")
+                if (s == null) {
+                    AppLog.warn("SourceManage", "CheckSourceService.state emit NULL, skip")
+                    return@collect
+                }
                 when (s) {
                     is CheckSourceService.Companion.State.Idle -> {
                         _isChecking.value = false
@@ -370,15 +469,21 @@ class BookSourceManageViewModel @Inject constructor(
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
-            val toDelete = sources.value.filter { it.bookSourceUrl in sourceUrls }
-            for (s in toDelete) {
-                runCatching { sourceRepo.delete(s) }
-                    .onFailure {
-                        AppLog.warn("CheckSource", "delete failed ${s.bookSourceUrl}: ${it.message}")
-                    }
-            }
+            val t0 = System.currentTimeMillis()
+            val urlList = sourceUrls.toList()
+            AppLog.info(
+                "SourceManage",
+                "deleteInvalidSources ENTRY wantUrls=${sourceUrls.size}" +
+                    " totalSources=${sources.value.size} (batch deleteByUrls)",
+            )
+            runCatching { sourceRepo.deleteByUrls(urlList) }
+                .onFailure { AppLog.warn("SourceManage", "deleteInvalidSources batch FAILED: ${it.message}") }
             _showInvalidResultsDialog.value = false
-            _importResult.value = "已删除 ${toDelete.size} 个失效书源"
+            _importResult.value = "已删除 ${sourceUrls.size} 个失效书源"
+            AppLog.info(
+                "SourceManage",
+                "deleteInvalidSources DONE wantUrls=${sourceUrls.size} dt=${System.currentTimeMillis() - t0}ms",
+            )
         }
     }
 
@@ -387,10 +492,21 @@ class BookSourceManageViewModel @Inject constructor(
         val invalidUrls = results.filter { !it.value.isValid }.keys
         if (invalidUrls.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
-            val toDelete = sources.value.filter { it.bookSourceUrl in invalidUrls }
-            toDelete.forEach { sourceRepo.delete(it) }
-            _importResult.value = "已删除 ${toDelete.size} 个无效书源"
+            val t0 = System.currentTimeMillis()
+            val urlList = invalidUrls.toList()
+            AppLog.info(
+                "SourceManage",
+                "removeInvalidSources ENTRY wantUrls=${invalidUrls.size}" +
+                    " totalSources=${sources.value.size} (batch deleteByUrls)",
+            )
+            runCatching { sourceRepo.deleteByUrls(urlList) }
+                .onFailure { AppLog.warn("SourceManage", "removeInvalidSources batch FAILED: ${it.message}") }
+            _importResult.value = "已删除 ${invalidUrls.size} 个无效书源"
             _checkResults.value = emptyMap()
+            AppLog.info(
+                "SourceManage",
+                "removeInvalidSources DONE wantUrls=${invalidUrls.size} dt=${System.currentTimeMillis() - t0}ms",
+            )
         }
     }
 

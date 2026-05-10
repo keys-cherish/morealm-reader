@@ -15,6 +15,7 @@ import com.morealm.app.domain.entity.rule.TocRule
 import com.morealm.app.domain.analyzeRule.JsExtensions
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.CookieStore
+import com.morealm.app.domain.source.SharedJsScope
 import kotlinx.serialization.builtins.serializer
 import com.script.ScriptBindings
 import com.script.rhino.RhinoScriptEngine
@@ -140,12 +141,28 @@ data class BookSource(
     }
 
     /**
-     * 执行登录脚本，传入用户填写的表单数据
+     * 执行登录脚本，传入用户填写的表单数据。
+     *
+     * 注入的 bindings 与 Legado SourceLoginDialog.login 对齐：
+     *  - `result` = [loginData] 表单值
+     *  - `book` / `chapter` = null（MoRealm 登录入口当前不携带书上下文，与 Legado
+     *    "从书源管理页直接登录"路径一致；如需带书上下文走 SourceLoginActivity 那条路再补）
+     *  - `isLongClick` = false
+     *
+     * [extraBindings] 让调用方追加副绑定（典型：`loginExt = SourceLoginScriptApi(...)`），
+     * 由 ViewModel 在创建时持有 lambda 把 JS 反向通道映射到 SharedFlow。
+     *
+     * [preludeJs] 会拼到脚本最前面。典型用途：`SourceLoginScriptApi.LEGACY_JAVA_COMPAT_PRELUDE`
+     * 让 Legado 原生 `java.upLoginData` 类写法零改动跑通。空串时按老逻辑处理。
      */
-    fun login(loginData: Map<String, String> = emptyMap()) {
+    fun login(
+        loginData: Map<String, String> = emptyMap(),
+        preludeJs: String = "",
+        extraBindings: ((ScriptBindings) -> Unit)? = null,
+    ) {
         val loginJs = getLoginJs()
         if (!loginJs.isNullOrBlank()) {
-            val js = """$loginJs
+            val js = """$preludeJs$loginJs
                 if(typeof login=='function'){
                     login.apply(this);
                 } else {
@@ -154,6 +171,10 @@ data class BookSource(
             """.trimIndent()
             evalJS(js) { bindings ->
                 bindings["result"] = loginData.toMutableMap()
+                bindings["book"] = null
+                bindings["chapter"] = null
+                bindings["isLongClick"] = false
+                extraBindings?.invoke(bindings)
             }
         }
     }
@@ -318,8 +339,30 @@ data class BookSource(
             bindings["cookie"] = CookieStore
             bindings["cache"] = CacheManager
             extraBindings?.invoke(bindings)
-            val scope = RhinoScriptEngine.getRuntimeScope(bindings)
-            RhinoScriptEngine.eval(jsStr, scope)
+            // jsLib 里声明的变量（host / 辅助函数等）通过 prototype 链暴露给后续 eval。
+            // 对齐 Legado BaseSource.evalJS：有 sharedScope 就跳过 getRuntimeScope，
+            // 直接把 bindings.prototype 挂成 sharedScope；否则走原 topLevel 路径。
+            val sharedScope = SharedJsScope.getScope(jsLib)
+            val scope = if (sharedScope != null) {
+                bindings.prototype = sharedScope
+                bindings
+            } else {
+                RhinoScriptEngine.getRuntimeScope(bindings)
+            }
+            try {
+                RhinoScriptEngine.eval(jsStr, scope)
+            } catch (e: Exception) {
+                // 把书源名打到 log——RhinoScriptEngine 看不到 source 实例，但定位
+                // 「哪个源的 JS 触发栈溢出 / 抛错」对运维至关重要。脚本前 80 字符
+                // 也 dump 出来，配合 logcat tag=RhinoEngine 的栈帧能精确定位是
+                // loginUrl / loginCheckJs / jsLib / header @js 哪一段。
+                com.morealm.app.core.log.AppLog.warn(
+                    "BookSource.evalJS",
+                    "evalJS failed [source='${bookSourceName}' url='${bookSourceUrl}']: " +
+                        "${e.message?.take(120)} | jsHead='${jsStr.take(80).replace("\n", "\\n")}'",
+                )
+                throw e
+            }
         }
     }
 

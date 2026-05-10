@@ -248,7 +248,31 @@ object EpubParser {
             val img = svg.selectFirst("img")
             if (img != null) {
                 svg.replaceWith(img)
+                return@forEach
             }
+            // 没 img 的 SVG 通常是注释 / 批注 / 章节装饰之类的内联图标 ——
+            // 「制作说明」EPUB 把「注」「批」用 SVG 圆圈+text 画成小徽标。
+            // 之前的 outerHtml + HtmlFormatter.notImgHtmlRegex 会剥掉 svg/text
+            // 标签但**保留 text 内的文字**，结果「注」「批」字独立成段渲染成
+            // 屏幕级超大字（图2 bug）。
+            //
+            // 修法：SVG 里有 <text> → 替换成方括号包裹的小文字（[注] / [批]），
+            // 让 reader 能展现「这里是注释徽标」语义但不破坏 layout；
+            // SVG 里啥文本都没（纯几何 path 图标）→ 整个移除，避免空 SVG 漏出。
+            //
+            // 后续 Phase 2 可改成专用 footnote token + Compose 层弹窗交互（图3 友商效果）。
+            val texts = svg.select("text")
+            if (texts.isNotEmpty()) {
+                val joined = texts.joinToString("") { it.text() }.trim()
+                if (joined.isNotBlank()) {
+                    val short = joined.take(4)  // 限长 4 字符够覆盖 注/批/作/序 这种
+                    svg.replaceWith(
+                        org.jsoup.nodes.TextNode("[$short]"),
+                    )
+                    return@forEach
+                }
+            }
+            svg.remove()
         }
         // Resolve relative image paths
         body.select("img").forEach { img ->
@@ -288,7 +312,32 @@ object EpubParser {
     ): String {
         elements.select("title").remove()
         elements.select("[style*=display:none]").remove()
-        // Strip ruby annotations (rp/rt) for cleaner text
+        // ── 振假名 Phase 1：保留 rt 文字（之前直接 select("rp, rt").remove() 把读音
+        //    一律删掉，日文 EPUB 用户看不到「八奈見(やなみ)」这种 ふりがな 注音）。
+        //
+        //    Ruby DOM 结构有多种：
+        //      <ruby>八奈見<rt>やなみ</rt></ruby>
+        //      <ruby><rb>八奈見</rb><rt>やなみ</rt></ruby>
+        //      <ruby>八<rt>や</rt>奈<rt>な</rt>見<rt>み</rt></ruby>  ← 字符级拆分
+        //    通用算法：先把所有 rt 文字 join 起来，再把 rp（括号占位符 () ）删掉避免
+        //    双层括号，剩下的 ruby 内容就是「底字」。底字 + 全角括号 + rt = 内联输出。
+        //
+        //    Phase 2 PageLayout 会识别 (?<base>..)(?<rt>..) 这种内联标记并升级为
+        //    上方 ruby 小字渲染（参考图1 静读天下日文）。Phase 1 先让 ruby 文字
+        //    至少出现，比之前完全不显示强。
+        elements.select("ruby").forEach { ruby ->
+            ruby.select("rp").remove()
+            val rts = ruby.select("rt").joinToString("") { it.text() }
+            ruby.select("rt").remove()
+            val baseText = ruby.text()  // 剩下的全部就是底字（去掉 rt/rp 后）
+            val joined = if (rts.isNotBlank() && baseText.isNotBlank()) {
+                "$baseText（$rts）"
+            } else {
+                baseText
+            }
+            ruby.replaceWith(org.jsoup.nodes.TextNode(joined))
+        }
+        // 兜底：游离的 rp/rt（不在 ruby 内的孤儿节点）依然移除
         elements.select("rp, rt").remove()
         elements.select("img[$COVER_IMAGE_MARKER]").forEachIndexed { i, img ->
             if (i > 0) img.remove()

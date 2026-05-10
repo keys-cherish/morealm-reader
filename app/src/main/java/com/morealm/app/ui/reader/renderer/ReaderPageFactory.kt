@@ -109,6 +109,12 @@ internal class ReaderPageFactory(
         return prevPages.lastIndex
     }
 
+    fun snapshotCurrentChapterIndex(): Int? = currentChapter?.chapterIndex
+
+    fun snapshotPrevChapterIndex(): Int? = prevChapter?.chapterIndex
+
+    fun snapshotPrevChapterPageCount(): Int = prevPages.size
+
     fun pageAt(displayIndex: Int): TextPage {
         return pages.getOrNull(displayIndex.coerceIn(0, pageCount - 1)) ?: curPage
     }

@@ -1,12 +1,15 @@
 package com.morealm.app.ui.settings
 
+import android.content.ClipData
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -33,6 +37,7 @@ import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.derivedStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,7 +74,6 @@ fun AppLogScreen(onBack: () -> Unit) {
     val crashFiles = remember { mutableStateOf(AppLog.getCrashFiles()) }
     var selectedCrashFile by remember { mutableStateOf<File?>(null) }
     var crashContent by remember { mutableStateOf("") }
-    var recordLog by remember { mutableStateOf(AppLog.isRecordLogEnabled()) }
 
     // Tag filter — null 表示「全部」。可选 tag 列表从当前 logs 动态推算，
     // 这样新出现的 tag（比如临时埋点 PageTurnFlicker）会自动出现在 chip 行
@@ -265,25 +269,17 @@ fun AppLogScreen(onBack: () -> Unit) {
                 }
             }
 
-            // RecordLog toggle
-            Row(
-                modifier = Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("详细日志记录", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    modifier = Modifier.weight(1f))
-                Switch(
-                    checked = recordLog,
-                    onCheckedChange = {
-                        recordLog = it
-                        AppLog.setRecordLog(it)
-                    },
-                    modifier = Modifier.height(32.dp),
-                )
-            }
+            // 日志路径 banner + 授权入口
+            LogPathBanner(
+                context = context,
+                onPermissionGranted = {
+                    // 用户授权后，进程内重新初始化 fileSink 让路径立刻切到 /MoRealm/logs，
+                    // 不需要重启 App。reinitFileSink 路径没变化时返回 null（no-op）。
+                    val newPath = AppLog.reinitFileSink(context)
+                    val msg = if (newPath != null) "日志路径已切换：$newPath" else "已授权，日志将保存到共享目录"
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                }
+            )
 
             // ── 日志清理面板 ──
             // 折叠的标题条 + 展开后的 4 个 slider + 立即清理按钮。
@@ -666,7 +662,7 @@ private fun LogListTab(
                             onLongClick = { onItemLongPress(record) },
                         )
                         .background(rowBg, MaterialTheme.shapes.extraSmall)
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (selectionMode) {
@@ -678,21 +674,57 @@ private fun LogListTab(
                         Spacer(Modifier.width(4.dp))
                     }
                     Column(Modifier.weight(1f)) {
+                        // 第一行：[Level chip] + tag(加粗) + (Spacer) + time 右对齐
+                        // 视觉重点前移 — 用户扫日志时第一眼看 level 和 tag，时间次要靠右。
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(timeFmt.format(Date(record.time)),
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontFamily = FontFamily.Monospace),
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
-                            Spacer(Modifier.width(6.dp))
-                            Text(record.level.label,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = color)
-                            Spacer(Modifier.width(6.dp))
-                            Text(record.tag,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                            Surface(
+                                shape = MaterialTheme.shapes.extraSmall,
+                                color = color.copy(alpha = 0.18f),
+                            ) {
+                                Text(
+                                    record.level.label.uppercase(),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    ),
+                                    color = color,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                record.tag,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = true),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                timeFmt.format(Date(record.time)),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                            )
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        // message：WARN 及以上染对应色（用户图 1 的 ERROR 红字效果），
+                        // INFO/DEBUG/VERBOSE 用 onSurface 默认，避免大批量普通日志全染色
+                        // 反而失去重点。
+                        val messageColor = if (record.level.priority >= LogLevel.WARN.priority) {
+                            color
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
                         }
                         Text(record.message,
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = messageColor,
                             maxLines = if (selected == record) Int.MAX_VALUE else 2,
                             overflow = TextOverflow.Ellipsis)
                         if (selected == record && record.throwable != null) {
@@ -832,17 +864,19 @@ private fun exportLogTxt(
         val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val fileName = "MoRealm_log_$ts.txt"
         val content = buildLogExportContent(records, tagFilter)
-        val uri = writeLogExportToDownloads(context, fileName, content)
+        val shareUri = writeLogExportToShareCache(context, fileName, content)
+        val savedToDownloads = trySaveLogExportToDownloads(context, fileName, content)
 
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_STREAM, shareUri)
             putExtra(Intent.EXTRA_SUBJECT, "MoRealm log $ts")
+            clipData = ClipData.newUri(context.contentResolver, fileName, shareUri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         Toast.makeText(
             context,
-            "已保存到 /storage/emulated/0/Download/morealm/log_exports/$fileName",
+            if (savedToDownloads) "已保存到 Download/$fileName，可直接分享" else "已生成日志文件，可直接分享",
             Toast.LENGTH_LONG,
         ).show()
         context.startActivity(Intent.createChooser(intent, "导出日志 TXT"))
@@ -872,17 +906,47 @@ private fun buildLogExportContent(
     }
 }
 
-private fun writeLogExportToDownloads(
+private fun writeLogExportToShareCache(
     context: Context,
     fileName: String,
     content: String,
 ): Uri {
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    val exportDir = File(context.cacheDir, "log_exports").apply { mkdirs() }
+    exportDir.listFiles()
+        ?.filter { it.name.startsWith("MoRealm_log_") && it.name.endsWith(".txt") }
+        ?.sortedByDescending { it.lastModified() }
+        ?.drop(10)
+        ?.forEach { it.delete() }
+    val txtFile = File(exportDir, fileName)
+    txtFile.writeText(content)
+    return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", txtFile)
+}
+
+private fun trySaveLogExportToDownloads(
+    context: Context,
+    fileName: String,
+    content: String,
+): Boolean {
+    return try {
+        writeLogExportToDownloads(context, fileName, content)
+        true
+    } catch (e: Exception) {
+        AppLog.warn("LogExport", "Save to Download skipped", e)
+        false
+    }
+}
+
+private fun writeLogExportToDownloads(
+    context: Context,
+    fileName: String,
+    content: String,
+) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, fileName)
             put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/morealm/log_exports")
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -894,7 +958,6 @@ private fun writeLogExportToDownloads(
             values.clear()
             values.put(MediaStore.Downloads.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
-            uri
         } catch (t: Throwable) {
             resolver.delete(uri, null, null)
             throw t
@@ -902,10 +965,8 @@ private fun writeLogExportToDownloads(
     } else {
         @Suppress("DEPRECATION")
         val baseDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val exportDir = File(baseDir, "morealm/log_exports").apply { mkdirs() }
-        val txtFile = File(exportDir, fileName)
+        val txtFile = File(baseDir.apply { mkdirs() }, fileName)
         txtFile.writeText(content)
-        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", txtFile)
     }
 }
 
@@ -1142,4 +1203,114 @@ private fun cleanupReportMessage(report: CleanupReport): String {
     else
         "${report.freedBytes / 1024} KB"
     return "已删 ${parts.joinToString("、")}，回收 $freed"
+}
+
+/**
+ * 日志路径 banner + 授权入口。
+ *
+ * 显示当前日志目录路径，如果是 Android 11+ 且未授权 MANAGE_EXTERNAL_STORAGE，
+ * 显示「授权管理所有文件」按钮，点击跳转到系统设置。授权后自动切换到共享根目录。
+ */
+@Composable
+private fun LogPathBanner(
+    context: Context,
+    onPermissionGranted: () -> Unit,
+) {
+    // 用 derivedStateOf 避免不必要的重组，只在权限真正变化时更新
+    var permissionState by remember { mutableStateOf(AppLog.hasManageStoragePermission()) }
+    val logPath by remember { derivedStateOf { AppLog.getLogDirPath() } }
+
+    // 监听 Activity resume 事件，检测用户从设置页返回后是否授权
+    DisposableEffect(Unit) {
+        val activity = context as? android.app.Activity
+        val callback = object : android.app.Application.ActivityLifecycleCallbacks {
+            override fun onActivityResumed(a: android.app.Activity) {
+                if (a == activity) {
+                    val newPermission = AppLog.hasManageStoragePermission()
+                    if (newPermission && !permissionState) {
+                        permissionState = true
+                        onPermissionGranted()
+                    }
+                }
+            }
+            override fun onActivityCreated(a: android.app.Activity, s: Bundle?) {}
+            override fun onActivityStarted(a: android.app.Activity) {}
+            override fun onActivityPaused(a: android.app.Activity) {}
+            override fun onActivityStopped(a: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(a: android.app.Activity, o: Bundle) {}
+            override fun onActivityDestroyed(a: android.app.Activity) {}
+        }
+        activity?.application?.registerActivityLifecycleCallbacks(callback)
+        onDispose {
+            activity?.application?.unregisterActivityLifecycleCallbacks(callback)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "日志路径",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                logPath,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        // 调试信息：显示权限状态和 Android 版本
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Android ${Build.VERSION.SDK_INT} | 权限状态: ${if (permissionState) "已授权" else "未授权"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
+        }
+
+        // Android 11+ 且未授权时显示授权按钮
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !permissionState) {
+            Spacer(Modifier.height(8.dp))
+            FilledTonalButton(
+                onClick = {
+                    try {
+                        val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        // Fallback：跳转到通用的「管理所有文件」设置页
+                        try {
+                            val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                            context.startActivity(intent)
+                        } catch (e2: Exception) {
+                            Toast.makeText(context, "无法打开设置页", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("授权管理所有文件（日志将保存到 /MoRealm/logs）", style = MaterialTheme.typography.labelSmall)
+            }
+            Text(
+                "授权后日志将保存到共享根目录，方便在文件管理器中查看",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
 }

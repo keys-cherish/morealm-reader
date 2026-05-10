@@ -490,7 +490,7 @@ object AppLog {
     private val idCounter = java.util.concurrent.atomic.AtomicLong(0)
     fun nextId(): Long = idCounter.incrementAndGet()
 
-    private val sinks = mutableListOf<LogSink>()
+    private val sinks = java.util.concurrent.CopyOnWriteArrayList<LogSink>()
     private var memorySink: MemorySink? = null
     private var fileSink: RollingFileSink? = null
     private var deviceInfo: String = ""
@@ -506,6 +506,8 @@ object AppLog {
     private const val KEY_FILE_SIZE = "limit_file_size_bytes"
     private const val KEY_TOTAL_DIR = "limit_total_dir_bytes"
     private const val KEY_MAX_DAYS = "limit_max_days"
+    /** 上次启动已自动复制到剪贴板的 crash 文件名（去重用），避免每次启动都重复 toast。 */
+    private const val KEY_LAST_COPIED_CRASH = "last_copied_crash_file"
 
     /** Reactive log records for Compose UI */
     val logs: StateFlow<List<LogRecord>>
@@ -517,8 +519,7 @@ object AppLog {
         if (initialized) return
         initialized = true
 
-        val logDir = (context.getExternalFilesDir(null) ?: context.filesDir)
-            .let { File(it, "logs").apply { mkdirs() } }
+        val logDir = getLogDir(context)
 
         // Pre-load persisted limits so the sinks are constructed with the
         // user's saved values, not the factory defaults. Falling back to
@@ -576,6 +577,11 @@ object AppLog {
         installCrashHandler(logDir)
         installAnrWatchdog()
         if (context is Application) installLifecycleMonitor(context)
+
+        // 上次启动若发生过崩溃，把关键摘要复制到剪贴板，方便用户直接贴给开发者。
+        // 仅复制 meta + Exception 主体 + Caused by 首段，避免把 device info / 30
+        // 行 recent logs 也塞进去拖死剪贴板（部分输入法对超长文本响应迟钝）。
+        copyLatestCrashToClipboardIfNew(context)
     }
 
     // ── Public API ──
@@ -630,6 +636,59 @@ object AppLog {
         fileSink?.todayFile()?.parentFile?.absolutePath ?: "N/A"
 
     fun getLogDir(): File? = fileSink?.todayFile()?.parentFile
+
+    /**
+     * 获取日志目录，优先使用共享根目录 /storage/emulated/0/MoRealm/logs。
+     *
+     * 策略：
+     * - Android 11+ (API 30+)：如果有 MANAGE_EXTERNAL_STORAGE 权限，使用共享根目录
+     * - 未授权或低版本：fallback 到私有目录 Android/data/<pkg>/files/logs
+     *
+     * 共享根目录的好处：用户可以直接在文件管理器中找到日志，无需 root 或 adb。
+     */
+    private fun getLogDir(context: Context): File {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Robolectric 在 Environment.isExternalStorageManager 内部依赖未初始化的
+            // service array，会抛 ArrayIndexOutOfBoundsException。生产环境无此问题，
+            // 测试环境直接 fallback 到私有目录（这条路径下不会进入 if-branch 也无意义）。
+            val hasPermission = try {
+                android.os.Environment.isExternalStorageManager()
+            } catch (t: Throwable) {
+                Log.w(TAG, "isExternalStorageManager threw (likely test env): ${t.message}")
+                false
+            }
+            Log.i(TAG, "getLogDir: Android 11+, hasManageStoragePermission=$hasPermission")
+            if (hasPermission) {
+                // 有 MANAGE_EXTERNAL_STORAGE 权限，使用共享根目录
+                val sharedRoot = android.os.Environment.getExternalStorageDirectory()
+                val logDir = File(sharedRoot, "MoRealm/logs")
+                val created = logDir.exists() || logDir.mkdirs()
+                Log.i(TAG, "getLogDir: sharedRoot=$sharedRoot, logDir=$logDir, created=$created")
+                if (created) {
+                    Log.i(TAG, "getLogDir: using shared directory: ${logDir.absolutePath}")
+                    return logDir
+                } else {
+                    Log.w(TAG, "getLogDir: failed to create shared directory, falling back to private")
+                }
+            }
+        } else {
+            Log.i(TAG, "getLogDir: Android < 11, using private directory")
+        }
+        // Fallback：私有目录（沙盒）
+        val privateDir = (context.getExternalFilesDir(null) ?: context.filesDir)
+            .let { File(it, "logs").apply { mkdirs() } }
+        Log.i(TAG, "getLogDir: using private directory: ${privateDir.absolutePath}")
+        return privateDir
+    }
+
+    /** 检查是否有 MANAGE_EXTERNAL_STORAGE 权限（Android 11+） */
+    fun hasManageStoragePermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            false
+        }
+    }
 
     /** Check if there are crash files from previous sessions */
     fun hasPendingCrash(): Boolean = getCrashFiles().isNotEmpty()
@@ -733,6 +792,64 @@ object AppLog {
             maxCrashFiles = sink.maxCrashFiles,
             maxTotalBytes = sink.maxTotalBytes,
         )
+    }
+
+    /**
+     * 在用户运行时授予 / 撤销 MANAGE_EXTERNAL_STORAGE 后调用，使日志路径立即生效，
+     * 无需重启 App。原因：[init] 中 [getLogDir] 只解析一次权限并固化到 [fileSink]，
+     * 后续即便用户在系统设置授权，本进程的写盘目录也不会变 —— 表现为「明明授权了
+     * 还是写到 Android/data 私有目录」。
+     *
+     * 流程：
+     *   1. 重新解析 [getLogDir]：有权限 → 共享根，无权限 → 私有目录。
+     *   2. 与当前 [fileSink] 路径一致则直接返回 null（no-op）。
+     *   3. 用旧 sink 的限值参数构造新 [RollingFileSink]；先 add 再 remove，
+     *      sinks 是 [java.util.concurrent.CopyOnWriteArrayList]，dispatch 遍历
+     *      期间不会 ConcurrentModificationException。
+     *   4. 关闭旧 sink（[RollingFileSink.close] flush 队列 + join 写线程）。
+     *
+     * 旧路径下已有的 log_*.txt / crash_*.txt 不会自动迁移 —— 用户需要的话可
+     * 从两个目录分别拷贝。这里不做迁移是为了避免阻塞 UI 线程（旧文件可能数 MB）。
+     *
+     * @return 新路径绝对路径；路径未变化或无 fileSink 则返回 null。
+     */
+    @Synchronized
+    fun reinitFileSink(context: Context): String? {
+        val newDir = getLogDir(context)
+        val old = fileSink ?: return null
+        val current = old.todayFile().parentFile
+        if (current?.absolutePath == newDir.absolutePath) return null
+
+        val recordOn = isRecordLogEnabled()
+        val limits = getLogLimits()
+        val fresh = RollingFileSink(
+            logDir = newDir,
+            minLevel = if (recordOn) LogLevel.DEBUG else LogLevel.WARN,
+            initialMaxFileSize = limits.maxFileSizeBytes,
+            initialMaxFiles = 5,
+        ).apply {
+            maxAgeDays = limits.maxAgeDays
+            maxLogFiles = old.maxLogFiles
+            maxCrashFiles = old.maxCrashFiles
+            maxTotalBytes = limits.maxTotalDirBytes
+        }
+        // CopyOnWriteArrayList: add 再 remove 保证替换瞬间始终至少有一个 file sink
+        sinks.add(fresh)
+        sinks.remove(old)
+        fileSink = fresh
+        try { old.close() } catch (_: Throwable) {}
+
+        // 同步把新路径下当天日志和历史 crash 加载到 memory，避免 UI 列表突然变空
+        try {
+            memorySink?.loadCrashFiles(newDir)
+            memorySink?.loadFromFile(
+                fresh.todayFile(),
+                SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()),
+            )
+        } catch (_: Throwable) {}
+
+        info(TAG, "日志路径已切换到: ${newDir.absolutePath}")
+        return newDir.absolutePath
     }
 
     /** Wipe all log files + crash files + in-memory buffer. Aggressive —
@@ -983,4 +1100,79 @@ object AppLog {
         t.printStackTrace(PrintWriter(sw))
         return sw.toString()
     }
+
+    // ── Crash 摘要自动复制 ──────────────────────────────
+    //
+    // 设计：在 init() 里如果检测到上次启动留下的最新 crash_*.txt 跟
+    // [KEY_LAST_COPIED_CRASH] 记录的不同，就构造一份「关键摘要」写入剪贴板，
+    // 并 toast 提示用户。不删 crash 文件 —— AppLogScreen 仍能查看完整内容。
+    //
+    // 摘要原则（用户明确要求「别复制太多卡死」）：
+    //   - 只取 5 行 meta：Time / Thread / App / Android / Model
+    //     —— 调试 bug 必需；舍掉分辨率 / heap / cores / ABI 等次要信息。
+    //   - Exception 主体最多保留 25 行，超出标注「堆栈已截断」。
+    //   - 仅取首个 Caused by，最多 10 行（足够定位根因）。
+    //   - 不带 Recent Logs（最长一段，最不必要）。
+    //
+    // 容量预估：摘要 ≈ 1–3 KB，远低于 Android 12+ 剪贴板的实际容忍上限，
+    // 也不会让微信 / QQ 输入框粘贴时卡顿。
+
+    /** 复制最新一份 crash 摘要到剪贴板（若尚未复制过）。在 [init] 末尾调用。
+     *  调用方为 Application context，主线程；toast 直接 post 到 main looper。 */
+    private fun copyLatestCrashToClipboardIfNew(context: Context) {
+        val latest = getCrashFiles().firstOrNull() ?: return
+        val lastCopied = logPrefs?.getString(KEY_LAST_COPIED_CRASH, null)
+        if (latest.name == lastCopied) return
+        val summary = buildCrashSummary(latest) ?: return
+        try {
+            val cm = context.applicationContext
+                .getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                ?: return
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("MoRealm Crash", summary))
+            logPrefs?.edit()?.putString(KEY_LAST_COPIED_CRASH, latest.name)?.apply()
+            Handler(Looper.getMainLooper()).post {
+                runCatching {
+                    android.widget.Toast.makeText(
+                        context.applicationContext,
+                        "上次崩溃日志已复制到剪贴板",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "copyLatestCrashToClipboardIfNew failed", e)
+        }
+    }
+
+    /** 把 crash_*.txt 压成「meta + Exception + Caused by 首段」摘要。
+     *  解析失败或文件读不到返回 null（不影响启动流程）。 */
+    private fun buildCrashSummary(file: File): String? = try {
+        val lines = file.readLines()
+        val sb = StringBuilder()
+        sb.appendLine("=== MoRealm Crash (摘要) ===")
+        listOf("Time:", "Thread:", "App:", "Android:", "Model:").forEach { prefix ->
+            lines.firstOrNull { it.startsWith(prefix) }?.let { sb.appendLine(it) }
+        }
+        sb.appendLine()
+
+        fun appendSection(header: String, maxLines: Int) {
+            val start = lines.indexOf(header)
+            if (start < 0) return
+            sb.appendLine(header)
+            var i = start + 1
+            var taken = 0
+            while (i < lines.size && !lines[i].startsWith("--- ")) {
+                sb.appendLine(lines[i])
+                taken++
+                if (taken >= maxLines) {
+                    sb.appendLine("  ... (已截断)")
+                    break
+                }
+                i++
+            }
+        }
+        appendSection("--- Exception ---", maxLines = 25)
+        appendSection("--- Caused by ---", maxLines = 10)
+        sb.toString().trimEnd()
+    } catch (_: Throwable) { null }
 }

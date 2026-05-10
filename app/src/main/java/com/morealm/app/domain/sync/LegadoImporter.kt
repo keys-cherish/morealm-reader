@@ -121,6 +121,7 @@ object LegadoImporter {
         val bookCount: Int,
         val bookSourceCount: Int,
         val bookmarkCount: Int,
+        /** 实际会导入的分组数 = zip 里非空分组数（已剔除 0 本书引用 + Legado 内置虚拟分组）。 */
         val bookGroupCount: Int,
         val replaceRuleCount: Int,
         val httpTtsCount: Int,
@@ -133,6 +134,14 @@ object LegadoImporter {
         val searchHistoryConflicts: Int,
         val skippedFiles: List<String>,
         val warnings: List<String>,
+        /**
+         * Legado 备份带过来的"空分组"个数。
+         * 包括：① 内置虚拟分组（IdAll/IdLocal/IdNetNone/... 这些负数 groupId）
+         *       ② 用户建了但 0 本书引用的自定义分组
+         * 这些不会真的导入，只用来在 UI 透明展示「跳过 N 个空分组」。
+         * 默认 0 → 旧路径不会破坏（如果 Preview 是反序列化等场景）。
+         */
+        val bookGroupsEmpty: Int = 0,
     )
 
     /** 实际写入数据库后的统计，UI 用来弹"已导入 X，跳过 Y"。 */
@@ -154,12 +163,19 @@ object LegadoImporter {
         val readProgressInserted: Int,
         val skippedSections: List<String>,
         val errors: List<String>,
+        /**
+         * 在写库前被「空分组过滤」剔除的分组数（内置虚拟分组 + 用户自定义但 0 本书的分组）。
+         * 与 [bookGroupsSkipped]（主键冲突跳过）语义不同 —— skipped 是"本机已有同名分组所以不动"，
+         * emptyFiltered 是"源数据本就是空的，不该塞给用户"。默认 0 保持向后兼容。
+         */
+        val bookGroupsEmptyFiltered: Int = 0,
     ) {
         fun summarize(): String = buildString {
             if (booksInserted + booksSkipped > 0) appendLine("书架：导入 $booksInserted，跳过 $booksSkipped")
             if (bookSourcesInserted + bookSourcesSkipped > 0) appendLine("书源：导入 $bookSourcesInserted，跳过 $bookSourcesSkipped")
             if (bookmarksInserted + bookmarksOrphaned > 0) appendLine("书签：导入 $bookmarksInserted，孤立 $bookmarksOrphaned")
             if (bookGroupsInserted + bookGroupsSkipped > 0) appendLine("分组：导入 $bookGroupsInserted，跳过 $bookGroupsSkipped")
+            if (bookGroupsEmptyFiltered > 0) appendLine("分组：过滤空分组 $bookGroupsEmptyFiltered")
             if (replaceRulesInserted + replaceRulesSkipped > 0) appendLine("替换规则：导入 $replaceRulesInserted，跳过 $replaceRulesSkipped")
             if (httpTtsInserted + httpTtsSkipped > 0) appendLine("朗读引擎：导入 $httpTtsInserted，跳过 $httpTtsSkipped")
             if (searchHistoryInserted + searchHistorySkipped > 0) appendLine("搜索历史：导入 $searchHistoryInserted，跳过 $searchHistorySkipped")
@@ -200,7 +216,11 @@ object LegadoImporter {
 
         val bookConflicts = parsed.books.count { it.bookUrl in existingBookUrls }
         val sourceConflicts = parsed.bookSources.count { it.bookSourceUrl in existingSourceUrls }
-        val groupConflicts = parsed.bookGroups.count { it.groupId.toString() in existingGroupIds }
+        // 空分组在 UI/统计里都不算 — 先过滤再算 size 和冲突，让用户看到的"分组 N"
+        // 等同于真正会写库的数量。
+        val effectiveGroups = filterNonEmptyBookGroups(parsed.books, parsed.bookGroups)
+        val emptyGroupCount = parsed.bookGroups.size - effectiveGroups.size
+        val groupConflicts = effectiveGroups.count { it.groupId.toString() in existingGroupIds }
         val replaceConflicts = parsed.replaceRules.count { it.id.toString() in existingReplaceIds }
         val httpTtsConflicts = parsed.httpTts.count { it.id in existingHttpTtsIds }
         val historyConflicts = parsed.searchHistory.count { it.word.trim() in existingHistoryWords }
@@ -216,7 +236,7 @@ object LegadoImporter {
             bookCount = parsed.books.size,
             bookSourceCount = parsed.bookSources.size,
             bookmarkCount = parsed.bookmarks.size,
-            bookGroupCount = parsed.bookGroups.size,
+            bookGroupCount = effectiveGroups.size,
             replaceRuleCount = parsed.replaceRules.size,
             httpTtsCount = parsed.httpTts.size,
             searchHistoryCount = parsed.searchHistory.size,
@@ -228,6 +248,7 @@ object LegadoImporter {
             searchHistoryConflicts = historyConflicts,
             skippedFiles = parsed.skippedFiles,
             warnings = warnings,
+            bookGroupsEmpty = emptyGroupCount,
         )
     }
 
@@ -280,11 +301,23 @@ object LegadoImporter {
         // BookGroup ──
         var groupsInserted = 0
         var groupsSkipped = 0
+        var groupsEmptyFiltered = 0
         if (opts.includeBookGroups && parsed.bookGroups.isNotEmpty()) {
-            onProgress(Progress("分组", 0, parsed.bookGroups.size))
+            // 在写库前先剔除"空分组"（Legado 内置虚拟分组 + 用户建了但 0 本书的）。
+            // Progress.total 用过滤后的数量，让用户看到的进度跟实际写库一致。
+            val effectiveGroups = filterNonEmptyBookGroups(parsed.books, parsed.bookGroups)
+            groupsEmptyFiltered = parsed.bookGroups.size - effectiveGroups.size
+            if (groupsEmptyFiltered > 0) {
+                AppLog.info(
+                    TAG,
+                    "BookGroup empty-filter: parsed=${parsed.bookGroups.size} effective=${effectiveGroups.size} " +
+                        "filtered=$groupsEmptyFiltered (内置虚拟分组 + 0 本书引用的用户分组)",
+                )
+            }
+            onProgress(Progress("分组", 0, effectiveGroups.size))
             runCatching {
                 val existing = db.bookGroupDao().getAllGroupsSync().map { it.id }.toHashSet()
-                val mapped = parsed.bookGroups.map(::mapBookGroup)
+                val mapped = effectiveGroups.map(::mapBookGroup)
                 val toInsert = mapped.filter { g ->
                     when (opts.conflictStrategy) {
                         ConflictStrategy.OVERWRITE -> true
@@ -295,14 +328,14 @@ object LegadoImporter {
                 toInsert.forEachIndexed { idx, group ->
                     db.bookGroupDao().insert(group)
                     // 分组每条都 emit；分组体量小（<20）所以不限频。
-                    onProgress(Progress("分组", idx + 1, parsed.bookGroups.size))
+                    onProgress(Progress("分组", idx + 1, effectiveGroups.size))
                 }
                 groupsInserted = toInsert.size
             }.onFailure {
                 errors += "分组导入失败：${it.message}"
                 AppLog.error(TAG, "bookGroup insert failed", it)
             }
-            onProgress(Progress("分组", parsed.bookGroups.size, parsed.bookGroups.size))
+            onProgress(Progress("分组", effectiveGroups.size, effectiveGroups.size))
         }
 
         // Book ──（先写 Book，因为 Bookmark 后续要按 bookName+author 反查它的 id）
@@ -314,6 +347,34 @@ object LegadoImporter {
             runCatching {
                 val existing = db.bookDao().getAllBooksSync().map { it.id }.toHashSet()
                 val mapped = parsed.books.map(::mapBook)
+                // 诊断：用户报「分组建好了 0 本书」时，需要排除以下歧义：
+                //   ① zip 里 books 是否真的有 N 本（parsed.books.size）
+                //   ② 映射后是否丢失（mapped.size 应等于 parsed.books.size）
+                //   ③ SKIP 策略下是否被全部判为冲突
+                //   ④ folderId 写入后是否能落到现有 BookGroup.id
+                // 这一坨 log 让事后看 logcat 就能直接定位到底卡在哪一步。
+                val mappedFolderIds = mapped.mapNotNull { it.folderId }
+                val groupIdsInDb = db.bookGroupDao().getAllGroupsSync().map { it.id }.toHashSet()
+                val matchedFolderIds = mappedFolderIds.count { it in groupIdsInDb }
+                val orphanFolderIds = mappedFolderIds.count { it !in groupIdsInDb }
+                AppLog.info(
+                    TAG,
+                    "Book section ENTER: parsed=${parsed.books.size} mapped=${mapped.size} " +
+                        "existingInDb=${existing.size} strategy=${opts.conflictStrategy} " +
+                        "withFolderId=${mappedFolderIds.size} folderIdMatchGroup=$matchedFolderIds " +
+                        "folderIdOrphan=$orphanFolderIds groupCountInDb=${groupIdsInDb.size}",
+                )
+                if (orphanFolderIds > 0) {
+                    // 抽 5 个 orphan folderId 样本 + 现有 group ids，便于看是不是 bitmask
+                    // 多分组归属（folderId="3" 是 1|2 两个分组的 OR，对不上单个 group.id）。
+                    val orphanSamples = mappedFolderIds.filter { it !in groupIdsInDb }.distinct().take(5)
+                    AppLog.warn(
+                        TAG,
+                        "Book folderId mismatch (orphan→will show under no group): " +
+                            "orphanSamples=$orphanSamples allGroupIds=${groupIdsInDb.toList().take(10)}",
+                    )
+                }
+
                 val toInsert = mapped.filter { b ->
                     when (opts.conflictStrategy) {
                         ConflictStrategy.OVERWRITE -> true
@@ -321,9 +382,33 @@ object LegadoImporter {
                     }
                 }
                 booksSkipped = mapped.size - toInsert.size
+                AppLog.info(
+                    TAG,
+                    "Book filter result: toInsert=${toInsert.size} skipped=$booksSkipped " +
+                        "(after ${opts.conflictStrategy} dedupe)",
+                )
                 if (toInsert.isNotEmpty()) {
                     db.bookDao().insertAll(toInsert)
                     booksInserted = toInsert.size
+                    // 入库后实测：用 getAllBooksSync 再查一次行数 + 抽 3 本看 folderId
+                    // 是否真的写进去了。Room insertAll 不抛异常但行被静默忽略的情况
+                    // 极少（@PrimaryKey 主键冲突走 OnConflict 策略 = REPLACE / IGNORE
+                    // 取决于 dao 定义），这条日志能直接验证落地。
+                    val afterInsert = db.bookDao().getAllBooksSync()
+                    val sample = afterInsert.takeLast(3)
+                        .joinToString { "(id=${it.id.take(20)} folderId=${it.folderId})" }
+                    AppLog.info(
+                        TAG,
+                        "Book insertAll DONE: requestedCount=${toInsert.size} dbRowsAfter=${afterInsert.size} " +
+                            "lastInsertedSample=$sample",
+                    )
+                } else {
+                    AppLog.warn(
+                        TAG,
+                        "Book toInsert is EMPTY — 全部书都被 SKIP 策略过滤掉。" +
+                            "若用户期望刷新，应改用 OVERWRITE 策略；若是首次导入到空库，" +
+                            "这一行不该出现，去看 mapped/parsed 是否真的有数据。",
+                    )
                 }
 
                 // ReadProgress 从同一批 Book 派生（Legado 把进度内嵌在 Book 里）
@@ -520,7 +605,8 @@ object LegadoImporter {
             TAG,
             "Import done: books=$booksInserted/${booksSkipped} sources=$sourcesInserted/${sourcesSkipped} " +
                 "bookmarks=$bookmarksInserted(orphan=$bookmarksOrphaned) groups=$groupsInserted " +
-                "rules=$replaceInserted httpTts=$httpTtsInserted history=$historyInserted progress=$progressInserted",
+                "(emptyFiltered=$groupsEmptyFiltered) rules=$replaceInserted httpTts=$httpTtsInserted " +
+                "history=$historyInserted progress=$progressInserted",
         )
 
         // 全部完成 —— UI 用这条收尾把进度条推到 100%。
@@ -544,6 +630,7 @@ object LegadoImporter {
             readProgressInserted = progressInserted,
             skippedSections = parsed.skippedFiles,
             errors = errors,
+            bookGroupsEmptyFiltered = groupsEmptyFiltered,
         )
     }
 
@@ -579,6 +666,9 @@ object LegadoImporter {
         var httpTts: List<LegadoHttpTtsDto> = emptyList()
         var searchHistory: List<LegadoSearchKeywordDto> = emptyList()
         val skipped = mutableListOf<String>()
+        // 诊断：观察 zip 里到底有什么文件、各自体量。用户报「分组建好了 0 本书」
+        // 时第一时间能看出 bookshelf.json 是否压根没在 zip 里 / 是不是空文件。
+        val seenEntries = mutableListOf<Pair<String, Int>>()
 
         ByteArrayInputStream(zipBytes).use { bais ->
             ZipInputStream(bais).use { zis ->
@@ -591,6 +681,7 @@ object LegadoImporter {
                     val name = entry.name.substringAfterLast('/')
                     val bytes = zis.readBytes()
                     val text = String(bytes, Charsets.UTF_8)
+                    seenEntries += name to bytes.size
                     when (name) {
                         "bookshelf.json" -> books = decodeListOrEmpty(text, name)
                         "bookSource.json" -> sources = decodeListOrEmpty(text, name)
@@ -618,7 +709,35 @@ object LegadoImporter {
             }
         }
 
-        return ParsedBackup(books, sources, bookmarks, groups, replaceRules, httpTts, searchHistory, skipped.toList())
+        return ParsedBackup(books, sources, bookmarks, groups, replaceRules, httpTts, searchHistory, skipped.toList()).also { p ->
+            AppLog.info(
+                TAG,
+                "parseZip DONE: entries=${seenEntries.size} " +
+                    "books=${p.books.size} sources=${p.bookSources.size} " +
+                    "bookmarks=${p.bookmarks.size} groups=${p.bookGroups.size} " +
+                    "replaceRules=${p.replaceRules.size} httpTts=${p.httpTts.size} " +
+                    "searchHistory=${p.searchHistory.size} skipped=${p.skippedFiles.size}",
+            )
+            // bookshelf.json 期望存在；如果 entries 里没看到说明 zip 不是 Legado 完整备份
+            // （可能是 Legado 选项导出只勾了部分内容、或第三方工具产出的非标准 zip）。
+            val hadBookshelf = seenEntries.any { it.first == "bookshelf.json" }
+            if (!hadBookshelf) {
+                AppLog.warn(
+                    TAG,
+                    "parseZip: bookshelf.json NOT in zip — " +
+                        "entries=${seenEntries.joinToString { (n, sz) -> "$n($sz)" }}",
+                )
+            } else if (p.books.isEmpty()) {
+                // bookshelf.json 在 zip 里但解出来 0 本：可能是 JSON 格式与 DTO 不匹配，
+                // 字段名变了或 GSON 序列化方式跟我们假设不同。看 bookshelf.json 大小。
+                val sz = seenEntries.first { it.first == "bookshelf.json" }.second
+                AppLog.warn(
+                    TAG,
+                    "parseZip: bookshelf.json present (size=$sz bytes) but books list is EMPTY — " +
+                        "decode failed; check kx-serialization compatibility against Legado JSON shape",
+                )
+            }
+        }
     }
 
     /** 解 List<T>；失败返回空 list 仅 log，不阻断其它 section。 */
@@ -717,6 +836,41 @@ object LegadoImporter {
 
     /** Legado 书源里 origin == "loc_book" 标记本地书。 */
     private const val LEGADO_LOCAL_TAG = "loc_book"
+
+    /**
+     * 从 [groups] 里挑出"实际有书引用的"分组。
+     *
+     * Legado 把 BookGroup 设计成位掩码：用户分组的 `groupId` 都是 2 的幂次正数（默认 0b1=1，
+     * 后续 0b10=2, 0b100=4...），Book.group 是这些 groupId 的 OR 组合（`book.group or groupId`
+     * 表示加入分组）。所以一本书 group=5 同时属于 groupId=1 和 groupId=4。
+     *
+     * Legado 的"全部 / 本地 / 网络未分组 / 本地未分组 / 音频 / 视频 / 更新失败"等内置分组用
+     * 负数 groupId (-1/-2/-3/-4/-5/-6/-11) — 这些**永远不会**被 Book.group 引用（书的位掩码
+     * 都是非负 OR 组合），所以"按位反查"自动会把它们筛掉，无需特殊处理。
+     *
+     * 用户搬家场景下 Legado 备份会忠实带上所有空分组（包括内置虚拟的）；MoRealm 不希望
+     * 给用户塞他没用过的"音频/视频/更新失败"等空分组（见 issue 截图）。
+     *
+     * @return 过滤后的分组列表（保持 [groups] 里的原顺序）。书架为空时返回空 list（这种
+     *   情况下根本不需要分组，避免单独搬一堆空分组进来）。
+     */
+    internal fun filterNonEmptyBookGroups(
+        books: List<LegadoBookDto>,
+        groups: List<LegadoBookGroupDto>,
+    ): List<LegadoBookGroupDto> {
+        if (groups.isEmpty()) return emptyList()
+        if (books.isEmpty()) return emptyList()
+        return groups.filter { g ->
+            // groupId <= 0 是 Legado 内置虚拟分组，直接判定为不导入。
+            // 即使理论上某本书 group=-1 也只是"未分组"语义，不构成对该 BookGroup 的引用。
+            if (g.groupId <= 0L) return@filter false
+            // 用户自定义分组：检查 Book.group 位掩码是否包含 g.groupId。
+            // 用 `(book.group and g.groupId) == g.groupId` 而不是 `!= 0L`，
+            // 是为了在 g.groupId 是单位（2 的幂）时严格判匹配，避免 group=3 (1|2) 的书
+            // 被误判为属于 groupId=4（虽然这不该发生，但保守一点）。
+            books.any { b -> b.group > 0L && (b.group and g.groupId) == g.groupId }
+        }
+    }
 
     /**
      * Legado.BookGroup → MoRealm.BookGroup。

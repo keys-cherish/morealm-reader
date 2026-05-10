@@ -6,8 +6,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -50,6 +52,14 @@ class MainActivity : ComponentActivity() {
             val themeViewModel: ThemeViewModel = hiltViewModel()
             val activeTheme by themeViewModel.activeTheme.collectAsStateWithLifecycle()
             val windowSizeClass = calculateWindowSizeClass(this)
+
+            // 「跟随系统主题」生效路径：系统暗色模式变化触发 isSystemInDarkTheme 重组，
+            // LaunchedEffect 把新值喂给 ThemeViewModel；ViewModel 内部按 followSystemTheme
+            // 开关决定是否切日/夜内置主题。开关关闭时这条 effect 会被忽略，不影响手动主题。
+            val systemIsDark = isSystemInDarkTheme()
+            LaunchedEffect(systemIsDark) {
+                themeViewModel.applySystemDarkModeIfFollowing(systemIsDark)
+            }
 
             MoRealmTheme(theme = activeTheme) {
                 MoRealmNavHost(

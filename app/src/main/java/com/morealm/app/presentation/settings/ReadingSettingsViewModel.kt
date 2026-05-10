@@ -18,6 +18,10 @@ class ReadingSettingsViewModel @Inject constructor(
     val pageAnim: StateFlow<String> = prefs.pageAnim
         .stateIn(viewModelScope, SharingStarted.Eagerly, "slide")
 
+    /** 阅读方向。Phase 1：horizontal / vertical_rl，仅持久化。 */
+    val readingDirection: StateFlow<String> = prefs.readingDirection
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "horizontal")
+
     val tapLeftAction: StateFlow<String> = prefs.tapLeftAction
         .stateIn(viewModelScope, SharingStarted.Eagerly, "next")
 
@@ -87,6 +91,7 @@ class ReadingSettingsViewModel @Inject constructor(
     fun setPageAnim(v: String) = viewModelScope.launch {
         prefs.setPageAnim(v)
     }
+    fun setReadingDirection(v: String) = viewModelScope.launch { prefs.setReadingDirection(v) }
     fun setTapLeftAction(v: String) = viewModelScope.launch { prefs.setTapLeftAction(v) }
     fun setVolumeKeyPage(v: Boolean) = viewModelScope.launch { prefs.setVolumeKeyPage(v) }
     fun setVolumeKeyReverse(v: Boolean) = viewModelScope.launch { prefs.setVolumeKeyReverse(v) }

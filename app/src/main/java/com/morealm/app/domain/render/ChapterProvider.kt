@@ -94,13 +94,25 @@ class ChapterProvider(
          * 单独绘制，所以书名一次性显示在状态栏不会丢失。
          */
         omitChapterTitleBlock: Boolean = false,
+        /**
+         * 排版方向。HORIZONTAL（默认）走原 layoutInternal；VERTICAL_RL 走
+         * [layoutInternalVertical]——列从右到左、字从上到下，适合日文 / 古典中文。
+         */
+        readingDirection: ReadingDirection = ReadingDirection.HORIZONTAL,
     ): TextChapter {
-        val textChapter = TextChapter(chapterIndex, title, chaptersSize)
+        val textChapter = TextChapter(chapterIndex, title, chaptersSize, readingDirection)
         val textPages = arrayListOf<TextPage>()
-        layoutInternal(
-            title, content, chapterIndex, chaptersSize, textChapter, textPages,
-            omitChapterTitleBlock = omitChapterTitleBlock,
-        )
+        if (readingDirection == ReadingDirection.VERTICAL_RL) {
+            layoutInternalVertical(
+                title, content, chapterIndex, chaptersSize, textChapter, textPages,
+                omitChapterTitleBlock = omitChapterTitleBlock,
+            )
+        } else {
+            layoutInternal(
+                title, content, chapterIndex, chaptersSize, textChapter, textPages,
+                omitChapterTitleBlock = omitChapterTitleBlock,
+            )
+        }
         return textChapter
     }
 
@@ -125,18 +137,40 @@ class ChapterProvider(
         onError: ((Throwable) -> Unit)? = null,
         /** 见 [layoutChapter] 同名参数。 */
         omitChapterTitleBlock: Boolean = false,
+        /** 见 [layoutChapter] 同名参数。 */
+        readingDirection: ReadingDirection = ReadingDirection.HORIZONTAL,
     ): AsyncLayoutHandle {
-        val textChapter = TextChapter(chapterIndex, title, chaptersSize)
+        val textChapter = TextChapter(chapterIndex, title, chaptersSize, readingDirection)
         val channel = Channel<TextPage>(Channel.UNLIMITED)
 
         val job = scope.launch(Dispatchers.Default) {
+            // 关键：捕获本协程的 CoroutineContext 给 layoutInternal 用作取消检查。
+            // layoutInternal 是非 suspend 函数（被 sync 路径 [layoutChapter] 共用），
+            // 不能直接 currentCoroutineContext().ensureActive()。改成传 lambda 让
+            // 内部循环周期检查；外部 cancel 时下一个检查点立刻抛 CancellationException
+            // → 中断进一步 onPageReady 回调 → 阻断"已 cancel 的协程仍在向 Compose state
+            // 写 placeholder 页"的回退-重发死循环（用户拖动滑块时 currentChapterKey
+            // 高频变化，老实现下多个被 cancel 的 layoutInternal 仍旧把 pages=1
+            // incomplete 倒灌，触发 publishCurTextChapter 在 pages=N completed=true 与
+            // pages=1 incomplete 之间反弹）。
+            val ctx = coroutineContext
             try {
                 val textPages = arrayListOf<TextPage>()
-                layoutInternal(
-                    title, content, chapterIndex, chaptersSize,
-                    textChapter, textPages, channel, onPageReady,
-                    omitChapterTitleBlock = omitChapterTitleBlock,
-                )
+                if (readingDirection == ReadingDirection.VERTICAL_RL) {
+                    layoutInternalVertical(
+                        title, content, chapterIndex, chaptersSize,
+                        textChapter, textPages, channel, onPageReady,
+                        omitChapterTitleBlock = omitChapterTitleBlock,
+                        cancelCheck = { ctx.ensureActive() },
+                    )
+                } else {
+                    layoutInternal(
+                        title, content, chapterIndex, chaptersSize,
+                        textChapter, textPages, channel, onPageReady,
+                        omitChapterTitleBlock = omitChapterTitleBlock,
+                        cancelCheck = { ctx.ensureActive() },
+                    )
+                }
                 channel.close()
                 onCompleted?.invoke()
             } catch (e: Exception) {
@@ -164,6 +198,22 @@ class ChapterProvider(
         channel: Channel<TextPage>? = null,
         onPageReady: ((Int, TextPage) -> Unit)? = null,
         omitChapterTitleBlock: Boolean = false,
+        /**
+         * 取消检查回调（async 路径必传，sync 路径不传 = no-op）。
+         *
+         * **为什么需要**：[layoutChapterAsync] 走 `scope.launch(Dispatchers.Default)`，
+         * 当 caller 的 [LaunchedEffect] 因 key 变化（如 currentChapterKey 因滑块拖动重算）
+         * 重启时，原协程被 cancel，但 [layoutInternal] 是非 suspend 同步代码，**不会自动
+         * 检查取消**。结果是 cancelled 协程继续把 placeholder 页推给 [onPageReady] / channel
+         * → CanvasRenderer 把 `pages=1, completed=false` 写回 Compose state → ProgressTrace
+         * 0%↔100% 反弹 → reader UI 永不稳态。
+         *
+         * **调用点**：放在外层段落循环顶端 + [finalizePage] 顶端。前者保证还没排到的段落
+         * 立即停手，后者保证不向 UI 倒灌 placeholder 页。`ensureActive()` 抛
+         * [kotlinx.coroutines.CancellationException]，被外层 try/catch 静默吞掉
+         * （`if (e !is CancellationException) onError`）。
+         */
+        cancelCheck: (() -> Unit)? = null,
     ) {
         val stringBuilder = StringBuilder()
         var absStartX = paddingLeft
@@ -173,6 +223,10 @@ class ChapterProvider(
 
         // 内部辅助：完成一页时的处理
         fun finalizePage(page: TextPage) {
+            // 取消检查：如果协程已 cancel，立刻抛 CancellationException，不再触发
+            // onPageReady / channel.trySend → 阻断「cancelled 协程仍在向 Compose
+            // state 写 placeholder」的回退-重发死循环（详见 [cancelCheck] KDoc）。
+            cancelCheck?.invoke()
             page.index = textPages.indexOf(page)
             page.chapterIndex = chapterIndex
             page.chapterSize = chaptersSize
@@ -260,6 +314,9 @@ class ChapterProvider(
 
         // Layout content paragraphs
         for (paragraph in paragraphs) {
+            // 段落级取消检查：长章节一次有数百段，每段开始前查一次 — cancel 后
+            // 不再继续排版下一段。配合 finalizePage 的检查双层防御。
+            cancelCheck?.invoke()
             val para = paragraph.text
             if (paragraph.isChapterTitle) {
                 if (textPages.last().lines.isNotEmpty()) {
@@ -355,6 +412,199 @@ class ChapterProvider(
         }
         lastPage.text = stringBuilder.toString()
         finalizePage(lastPage)
+
+        textChapter.isCompleted = true
+    }
+
+    /**
+     * 竖排版（VERTICAL_RL）排版逻辑——列从右到左、列内字从上到下。
+     *
+     * Phase 2 简化策略（与 [layoutInternal] 的横排版相比）：
+     *   - **不**做全宽对齐 / 标点挤压 / 末行特殊化（横排的 ZhLayout 这些精排手法暂不适配）
+     *   - **不**走 setTypeImage 路径（图片栏 Phase 3 再说，先把文字打通）
+     *   - **不**做 tate-chu-yoko 长串数字字母旋转——所有字符 upright（Task #5 接入）
+     *   - **不**做卧排标点 / 句号顿号偏移——所有标点同 upright（Task #5 接入）
+     *   - **不**画装饰横条（横排 isTitleEnd 的 accent bar），竖排标题用 isTitle=true
+     *     交给 drawer 用 titlePaint 上色，不做几何装饰
+     *   - 标题用 contentPaint 的字号（不放大）——避免列宽不一致导致排版崩
+     *
+     * 输出兼容：仍写 TextChapter / TextPage / TextLine / TextColumn，字段语义按
+     * [ReadingDirection.VERTICAL_RL] 文档解读：
+     *   - TextLine = 一列（右起为 lines[0]）
+     *   - TextLine.columnLeftX / columnRightX = 列在页面的 X 范围
+     *   - TextLine.lineTop / lineBottom = 列的 Y 范围（= padding 区间，整列共用）
+     *   - TextColumn.start / end = 字符在列内的 Y 上下边界
+     *   - TextColumn.charData = 单字
+     *
+     * chapterPosition / page.charSize / paragraphEnd 语义与横排一致——
+     * getPageIndexByCharIndex / getPosByLineColumn / TextChapter.getReadLength 等
+     * 通用 API 不需要为竖排额外修改。
+     */
+    private fun layoutInternalVertical(
+        title: String,
+        content: String,
+        chapterIndex: Int,
+        chaptersSize: Int,
+        textChapter: TextChapter,
+        textPages: ArrayList<TextPage>,
+        channel: Channel<TextPage>? = null,
+        onPageReady: ((Int, TextPage) -> Unit)? = null,
+        omitChapterTitleBlock: Boolean = false,
+        cancelCheck: (() -> Unit)? = null,
+    ) {
+        // ── 几何 ───────────────────────────────────────────────────────────
+        // charYStep：列内每字 Y 步进 = 字号 × 1.5。
+        //   原值是 contentPaintTextHeight (≈textSize*1.2) 偏紧，字与字之间几乎贴着，
+        //   对照传统日文 / 古典中文竖排（明朝体活字印刷间距 ~50% 字高）调到 *1.5。
+        //
+        // columnXStep：列与列的 X 步进 = 字号 × 1.7。
+        //   原值 *1.1 太紧 —— 列宽刚好放下一个字符宽，相邻列字符紧贴。
+        //   *1.7 给出约 70% 列间距 + 字符自身 100% 宽 = 接近商业阅读器的宽松感。
+        //
+        // 调大间距会让一页字数下降（charsPerColumn / columnsPerPage 都减小），
+        // 章节总页数同比上升。但「读起来不挤」远比「页数少」对竖排体验更重要。
+        // 用户如果觉得太松，可以反过来调小这两个常数；目前没暴露设置项。
+        val charYStep: Float = contentPaint.textSize * 1.5f
+        val columnXStep: Float = contentPaint.textSize * 1.7f
+        val charsPerColumn: Int = (visibleHeight / charYStep).toInt().coerceAtLeast(1)
+        val columnsPerPage: Int = (visibleWidth / columnXStep).toInt().coerceAtLeast(1)
+        val pageWidth: Float = viewWidth.toFloat()
+        val stringBuilder = StringBuilder()
+
+        // 内部辅助：完成一页时的处理（与横排 finalizePage 等价）
+        fun finalizePage(page: TextPage) {
+            cancelCheck?.invoke()
+            page.index = textPages.indexOf(page)
+            page.chapterIndex = chapterIndex
+            page.chapterSize = chaptersSize
+            page.title = title
+            page.doublePage = doublePage
+            page.paddingTop = drawPaddingTop
+            page.isCompleted = true
+            page.textChapter = textChapter
+            // 竖排不需要 upLinesPosition（那是横排的"剩余空间均分到 line gap"对齐手段，
+            // 竖排里"剩余 X 空间"应该让最左列右移居中，但 Phase 2 简化为留白即可——
+            // 用户视觉上是"右起一栏栏排满，剩下左侧留白"，不影响阅读）。
+            textChapter.addPage(page)
+            channel?.trySend(page)
+            onPageReady?.invoke(page.index, page)
+        }
+
+        // ── 解析段落 ──（与横排共享 parseHtmlParagraphs / normalizeParagraph） ──
+        val isHtml = content.trimStart().let {
+            it.startsWith("<") && (it.contains("<p") || it.contains("<div") || it.contains("<img"))
+        }
+        val paragraphs = if (isHtml) parseHtmlParagraphs(content) else {
+            content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
+        }
+        val contentProvidesChapterTitle = paragraphs.firstOrNull()?.let { first ->
+            first.isChapterTitle || isSameChapterTitle(first.text, title)
+        } == true
+
+        // ── 状态机 ───
+        var currentPage = TextPage()
+        textPages.add(currentPage)
+        var columnIdxFromRight = 0
+        var paragraphNum = 0
+        var chapterPosition = 0
+
+        fun startNewColumn(isTitle: Boolean): TextLine {
+            val col = TextLine(isTitle = isTitle, isLeftLine = true)
+            col.paragraphNum = paragraphNum
+            col.chapterPosition = chapterPosition
+            // 几何：列从右到左排，第 0 列贴右边界 paddingRight。
+            val columnLeftX = pageWidth - paddingRight - (columnIdxFromRight + 1) * columnXStep
+            col.columnLeftX = columnLeftX
+            col.columnRightX = columnLeftX + columnXStep
+            // lineTop / lineBottom 仍是 Y——竖排里整列共享同一个 Y 范围（= 正文区上下边界）。
+            // lineBase 在竖排没有"基线"概念，给个合理近似值供 isTouchY 等横排兼容代码使用。
+            col.lineTop = paddingTop.toFloat()
+            col.lineBase = paddingTop + charYStep
+            col.lineBottom = (paddingTop + visibleHeight).toFloat()
+            return col
+        }
+
+        // 把一段文字按列切片填入页面。columnsPerPage 用完则起新页继续填这段的剩余。
+        fun layoutParagraphText(text: String, isTitle: Boolean) {
+            if (text.isEmpty()) return
+            cancelCheck?.invoke()
+            var idx = 0
+            while (idx < text.length) {
+                val col = startNewColumn(isTitle)
+                var charsInColumn = 0
+                var y = paddingTop.toFloat()
+                while (idx < text.length && charsInColumn < charsPerColumn) {
+                    val ch = text[idx]
+                    if (isZeroWidthChar(ch)) {
+                        idx++
+                        chapterPosition++
+                        continue
+                    }
+                    col.addColumn(
+                        TextColumn(charData = ch.toString(), start = y, end = y + charYStep),
+                    )
+                    col.text += ch
+                    stringBuilder.append(ch)
+                    idx++
+                    chapterPosition++
+                    charsInColumn++
+                    y += charYStep
+                }
+                if (col.columns.isNotEmpty()) {
+                    currentPage.addLine(col)
+                    columnIdxFromRight++
+                    val isParaEnd = idx >= text.length
+                    if (isParaEnd) {
+                        col.isParagraphEnd = true
+                        chapterPosition++  // implicit '\n'
+                        stringBuilder.append('\n')
+                    }
+                    if (columnIdxFromRight >= columnsPerPage) {
+                        currentPage.text = stringBuilder.toString()
+                        finalizePage(currentPage)
+                        stringBuilder.setLength(0)
+                        currentPage = TextPage()
+                        textPages.add(currentPage)
+                        columnIdxFromRight = 0
+                    }
+                } else {
+                    // col 完全空（text 全是 zero-width chars）——退出避免死循环
+                    break
+                }
+            }
+        }
+
+        // ── 标题块 ──
+        // titleMode==2 / contentProvidesChapterTitle / omitChapterTitleBlock 跟横排同语义：
+        // 不画标题块，直接进正文。
+        if (titleMode != 2 && !contentProvidesChapterTitle && !omitChapterTitleBlock && title.isNotBlank()) {
+            paragraphNum++
+            layoutParagraphText(title, isTitle = true)
+        }
+
+        // ── 正文段落 ──
+        for (paragraph in paragraphs) {
+            cancelCheck?.invoke()
+            paragraphNum++
+            // 段首加 paragraphIndent（"　　"两个全角空格）——竖排里就是
+            // 列顶部留两格空白，跟横排"行首缩进"等价的视觉暗示。chapterTitle 段不加。
+            val paraText = if (paragraph.isChapterTitle) paragraph.text
+                           else paragraphIndent + paragraph.text
+            layoutParagraphText(paraText, isTitle = paragraph.isChapterTitle)
+        }
+
+        // ── 收尾 ──
+        if (currentPage.lines.isNotEmpty()) {
+            currentPage.text = stringBuilder.toString()
+            finalizePage(currentPage)
+        } else if (textPages.size > 1) {
+            // 末页空（最后一段恰好填满前一页）——移除空白尾页
+            textPages.removeAt(textPages.lastIndex)
+        } else {
+            // 整章空——给个占位页避免 pageSize=0 把 pageFactory 卡住
+            currentPage.format()
+            finalizePage(currentPage)
+        }
 
         textChapter.isCompleted = true
     }

@@ -1,6 +1,7 @@
 package com.morealm.app.domain.repository
 
 import android.content.Context
+import android.content.res.Configuration
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.db.ThemeDao
 import com.morealm.app.domain.entity.LegadoThemeConfig
@@ -41,6 +42,10 @@ class ThemeRepository @Inject constructor(
      *  Used by `ThemeViewModel.exportAllCustomThemes` for the bundle export path. */
     suspend fun getCustomThemesSnapshot(): List<ThemeEntity> =
         themeDao.getAllSync().filter { !it.isBuiltin }
+
+    /** 直接按 ID 取主题。供 ViewModel 在「跟随系统」场景下校验用户配的日 / 夜默认
+     *  主题是否仍然存在（自定义主题可能被用户删除），不存在时由调用方 fallback。 */
+    suspend fun getThemeById(id: String): ThemeEntity? = themeDao.getById(id)
 
     suspend fun activateTheme(themeId: String) {
         themeDao.deactivateAll()
@@ -149,7 +154,28 @@ class ThemeRepository @Inject constructor(
         })
         // Only set default active if no theme is currently active (fresh install)
         if (themeDao.countActiveThemes() == 0) {
-            themeDao.activate(builtins.first().id)
+            // 真·首次安装：getFollowSystemThemeSync() 在 AppPreferences 里默认 true，
+            // 这里就直接按当前系统暗色态选 paper / moRealm；否则 ThemeViewModel 拿到
+            // initialTheme=paper（系统白天）但 DB activate 写的是 moRealm，进入主屏后
+            // activeTheme StateFlow 收到 DB 真值会从白闪到夜（再被 applySystemDarkMode
+            // IfFollowing 异步切回白），用户能看到一次明显的颜色跳变。
+            val followSystem = preferences.getFollowSystemThemeSync()
+            val firstThemeId = if (followSystem) {
+                val sysIsNight = isSystemInNightMode()
+                if (sysIsNight) BuiltinThemes.moRealm.id else BuiltinThemes.paper.id
+            } else {
+                builtins.first().id
+            }
+            themeDao.activate(firstThemeId)
+            // 同步到 themePrefs，让冷启动 getActiveThemeIdSync 命中正确主题；
+            // 不然下次启动 sync 路径还是默认 morealm_default 又闪一次。
+            val targetTheme = builtins.first { it.id == firstThemeId }
+            preferences.setActiveTheme(firstThemeId, targetTheme.isNightTheme)
         }
+    }
+
+    private fun isSystemInNightMode(): Boolean {
+        val uiMode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        return uiMode == Configuration.UI_MODE_NIGHT_YES
     }
 }

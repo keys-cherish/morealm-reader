@@ -37,6 +37,24 @@ class SourceRepository @Inject constructor(
 
     suspend fun delete(source: BookSource) = sourceDao.delete(source)
 
+    /**
+     * 批量删除：一次事务里删完，全程只触发一次 Room InvalidationTracker 通知。
+     *
+     * **Why:** 逐条 delete 时 `DefaultDispatcher` 上的 `getAllSources()` Flow
+     * collector 会边读 CursorWindow 边被下一次 delete invalidate，
+     * 在 `BookSourceDao_Impl.getString` 阶段抛 `Couldn't read row X col 0`。
+     */
+    suspend fun deleteAll(sources: List<BookSource>) {
+        if (sources.isEmpty()) return
+        sourceDao.delete(sources)
+    }
+
+    /** 按 URL 批量删除——不需要先 select 出 BookSource。单事务。 */
+    suspend fun deleteByUrls(urls: List<String>) {
+        if (urls.isEmpty()) return
+        sourceDao.deleteByUrls(urls)
+    }
+
     fun fetchSourceJson(url: String): String {
         val response = okHttpClient.newCall(
             Request.Builder().url(url)

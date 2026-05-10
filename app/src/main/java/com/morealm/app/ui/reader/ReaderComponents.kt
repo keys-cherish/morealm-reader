@@ -12,12 +12,29 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.*
+// ── 阅读控制栏底部按钮线性矢量图标 (Image 16 设计) ────────────────────
+// 全部走 Outlined 系列让底栏视觉更轻、更现代；TTS 按钮从「人 + 声波」
+// (RecordVoiceOver) 换成传统麦克风形状 (Mic)，和大多数音频/朗读类 App 对齐。
+// 注意：Icons.Outlined.* 与 Icons.Default.* (= Icons.Filled.*) 是扩展属性，
+// 不能用 `import ... as Alias` 重命名当独立标识符用——只能用完整路径
+// `Icons.Outlined.Xxx`。这里只 import 包让属性可被解析；引用时写完整路径。
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -33,9 +50,16 @@ import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.ui.theme.toComposeColor
 import com.morealm.app.presentation.reader.PageTurnMode
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.runtime.snapshotFlow
 
 // ── Top Bar ─────────────────────────────────────────────
 
@@ -164,13 +188,19 @@ fun ReaderTopBar(
 // ── Bottom Control Bar (HTML prototype style: floating pill) ──
 
 /**
- * Seek preview 保留时长——见 LaunchedEffect(pendingChapter) 内部注释。
+ * Seek preview 兜底超时——见 LaunchedEffect(pendingChapter, currentChapter) 内部注释。
+ * 章节切到目标后，再等 [POST_SEEK_SETTLE_MS] 让 scrollProgress 流到 withinPct 再清。
+ * [SEEK_PREVIEW_TIMEOUT_MS] 仅作为加载失败 / 卡住时的兜底，让 thumb 不至于永远不清。
  * 900ms 是经验值，覆盖本地 + 一般网络章节的 loadChapter + LazyScroll restore
  * + scrollProgress emit 全程。极慢章节超过这个值时 seekValue 会先被清，slider
  * 短暂回到 baseProgress（已部分恢复）—— 比错位回弹温和。
  */
-private const val SEEK_PREVIEW_RETENTION_MS = 900L
+private const val POST_SEEK_SETTLE_MS = 200L
+private const val SEEK_PREVIEW_TIMEOUT_MS = 8_000L
 
+// Slider 的 thumb/track 自定义 slot 是 ExperimentalMaterial3Api。
+// 嵌入百分比 track ([EmbeddedPercentTrack]) + 细线 thumb 必须用这个槽位。
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderControlBar(
     currentChapter: Int, totalChapters: Int, chapterTitle: String,
@@ -219,6 +249,20 @@ fun ReaderControlBar(
     //   withinChapterPct = (rawProgress - targetChapter) * 100  // [0, 100)
     var seekValue: Float? by remember { mutableStateOf(null) }
     var pendingChapter: Int? by remember { mutableStateOf(null) }
+    // 用户是否正在拖动 slider。onValueChange 触发时 set true，onValueChangeFinished
+    // set false。LaunchedEffect 清 seekValue 时必须检查这个，否则用户长时间拖动期间
+    // 一次预览切章触发 LaunchedEffect 清 seekValue → sliderValue 退回 baseProgress
+    // → thumb 视觉位置（手指实际所在）跟 sliderValue 完全分裂（用户报「拖到 43% 但显示
+    // 2%」根因：thumb 在 43%、sliderValue 已被清成 baseProgress=旧章 6/300=2%）。
+    var sliderDragging by remember { mutableStateOf(false) }
+    // 双重保险：直接持引用的可变 float，绕开 Snapshot 系统的批量提交。
+    // 用户报「松手大概率不是最后一次进度」——如果是 onValueChangeFinished 先于
+    // 最后一次 onValueChange 落到 Snapshot store 的极端情况（Compose 1.6+ Slider
+    // 偶发可观察），seekValue 会比实际 thumb 值滞后一帧。每次 onValueChange 同步
+    // 写一份到 FloatArray（无 Snapshot batching）作为「最权威」的最后值，
+    // onValueChangeFinished 优先读它，确保 seek 目标 = 用户视觉上松手时 thumb
+    // 所在位置。
+    val latestSliderValueRef = remember { floatArrayOf(Float.NaN) }
     val sliderValue = seekValue ?: baseProgress
     val rawProgress = sliderValue * totalChapters
     val previewIdx = if (totalChapters > 0)
@@ -229,19 +273,92 @@ fun ReaderControlBar(
     else 0
     val previewBookPct = (sliderValue * 100f).coerceIn(0f, 100f)
 
-    // 当用户松手发起 seek 后，等 [SEEK_PREVIEW_RETENTION_MS] 让 viewModel 跑完
-     // loadChapter + LazyScroll restoreProgress JUMP + scrollProgress emit 一整套，
-     // 然后再清 seekValue / pendingChapter。期间 sliderValue 保持 = seekValue
-     // （用户拖到的位置），thumb 不会先跳回 baseProgress 再跳到目标——前者就是
-     // bug「松手回弹然后恢复」/「拖动没反应」的根因（SCROLL 模式下
-     // visiblePage.chapterIndex 在 LazyScroll JUMP 那一刻就流到目标章，
-     // 但 scrollProgress 还是 0%，baseProgress = chapterFraction + 0 → thumb
-     // 跳到目标章首；几十 ms 后 scrollProgress 才到 withinPct）。900ms 覆盖
-     // 大部分本地 + 网络章节加载；连点 seek 时新点击会重启延迟，旧 coroutine
-     // 被 cancel，seekValue 始终保持为最近一次拖动到的位置。
-    LaunchedEffect(pendingChapter) {
-        if (pendingChapter != null) {
-            kotlinx.coroutines.delay(SEEK_PREVIEW_RETENTION_MS)
+    // 当用户松手发起 seek 后，等 viewModel 跑完 loadChapter + LazyScroll restoreProgress
+    // JUMP + scrollProgress emit 一整套，然后再清 seekValue / pendingChapter。
+    // 期间 sliderValue 保持 = seekValue（用户拖到的位置），thumb 不会先跳回
+    // baseProgress 再跳到目标——前者就是 bug「松手回弹然后恢复」/「拖动没反应」
+    // 的根因（SCROLL 模式下 visiblePage.chapterIndex 在 LazyScroll JUMP 那一刻就
+    // 流到目标章，但 scrollProgress 还是 0%，baseProgress = chapterFraction + 0
+    // → thumb 跳到目标章首；几十 ms 后 scrollProgress 才到 withinPct）。
+    //
+    // 历史 bug：旧版本固定 delay(900ms) 后清，跟「currentChapter 是否真的跟上 pendingChapter」
+    // 完全无关。如果 loadChapter 实际加载耗时 > 900ms（弱网 / 大书），seekValue 已被清成 null
+    // 但 currentChapter 还在旧位置（如 40%），baseProgress = 40% → thumb 弹回 40% →
+    // 用户报告「拖到 70% 结果落到 40%」。
+    //
+    // 修法：监听 (pendingChapter, currentChapter)。pendingChapter 不为 null 且 currentChapter
+    // 已切到目标 → 立刻清；同时设个 [SEEK_PREVIEW_TIMEOUT_MS] 兜底（加载失败 / 超时
+    // 不会让 thumb 永远卡在 seek 位置）。
+    // ── Drag preview：拖动过程中跨章节边界时即时切章 ──
+    // 用户希望拖滑块时阅读区内容跟随翻动便于"找位置"。但 viewModel.loadChapter 重，每帧
+    // 调用会卡顿，所以策略是「跨章才切 + debounce 220ms」：
+    //  - 仅当 previewIdx 与 currentChapter 不同（拖过整章边界）才 fire
+    //  - debounce 220ms 避免快速来回拖动导致章节切换抖动
+    //  - 不带 withinPct（withinPct=0），只切章不滚动，松手时 onValueChangeFinished
+    //    再 final seek 带 withinPct 精确定位
+    // ── 拖动期间章预览：conflate + 单 worker 串行 ────────────────────────
+    // 目标：用户「边拖边看到内容变化」，但不能高频打 viewModel.loadChapter
+    // 否则 chapterLoadJob 反复 cancel + 启动会卡死 reader。
+    //
+    // 关键算法：
+    //   1. snapshotFlow.conflate() —— 上游 emit 时若下游 collect 还在跑，只保留
+    //      最新值（不堆积、不丢失「最终目标」）。用户疯狂拖动时 source 每帧 emit，
+    //      conflate 只保留最新一帧，collect 处理完看最新值即可。
+    //   2. collect 内串行：onSeekFullBook → 然后等 currentChapter 真的追上 previewIdx
+    //      （最长 500ms 兜底）→ 才 return，让下一次 conflate 取到新最新值。这样
+    //      loadChapter 是「跑完一个再跑下一个」，永远不会并发或抖动。
+    //   3. 用户停在同一章不重复触发：previewIdx == currentChapter → 直接跳过；
+    //      用户拖回当前章 → lastPreviewedIdxRef 防止 ping-pong。
+    //
+    // 实测节奏：用户连续拖过 5 章 → 第 1 章 commit 完才处理第 5 章（中间章被 conflate 丢弃），
+    // 每个 commit ~200-500ms，整体 1-3 秒走完不卡。比之前 cancel-restart-cancel 强得多。
+    val lastPreviewedIdxRef = remember { intArrayOf(-1) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { seekValue }
+            .filterNotNull()
+            .conflate()
+            .collect { v ->
+                if (totalChapters <= 0) return@collect
+                val raw = (v * totalChapters).coerceIn(0f, totalChapters.toFloat())
+                val previewIdx = raw.toInt().coerceIn(0, totalChapters - 1)
+                if (previewIdx == currentChapter || previewIdx == lastPreviewedIdxRef[0]) return@collect
+                lastPreviewedIdxRef[0] = previewIdx
+                pendingChapter = previewIdx
+                onSeekFullBook(previewIdx, 0)
+                // 等 currentChapter 实际追上目标，500ms 兜底（弱网 / 加载失败）。
+                // 这是串行的核心：不等就立即 collect 下一个，loadChapter 会并发。
+                withTimeoutOrNull(500L) {
+                    snapshotFlow { currentChapter }
+                        .first { it == previewIdx }
+                }
+            }
+    }
+    // seekValue 被清（松手后）→ 重置 lastPreviewedIdx，下次拖动从 currentChapter 重新起算
+    LaunchedEffect(seekValue) {
+        if (seekValue == null) lastPreviewedIdxRef[0] = -1
+    }
+
+    LaunchedEffect(pendingChapter, currentChapter, sliderDragging) {
+        val target = pendingChapter ?: return@LaunchedEffect
+        // 用户还在拖动 → 绝对不清 seekValue。否则 sliderValue 退回 baseProgress 让
+        // thumb 跟手指位置分裂（用户报「拖到 43% 显示 2%」根因）。等 onValueChangeFinished
+        // 把 sliderDragging 翻 false 再让本 effect 重新跑清空逻辑。
+        if (sliderDragging) return@LaunchedEffect
+        if (currentChapter == target) {
+            // 章节已切到目标——再多等 [POST_SEEK_SETTLE_MS] 让 scrollProgress 也流到 withinPct
+            // （ScrollRenderer JUMP 完成 + collector emit），避免 thumb 先回到章首再到 withinPct。
+            kotlinx.coroutines.delay(POST_SEEK_SETTLE_MS)
+            if (!sliderDragging) {
+                seekValue = null
+                pendingChapter = null
+            }
+            return@LaunchedEffect
+        }
+        // 章节还没切：兜底超时。多数情况下 currentChapter 会先变化触发本 effect 重启，
+        // 这条 delay 跑完后 effect 就被新的 (currentChapter) 取消了；只有真的加载不动时
+        // 才会跑到清空 seekValue 这一步——比卡死强。
+        kotlinx.coroutines.delay(SEEK_PREVIEW_TIMEOUT_MS)
+        if (!sliderDragging) {
             seekValue = null
             pendingChapter = null
         }
@@ -254,7 +371,10 @@ fun ReaderControlBar(
             .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .clip(barShape)
-            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.88f))
+            // 不透明 surfaceContainer —— 用户反馈 0.88 还是能看到背景文字（深色模式
+            // 下背景是高对比度文字时透出感很明显），1.0 完全不透明。Image 21 vs 20
+            // 对比就是这个修复。
+            .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable(
                 indication = null,
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
@@ -262,119 +382,52 @@ fun ReaderControlBar(
             ),
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            // Icon row
+            // ── 章节标题预览：拖动时优先显示 preview；闲时显示当前章 + 进度 ──
+            // 之前在 Icon row 中央，按钮重排后独立成一行放在最顶
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "返回书架"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = onChapterSelect,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "目录"
-                            role = Role.Button
-                        },
-                ) {
-                    @Suppress("DEPRECATION")
-                    Icon(Icons.Default.FormatListBulleted, "目录",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = onSearch,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "全文搜索"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Default.Search, "搜索",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp))
-                }
-                // Center: progress / 拖动预览
-                Column(
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    if (seekValue != null && totalChapters > 0) {
-                        // #3 拖动时实时显示「全书 X.X% · 第N章 · 章内Y%」
-                        val previewTitle = getChapterTitle(previewIdx).ifBlank { "第${previewIdx + 1}章" }
-                        Text(
-                            "→ ${"%.1f".format(previewBookPct)}% · ${previewTitle.take(14)} · 章内${previewWithinPct}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else {
-                        Text(
-                            "${chapterTitle.ifBlank { "第${currentChapter + 1}章" }} · $readProgress",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = onTts,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "朗读"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Default.RecordVoiceOver, "朗读",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = onAutoPage,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "自动翻页"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Default.Timer, "自动翻页",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp))
-                }
-                IconButton(
-                    onClick = onSettings,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .semantics {
-                            contentDescription = "阅读设置"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Default.TextFields, "设置",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp))
+                if (seekValue != null && totalChapters > 0) {
+                    val previewTitle = getChapterTitle(previewIdx).ifBlank { "第${previewIdx + 1}章" }
+                    Text(
+                        "→ ${"%.1f".format(previewBookPct)}% · ${previewTitle.take(14)} · 章内${previewWithinPct}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    // ── 章节标题 + 章内进度 ──
+                    // 去掉「· 分隔符」（用户反馈：分隔符让人误以为两者是同级信息）。
+                    // 章名 onSurface 0.7 偏白；进度 (5/71) 用 0.4 灰色 → 视觉上自然分级，
+                    // 章名是主信息，进度是辅信息。
+                    Text(
+                        text = chapterTitle.ifBlank { "第${currentChapter + 1}章" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = readProgress,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                        maxLines = 1,
+                    )
                 }
             }
             // ── #3 章节进度条（可拖动） ──
             // 单章节情况下不渲染 Slider（valueRange 0..0 不合法），保留旧的小提示就够用。
             if (totalChapters > 1) {
+                // 旧版本 Slider 上方独立 Row 显示「33.8%」—— 用户反馈：
+                //   1. 单独占一行，浪费控制栏纵向空间
+                //   2. 紧挨着「序章 Prologue · 5/71」让人误以为是章内进度
+                // 改成把百分比嵌入 Slider 自身的 track（混合反差色：经过紫色显白，
+                // 没经过显暗紫），既省一行空间，也让百分比天然贴在「全书进度条」上，
+                // 视觉上明确归属为「全书进度」。详见 [EmbeddedPercentTrack]。
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -385,25 +438,70 @@ fun ReaderControlBar(
                         modifier = Modifier.clickable(onClick = onPrevChapter)
                             .padding(vertical = 4.dp, horizontal = 2.dp),
                     )
+                    val barColor = MaterialTheme.colorScheme.primary
+                    val trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                    val textOnEmpty = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                    val textOnFilled = Color.White
                     Slider(
                         value = sliderValue,
-                        onValueChange = { seekValue = it },
+                        onValueChange = {
+                            seekValue = it
+                            latestSliderValueRef[0] = it
+                            sliderDragging = true
+                        },
                         onValueChangeFinished = {
-                            seekValue?.let { v ->
+                            sliderDragging = false
+                            // 优先用 latestSliderValueRef[0]（无 Snapshot batch 的最新值），
+                            // 兜底到 seekValue。两者绝大多数情况一致，但极端时序下
+                            // latestSliderValueRef 比 seekValue 多落一次，能避免「松手
+                            // 跳到上一帧位置」的视觉偏差。
+                            val finalValue = latestSliderValueRef[0]
+                                .takeIf { !it.isNaN() }
+                                ?: seekValue
+                            finalValue?.let { v ->
                                 val raw = (v * totalChapters).coerceIn(0f, totalChapters.toFloat())
                                 val idx = raw.toInt().coerceIn(0, totalChapters - 1)
                                 val withinPct = ((raw - idx) * 100f).toInt().coerceIn(0, 99)
+                                com.morealm.app.core.log.AppLog.debug(
+                                    "ReaderSlider",
+                                    "seek finished v=$v rawIdx=$raw → ch=$idx pct=$withinPct" +
+                                        " seekValue=$seekValue latestRef=${latestSliderValueRef[0]}",
+                                )
                                 // 注意：即使章号没变也要触发 — 用户可能在本章内拖位置。
                                 // 旧实现 `if (idx != currentChapter)` 会吃掉章内 seek。
                                 pendingChapter = idx
                                 onSeekFullBook(idx, withinPct)
                             }
-                            // seekValue 不在这里清——上面的 LaunchedEffect 等
-                            // currentChapter == pendingChapter 后再清，避免 thumb
-                            // 弹回旧位置再跳到新位置。
+                            // 重置 latestRef 让下次 drag 起点干净；seekValue 不在这里清——
+                            // 上面的 LaunchedEffect 等 currentChapter == pendingChapter 后
+                            // 再清，避免 thumb 弹回旧位置再跳到新位置。
+                            latestSliderValueRef[0] = Float.NaN
                         },
                         valueRange = 0f..1f,
-                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp)
+                            .height(28.dp),  // 略矮于旧版 32dp，让 EmbeddedPercentTrack 的圆角条贴满高度
+                        thumb = {
+                            // 完全隐藏 thumb —— 用户反馈白色细线在填充段末尾形成视觉割裂
+                            // (Image 21)，看起来像两段拼接而不是连续胶囊。隐藏后填充段
+                            // 用自身的右侧圆角自然结束（Image 20 设计）。
+                            //
+                            // 触摸交互不受影响：Slider 的拖动手势绑定整个 modifier 区域，
+                            // 不依赖 thumb 视觉存在。用户照常可以在胶囊上任意位置按下拖动。
+                            Box(modifier = Modifier.size(0.dp))
+                        },
+                        track = {
+                            EmbeddedPercentTrack(
+                                fraction = sliderValue.coerceIn(0f, 1f),
+                                text = "%.1f%%".format(previewBookPct),
+                                isDragging = seekValue != null,
+                                barColor = barColor,
+                                trackColor = trackColor,
+                                textOnEmpty = textOnEmpty,
+                                textOnFilled = textOnFilled,
+                            )
+                        },
                         colors = SliderDefaults.colors(
                             thumbColor = MaterialTheme.colorScheme.primary,
                             activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -428,6 +526,216 @@ fun ReaderControlBar(
                     trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                 )
             }
+            // ── 按钮 Row：放在进度条之下，按钮尺寸放大方便点击 ──
+            // 之前是 32dp 容器 + 18dp icon 紧凑布局；用户反馈按钮太小不好点。
+            // 改为 44dp 容器 + 22dp icon（接近 Material3 标准触摸目标 48dp）。
+            // 章节标题预览已上移到顶部独立行，这里专注按钮均匀分布。
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "返回书架"
+                            role = Role.Button
+                        },
+                ) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp))
+                }
+                IconButton(
+                    onClick = onChapterSelect,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "目录"
+                            role = Role.Button
+                        },
+                ) {
+                    Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, "目录",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp))
+                }
+                IconButton(
+                    onClick = onSearch,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "全文搜索"
+                            role = Role.Button
+                        },
+                ) {
+                    Icon(Icons.Outlined.Search, "搜索",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp))
+                }
+                IconButton(
+                    onClick = onTts,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "朗读"
+                            role = Role.Button
+                        },
+                ) {
+                    // 麦克风图标 + primary tint —— 仍是激活态视觉重心，跟其他 outlined
+                    // 灰色按钮形成对比；image 16 的 mic 也是这个走法。
+                    Icon(Icons.Outlined.Mic, "朗读",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp))
+                }
+                IconButton(
+                    onClick = onAutoPage,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "自动翻页"
+                            role = Role.Button
+                        },
+                ) {
+                    Icon(Icons.Outlined.Timer, "自动翻页",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp))
+                }
+                IconButton(
+                    onClick = onSettings,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .semantics {
+                            contentDescription = "阅读设置"
+                            role = Role.Button
+                        },
+                ) {
+                    Icon(Icons.Outlined.TextFields, "设置",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 进度条 track —— 把全书进度百分比文字嵌入到 Slider 自身的 track 里，
+ * 用「混合反差色」让文字在「填充段」和「空白段」上都清晰可读。
+ *
+ * # 视觉效果
+ *
+ * ```
+ *   ┌──────────────────────┐
+ *   │█████████ 33.8% ░░░░░░│
+ *   └──────────────────────┘
+ *      ↑ 反白处       ↑ 反黑处
+ * ```
+ *
+ *   - 文字在 track 正中 (Alignment.Center)
+ *   - 跨过紫色填充段时显示 [textOnFilled]（白）
+ *   - 跨过空白段时显示 [textOnEmpty]（暗紫）
+ *
+ * # 实现技巧（双层 + clipRect）
+ *
+ * 单层文字无法在两种背景上都对比清晰——纯白看不见空白段，纯暗看不见填充段。
+ * 解法：渲染同一份文字两遍，**两遍的位置完全相同**（都 Center 对齐到同一个
+ * 父 Box），但用 `Modifier.drawWithContent` 配合 [clipRect] 把第二遍裁剪到只
+ * 在「已填充」区域可见。
+ *
+ *   - 底层：textOnEmpty 颜色，全幅显示——空白段看到的就是它
+ *   - 上层：textOnFilled 颜色，clipRect 裁到 fraction 宽度——只在填充段盖住底层
+ *
+ * 这样不论 fraction 是 0 / 50% / 100%，文字始终清晰、不需要根据进度切换颜色。
+ *
+ * # 与 SliderState 的关系
+ *
+ * 调用方在 [ReaderControlBar] 里通过 Slider 的 `track = { ... }` 槽位调用本函数，
+ * 显式传入 fraction（已是 0..1 的 sliderValue）—— 不读 SliderState 的原因：
+ *
+ *   - SliderState 只在 SliderState 版本的 Slider 里可用，本文件用 (value, onValueChange)
+ *     legacy 签名，slot 收到的也是 SliderState 但语义稍有不同
+ *   - 显式传入避免假如 valueRange 不是 0..1 时 fraction 计算分歧
+ */
+@Composable
+private fun EmbeddedPercentTrack(
+    fraction: Float,
+    text: String,
+    isDragging: Boolean,
+    barColor: Color,
+    trackColor: Color,
+    textOnEmpty: Color,
+    textOnFilled: Color,
+) {
+    val barHeight = 24.dp
+    val shape = RoundedCornerShape(barHeight / 2)
+    // ── 渐变填充：起点稍亮（混白 22%），终点 barColor 纯色 ──
+    // 之前填充段是纯色 barColor 一片，视觉扁平 —— 用户反馈"没渐变；没感觉"。
+    // 加横向渐变让填充段在深色背景下有立体光感（从亮到正常），模拟"凸起胶囊"
+    // 的高光效果。混白比例 22% 在深色 / 浅色主题下都不至于过曝。
+    val gradientStart = lerp(barColor, Color.White, 0.22f)
+    val fillBrush = remember(barColor, gradientStart) {
+        Brush.horizontalGradient(colors = listOf(gradientStart, barColor))
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(barHeight)
+            .clip(shape)
+            .background(trackColor),
+        contentAlignment = Alignment.Center,
+    ) {
+        // ① 填充段 —— "独立胶囊"：自己 clip 圆角 + 渐变背景
+        //
+        // 旧实现没有自己的 clip：填充段的左侧贴外层 Box 的圆角"借用"了胶囊形，
+        // 但右侧（fraction × width 处）是直角 → 视觉上是"嵌在外胶囊里"而不是
+        // "独立胶囊浮在 track 上"。用户反馈图 3 那种"突出圆角"的设计感就是
+        // 让填充段两端都圆角 = 独立胶囊。改法：填充段加 clip(shape) 自带胶囊
+        // 圆角，背景换 fillBrush 渐变。
+        if (fraction > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                    .fillMaxHeight()
+                    .align(Alignment.CenterStart)
+                    .clip(shape)
+                    .background(fillBrush),
+            )
+        }
+        // ② 文字底层（在空白段上显色）—— 暗紫，全幅显示
+        Text(
+            text = text,
+            color = textOnEmpty,
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontFeatureSettings = "tnum",  // 数字等宽防抖
+                fontWeight = if (isDragging) FontWeight.Bold else FontWeight.SemiBold,
+            ),
+        )
+        // ③ 文字上层（在填充段上显色）—— 白色，clipRect 裁到 fraction 宽度
+        // drawWithContent + clipRect 是 Compose 里实现"按几何区域反色显示"的标准手法，
+        // 比叠两个 Box + 各自 fillMaxWidth(fraction) 居中要简单一档（后者两个 Box 的
+        // 文字"中心"会跟着各自的容器宽度走 → 两层文字位置不一致 → 文字看起来"撕裂"）。
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .drawWithContent {
+                    val clipWidth = size.width * fraction.coerceIn(0f, 1f)
+                    clipRect(0f, 0f, clipWidth, size.height) {
+                        this@drawWithContent.drawContent()
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = text,
+                color = textOnFilled,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontFeatureSettings = "tnum",
+                    fontWeight = if (isDragging) FontWeight.Bold else FontWeight.SemiBold,
+                ),
+            )
         }
     }
 }
@@ -459,15 +767,16 @@ fun ReaderSettingsPanel(
     paragraphSpacing: Int = 8,
     onParagraphSpacingChange: (Int) -> Unit = {},
     marginHorizontal: Int = 24,
-    /** 拖动中：实时反馈给渲染器但**不持久化**。每帧都触发，由 ReaderScreen 维护 preview state。 */
-    onMarginHorizontalPreview: (Int) -> Unit = {},
-    /** 松手：把最终值写入 Room 并清空 preview。仅 onValueChangeFinished 触发，频率极低。 */
+    /**
+     * 松手时回写 prefs 触发 reflow。设计上**不**走"拖动期间实时预览"——
+     * CanvasRenderer 的 reflow 是 onCompleted 才 atomic swap 的设计，拖动期间高频
+     * 重排会被取消重启永远完不成；改为松手生效后体验明确：thumb 跟手移动 + 数值
+     * 实时刷新，松手内容才重排一次。
+     */
     onMarginHorizontalCommit: (Int) -> Unit = {},
     marginTop: Int = 24,
-    onMarginTopPreview: (Int) -> Unit = {},
     onMarginTopCommit: (Int) -> Unit = {},
     marginBottom: Int = 24,
-    onMarginBottomPreview: (Int) -> Unit = {},
     onMarginBottomCommit: (Int) -> Unit = {},
     customCss: String = "",
     onCustomCssChange: (String) -> Unit = {},
@@ -557,13 +866,17 @@ fun ReaderSettingsPanel(
                 ) {
                     readerStyles.forEach { style ->
                         val isActive = style.id == activeStyleId
-                        val bg = style.bgColor.toComposeColor()
-                        val fg = style.textColor.toComposeColor()
+                        // v29 起 ReaderStyle 不再带颜色，瓦片预览改为按 preset 的
+                        // textSize 视觉缩放 "Aa" 字样：
+                        //   - 默认 17 → 12sp、紧凑 15 → 11sp、大字 20 → 14sp
+                        // 直观传达"这是排版差异"而非"颜色差异"。瓦片底色统一用主题
+                        // surfaceContainerHigh，跟当前主题协调。
+                        val previewFontSize = (style.textSize / 1.4f).coerceIn(10f, 16f).sp
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
                                 .semantics {
-                                    contentDescription = "阅读样式：${style.name}"
+                                    contentDescription = "排版预设：${style.name}"
                                     role = Role.Button
                                 }
                                 .clickable { onStyleChange(style.id) },
@@ -572,15 +885,16 @@ fun ReaderSettingsPanel(
                                 modifier = Modifier
                                     .size(42.dp)
                                     .clip(CircleShape)
-                                    .background(bg)
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                                     .then(
                                         if (isActive) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
                                         else Modifier.border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f), CircleShape)
                                     ),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text("文", color = fg,
-                                    style = MaterialTheme.typography.labelSmall,
+                                Text("Aa",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = previewFontSize,
                                     fontWeight = FontWeight.Bold)
                             }
                             Spacer(Modifier.height(4.dp))
@@ -855,7 +1169,7 @@ fun ReaderSettingsPanel(
                     modifier = Modifier.width(32.dp))
                 Slider(
                     value = mH.toFloat(),
-                    onValueChange = { mH = it.toInt(); onMarginHorizontalPreview(mH) },
+                    onValueChange = { mH = it.toInt() },
                     onValueChangeFinished = { onMarginHorizontalCommit(mH) },
                     valueRange = 8f..64f, steps = 0,
                     modifier = Modifier.weight(1f),
@@ -871,7 +1185,7 @@ fun ReaderSettingsPanel(
                     modifier = Modifier.width(32.dp))
                 Slider(
                     value = mT.toFloat(),
-                    onValueChange = { mT = it.toInt(); onMarginTopPreview(mT) },
+                    onValueChange = { mT = it.toInt() },
                     onValueChangeFinished = { onMarginTopCommit(mT) },
                     valueRange = 8f..64f, steps = 0,
                     modifier = Modifier.weight(1f),
@@ -887,7 +1201,7 @@ fun ReaderSettingsPanel(
                     modifier = Modifier.width(32.dp))
                 Slider(
                     value = mB.toFloat(),
-                    onValueChange = { mB = it.toInt(); onMarginBottomPreview(mB) },
+                    onValueChange = { mB = it.toInt() },
                     onValueChangeFinished = { onMarginBottomCommit(mB) },
                     valueRange = 8f..64f, steps = 0,
                     modifier = Modifier.weight(1f),

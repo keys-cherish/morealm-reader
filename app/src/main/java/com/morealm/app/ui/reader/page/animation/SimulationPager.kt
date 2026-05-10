@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
@@ -69,6 +72,13 @@ private data class SimulationIdleKey(
      * 用户加 / 删字体色也要等翻页才生效。
      */
     val textColorId: Int,
+    /**
+     * 3 套 paint 引用的联合 hash。CanvasRenderer 切日/夜 / 换字号 / 换字体 /
+     * 换字色时 paint 会 remember 重建，引用换新；不并入 key 时 pageId + bgColor
+     * 巧合相同的场景（比如用户自定义主题只改字色不改背景）会被 dedupe 误吞，
+     * idle bitmap 沿用旧字色画面。
+     */
+    val paintsId: Int,
 )
 
 /**
@@ -117,6 +127,18 @@ internal fun SimulationPager(
     val cap = (pageCount - 1).coerceAtLeast(currentDisplayPage)
     val displayPage = currentDisplayPage.coerceIn(0, cap)
 
+    // 见 view.onPageTurnCompleted 内注释——快速翻页时跟踪「最近一次 commit 后落地的
+    // page」，作为下一次 commit 的 base。-1 = 没有挂起的 commit，从 displayPage 起算。
+    val lastCommittedRef = remember { mutableIntStateOf(-1) }
+    // displayPage 跟上 lastCommittedRef → PagerState 已经落地 → 重置 anchor，让用户
+    // 真正停下来后下一次翻页从最新 displayPage 起算。不重置会让切章 / 跳进度后
+    // 残留的 anchor 把后续 commit 都拐到错误的 base。
+    LaunchedEffect(displayPage) {
+        if (displayPage == lastCommittedRef.intValue) {
+            lastCommittedRef.intValue = -1
+        }
+    }
+
     // ── B 修复：prelayout 期间 setIdleBitmap 抖动抑制 ──────────────────────────
     // pages 流式增长（155→275→276→...）过程中，即便 displayPage=0 / pageId 不变，
     // PageInfoOverlay 的身份哈希（时间/电量刷新）会换 → contentKey 不同 → 每次 pages.size
@@ -133,9 +155,31 @@ internal fun SimulationPager(
     // 当作 key，当 ViewModel 推新列表时这个 IntArray 重新生成 → 早 return 失效 →
     // 走完整 setIdleBitmap 路径。配合 SimulationIdleKey 里新增的 highlightsId /
     // textColorId 字段（防止 setIdleBitmap 内部再次 dedupe），形成两层防御。
-    val lastBitmapState = remember(params.chapterHighlights, params.chapterTextColorSpans) {
+    //
+    // 日/夜间 + 主题切换补丁：paint / bgColor / bgBitmap 也并入 key。否则切日夜后
+    // `pageId == lastBitmapState[1]` 命中（TextPage 是 pre-layout 的同一对象），
+    // 下面 line ~260 的 short-circuit 直接 return，SimulationIdleKey 的 bgColor
+    // 字段根本没机会比较 → idle bitmap 沿用旧主题画面 → 个别设备上必须"退出重进"
+    // 才能看到新主题。(反馈来源：2026-05-08 QQ 图片 20260508143527.jpg)
+    val lastBitmapState = remember(
+        params.chapterHighlights, params.chapterTextColorSpans,
+        params.titlePaint, params.contentPaint, params.chapterNumPaint,
+        params.bgColor, params.bgBitmap,
+    ) {
         intArrayOf(-1, 0)
     } // [0]=displayPage, [1]=pageId
+
+    // 主题 / 字号 / 字体切换检测 token：任一 paint 引用 / bgColor / bgBitmap 变化
+    // 都 remember 出新 Any()，通过下面 update lambda 里的身份比较触发
+    // [SimulationReadView.unpinIdleBitmap] —— 见 onAnimStop 的 pinned 自动升格机制：
+    // 翻完一页后 idleBitmap 被 pin，此时切日夜间 / 字号，setIdleBitmap 被 REJECTED
+    // 导致主题切换不立即生效，必须摸屏 / 退出重进才生效。该 token 让 update 主动
+    // unpin。
+    val themeToken = remember(
+        params.titlePaint, params.contentPaint, params.chapterNumPaint,
+        params.bgColor, params.bgBitmap,
+    ) { Any() }
+    val lastThemeTokenRef = remember { mutableStateOf<Any?>(null) }
     // 节流 "[3a] setIdleBitmap SKIPPED (unchanged)" 日志：分页流式产页时
     // 同 (displayPage, pageId) 会在 ~50ms 内连发 ≥10 次（log 19:32:48.8~49.5），
     // 污染日志。同 key 在 [SKIP_LOG_THROTTLE_MS] 内只打第一行，被压制的次数
@@ -162,6 +206,11 @@ internal fun SimulationPager(
             }
         },
         update = { view ->
+            // 主题 / 字号 / 字体 / 背景图变化时主动 unpin —— 见 themeToken 注释。
+            if (lastThemeTokenRef.value !== themeToken) {
+                view.unpinIdleBitmap()
+                lastThemeTokenRef.value = themeToken
+            }
             view.setBackgroundColor(params.bgColor)
             view.bgMeanColor = params.bgMeanColor
             view.canTurnNext = { params.canTurn(displayPage, ReaderPageDirection.NEXT) }
@@ -215,9 +264,25 @@ internal fun SimulationPager(
             view.onTapWhileGated = { params.onDismissPopup?.invoke() }
             view.onPageTurnCompleted = { isNext ->
                 val direction = if (isNext) ReaderPageDirection.NEXT else ReaderPageDirection.PREV
-                val committedPage = params.onFillPage(displayPage, direction)
+                // ─── 快速翻页 base-page race 修复 ────────────────────────────
+                // 历史 bug：base 直接用 capture 的 displayPage，但 PagerState.scrollToPage
+                // 是 scope.launch 异步的，update lambda 重组也跟在 PagerState 实际更新
+                // 之后。用户快速连按时 abortAnim 的 force-commit 会在新 displayPage 还
+                // 没 capture 时再次跑 onPageTurnCompleted，base 还停在旧值 → 表现：
+                //   - 连续 next：重复 commit 到同一页，看起来「翻不动」
+                //   - next 后立刻 prev：base = next 前的旧 displayPage，prev 跑出
+                //     旧页 - 1（而不是 commit 后的页 - 1），用户报的「走三步退一步」
+                //
+                // 修法：用 lastCommittedRef 单调追踪「最近一次 commit 后落地的 page」。
+                // 它一旦写入就比 displayPage 更新，后续 commit 全部以它为 base 累计；
+                // displayPage 真正赶上后由 LaunchedEffect 重置（见下方），让停下来时
+                // 重新以 displayPage 为起点（防止用户切章后还残留旧 anchor）。
+                val base = if (lastCommittedRef.intValue >= 0) lastCommittedRef.intValue
+                           else displayPage
+                val committedPage = params.onFillPage(base, direction)
                 if (committedPage != null) {
                     val safePage = committedPage.coerceIn(0, pageCount - 1)
+                    lastCommittedRef.intValue = safePage
                     scope.launch { pagerState.scrollToPage(safePage) }
                     params.onPageChanged(safePage)
                 }
@@ -237,8 +302,21 @@ internal fun SimulationPager(
             // idleBitmap；越界期间保留 View 现有 idleBitmap（新建 View 时为
             // null，绘制为纯 bgColor 背景，比闪 5 张错页温和得多）。等
             // pages 列表追上后下一次 update 会用正确内容补齐。
-            if (w > 0 && h > 0 && displayPage in pages.indices) {
-                val page = params.pageForTurn(displayPage, 0)
+            //
+            // ── 例外：首次进入仿真 ──────────────────────────────────
+            // 如果 view 刚刚被创建（其它翻页动画切到仿真），idleBitmap 还是
+            // null，此时如果 displayPage 越界就持续白屏 —— 等 pages 追上
+            // 期间用户看到的是 bgMeanColor 纯色，体感是「切到仿真必白屏」。
+            // 首次进入时**允许越界写**：用 displayPage.coerceIn(0, pages.size-1)
+            // 取一张实际存在的页，宁可暂时画"错页"也不要白屏；prelayout 完成
+            // 后 update 会再次执行用正确 page 覆盖。
+            val isFirstFrameOfSimulation = !view.hasIdleBitmap()
+            val safeDisplayForFallback = displayPage.coerceIn(0, pages.lastIndex.coerceAtLeast(0))
+            val canRender = w > 0 && h > 0 &&
+                (displayPage in pages.indices || isFirstFrameOfSimulation)
+            if (canRender) {
+                val pageForRender = if (displayPage in pages.indices) displayPage else safeDisplayForFallback
+                val page = params.pageForTurn(pageForRender, 0)
                 val curPageId = page?.let(System::identityHashCode) ?: 0
 
                 // B 修复的 short-circuit：displayPage 和 pageId 都没变 → 直接跳过。
@@ -293,6 +371,13 @@ internal fun SimulationPager(
                         // [SimulationIdleKey] 字段说明。
                         highlightsId = System.identityHashCode(params.chapterHighlights),
                         textColorId = System.identityHashCode(params.chapterTextColorSpans),
+                        // 3 套 paint 引用 XOR — 任一引用变化（日夜切换、换字号 / 字体 /
+                        // 字色）都让 dedupe key 不再 equals。CanvasRenderer 通过 remember
+                        // key 重建 paint 时引用必变，所以 identityHashCode XOR 足以表达
+                        // "本帧 paint 集合"。
+                        paintsId = System.identityHashCode(params.titlePaint) xor
+                            System.identityHashCode(params.contentPaint) xor
+                            (params.chapterNumPaint?.let(System::identityHashCode) ?: 0),
                     )
                 } else null
                 // Diagnostic — pairs with setIdleBitmap's RECV log so we can

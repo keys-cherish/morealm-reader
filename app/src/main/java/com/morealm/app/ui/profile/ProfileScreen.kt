@@ -103,6 +103,11 @@ fun ProfileScreen(
     val recentDays by profileViewModel.recentDays.collectAsStateWithLifecycle()
     val annualReport by profileViewModel.annualReport.collectAsStateWithLifecycle()
     var showAnnualReport by remember { mutableStateOf(false) }
+    // 「跟随系统」开启时，给用户配置日 / 夜默认主题的选择对话框可见性。
+    // 两个独立 state 而非一个 enum，是为了允许（极端情况下）两个 dialog 同时
+    // 出现不会互相干扰；常规用户从一个流程进，互不影响。
+    var showAutoDayPicker by remember { mutableStateOf(false) }
+    var showAutoNightPicker by remember { mutableStateOf(false) }
 
     val themeExportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -185,6 +190,63 @@ fun ProfileScreen(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
+                // 「跟随系统」开关 —— 开启后系统暗色模式变化（用户改了 Android
+                // 系统设置 → 显示 → 深色主题，或日落自动切换）会驱动这里在内置
+                // 日间 / 夜间主题之间切。手动点下面任何主题瓦片都会自动关掉这个
+                // 开关（switchTheme 内部会调 setFollowSystemTheme(false)），
+                // 把主题选择权交还用户。
+                run {
+                    val follow by themeViewModel.followSystemTheme.collectAsStateWithLifecycle()
+                    val systemIsDark = androidx.compose.foundation.isSystemInDarkTheme()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("跟随系统主题",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium)
+                            Text(
+                                if (follow) "已开启 · 系统切到${if (systemIsDark) "深色" else "浅色"}时自动切换"
+                                else "关闭 · 用下方瓦片手动选择主题",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            )
+                        }
+                        Switch(
+                            checked = follow,
+                            onCheckedChange = { enabled ->
+                                themeViewModel.setFollowSystemTheme(enabled, systemIsDark)
+                            },
+                        )
+                    }
+                    // 跟随系统打开后才暴露日 / 夜默认主题选择 —— 关闭时这两行没意义
+                    // 而且会让 Card 永久长高，加重 profile 拥挤问题。用简单 if 而非
+                    // AnimatedVisibility，避免引入新的 import 和动画时序耦合。
+                    if (follow) {
+                        Spacer(Modifier.height(12.dp))
+                        AutoThemePickerRow(
+                            label = "白天默认主题",
+                            currentThemeName = run {
+                                val id by themeViewModel.autoDayThemeId.collectAsStateWithLifecycle()
+                                allThemes.find { it.id == id }?.name ?: "内置 · 米色书页"
+                            },
+                            onClick = { showAutoDayPicker = true },
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        AutoThemePickerRow(
+                            label = "夜晚默认主题",
+                            currentThemeName = run {
+                                val id by themeViewModel.autoNightThemeId.collectAsStateWithLifecycle()
+                                allThemes.find { it.id == id }?.name ?: "内置 · 墨境"
+                            },
+                            onClick = { showAutoNightPicker = true },
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    Spacer(Modifier.height(12.dp))
+                }
                 Text("点击切换主题，实时预览效果",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
@@ -433,6 +495,37 @@ fun ProfileScreen(
     // UX-1: 删除主题已迁移到 onLongClick 内联处理（立即删 + Snackbar 撤销），
     // 原 AlertDialog + showDeleteThemeConfirm 状态已下线。
 
+    // 「跟随系统主题」日 / 夜默认主题选择对话框。candidates 按 isNightTheme 过滤，
+    // 用户选「使用内置默认」时写入空串 = ThemeViewModel 会 fallback 到 paper / moRealm。
+    if (showAutoDayPicker) {
+        val selectedId by themeViewModel.autoDayThemeId.collectAsStateWithLifecycle()
+        AutoThemePickerDialog(
+            title = "选择白天默认主题",
+            candidates = allThemes.filter { !it.isNightTheme },
+            currentSelectedId = selectedId,
+            fallbackLabel = "使用内置默认（米色书页）",
+            onPick = { id ->
+                themeViewModel.setAutoDayThemeId(id)
+                showAutoDayPicker = false
+            },
+            onDismiss = { showAutoDayPicker = false },
+        )
+    }
+    if (showAutoNightPicker) {
+        val selectedId by themeViewModel.autoNightThemeId.collectAsStateWithLifecycle()
+        AutoThemePickerDialog(
+            title = "选择夜晚默认主题",
+            candidates = allThemes.filter { it.isNightTheme },
+            currentSelectedId = selectedId,
+            fallbackLabel = "使用内置默认（墨境）",
+            onPick = { id ->
+                themeViewModel.setAutoNightThemeId(id)
+                showAutoNightPicker = false
+            },
+            onDismiss = { showAutoNightPicker = false },
+        )
+    }
+
     // Annual report dialog
     if (showAnnualReport) {
         AnnualReportDialog(
@@ -477,12 +570,19 @@ private fun StatItem(value: String, label: String) {
     }
 }
 
+// 时长格式：用国际通用 h/m 缩写代替「小时/分钟」中文长字 ——
+// 统计卡片格子小，长字会换行/截断。Image 12 风格：「9h 53m」
+// 比「9小时53分」更紧凑、信息密度高。
 private fun formatDuration(ms: Long): String {
     val minutes = ms / 60_000
     return when {
-        minutes < 1 -> "0分钟"
-        minutes < 60 -> "${minutes}分钟"
-        else -> "${minutes / 60}小时${minutes % 60}分"
+        minutes < 1 -> "0m"
+        minutes < 60 -> "${minutes}m"
+        else -> {
+            val h = minutes / 60
+            val m = minutes % 60
+            if (m == 0L) "${h}h" else "${h}h ${m}m"
+        }
     }
 }
 
@@ -568,6 +668,126 @@ fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) 
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) { Column(Modifier.padding(vertical = 4.dp)) { content() } }
     Spacer(Modifier.height(16.dp))
+}
+
+/**
+ * 「跟随系统主题」开启时，给用户挑选日 / 夜默认主题的入口行。
+ *
+ * 视觉对齐 SettingsItem 但不能复用 —— SettingsItem 强制 Card containerColor=transparent
+ * 假设父级是 SettingsSection；本组件直接放在主题 Card 内，需要透明背景 + 缩进与
+ * 其它 Card 内文字对齐，所以手写 Row 而非 ListItem。trailing 用 ChevronRight 暗示
+ * 「点击进二级选择」。
+ */
+@Composable
+private fun AutoThemePickerRow(
+    label: String,
+    currentThemeName: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                currentThemeName,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight, null,
+            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+/**
+ * 主题选择对话框 —— 列出符合 [filterIsNight] 的所有主题（内置 + 自定义）+ 一项
+ * 「使用内置默认」让用户能取消自定义回退到默认值。
+ *
+ * 不用 BottomSheet：profile 是滚动页面，BottomSheet 在长滚动场景下手势容易冲突，
+ * AlertDialog 是 ProfileScreen 现有 UX 已采用的统一选择 pattern（年度报告 / 删除
+ * 确认都是 AlertDialog），保持一致比追求新颖更重要。
+ */
+@Composable
+private fun AutoThemePickerDialog(
+    title: String,
+    candidates: List<com.morealm.app.domain.entity.ThemeEntity>,
+    currentSelectedId: String,
+    fallbackLabel: String,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            // heightIn 限高 + 内部 Column.verticalScroll —— 与换源对话框同款套路。
+            // M3 AlertDialog text slot 不会自动滚动，必须自己包 verticalScroll，否则
+            // 候选超出可视区会被裁掉无法滑（这是 BookDetailScreen 已经踩过的坑）。
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ThemePickerOption(
+                    name = fallbackLabel,
+                    selected = currentSelectedId.isBlank(),
+                    onClick = { onPick("") },
+                )
+                for (theme in candidates) {
+                    ThemePickerOption(
+                        name = theme.name,
+                        selected = theme.id == currentSelectedId,
+                        onClick = { onPick(theme.id) },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        },
+    )
+}
+
+@Composable
+private fun ThemePickerOption(name: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.small,
+        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            if (selected) {
+                Icon(
+                    Icons.Default.Check, null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
 }
 
 /**

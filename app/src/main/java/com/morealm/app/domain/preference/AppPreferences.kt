@@ -26,6 +26,14 @@ class AppPreferences @Inject constructor(
         val READER_TITLE_FONT_FAMILY = stringPreferencesKey("reader_title_font_family")
         val READER_TITLE_FONT_WEIGHT = intPreferencesKey("reader_title_font_weight")
         val PAGE_TURN_MODE = stringPreferencesKey("page_turn_mode")
+        /**
+         * 阅读方向。"horizontal" = 横排（默认，从左到右、从上到下，中文常见排版）；
+         * "vertical_rl" = 竖排（从上到下、列从右到左，日文 / 古典中文常见）。
+         *
+         * Phase 1 仅做开关 + 持久化，PageLayout / Drawer 暂不响应；用户切换后阅读区
+         * 暂时不变化（Phase 2 落地真正的竖排算法）。
+         */
+        val READING_DIRECTION = stringPreferencesKey("reading_direction")
         val FULLSCREEN_TAP = booleanPreferencesKey("fullscreen_tap")
         val TTS_ENGINE = stringPreferencesKey("tts_engine")
         /**
@@ -91,7 +99,25 @@ class AppPreferences @Inject constructor(
          * 异常值 fallback 到 "none"，比 enum ordinal 容错更好。
          */
         val SOURCE_GROUP_MODE = stringPreferencesKey("source_group_mode")
+        /**
+         * 旧版「时间自动夜间」开关。语义已废弃 —— 自动夜间逻辑（22:00-06:00 切换）
+         * 在 v1.x 后被「跟随系统暗色模式」替代，新逻辑见 [FOLLOW_SYSTEM_THEME]。
+         *
+         * 保留 key 仅为向后兼容：旧版本写入的值不会被错误读取。新代码不要再读写这个 key。
+         */
+        @Deprecated("用 FOLLOW_SYSTEM_THEME 取代", level = DeprecationLevel.WARNING)
         val AUTO_NIGHT_MODE = booleanPreferencesKey("auto_night_mode")
+        /**
+         * 主题是否跟随系统暗色模式。true = 系统切到 Dark 自动用夜间内置主题，
+         * 切到 Light 用日间内置主题；false = 用户手动选什么就用什么。默认 false
+         * （新装 / 老用户都不强制开自动切换 —— 老版本「时间自动夜间」永远开着曾让
+         * 用户在傍晚阅读时被强行换主题，新版本默认把主动权交还用户）。
+         */
+        val FOLLOW_SYSTEM_THEME = booleanPreferencesKey("follow_system_theme")
+        // 自定义「跟随系统」时使用的日 / 夜主题 ID。空串表示走内置默认（paper / morealm_default）。
+        // 让用户能把"系统切到暗色"自动落到自己导入或定制的暗色主题，而不是被硬切回内置。
+        val AUTO_DAY_THEME_ID = stringPreferencesKey("auto_day_theme_id")
+        val AUTO_NIGHT_THEME_ID = stringPreferencesKey("auto_night_theme_id")
         val SOURCE_FILTER_MIN_WORDS = intPreferencesKey("source_filter_min_words")
         val SOURCE_FILTER_MAX_WORDS = intPreferencesKey("source_filter_max_words")
         /**
@@ -248,6 +274,40 @@ class AppPreferences @Inject constructor(
     fun getAutoNightModeSync(): Boolean =
         themePrefs.getBoolean("auto_night_mode", true)
 
+    /**
+     * 同步读取「跟随系统主题」开关。在 [com.morealm.app.presentation.theme.ThemeViewModel]
+     * 的 init 阶段（首帧前）需要立即知道是否跟系统，避免冷启动时先用本地保存主题
+     * 再被异步切换造成闪屏。
+     *
+     * 默认值策略：
+     *  - 已显式写过此 key（老用户 / 新用户曾经手动调过开关）→ 用持久化值。
+     *  - 没写过且 active_theme_id 也没写过（真·首次安装）→ 默认 true，跟随系统暗色。
+     *  - 没写过但 active_theme_id 已存在（旧版本升级用户，没经历过这个开关）→ 默认
+     *    false，保留他/她原本手动选择的主题，不强行切到系统色让其困惑。
+     *
+     * 决策被惰性写回 themePrefs，下次冷启动直接命中第一种快路径，不再判断。
+     */
+    fun getFollowSystemThemeSync(): Boolean {
+        if (themePrefs.contains("follow_system_theme")) {
+            return themePrefs.getBoolean("follow_system_theme", false)
+        }
+        val isFreshInstall = !themePrefs.contains("active_theme_id")
+        val resolved = isFreshInstall
+        themePrefs.edit().putBoolean("follow_system_theme", resolved).apply()
+        return resolved
+    }
+
+    /**
+     * 自定义「跟随系统」时使用的日 / 夜主题 ID。
+     * 空串表示走内置默认（[com.morealm.app.domain.entity.BuiltinThemes] 的 paper / moRealm）。
+     * 与 follow_system_theme 同走 themePrefs sync 双写，避免冷启动时主题闪烁。
+     */
+    fun getAutoDayThemeIdSync(): String =
+        themePrefs.getString("auto_day_theme_id", "") ?: ""
+
+    fun getAutoNightThemeIdSync(): String =
+        themePrefs.getString("auto_night_theme_id", "") ?: ""
+
     fun getActiveThemeIsNightSync(): Boolean =
         themePrefs.getBoolean("active_theme_is_night", true)
 
@@ -280,6 +340,10 @@ class AppPreferences @Inject constructor(
 
     val pageTurnMode: Flow<String> = context.dataStore.data
         .map { it[Keys.PAGE_TURN_MODE] ?: "scroll" }
+
+    /** 阅读方向：horizontal（默认）/ vertical_rl。详见 [Keys.READING_DIRECTION]。 */
+    val readingDirection: Flow<String> = context.dataStore.data
+        .map { it[Keys.READING_DIRECTION] ?: "horizontal" }
 
     val fullscreenTap: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.FULLSCREEN_TAP] ?: false }
@@ -333,6 +397,26 @@ class AppPreferences @Inject constructor(
 
     val autoNightMode: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.AUTO_NIGHT_MODE] ?: true }
+
+    /**
+     * 跟随系统暗色模式。Flow 用 [SharingStarted.Eagerly] 暴露给 ThemeViewModel，
+     * 系统暗色模式变化时 MainActivity 的 Composable 会读 [androidx.compose.foundation.isSystemInDarkTheme]
+     * 并喂给 ThemeViewModel 切日/夜主题。
+     */
+    /**
+     * 「跟随系统主题」开关。Flow 默认值委托给 [getFollowSystemThemeSync]，与冷启动 sync
+     * 路径保持一致，避免「sync 路径决策为 true，Flow 第一次 emit 又拉回 false」的回弹。
+     */
+    val followSystemTheme: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.FOLLOW_SYSTEM_THEME] ?: getFollowSystemThemeSync() }
+
+    /** 跟随系统模式下，系统在「白天」时应用的目标主题 ID。空串 = 内置 paper。 */
+    val autoDayThemeId: Flow<String> = context.dataStore.data
+        .map { it[Keys.AUTO_DAY_THEME_ID] ?: "" }
+
+    /** 跟随系统模式下，系统在「夜晚」时应用的目标主题 ID。空串 = 内置 moRealm。 */
+    val autoNightThemeId: Flow<String> = context.dataStore.data
+        .map { it[Keys.AUTO_NIGHT_THEME_ID] ?: "" }
 
     val webDavUrl: Flow<String> = context.dataStore.data
         .map { it[Keys.WEBDAV_URL] ?: "" }
@@ -569,6 +653,7 @@ class AppPreferences @Inject constructor(
     suspend fun setReaderTitleFontFamily(family: String) = update(Keys.READER_TITLE_FONT_FAMILY, family)
     suspend fun setReaderTitleFontWeight(weight: Int) = update(Keys.READER_TITLE_FONT_WEIGHT, weight)
     suspend fun setPageTurnMode(mode: String) = update(Keys.PAGE_TURN_MODE, mode)
+    suspend fun setReadingDirection(value: String) = update(Keys.READING_DIRECTION, value)
     suspend fun setFullscreenTap(enabled: Boolean) = update(Keys.FULLSCREEN_TAP, enabled)
     suspend fun setTtsEngine(engine: String) = update(Keys.TTS_ENGINE, engine)
 
@@ -591,6 +676,27 @@ class AppPreferences @Inject constructor(
     suspend fun setAutoNightMode(enabled: Boolean) {
         themePrefs.edit().putBoolean("auto_night_mode", enabled).apply()
         update(Keys.AUTO_NIGHT_MODE, enabled)
+    }
+
+    /**
+     * 写入「跟随系统主题」。同时刷 [themePrefs] 让冷启动同步读取生效，
+     * 与 [setAutoNightMode] 同款双写策略 —— 冷启动闪屏判断用同步 SharedPreferences，
+     * 运行时 Flow 走 DataStore，二者必须保持一致。
+     */
+    suspend fun setFollowSystemTheme(enabled: Boolean) {
+        themePrefs.edit().putBoolean("follow_system_theme", enabled).apply()
+        update(Keys.FOLLOW_SYSTEM_THEME, enabled)
+    }
+
+    /** 与 setFollowSystemTheme 同款双写策略（themePrefs 同步 + DataStore 异步）。 */
+    suspend fun setAutoDayThemeId(id: String) {
+        themePrefs.edit().putString("auto_day_theme_id", id).apply()
+        update(Keys.AUTO_DAY_THEME_ID, id)
+    }
+
+    suspend fun setAutoNightThemeId(id: String) {
+        themePrefs.edit().putString("auto_night_theme_id", id).apply()
+        update(Keys.AUTO_NIGHT_THEME_ID, id)
     }
     suspend fun setSourceFilterMinWords(min: Int) = update(Keys.SOURCE_FILTER_MIN_WORDS, min)
     suspend fun setSourceFilterMaxWords(max: Int) = update(Keys.SOURCE_FILTER_MAX_WORDS, max)
