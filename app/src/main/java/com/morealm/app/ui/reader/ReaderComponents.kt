@@ -222,6 +222,12 @@ fun ReaderControlBar(
     //   withinChapterPct = (rawProgress - targetChapter) * 100  // [0, 100)
     var seekValue: Float? by remember { mutableStateOf(null) }
     var pendingChapter: Int? by remember { mutableStateOf(null) }
+    // 用户是否正在拖动 slider。onValueChange 触发时 set true，onValueChangeFinished
+    // set false。LaunchedEffect 清 seekValue 时必须检查这个，否则用户长时间拖动期间
+    // 一次预览切章触发 LaunchedEffect 清 seekValue → sliderValue 退回 baseProgress
+    // → thumb 视觉位置（手指实际所在）跟 sliderValue 完全分裂（用户报「拖到 43% 但显示
+    // 2%」根因：thumb 在 43%、sliderValue 已被清成 baseProgress=旧章 6/300=2%）。
+    var sliderDragging by remember { mutableStateOf(false) }
     // 双重保险：直接持引用的可变 float，绕开 Snapshot 系统的批量提交。
     // 用户报「松手大概率不是最后一次进度」——如果是 onValueChangeFinished 先于
     // 最后一次 onValueChange 落到 Snapshot store 的极端情况（Compose 1.6+ Slider
@@ -276,22 +282,30 @@ fun ReaderControlBar(
         }
     }
 
-    LaunchedEffect(pendingChapter, currentChapter) {
+    LaunchedEffect(pendingChapter, currentChapter, sliderDragging) {
         val target = pendingChapter ?: return@LaunchedEffect
+        // 用户还在拖动 → 绝对不清 seekValue。否则 sliderValue 退回 baseProgress 让
+        // thumb 跟手指位置分裂（用户报「拖到 43% 显示 2%」根因）。等 onValueChangeFinished
+        // 把 sliderDragging 翻 false 再让本 effect 重新跑清空逻辑。
+        if (sliderDragging) return@LaunchedEffect
         if (currentChapter == target) {
             // 章节已切到目标——再多等 [POST_SEEK_SETTLE_MS] 让 scrollProgress 也流到 withinPct
             // （ScrollRenderer JUMP 完成 + collector emit），避免 thumb 先回到章首再到 withinPct。
             kotlinx.coroutines.delay(POST_SEEK_SETTLE_MS)
-            seekValue = null
-            pendingChapter = null
+            if (!sliderDragging) {
+                seekValue = null
+                pendingChapter = null
+            }
             return@LaunchedEffect
         }
         // 章节还没切：兜底超时。多数情况下 currentChapter 会先变化触发本 effect 重启，
         // 这条 delay 跑完后 effect 就被新的 (currentChapter) 取消了；只有真的加载不动时
         // 才会跑到清空 seekValue 这一步——比卡死强。
         kotlinx.coroutines.delay(SEEK_PREVIEW_TIMEOUT_MS)
-        seekValue = null
-        pendingChapter = null
+        if (!sliderDragging) {
+            seekValue = null
+            pendingChapter = null
+        }
     }
 
     // Floating pill bar like HTML prototype's .r-bar
@@ -451,8 +465,10 @@ fun ReaderControlBar(
                         onValueChange = {
                             seekValue = it
                             latestSliderValueRef[0] = it
+                            sliderDragging = true
                         },
                         onValueChangeFinished = {
+                            sliderDragging = false
                             // 优先用 latestSliderValueRef[0]（无 Snapshot batch 的最新值），
                             // 兜底到 seekValue。两者绝大多数情况一致，但极端时序下
                             // latestSliderValueRef 比 seekValue 多落一次，能避免「松手
