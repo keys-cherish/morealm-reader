@@ -26,6 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -2548,6 +2550,32 @@ private fun BatteryIcon(
                 color = color,
                 style = androidx.compose.ui.graphics.drawscope.Stroke(width = 0.6.dp.toPx()),
             )
+        } else {
+            // 电池本体内画百分比数字（充电时让位给闪电）。数字以电池本体居中，
+            // fill 区高对比时（level > 50%）用 white，否则用 color 本身。
+            // 字号取 bodyH * 0.75，6.x dp 起步，能放下 100 三位数（22dp 宽设计内）。
+            val text = level.coerceIn(0, 100).toString()
+            // 文字颜色：fill 高（>50%）时用白色压在深色 fill 上，低电时用电池本体颜色
+            // 直接画在空电区（避免低电时白色文字飘在透明区里看不清）。注意 paint
+            // 的 color 字段名跟 BatteryIcon 的 param 同名 → 必须先把 ARGB 算出来再赋值，
+            // 不能在 apply{} 内引用 color（会被 apply receiver 阴影成 paint.color）。
+            val textArgb = if (level > 50) {
+                android.graphics.Color.WHITE
+            } else {
+                color.toArgb()
+            }
+            val nativePaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                this.color = textArgb
+                textSize = bodyH * 0.75f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                textAlign = android.graphics.Paint.Align.CENTER
+            }
+            val cx = (bodyW - strokeW) / 2f
+            val baseline = bodyH / 2f - (nativePaint.fontMetrics.ascent + nativePaint.fontMetrics.descent) / 2
+            drawIntoCanvas { canvas ->
+                canvas.nativeCanvas.drawText(text, cx, baseline, nativePaint)
+            }
         }
     }
 }
