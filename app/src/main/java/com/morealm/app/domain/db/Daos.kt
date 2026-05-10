@@ -198,6 +198,12 @@ interface BookSourceDao {
     @Delete
     suspend fun delete(source: BookSource)
 
+    @Delete
+    suspend fun delete(sources: List<BookSource>)
+
+    @Query("DELETE FROM book_sources WHERE bookSourceUrl IN (:urls)")
+    suspend fun deleteByUrls(urls: List<String>)
+
     @Query("DELETE FROM book_sources")
     suspend fun deleteAll()
 }

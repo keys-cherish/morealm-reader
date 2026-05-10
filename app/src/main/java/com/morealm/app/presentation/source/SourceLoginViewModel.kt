@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.MapSerializer
@@ -62,6 +63,8 @@ class SourceLoginViewModel @Inject constructor(
      */
     private val _loginStatusMap = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val loginStatusMap: StateFlow<Map<String, Boolean>> = _loginStatusMap.asStateFlow()
+
+    private var refreshLoginStatusJob: Job? = null
 
     /**
      * 一次性 toast 事件：button action 结果、JS 异常、登录成败提示。
@@ -111,9 +114,15 @@ class SourceLoginViewModel @Inject constructor(
      * 批量预算 [sources] 的登录状态 → 写入 [loginStatusMap]。
      */
     fun refreshLoginStatuses(sources: List<BookSource>) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val map = HashMap<String, Boolean>(sources.size)
-            for (source in sources) {
+        refreshLoginStatusJob?.cancel()
+        val loginSources = sources.filter { !it.loginUrl.isNullOrBlank() || !it.loginCheckJs.isNullOrBlank() }
+        if (loginSources.isEmpty()) {
+            _loginStatusMap.value = emptyMap()
+            return
+        }
+        refreshLoginStatusJob = viewModelScope.launch(Dispatchers.IO) {
+            val map = HashMap<String, Boolean>(loginSources.size)
+            for (source in loginSources) {
                 map[source.bookSourceUrl] = computeLoginStatus(source)
             }
             _loginStatusMap.value = map
@@ -186,12 +195,14 @@ class SourceLoginViewModel @Inject constructor(
                 }
 
                 withContext(Dispatchers.Main) {
-                    _uiState.value = LoginUiState.Success("登录成功")
+                    _uiState.value = LoginUiState.Success("已登录到《${source.bookSourceName}》")
                 }
             } catch (e: Exception) {
                 AppLog.error("SourceLogin", "登录失败", e)
                 withContext(Dispatchers.Main) {
-                    _uiState.value = LoginUiState.Error(ErrorMessages.forUser("登录", e))
+                    _uiState.value = LoginUiState.Error(
+                        "登录《${source.bookSourceName}》失败：${ErrorMessages.forUser("登录", e)}"
+                    )
                 }
             }
         }
@@ -234,7 +245,7 @@ class SourceLoginViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             source.removeLoginInfo()
             source.removeLoginHeader()
-            _uiState.value = LoginUiState.Success("已退出登录")
+            _uiState.value = LoginUiState.Success("已退出《${source.bookSourceName}》")
         }
     }
 

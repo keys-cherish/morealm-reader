@@ -63,6 +63,8 @@ import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.entity.displayTitle
 import com.morealm.app.domain.entity.isAutoSplitChapter
 import com.morealm.app.presentation.reader.ReaderSearchController
+import com.morealm.app.presentation.source.SourceLoginViewModel
+import com.morealm.app.ui.source.SourceLoginOverlay
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.ui.theme.MoRealmColors
@@ -95,6 +97,11 @@ fun ReaderScreen(
     onNavigateToFontManager: () -> Unit = {},
     themeViewModel: ThemeViewModel? = null,
     viewModel: ReaderViewModel = hiltViewModel(),
+    /**
+     * 共享的书源登录 VM。走 hiltViewModel() 默认行为：不同调用方传 key 不同，这里不传
+     * key 即 Activity 级单例，和 BookSourceManageScreen / 详情页共用登录状态机。
+     */
+    loginViewModel: SourceLoginViewModel = hiltViewModel(),
 ) {
     val book by viewModel.book.collectAsStateWithLifecycle()
     val chapters by viewModel.chapters.collectAsStateWithLifecycle()
@@ -1079,6 +1086,46 @@ fun ReaderScreen(
                 .navigationBarsPadding()
                 .padding(bottom = 8.dp)
         )
+
+        // ── B1：书源登录引导 Snackbar ──
+        //
+        // ReaderChapterController 检测到章节 / 目录加载失败且疑似登录原因时，通过
+        // loginPrompt SharedFlow 推出对应的 BookSource。我们 collect 它，弹
+        // Snackbar 带 "去登录" action 直接拉起 loginViewModel.showLoginDialog，
+        // 把"阅读中发现需登录 → 去哪登录"的几步跳转压缩成一次点击。
+        //
+        // 同源 5s 去抖：否则翻页连遇失败章会连弹 —— 用 lastSourceUrl 记忆上次源，
+        // 同源在 LocalTime 5s 内复发的事件直接丢弃。
+        val snackbarHostState = remember { SnackbarHostState() }
+        val scope = rememberCoroutineScope()
+        LaunchedEffect(Unit) {
+            var lastUrl: String? = null
+            var lastAtMs = 0L
+            viewModel.loginPrompt.collect { source ->
+                val now = System.currentTimeMillis()
+                if (source.bookSourceUrl == lastUrl && now - lastAtMs < 5_000L) return@collect
+                lastUrl = source.bookSourceUrl
+                lastAtMs = now
+                val result = snackbarHostState.showSnackbar(
+                    message = "《${source.bookSourceName}》加载失败，可能需要登录",
+                    actionLabel = "去登录",
+                    duration = SnackbarDuration.Long,
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    scope.launch { loginViewModel.showLoginDialog(source) }
+                }
+            }
+        }
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 48.dp), // 留给 TtsErrorSnackbarHost 的空间
+        )
+
+        // 登录流程 UI —— 直接复用书源管理页同款 overlay，避免阅读器内另起一套。
+        SourceLoginOverlay(loginViewModel = loginViewModel)
     }
 }
 
