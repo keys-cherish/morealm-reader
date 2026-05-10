@@ -256,6 +256,26 @@ fun ReaderControlBar(
     // 修法：监听 (pendingChapter, currentChapter)。pendingChapter 不为 null 且 currentChapter
     // 已切到目标 → 立刻清；同时设个 [SEEK_PREVIEW_TIMEOUT_MS] 兜底（加载失败 / 超时
     // 不会让 thumb 永远卡在 seek 位置）。
+    // ── Drag preview：拖动过程中跨章节边界时即时切章 ──
+    // 用户希望拖滑块时阅读区内容跟随翻动便于"找位置"。但 viewModel.loadChapter 重，每帧
+    // 调用会卡顿，所以策略是「跨章才切 + debounce 220ms」：
+    //  - 仅当 previewIdx 与 currentChapter 不同（拖过整章边界）才 fire
+    //  - debounce 220ms 避免快速来回拖动导致章节切换抖动
+    //  - 不带 withinPct（withinPct=0），只切章不滚动，松手时 onValueChangeFinished
+    //    再 final seek 带 withinPct 精确定位
+    LaunchedEffect(seekValue) {
+        val v = seekValue ?: return@LaunchedEffect
+        if (totalChapters <= 0) return@LaunchedEffect
+        kotlinx.coroutines.delay(220L)  // debounce
+        val raw = (v * totalChapters).coerceIn(0f, totalChapters.toFloat())
+        val previewIdx = raw.toInt().coerceIn(0, totalChapters - 1)
+        if (previewIdx != currentChapter) {
+            // 跟踪到 pendingChapter，让 (pendingChapter, currentChapter) effect 处理 thumb 等待
+            pendingChapter = previewIdx
+            onSeekFullBook(previewIdx, 0)
+        }
+    }
+
     LaunchedEffect(pendingChapter, currentChapter) {
         val target = pendingChapter ?: return@LaunchedEffect
         if (currentChapter == target) {
@@ -402,6 +422,20 @@ fun ReaderControlBar(
             // ── #3 章节进度条（可拖动） ──
             // 单章节情况下不渲染 Slider（valueRange 0..0 不合法），保留旧的小提示就够用。
             if (totalChapters > 1) {
+                // Slider 上方居中显示当前进度百分比（拖动时跟随 sliderValue 变化），
+                // 让用户能直接看到"我现在在哪"——之前只有 chapterTitle 没全书 %。
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${"%.1f".format(previewBookPct)}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (seekValue != null) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,

@@ -75,13 +75,21 @@ class SimulationDrawHelper {
     private var mMiddleY = 0f
     private var mDegrees = 0f
     private var mTouchToCornerDis = 0f
+    /**
+     * 翻页背面 ColorMatrix —— alpha 通道压到 0.35 (~35%)，让背面"透"出底层 bgMeanColor，
+     * 视觉上模拟纸页背面。比恒等矩阵（背面跟正面一样浓的旧行为）真实许多。
+     *
+     * 0.35 是用户反馈范围 (10%-50%) 的中段值，参照静读天下：太低看不清字、太高失真。
+     * 注意 [drawCurrentBackArea] 会先 drawColor(bgMeanColor) 再画 bitmap with this filter，
+     * 所以 alpha=0.35 → bitmap 跟 bg 35:65 混色，文字保留薄薄一层但能透出纸色。
+     */
     private val mColorMatrixFilter = ColorMatrixColorFilter(
         ColorMatrix(
             floatArrayOf(
                 1f, 0f, 0f, 0f, 0f,
                 0f, 1f, 0f, 0f, 0f,
                 0f, 0f, 1f, 0f, 0f,
-                0f, 0f, 0f, 1f, 0f
+                0f, 0f, 0f, 0.35f, 0f
             )
         )
     )

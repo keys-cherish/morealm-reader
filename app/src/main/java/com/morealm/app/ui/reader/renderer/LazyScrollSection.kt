@@ -684,10 +684,22 @@ fun LazyScrollSection(
                 // SCROLL 重架：windowSource 路径下用 viewport center 章 idx 驱动 cur 章节真值流
                 // （via [ChapterWindowSource.updateViewportCenter] → setCurrentChapterIndexFromScroll）。
                 // 标题查询从 windowSource.chapterTitleAt 走，不再依赖 caller 传 prev/cur/next 三个标题。
+                //
+                // readProgress 计算：以可见首段的 firstChapterPosition / chapterCharSize 估算
+                // 章内字符进度（0-100%）。SCROLL 模式段为单位，精确到段首字符即可——比之前
+                // 写死 "" 让 ReaderControlBar 显示「第 N 章 · 」（progress 留白）好得多，
+                // 用户报「上下滑动当前页不计数」根因之一。
+                val charSize = if (windowSource != null) windowSource.chapterCharSize(p.chapterIndex)
+                               else chapterCharSizes[p.chapterIndex] ?: 0
+                val progressStr = if (charSize > 0) {
+                    val pct = (p.firstChapterPosition.toFloat() / charSize * 100f)
+                        .coerceIn(0f, 100f)
+                    "%.1f%%".format(pct)
+                } else ""
                 if (windowSource != null) {
                     windowSource.updateViewportCenter(p.chapterIndex)
                     val title = windowSource.chapterTitleAt(p.chapterIndex)
-                    onVisiblePageChanged(p.chapterIndex, title, "", p.firstChapterPosition)
+                    onVisiblePageChanged(p.chapterIndex, title, progressStr, p.firstChapterPosition)
                     return@LazyScrollRenderer
                 }
                 val titleForChapter = when (p.chapterIndex) {
@@ -696,7 +708,7 @@ fun LazyScrollSection(
                     nextTextChapter?.chapterIndex -> nextChapterTitle
                     else -> ""
                 }
-                onVisiblePageChanged(p.chapterIndex, titleForChapter, "", p.firstChapterPosition)
+                onVisiblePageChanged(p.chapterIndex, titleForChapter, progressStr, p.firstChapterPosition)
             },
             onScrollingChanged = onScrollingChanged,
             onTapCenter = onTapCenter,
