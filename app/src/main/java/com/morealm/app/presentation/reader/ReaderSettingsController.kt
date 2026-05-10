@@ -32,6 +32,10 @@ class ReaderSettingsController(
         .map { key -> PageTurnMode.entries.find { it.key == key } ?: PageTurnMode.SCROLL }
         .stateIn(scope, SharingStarted.Eagerly, PageTurnMode.SCROLL)
 
+    /** 阅读方向：horizontal / vertical_rl。Phase 1 仅持久化，layout 暂未响应（Phase 2 落地）。 */
+    val readingDirection: StateFlow<String> = prefs.readingDirection
+        .stateIn(scope, SharingStarted.Eagerly, "horizontal")
+
     val customFontUri: StateFlow<String> = prefs.customFontUri
         .stateIn(scope, SharingStarted.Eagerly, "")
 
@@ -199,6 +203,11 @@ class ReaderSettingsController(
         scope.launch { prefs.setPageTurnMode(mode.key) }
     }
 
+    /** 切换阅读方向。Phase 1 只更新偏好，UI 暂不响应。 */
+    fun setReadingDirection(value: String) {
+        scope.launch { prefs.setReadingDirection(value) }
+    }
+
     /**
      * 旧入口：直接复制 SAF URI 作为自定义字体（保留单文件兼容路径，但**不再首选**）。
      * 新流程是用 FontManagerScreen + FontRepository.importFromUri 复制到 App 字库。
@@ -342,6 +351,7 @@ class ReaderSettingsController(
             // ── 阅读相关 prefs 全面 reset 到默认值 ─────────────────────────
             prefs.setPageTurnMode(PageTurnMode.SCROLL.key)
             prefs.setPageAnim("slide")
+            prefs.setReadingDirection("horizontal")
             prefs.setScreenOrientation(-1)
             prefs.setTextSelectable(true)
             prefs.setChineseConvertMode(0)

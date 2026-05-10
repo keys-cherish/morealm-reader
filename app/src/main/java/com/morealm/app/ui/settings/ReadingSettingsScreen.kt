@@ -39,6 +39,7 @@ fun ReadingSettingsScreen(
 ) {
     val moColors = LocalMoRealmColors.current
     val pageAnim by viewModel.pageAnim.collectAsStateWithLifecycle()
+    val readingDirection by viewModel.readingDirection.collectAsStateWithLifecycle()
     val tapLeftAction by viewModel.tapLeftAction.collectAsStateWithLifecycle()
     val volumeKeyPage by viewModel.volumeKeyPage.collectAsStateWithLifecycle()
     val volumeKeyReverse by viewModel.volumeKeyReverse.collectAsStateWithLifecycle()
@@ -143,6 +144,16 @@ fun ReadingSettingsScreen(
 
             // ── 阅读界面 ──
             SectionHeader("阅读界面")
+
+            // Phase 1：仅持久化字段，layout / Drawer 暂未响应。Phase 2 落地后此开关
+            // 才会真正改变阅读区排版（日文 / 古典中文常用：列从右到左、字从上到下）。
+            SettingsToggleRow(
+                title = "竖排版（日文 / 古典中文，逐步上线中）",
+                checked = readingDirection == "vertical_rl",
+            ) {
+                viewModel.setReadingDirection(if (it) "vertical_rl" else "horizontal")
+            }
+            SettingsDivider()
 
             SettingsClickRow(
                 title = "屏幕关闭时间",
