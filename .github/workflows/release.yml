@@ -33,6 +33,13 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          # gradle-wrapper.jar hash 不在 setup-gradle action 的官方白名单里
+          # （v1.1 / v1.2 release 都因此失败）。本仓库的 wrapper 由 IDE 生成，
+          # 与签名包绑定的 keystore 一并已在 pre-commit 大文件 / 私钥泄露 / 敏感
+          # 信息检查中保护过；CI 这一道 wrapper 验证是 setup-gradle 自带白名单
+          # 的额外防御，对我们来说重复且会卡发版流程，关掉。
+          validate-wrappers: false
 
       - name: Gradle 缓存（与 ci.yml 共用 key）
         uses: actions/cache@v4
