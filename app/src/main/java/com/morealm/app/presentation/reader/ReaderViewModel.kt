@@ -293,22 +293,41 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    /** 关闭繁简转换 — 等价于 Legado 占位条目的 ✕ 操作。 */
+    /** 关闭繁简转换 — 等价于 Legado 占位条目的 ✕ 操作。
+     *
+     *  ⚠ 走 [setChineseConvertMode](0) 而不是直接 prefs.setChineseConvertMode(0)。
+     *  历史 bug：之前直接写 prefs，cache 不清、chapter 不 reload，dialog 关闭时
+     *  refreshAfterReplaceRulesChanged 跑 loadChapter 又因为 chineseConvertMode()
+     *  lambda 读 stateIn.value 还是 stale 的旧 mode，于是「关闭繁简」点完仍显示
+     *  繁体（或反过来）——用户报的「大概率失灵或相反」其中一个根因。
+     */
     fun disableChineseConvert() {
-        viewModelScope.launch(Dispatchers.IO) { prefs.setChineseConvertMode(0) }
+        setChineseConvertMode(0)
     }
 
     /**
      * 用户在 EffectiveReplacesDialog 内做了任何修改（禁用 / 编辑 / 改繁简） → dismiss 时调一次，
      * 重拉规则缓存并请求重渲染当前章。Legado 等价 viewModel.replaceRuleChanged()。
+     *
+     * 与 [setChineseConvertMode] 共享 [chineseConvertMutex]：dialog 内可能刚刚连点了
+     * 几次 onSetChineseConvertMode（每次走 mutex + reload），dismiss 立即触发的这次
+     * refresh 必须排在那些 reload 之后；否则两个 loadChapter job 可能交叉，
+     * 最终 _chapterContent 是用某次中间 mode 转的内容。
+     *
+     * 即便没有改过繁简（只编辑了替换规则），这里也走 mutex 是无害的——mutex 没人持
+     * 时立刻拿到锁，开销可忽略。
      */
     fun refreshAfterReplaceRulesChanged() {
         viewModelScope.launch(Dispatchers.IO) {
             chapter.refreshReplaceRules()
-            // 重新加载当前章 — 走 loadChapter 同款路径，会清 hit 集合并重跑 applyReplaceRules。
-            val idx = chapter.currentChapterIndex.value
-            withContext(Dispatchers.Main) {
-                chapter.loadChapter(idx)
+            chineseConvertMutex.withLock {
+                // 清预加载——它们是用旧 rules / 旧 mode 转的；不清的话翻下一页
+                // 直接消费旧 PreloadedReaderChapter。
+                chapter.clearPreloadedChapters()
+                val idx = chapter.currentChapterIndex.value
+                withContext(Dispatchers.Main) {
+                    chapter.loadChapter(idx)
+                }
             }
         }
     }

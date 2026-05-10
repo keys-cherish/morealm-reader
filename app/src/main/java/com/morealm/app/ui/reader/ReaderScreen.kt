@@ -19,6 +19,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -36,6 +37,8 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -147,6 +150,10 @@ fun ReaderScreen(
     val nextBookPrompt by viewModel.nextBookPrompt.collectAsStateWithLifecycle()
     val navigateDirection by viewModel.navigateDirection.collectAsStateWithLifecycle()
     var pageTurnCommand by remember { mutableStateOf<ReaderPageDirection?>(null) }
+    // Compose 的 onKeyEvent 只会从 focused composable 沿 focus traversal 冒泡，
+    // 没有 focusable + requestFocus，物理键盘 / 音量键 / 蓝牙翻页器全部都收不到。
+    // 这里挂在阅读器根 Box 上 + 启动时 requestFocus，是阅读场景下唯一稳的方式。
+    val keyFocus = remember { FocusRequester() }
     val customFontUri by viewModel.settings.customFontUri.collectAsStateWithLifecycle()
     val customFontName by viewModel.settings.customFontName.collectAsStateWithLifecycle()
     val readerTypeface by viewModel.settings.currentTypeface.collectAsStateWithLifecycle()
@@ -382,6 +389,8 @@ fun ReaderScreen(
             .fillMaxSize()
             .background(moColors.readerBackground)
             .semantics { contentDescription = "阅读器" }
+            .focusRequester(keyFocus)
+            .focusable()
             .onKeyEvent { event ->
                 // 物理按键翻页处理。两个开关分别管两组键：
                 //   - 音量键 (VOLUME_UP/DOWN)：受 volumeKeyPage 管
@@ -493,6 +502,15 @@ fun ReaderScreen(
                 true
             }
     ) {
+        // 阅读器进入 / 任一菜单关闭后重新拿焦点，确保物理键盘 / 音量键 / 蓝牙翻页器
+        // 一直能进 onKeyEvent。搜索 / 书签等弹层会带 EditText 抢焦点，关闭时不会自动还。
+        val anyMenuOpenForFocus = showControls || showSettings || showTtsPanel ||
+            showChapterList || showBookmarks || showFullSearch
+        LaunchedEffect(anyMenuOpenForFocus) {
+            if (!anyMenuOpenForFocus) {
+                runCatching { keyFocus.requestFocus() }
+            }
+        }
         // WebView reader content — handles all touch events internally via JS
         // Resolve reader colors: activeStyle overrides theme defaults
         val isNight = moColors.isNight
