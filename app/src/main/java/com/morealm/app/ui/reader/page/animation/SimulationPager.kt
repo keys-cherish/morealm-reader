@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -124,6 +126,18 @@ internal fun SimulationPager(
     // CanvasRenderer.kt 的 safeDisplayMax 注释。
     val cap = (pageCount - 1).coerceAtLeast(currentDisplayPage)
     val displayPage = currentDisplayPage.coerceIn(0, cap)
+
+    // 见 view.onPageTurnCompleted 内注释——快速翻页时跟踪「最近一次 commit 后落地的
+    // page」，作为下一次 commit 的 base。-1 = 没有挂起的 commit，从 displayPage 起算。
+    val lastCommittedRef = remember { mutableIntStateOf(-1) }
+    // displayPage 跟上 lastCommittedRef → PagerState 已经落地 → 重置 anchor，让用户
+    // 真正停下来后下一次翻页从最新 displayPage 起算。不重置会让切章 / 跳进度后
+    // 残留的 anchor 把后续 commit 都拐到错误的 base。
+    LaunchedEffect(displayPage) {
+        if (displayPage == lastCommittedRef.intValue) {
+            lastCommittedRef.intValue = -1
+        }
+    }
 
     // ── B 修复：prelayout 期间 setIdleBitmap 抖动抑制 ──────────────────────────
     // pages 流式增长（155→275→276→...）过程中，即便 displayPage=0 / pageId 不变，
@@ -250,9 +264,25 @@ internal fun SimulationPager(
             view.onTapWhileGated = { params.onDismissPopup?.invoke() }
             view.onPageTurnCompleted = { isNext ->
                 val direction = if (isNext) ReaderPageDirection.NEXT else ReaderPageDirection.PREV
-                val committedPage = params.onFillPage(displayPage, direction)
+                // ─── 快速翻页 base-page race 修复 ────────────────────────────
+                // 历史 bug：base 直接用 capture 的 displayPage，但 PagerState.scrollToPage
+                // 是 scope.launch 异步的，update lambda 重组也跟在 PagerState 实际更新
+                // 之后。用户快速连按时 abortAnim 的 force-commit 会在新 displayPage 还
+                // 没 capture 时再次跑 onPageTurnCompleted，base 还停在旧值 → 表现：
+                //   - 连续 next：重复 commit 到同一页，看起来「翻不动」
+                //   - next 后立刻 prev：base = next 前的旧 displayPage，prev 跑出
+                //     旧页 - 1（而不是 commit 后的页 - 1），用户报的「走三步退一步」
+                //
+                // 修法：用 lastCommittedRef 单调追踪「最近一次 commit 后落地的 page」。
+                // 它一旦写入就比 displayPage 更新，后续 commit 全部以它为 base 累计；
+                // displayPage 真正赶上后由 LaunchedEffect 重置（见下方），让停下来时
+                // 重新以 displayPage 为起点（防止用户切章后还残留旧 anchor）。
+                val base = if (lastCommittedRef.intValue >= 0) lastCommittedRef.intValue
+                           else displayPage
+                val committedPage = params.onFillPage(base, direction)
                 if (committedPage != null) {
                     val safePage = committedPage.coerceIn(0, pageCount - 1)
+                    lastCommittedRef.intValue = safePage
                     scope.launch { pagerState.scrollToPage(safePage) }
                     params.onPageChanged(safePage)
                 }
