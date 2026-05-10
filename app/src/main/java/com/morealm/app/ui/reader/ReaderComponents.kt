@@ -33,9 +33,16 @@ import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.ui.theme.toComposeColor
 import com.morealm.app.presentation.reader.PageTurnMode
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.compose.runtime.snapshotFlow
 
 // ── Top Bar ─────────────────────────────────────────────
 
@@ -269,17 +276,46 @@ fun ReaderControlBar(
     //  - debounce 220ms 避免快速来回拖动导致章节切换抖动
     //  - 不带 withinPct（withinPct=0），只切章不滚动，松手时 onValueChangeFinished
     //    再 final seek 带 withinPct 精确定位
+    // ── 拖动期间章预览：conflate + 单 worker 串行 ────────────────────────
+    // 目标：用户「边拖边看到内容变化」，但不能高频打 viewModel.loadChapter
+    // 否则 chapterLoadJob 反复 cancel + 启动会卡死 reader。
+    //
+    // 关键算法：
+    //   1. snapshotFlow.conflate() —— 上游 emit 时若下游 collect 还在跑，只保留
+    //      最新值（不堆积、不丢失「最终目标」）。用户疯狂拖动时 source 每帧 emit，
+    //      conflate 只保留最新一帧，collect 处理完看最新值即可。
+    //   2. collect 内串行：onSeekFullBook → 然后等 currentChapter 真的追上 previewIdx
+    //      （最长 500ms 兜底）→ 才 return，让下一次 conflate 取到新最新值。这样
+    //      loadChapter 是「跑完一个再跑下一个」，永远不会并发或抖动。
+    //   3. 用户停在同一章不重复触发：previewIdx == currentChapter → 直接跳过；
+    //      用户拖回当前章 → lastPreviewedIdxRef 防止 ping-pong。
+    //
+    // 实测节奏：用户连续拖过 5 章 → 第 1 章 commit 完才处理第 5 章（中间章被 conflate 丢弃），
+    // 每个 commit ~200-500ms，整体 1-3 秒走完不卡。比之前 cancel-restart-cancel 强得多。
+    val lastPreviewedIdxRef = remember { intArrayOf(-1) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { seekValue }
+            .filterNotNull()
+            .conflate()
+            .collect { v ->
+                if (totalChapters <= 0) return@collect
+                val raw = (v * totalChapters).coerceIn(0f, totalChapters.toFloat())
+                val previewIdx = raw.toInt().coerceIn(0, totalChapters - 1)
+                if (previewIdx == currentChapter || previewIdx == lastPreviewedIdxRef[0]) return@collect
+                lastPreviewedIdxRef[0] = previewIdx
+                pendingChapter = previewIdx
+                onSeekFullBook(previewIdx, 0)
+                // 等 currentChapter 实际追上目标，500ms 兜底（弱网 / 加载失败）。
+                // 这是串行的核心：不等就立即 collect 下一个，loadChapter 会并发。
+                withTimeoutOrNull(500L) {
+                    snapshotFlow { currentChapter }
+                        .first { it == previewIdx }
+                }
+            }
+    }
+    // seekValue 被清（松手后）→ 重置 lastPreviewedIdx，下次拖动从 currentChapter 重新起算
     LaunchedEffect(seekValue) {
-        val v = seekValue ?: return@LaunchedEffect
-        if (totalChapters <= 0) return@LaunchedEffect
-        kotlinx.coroutines.delay(220L)  // debounce
-        val raw = (v * totalChapters).coerceIn(0f, totalChapters.toFloat())
-        val previewIdx = raw.toInt().coerceIn(0, totalChapters - 1)
-        if (previewIdx != currentChapter) {
-            // 跟踪到 pendingChapter，让 (pendingChapter, currentChapter) effect 处理 thumb 等待
-            pendingChapter = previewIdx
-            onSeekFullBook(previewIdx, 0)
-        }
+        if (seekValue == null) lastPreviewedIdxRef[0] = -1
     }
 
     LaunchedEffect(pendingChapter, currentChapter, sliderDragging) {
