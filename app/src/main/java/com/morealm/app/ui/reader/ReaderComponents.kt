@@ -164,12 +164,15 @@ fun ReaderTopBar(
 // ── Bottom Control Bar (HTML prototype style: floating pill) ──
 
 /**
- * Seek preview 保留时长——见 LaunchedEffect(pendingChapter) 内部注释。
+ * Seek preview 兜底超时——见 LaunchedEffect(pendingChapter, currentChapter) 内部注释。
+ * 章节切到目标后，再等 [POST_SEEK_SETTLE_MS] 让 scrollProgress 流到 withinPct 再清。
+ * [SEEK_PREVIEW_TIMEOUT_MS] 仅作为加载失败 / 卡住时的兜底，让 thumb 不至于永远不清。
  * 900ms 是经验值，覆盖本地 + 一般网络章节的 loadChapter + LazyScroll restore
  * + scrollProgress emit 全程。极慢章节超过这个值时 seekValue 会先被清，slider
  * 短暂回到 baseProgress（已部分恢复）—— 比错位回弹温和。
  */
-private const val SEEK_PREVIEW_RETENTION_MS = 900L
+private const val POST_SEEK_SETTLE_MS = 200L
+private const val SEEK_PREVIEW_TIMEOUT_MS = 8_000L
 
 @Composable
 fun ReaderControlBar(
@@ -219,6 +222,14 @@ fun ReaderControlBar(
     //   withinChapterPct = (rawProgress - targetChapter) * 100  // [0, 100)
     var seekValue: Float? by remember { mutableStateOf(null) }
     var pendingChapter: Int? by remember { mutableStateOf(null) }
+    // 双重保险：直接持引用的可变 float，绕开 Snapshot 系统的批量提交。
+    // 用户报「松手大概率不是最后一次进度」——如果是 onValueChangeFinished 先于
+    // 最后一次 onValueChange 落到 Snapshot store 的极端情况（Compose 1.6+ Slider
+    // 偶发可观察），seekValue 会比实际 thumb 值滞后一帧。每次 onValueChange 同步
+    // 写一份到 FloatArray（无 Snapshot batching）作为「最权威」的最后值，
+    // onValueChangeFinished 优先读它，确保 seek 目标 = 用户视觉上松手时 thumb
+    // 所在位置。
+    val latestSliderValueRef = remember { floatArrayOf(Float.NaN) }
     val sliderValue = seekValue ?: baseProgress
     val rawProgress = sliderValue * totalChapters
     val previewIdx = if (totalChapters > 0)
@@ -229,22 +240,38 @@ fun ReaderControlBar(
     else 0
     val previewBookPct = (sliderValue * 100f).coerceIn(0f, 100f)
 
-    // 当用户松手发起 seek 后，等 [SEEK_PREVIEW_RETENTION_MS] 让 viewModel 跑完
-     // loadChapter + LazyScroll restoreProgress JUMP + scrollProgress emit 一整套，
-     // 然后再清 seekValue / pendingChapter。期间 sliderValue 保持 = seekValue
-     // （用户拖到的位置），thumb 不会先跳回 baseProgress 再跳到目标——前者就是
-     // bug「松手回弹然后恢复」/「拖动没反应」的根因（SCROLL 模式下
-     // visiblePage.chapterIndex 在 LazyScroll JUMP 那一刻就流到目标章，
-     // 但 scrollProgress 还是 0%，baseProgress = chapterFraction + 0 → thumb
-     // 跳到目标章首；几十 ms 后 scrollProgress 才到 withinPct）。900ms 覆盖
-     // 大部分本地 + 网络章节加载；连点 seek 时新点击会重启延迟，旧 coroutine
-     // 被 cancel，seekValue 始终保持为最近一次拖动到的位置。
-    LaunchedEffect(pendingChapter) {
-        if (pendingChapter != null) {
-            kotlinx.coroutines.delay(SEEK_PREVIEW_RETENTION_MS)
+    // 当用户松手发起 seek 后，等 viewModel 跑完 loadChapter + LazyScroll restoreProgress
+    // JUMP + scrollProgress emit 一整套，然后再清 seekValue / pendingChapter。
+    // 期间 sliderValue 保持 = seekValue（用户拖到的位置），thumb 不会先跳回
+    // baseProgress 再跳到目标——前者就是 bug「松手回弹然后恢复」/「拖动没反应」
+    // 的根因（SCROLL 模式下 visiblePage.chapterIndex 在 LazyScroll JUMP 那一刻就
+    // 流到目标章，但 scrollProgress 还是 0%，baseProgress = chapterFraction + 0
+    // → thumb 跳到目标章首；几十 ms 后 scrollProgress 才到 withinPct）。
+    //
+    // 历史 bug：旧版本固定 delay(900ms) 后清，跟「currentChapter 是否真的跟上 pendingChapter」
+    // 完全无关。如果 loadChapter 实际加载耗时 > 900ms（弱网 / 大书），seekValue 已被清成 null
+    // 但 currentChapter 还在旧位置（如 40%），baseProgress = 40% → thumb 弹回 40% →
+    // 用户报告「拖到 70% 结果落到 40%」。
+    //
+    // 修法：监听 (pendingChapter, currentChapter)。pendingChapter 不为 null 且 currentChapter
+    // 已切到目标 → 立刻清；同时设个 [SEEK_PREVIEW_TIMEOUT_MS] 兜底（加载失败 / 超时
+    // 不会让 thumb 永远卡在 seek 位置）。
+    LaunchedEffect(pendingChapter, currentChapter) {
+        val target = pendingChapter ?: return@LaunchedEffect
+        if (currentChapter == target) {
+            // 章节已切到目标——再多等 [POST_SEEK_SETTLE_MS] 让 scrollProgress 也流到 withinPct
+            // （ScrollRenderer JUMP 完成 + collector emit），避免 thumb 先回到章首再到 withinPct。
+            kotlinx.coroutines.delay(POST_SEEK_SETTLE_MS)
             seekValue = null
             pendingChapter = null
+            return@LaunchedEffect
         }
+        // 章节还没切：兜底超时。多数情况下 currentChapter 会先变化触发本 effect 重启，
+        // 这条 delay 跑完后 effect 就被新的 (currentChapter) 取消了；只有真的加载不动时
+        // 才会跑到清空 seekValue 这一步——比卡死强。
+        kotlinx.coroutines.delay(SEEK_PREVIEW_TIMEOUT_MS)
+        seekValue = null
+        pendingChapter = null
     }
 
     // Floating pill bar like HTML prototype's .r-bar
@@ -387,20 +414,36 @@ fun ReaderControlBar(
                     )
                     Slider(
                         value = sliderValue,
-                        onValueChange = { seekValue = it },
+                        onValueChange = {
+                            seekValue = it
+                            latestSliderValueRef[0] = it
+                        },
                         onValueChangeFinished = {
-                            seekValue?.let { v ->
+                            // 优先用 latestSliderValueRef[0]（无 Snapshot batch 的最新值），
+                            // 兜底到 seekValue。两者绝大多数情况一致，但极端时序下
+                            // latestSliderValueRef 比 seekValue 多落一次，能避免「松手
+                            // 跳到上一帧位置」的视觉偏差。
+                            val finalValue = latestSliderValueRef[0]
+                                .takeIf { !it.isNaN() }
+                                ?: seekValue
+                            finalValue?.let { v ->
                                 val raw = (v * totalChapters).coerceIn(0f, totalChapters.toFloat())
                                 val idx = raw.toInt().coerceIn(0, totalChapters - 1)
                                 val withinPct = ((raw - idx) * 100f).toInt().coerceIn(0, 99)
+                                com.morealm.app.core.log.AppLog.debug(
+                                    "ReaderSlider",
+                                    "seek finished v=$v rawIdx=$raw → ch=$idx pct=$withinPct" +
+                                        " seekValue=$seekValue latestRef=${latestSliderValueRef[0]}",
+                                )
                                 // 注意：即使章号没变也要触发 — 用户可能在本章内拖位置。
                                 // 旧实现 `if (idx != currentChapter)` 会吃掉章内 seek。
                                 pendingChapter = idx
                                 onSeekFullBook(idx, withinPct)
                             }
-                            // seekValue 不在这里清——上面的 LaunchedEffect 等
-                            // currentChapter == pendingChapter 后再清，避免 thumb
-                            // 弹回旧位置再跳到新位置。
+                            // 重置 latestRef 让下次 drag 起点干净；seekValue 不在这里清——
+                            // 上面的 LaunchedEffect 等 currentChapter == pendingChapter 后
+                            // 再清，避免 thumb 弹回旧位置再跳到新位置。
+                            latestSliderValueRef[0] = Float.NaN
                         },
                         valueRange = 0f..1f,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
