@@ -312,7 +312,32 @@ object EpubParser {
     ): String {
         elements.select("title").remove()
         elements.select("[style*=display:none]").remove()
-        // Strip ruby annotations (rp/rt) for cleaner text
+        // ── 振假名 Phase 1：保留 rt 文字（之前直接 select("rp, rt").remove() 把读音
+        //    一律删掉，日文 EPUB 用户看不到「八奈見(やなみ)」这种 ふりがな 注音）。
+        //
+        //    Ruby DOM 结构有多种：
+        //      <ruby>八奈見<rt>やなみ</rt></ruby>
+        //      <ruby><rb>八奈見</rb><rt>やなみ</rt></ruby>
+        //      <ruby>八<rt>や</rt>奈<rt>な</rt>見<rt>み</rt></ruby>  ← 字符级拆分
+        //    通用算法：先把所有 rt 文字 join 起来，再把 rp（括号占位符 () ）删掉避免
+        //    双层括号，剩下的 ruby 内容就是「底字」。底字 + 全角括号 + rt = 内联输出。
+        //
+        //    Phase 2 PageLayout 会识别 (?<base>..)(?<rt>..) 这种内联标记并升级为
+        //    上方 ruby 小字渲染（参考图1 静读天下日文）。Phase 1 先让 ruby 文字
+        //    至少出现，比之前完全不显示强。
+        elements.select("ruby").forEach { ruby ->
+            ruby.select("rp").remove()
+            val rts = ruby.select("rt").joinToString("") { it.text() }
+            ruby.select("rt").remove()
+            val baseText = ruby.text()  // 剩下的全部就是底字（去掉 rt/rp 后）
+            val joined = if (rts.isNotBlank() && baseText.isNotBlank()) {
+                "$baseText（$rts）"
+            } else {
+                baseText
+            }
+            ruby.replaceWith(org.jsoup.nodes.TextNode(joined))
+        }
+        // 兜底：游离的 rp/rt（不在 ruby 内的孤儿节点）依然移除
         elements.select("rp, rt").remove()
         elements.select("img[$COVER_IMAGE_MARKER]").forEachIndexed { i, img ->
             if (i > 0) img.remove()
