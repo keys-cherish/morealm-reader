@@ -54,6 +54,10 @@ fun ThemeEditorScreen(
 
     var themeName by remember { mutableStateOf("我的主题") }
     var isNight by remember { mutableStateOf(false) }
+    // 用户是否手动切过 isNight 开关。一旦切过就不再让 bgColor 联动覆盖；否则 bgColor
+    // 改深 / 改浅时自动同步 isNight，省得用户做完浅色主题忘记关掉「暗色主题」开关，
+    // 结果保存后只在「夜晚默认主题」对话框里能看到（白天对话框按 !isNightTheme 过滤）。
+    var userOverrodeIsNight by remember { mutableStateOf(false) }
     var bgColor by remember { mutableStateOf("FF0A0A0F") }
     var textColor by remember { mutableStateOf("FFEDEDEF") }
     var accentColor by remember { mutableStateOf("FF818CF8") }
@@ -63,11 +67,29 @@ fun ThemeEditorScreen(
     LaunchedEffect(editingTheme, activeTheme) {
         val sourceTheme = editingTheme ?: activeTheme
         themeName = editingTheme?.name ?: "我的主题"
-        isNight = sourceTheme?.isNightTheme ?: true
         bgColor = sourceTheme?.backgroundColor?.removePrefix("#") ?: "FF0A0A0F"
         textColor = sourceTheme?.onBackgroundColor?.removePrefix("#") ?: "FFEDEDEF"
         accentColor = sourceTheme?.accentColor?.removePrefix("#") ?: "FF818CF8"
         customCss = editingTheme?.customCss ?: sourceTheme?.customCss.orEmpty()
+        // 编辑现有主题：尊重 entity 已保存的 isNightTheme，并视为「用户已选定」不再联动；
+        // 新建主题：以当前 bgColor 的亮度做默认值，让浅色背景默认归到「白天」、深色归到
+        // 「夜晚」。比之前盲目拷 active.isNightTheme=true 友好得多——active 是 moRealm
+        // 时所有新建主题默认夜间，是用户报「白天对话框看不到自定义主题」的根因。
+        if (editingTheme != null) {
+            isNight = editingTheme.isNightTheme
+            userOverrodeIsNight = true
+        } else {
+            isNight = "#$bgColor".toComposeColor().luminance() < 0.5f
+            userOverrodeIsNight = false
+        }
+    }
+
+    // bgColor 改了 → 没手动切过 isNight 时自动跟随。一旦用户手动切过 Switch，他/她
+    // 知道自己在干嘛（例如想做一个浅色但归类为夜间的「莫兰迪夜读」主题），就不再覆盖。
+    LaunchedEffect(bgColor) {
+        if (!userOverrodeIsNight) {
+            isNight = "#$bgColor".toComposeColor().luminance() < 0.5f
+        }
     }
 
     val bgPalette = listOf(
@@ -207,19 +229,29 @@ fun ThemeEditorScreen(
                 colors = CardDefaults.cardColors(
                     containerColor = editorCardColor),
             ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(if (isNight) Icons.Default.DarkMode else Icons.Default.LightMode,
-                        null, tint = previewAccentColor)
-                    Spacer(Modifier.width(12.dp))
-                    Text("暗色主题", style = MaterialTheme.typography.bodyLarge,
-                        color = previewTextColor,
-                        modifier = Modifier.weight(1f))
-                    Switch(checked = isNight, onCheckedChange = { isNight = it },
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = previewAccentColor))
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (isNight) Icons.Default.DarkMode else Icons.Default.LightMode,
+                            null, tint = previewAccentColor)
+                        Spacer(Modifier.width(12.dp))
+                        Text("暗色主题", style = MaterialTheme.typography.bodyLarge,
+                            color = previewTextColor,
+                            modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = isNight,
+                            onCheckedChange = {
+                                isNight = it
+                                userOverrodeIsNight = true
+                            },
+                            colors = SwitchDefaults.colors(checkedTrackColor = previewAccentColor),
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "决定「跟随系统」时此主题归到白天 / 夜晚分类。默认按背景亮度自动判断，可手动覆盖。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = previewTextColor.copy(alpha = 0.6f),
+                    )
                 }
             }
             Spacer(Modifier.height(16.dp))
