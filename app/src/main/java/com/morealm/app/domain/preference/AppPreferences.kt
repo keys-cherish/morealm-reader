@@ -106,6 +106,10 @@ class AppPreferences @Inject constructor(
          * 用户在傍晚阅读时被强行换主题，新版本默认把主动权交还用户）。
          */
         val FOLLOW_SYSTEM_THEME = booleanPreferencesKey("follow_system_theme")
+        // 自定义「跟随系统」时使用的日 / 夜主题 ID。空串表示走内置默认（paper / morealm_default）。
+        // 让用户能把"系统切到暗色"自动落到自己导入或定制的暗色主题，而不是被硬切回内置。
+        val AUTO_DAY_THEME_ID = stringPreferencesKey("auto_day_theme_id")
+        val AUTO_NIGHT_THEME_ID = stringPreferencesKey("auto_night_theme_id")
         val SOURCE_FILTER_MIN_WORDS = intPreferencesKey("source_filter_min_words")
         val SOURCE_FILTER_MAX_WORDS = intPreferencesKey("source_filter_max_words")
         /**
@@ -270,6 +274,17 @@ class AppPreferences @Inject constructor(
     fun getFollowSystemThemeSync(): Boolean =
         themePrefs.getBoolean("follow_system_theme", false)
 
+    /**
+     * 自定义「跟随系统」时使用的日 / 夜主题 ID。
+     * 空串表示走内置默认（[com.morealm.app.domain.entity.BuiltinThemes] 的 paper / moRealm）。
+     * 与 follow_system_theme 同走 themePrefs sync 双写，避免冷启动时主题闪烁。
+     */
+    fun getAutoDayThemeIdSync(): String =
+        themePrefs.getString("auto_day_theme_id", "") ?: ""
+
+    fun getAutoNightThemeIdSync(): String =
+        themePrefs.getString("auto_night_theme_id", "") ?: ""
+
     fun getActiveThemeIsNightSync(): Boolean =
         themePrefs.getBoolean("active_theme_is_night", true)
 
@@ -363,6 +378,14 @@ class AppPreferences @Inject constructor(
      */
     val followSystemTheme: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.FOLLOW_SYSTEM_THEME] ?: false }
+
+    /** 跟随系统模式下，系统在「白天」时应用的目标主题 ID。空串 = 内置 paper。 */
+    val autoDayThemeId: Flow<String> = context.dataStore.data
+        .map { it[Keys.AUTO_DAY_THEME_ID] ?: "" }
+
+    /** 跟随系统模式下，系统在「夜晚」时应用的目标主题 ID。空串 = 内置 moRealm。 */
+    val autoNightThemeId: Flow<String> = context.dataStore.data
+        .map { it[Keys.AUTO_NIGHT_THEME_ID] ?: "" }
 
     val webDavUrl: Flow<String> = context.dataStore.data
         .map { it[Keys.WEBDAV_URL] ?: "" }
@@ -631,6 +654,17 @@ class AppPreferences @Inject constructor(
     suspend fun setFollowSystemTheme(enabled: Boolean) {
         themePrefs.edit().putBoolean("follow_system_theme", enabled).apply()
         update(Keys.FOLLOW_SYSTEM_THEME, enabled)
+    }
+
+    /** 与 setFollowSystemTheme 同款双写策略（themePrefs 同步 + DataStore 异步）。 */
+    suspend fun setAutoDayThemeId(id: String) {
+        themePrefs.edit().putString("auto_day_theme_id", id).apply()
+        update(Keys.AUTO_DAY_THEME_ID, id)
+    }
+
+    suspend fun setAutoNightThemeId(id: String) {
+        themePrefs.edit().putString("auto_night_theme_id", id).apply()
+        update(Keys.AUTO_NIGHT_THEME_ID, id)
     }
     suspend fun setSourceFilterMinWords(min: Int) = update(Keys.SOURCE_FILTER_MIN_WORDS, min)
     suspend fun setSourceFilterMaxWords(max: Int) = update(Keys.SOURCE_FILTER_MAX_WORDS, max)

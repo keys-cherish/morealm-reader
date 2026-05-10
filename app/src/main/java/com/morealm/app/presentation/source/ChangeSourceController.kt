@@ -44,6 +44,16 @@ private const val TEXT_BOOK_SOURCE_TYPE = 0
 private const val SEARCH_CACHE_TTL_MS = 7L * 24 * 3600 * 1000
 
 /**
+ * 缓存新鲜度阈值：30 分钟内的搜索结果直接复用，不再发起新一轮全源网络搜索。
+ *
+ * 选 30 分钟的依据：
+ * - 书源更新章节频率一般以小时为单位，30 分钟内的书源候选差异极小；
+ * - 单次全源搜索按 50+ 源算，平均要 5-15 秒、几十个 HTTP 请求，反复点详情页代价巨大；
+ * - 用户如果真想强制刷新（新加了书源 / 怀疑结果过期），有刷新按钮兜底。
+ */
+private const val SEARCH_CACHE_FRESH_MS = 30L * 60 * 1000
+
+/**
  * 换源候选结果（封装 SearchBook + 进度状态 + 排序键）。
  *
  * `originOrder` 来自 BookSource.customOrder，越小越靠前；
@@ -149,10 +159,15 @@ class ChangeSourceController(
 
     // ── Public API ────────────────────────────────────────────────────────
 
-    /** 打开换源对话框并启动跨源搜索。 */
+    /** 打开换源对话框并启动跨源搜索（默认走缓存窗口）。 */
     fun openPicker(book: Book) {
         _showPicker.value = true
-        startSearch(book)
+        startSearch(book, force = false)
+    }
+
+    /** 强制重新搜索（忽略缓存窗口）—— UI 上的「刷新」按钮调用。 */
+    fun refresh(book: Book) {
+        startSearch(book, force = true)
     }
 
     /** 关闭对话框 + 取消搜索 + 清 toc cache。 */
@@ -303,7 +318,7 @@ class ChangeSourceController(
 
     // ── Internal helpers ──────────────────────────────────────────────────
 
-    private fun startSearch(book: Book) {
+    private fun startSearch(book: Book, force: Boolean) {
         cancelSearch()
         _candidates.value = emptyList()
         _progress.value = emptyList()
@@ -327,6 +342,24 @@ class ChangeSourceController(
                         .map { it.toCandidate(fromCache = true) }
                     mergeMutex.withLock {
                         _candidates.value = asCandidates.sortedWith(candidateComparator)
+                    }
+                }
+
+                // ── 缓存窗口：30 分钟内的搜索结果直接复用，不重跑 Phase 2。 ──
+                // 取「最新一条 cache 的 time」做判定 —— 因为 Phase 2 是并发批量写
+                // （每个源命中后单独 insert），最新 time 能反映上一轮全源搜索的完成时间。
+                // force=true 时（用户点刷新按钮）跳过这条短路。
+                if (!force && cached.isNotEmpty()) {
+                    val newestTime = cached.maxOf { it.time }
+                    val ageMs = System.currentTimeMillis() - newestTime
+                    if (ageMs in 0..SEARCH_CACHE_FRESH_MS) {
+                        AppLog.info(
+                            "ChangeSource",
+                            "Reuse cache for '$keyword': ${cached.size} entries, " +
+                                "age=${ageMs / 1000}s (< ${SEARCH_CACHE_FRESH_MS / 1000}s)"
+                        )
+                        _searching.value = false
+                        return@launch
                     }
                 }
 

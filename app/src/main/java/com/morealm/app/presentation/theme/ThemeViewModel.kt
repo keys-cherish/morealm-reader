@@ -41,7 +41,13 @@ class ThemeViewModel @Inject constructor(
             // 「跟随系统」开启时冷启动直接按 OS uiMode 决定日/夜，不读保存的 themeId
             // —— 否则上次手动选的主题会先一闪然后被切回系统色。
             val sysIsNight = isSystemInNightMode()
-            return@run if (sysIsNight) BuiltinThemes.moRealm else BuiltinThemes.paper
+            // 优先用用户配置的「日 / 夜默认主题」，找不到再 fallback 到内置。
+            // initialTheme 在 ViewModel 构造期同步执行，没法 await DB —— 所以
+            // 自定义主题这里只能给个 builtin fallback。activeTheme StateFlow 一旦
+            // 收到 DB 真值会立刻覆盖（initialValue），用户感受不到 fallback。
+            val customId = if (sysIsNight) prefs.getAutoNightThemeIdSync() else prefs.getAutoDayThemeIdSync()
+            val builtin = BuiltinThemes.all().find { it.id == customId }
+            return@run builtin ?: if (sysIsNight) BuiltinThemes.moRealm else BuiltinThemes.paper
         }
         val savedId = prefs.getActiveThemeIdSync()
         val builtin = BuiltinThemes.all().find { it.id == savedId }
@@ -70,6 +76,16 @@ class ThemeViewModel @Inject constructor(
     val followSystemTheme: StateFlow<Boolean> = prefs.followSystemTheme
         .stateIn(viewModelScope, SharingStarted.Eagerly, prefs.getFollowSystemThemeSync())
 
+    /**
+     * 用户为「跟随系统」配置的日 / 夜默认主题 ID。空串 = 走内置 paper / moRealm。
+     * UI 在跟随系统开关下方暴露选择器，写入这两个 pref。
+     */
+    val autoDayThemeId: StateFlow<String> = prefs.autoDayThemeId
+        .stateIn(viewModelScope, SharingStarted.Eagerly, prefs.getAutoDayThemeIdSync())
+
+    val autoNightThemeId: StateFlow<String> = prefs.autoNightThemeId
+        .stateIn(viewModelScope, SharingStarted.Eagerly, prefs.getAutoNightThemeIdSync())
+
     val customCss: StateFlow<String> = prefs.customCss
         .stateIn(viewModelScope, SharingStarted.Lazily, "")
 
@@ -97,7 +113,7 @@ class ThemeViewModel @Inject constructor(
             val current = activeTheme.value
             val currentIsNight = current?.isNightTheme ?: true
             if (systemIsDark == currentIsNight) return@launch
-            val targetId = if (systemIsDark) BuiltinThemes.moRealm.id else BuiltinThemes.paper.id
+            val targetId = resolveAutoTargetThemeId(systemIsDark)
             themeRepo.activateTheme(targetId)
             AppLog.info("Theme", "Follow system → $targetId (systemDark=$systemIsDark)")
         }
@@ -112,12 +128,42 @@ class ThemeViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             prefs.setFollowSystemTheme(false)
             val current = activeTheme.value
-            val targetId = if (current?.isNightTheme == true) {
-                BuiltinThemes.paper.id
-            } else {
-                BuiltinThemes.moRealm.id
-            }
+            val targetIsNight = current?.isNightTheme != true
+            val targetId = resolveAutoTargetThemeId(targetIsNight)
             themeRepo.activateTheme(targetId)
+        }
+    }
+
+    /**
+     * 解析「跟随系统 / 手动切日夜」时应当使用的目标主题 ID。
+     *
+     * 规则：先看用户在 [autoDayThemeId] / [autoNightThemeId] 配的自定义主题；
+     * 该主题在 DB 中存在且 isNightTheme 与目标方向一致时直接用；否则 fallback 到内置
+     * （moRealm = 夜，paper = 日）。两层校验避免：
+     *  1) 用户配过的自定义主题被删除后切日/夜变成无主题（DB null）
+     *  2) 用户把夜间主题误配成"日间默认"导致切日时出现深色
+     */
+    private suspend fun resolveAutoTargetThemeId(targetIsNight: Boolean): String {
+        val customId = if (targetIsNight) autoNightThemeId.value else autoDayThemeId.value
+        if (customId.isNotBlank()) {
+            val custom = themeRepo.getThemeById(customId)
+            if (custom != null && custom.isNightTheme == targetIsNight) {
+                return customId
+            }
+        }
+        return if (targetIsNight) BuiltinThemes.moRealm.id else BuiltinThemes.paper.id
+    }
+
+    /** UI 选择器写回：用户挑了一个主题作为「白天默认」。空串 = 重置为内置默认。 */
+    fun setAutoDayThemeId(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            prefs.setAutoDayThemeId(id)
+        }
+    }
+
+    fun setAutoNightThemeId(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            prefs.setAutoNightThemeId(id)
         }
     }
 

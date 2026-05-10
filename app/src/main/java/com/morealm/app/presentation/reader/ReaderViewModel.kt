@@ -7,6 +7,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.Book
+import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.Bookmark
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.preference.AppPreferences
@@ -256,6 +257,14 @@ class ReaderViewModel @Inject constructor(
     val hitContentRules: StateFlow<List<com.morealm.app.domain.entity.ReplaceRule>> = chapter.hitContentRules
     /** 同上，title 路径。 */
     val hitTitleRules: StateFlow<List<com.morealm.app.domain.entity.ReplaceRule>> = chapter.hitTitleRules
+
+    /**
+     * 阅读器内触发"去登录"的事件流。ReaderChapterController 检测到章节/目录加载
+     * 失败且疑似登录问题时 emit 出对应源；ReaderScreen collect 后用 Snackbar 把
+     * 入口送到用户眼前，避免用户要返回到书源管理页去找登录。
+     */
+    val loginPrompt: SharedFlow<BookSource> =
+        chapter.loginPrompt
 
     // ── UI-only state (stays in ViewModel) ──
     private val _showControls = MutableStateFlow(false)
