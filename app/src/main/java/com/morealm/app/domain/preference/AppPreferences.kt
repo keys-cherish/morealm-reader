@@ -26,6 +26,14 @@ class AppPreferences @Inject constructor(
         val READER_TITLE_FONT_FAMILY = stringPreferencesKey("reader_title_font_family")
         val READER_TITLE_FONT_WEIGHT = intPreferencesKey("reader_title_font_weight")
         val PAGE_TURN_MODE = stringPreferencesKey("page_turn_mode")
+        /**
+         * 阅读方向。"horizontal" = 横排（默认，从左到右、从上到下，中文常见排版）；
+         * "vertical_rl" = 竖排（从上到下、列从右到左，日文 / 古典中文常见）。
+         *
+         * Phase 1 仅做开关 + 持久化，PageLayout / Drawer 暂不响应；用户切换后阅读区
+         * 暂时不变化（Phase 2 落地真正的竖排算法）。
+         */
+        val READING_DIRECTION = stringPreferencesKey("reading_direction")
         val FULLSCREEN_TAP = booleanPreferencesKey("fullscreen_tap")
         val TTS_ENGINE = stringPreferencesKey("tts_engine")
         /**
@@ -332,6 +340,10 @@ class AppPreferences @Inject constructor(
 
     val pageTurnMode: Flow<String> = context.dataStore.data
         .map { it[Keys.PAGE_TURN_MODE] ?: "scroll" }
+
+    /** 阅读方向：horizontal（默认）/ vertical_rl。详见 [Keys.READING_DIRECTION]。 */
+    val readingDirection: Flow<String> = context.dataStore.data
+        .map { it[Keys.READING_DIRECTION] ?: "horizontal" }
 
     val fullscreenTap: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.FULLSCREEN_TAP] ?: false }
@@ -641,6 +653,7 @@ class AppPreferences @Inject constructor(
     suspend fun setReaderTitleFontFamily(family: String) = update(Keys.READER_TITLE_FONT_FAMILY, family)
     suspend fun setReaderTitleFontWeight(weight: Int) = update(Keys.READER_TITLE_FONT_WEIGHT, weight)
     suspend fun setPageTurnMode(mode: String) = update(Keys.PAGE_TURN_MODE, mode)
+    suspend fun setReadingDirection(value: String) = update(Keys.READING_DIRECTION, value)
     suspend fun setFullscreenTap(enabled: Boolean) = update(Keys.FULLSCREEN_TAP, enabled)
     suspend fun setTtsEngine(engine: String) = update(Keys.TTS_ENGINE, engine)
 
