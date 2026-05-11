@@ -406,13 +406,13 @@ fun ShelfScreen(
                             leadingIcon = { Icon(Icons.Default.Description, null) },
                             onClick = {
                                 showImportMenu = false
-                                filePickerLauncher.launch(arrayOf(
-                                    "text/plain", "application/epub+zip", "application/pdf",
-                                    "application/x-mobipocket-ebook", "application/octet-stream",
-                                    "application/x-cbz", "application/vnd.comicbook+zip",
-                                    "application/x-cbr", "application/vnd.comicbook-rar",
-                                    "application/zip", "application/x-rar-compressed", "application/x-7z-compressed",
-                                ))
+                                // mime 白名单在各家 OEM ROM 上不一致——同样的 .mobi 有的
+                                // 报 application/x-mobipocket-ebook，有的报 octet-stream，
+                                // 有的干脆给 text/x-markdown 之类。任何遗漏都会让 SAF picker
+                                // 灰显该文件并弹「不支持这类文件」toast。对齐 Legado 的做法：
+                                // 直接 */*，文件类型识别交给后置的 ShelfImportController.detectFormat
+                                // 按扩展名判断（mobi/azw3/epub/pdf/txt/cbz/...）。
+                                filePickerLauncher.launch(arrayOf("*/*"))
                             },
                         )
                         DropdownMenuItem(
@@ -663,7 +663,7 @@ fun ShelfScreen(
             ShelfGridSkeleton(modifier = Modifier.fillMaxSize())
         } else if (!hasContent) {
             EmptyShelf(
-                onImportFile = { filePickerLauncher.launch(arrayOf("text/plain", "application/epub+zip", "application/pdf", "application/octet-stream")) },
+                onImportFile = { filePickerLauncher.launch(arrayOf("*/*")) },
                 onImportFolder = { folderPickerLauncher.launch(downloadUri) },
                 modifier = Modifier.fillMaxSize(),
             )

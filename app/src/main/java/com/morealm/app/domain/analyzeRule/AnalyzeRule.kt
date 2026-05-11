@@ -611,24 +611,47 @@ class AnalyzeRule(
         } else if (isRegex) {
             mMode = Mode.Regex
         }
-        var tmp: String
+
+        // 旧实现先用 JS_PATTERN 扫一遍整串、再用 WebJS_PATTERN 从 0 重扫整串，两次
+        // matcher 互相不知道对方消费过的区间——当 @webjs: 出现在 <js>...</js> 内部
+        // （或 @js: 之后的贪婪尾巴里），WebJS 会把它再切一刀，ruleList 多出一个错位
+        // 的 WebJs token；同时尾巴段 `ruleStr.length > start` 用最后一次 webJsMatcher.end()
+        // 做基准，可能把第一遍 JS 段之后的明文片段一起吞掉。
+        //
+        // 改成单次线性扫描：两个 pattern 各跑一次只收集 (start, end, mode, body)，按
+        // start 升序统一排序后顺序消费——任何 token.start 落在已消费区间内（被前一个
+        // token 吃掉）的直接跳过，保证 [明文, token, 明文, token, ...] 结构互不重叠。
+        data class Token(val s: Int, val e: Int, val mode: Mode, val body: String)
+        val tokens = ArrayList<Token>()
         val jsMatcher = JS_PATTERN.matcher(ruleStr)
         while (jsMatcher.find()) {
-            if (jsMatcher.start() > start) {
-                tmp = ruleStr.substring(start, jsMatcher.start()).trim { it <= ' ' }
-                if (tmp.isNotEmpty()) ruleList.add(SourceRule(tmp, mMode))
-            }
-            ruleList.add(SourceRule(jsMatcher.group(2) ?: jsMatcher.group(1), Mode.Js))
-            start = jsMatcher.end()
+            tokens.add(
+                Token(
+                    jsMatcher.start(), jsMatcher.end(), Mode.Js,
+                    jsMatcher.group(2) ?: jsMatcher.group(1) ?: "",
+                )
+            )
         }
         val webJsMatcher = WebJS_PATTERN.matcher(ruleStr)
         while (webJsMatcher.find()) {
-            if (webJsMatcher.start() > start) {
-                tmp = ruleStr.substring(start, webJsMatcher.start()).trim { it <= ' ' }
+            tokens.add(
+                Token(
+                    webJsMatcher.start(), webJsMatcher.end(), Mode.WebJs,
+                    webJsMatcher.group(1) ?: "",
+                )
+            )
+        }
+        tokens.sortBy { it.s }
+
+        var tmp: String
+        for (t in tokens) {
+            if (t.s < start) continue // 落在已消费区间，是被前一个 token 包住的伪命中
+            if (t.s > start) {
+                tmp = ruleStr.substring(start, t.s).trim { it <= ' ' }
                 if (tmp.isNotEmpty()) ruleList.add(SourceRule(tmp, mMode))
             }
-            ruleList.add(SourceRule(webJsMatcher.group(1) ?: "", Mode.WebJs))
-            start = webJsMatcher.end()
+            ruleList.add(SourceRule(t.body, t.mode))
+            start = t.e
         }
         if (ruleStr.length > start) {
             tmp = ruleStr.substring(start).trim { it <= ' ' }
