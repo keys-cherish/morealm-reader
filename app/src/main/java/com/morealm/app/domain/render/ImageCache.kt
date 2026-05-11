@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import com.morealm.app.domain.http.okHttpClient
+import com.morealm.app.domain.parser.MobiResourceLoader
 import okhttp3.Request
 
 /**
@@ -13,7 +14,7 @@ import okhttp3.Request
  * - 最小 50MB，最大 256MB
  * - 在 [50MB, maxMemory/4] 范围内动态选择
  *
- * 支持本地文件和网络图片（带 header 注入）。
+ * 支持本地文件、网络图片（带 header 注入）、mobi-img:// 虚拟协议。
  */
 object ImageCache {
 
@@ -21,6 +22,9 @@ object ImageCache {
     private const val MAX_CACHE_SIZE_KB = 256 * 1024  // 256MB
 
     private val cache: LruCache<String, Bitmap>
+
+    /** Application context — 由 MoRealmApp 在 onCreate 时注入。 */
+    var appContext: Context? = null
 
     init {
         val maxMemory = Runtime.getRuntime().maxMemory() / 1024 // KB
@@ -45,13 +49,20 @@ object ImageCache {
     }
 
     /**
-     * 获取图片，优先从缓存读取，未命中则解码并放入缓存。
-     * 支持按目标宽度缩放解码，避免超大图片 OOM。
-     * @param path 文件路径（不含 file:// 前缀）
-     * @param targetWidth 目标显示宽度（px），0 表示不缩放
-     * @return 解码后的 Bitmap，失败返回 null
+     * 统一入口 —— 根据 src 前缀分流：
+     *   - `mobi-img://` → 按需从 MOBI 文件流式读取
+     *   - `file://` 或无前缀 → 本地文件 BitmapFactory.decodeFile
      */
-    fun get(path: String, targetWidth: Int = 0): Bitmap? {
+    fun get(src: String, targetWidth: Int = 0): Bitmap? {
+        if (src.startsWith("mobi-img://")) return getMobi(src, targetWidth)
+        val path = src.removePrefix("file://")
+        return getFile(path, targetWidth)
+    }
+
+    /**
+     * 获取本地文件图片，优先从缓存读取，未命中则解码并放入缓存。
+     */
+    fun getFile(path: String, targetWidth: Int = 0): Bitmap? {
         cache.get(path)?.let { bmp ->
             if (!bmp.isRecycled) return bmp
             cache.remove(path)
@@ -73,10 +84,38 @@ object ImageCache {
     }
 
     /**
+     * mobi-img://{hash}/{imageIndex} → 从 MOBI 原始文件按需流式读取字节并解码。
+     * 不写本地 cacheDir，解码后进 LRU 内存缓存。
+     */
+    private fun getMobi(src: String, targetWidth: Int): Bitmap? {
+        cache.get(src)?.let { bmp ->
+            if (!bmp.isRecycled) return bmp
+            cache.remove(src)
+        }
+        val ctx = appContext ?: return null
+        val parts = src.removePrefix("mobi-img://").split("/", limit = 2)
+        if (parts.size < 2) return null
+        val hash = parts[0]
+        val idx = parts[1].toIntOrNull() ?: return null
+        val bytes = MobiResourceLoader.readBytes(ctx, hash, idx) ?: return null
+        return try {
+            val opts = BitmapFactory.Options()
+            if (targetWidth > 0) {
+                opts.inJustDecodeBounds = true
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                opts.inSampleSize = calculateInSampleSize(opts.outWidth, opts.outHeight, targetWidth)
+                opts.inJustDecodeBounds = false
+            }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.also { bmp ->
+                cache.put(src, bmp)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * 获取网络图片，带 header 注入（书源图片需要 Referer/Cookie 等）。
-     * @param url 图片 URL
-     * @param headers 请求头（如 Referer, Cookie）
-     * @param targetWidth 目标显示宽度（px），0 表示不缩放
      */
     fun getUrl(url: String, headers: Map<String, String> = emptyMap(), targetWidth: Int = 0): Bitmap? {
         val cacheKey = "url:$url"

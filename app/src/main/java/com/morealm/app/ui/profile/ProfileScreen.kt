@@ -145,6 +145,7 @@ fun ProfileScreen(
                 containerColor = Color.Transparent,
                 scrolledContainerColor = Color.Transparent,
             ),
+            windowInsets = WindowInsets(0, 0, 0, 0),
         )
 
         // Reading stats card (real data)

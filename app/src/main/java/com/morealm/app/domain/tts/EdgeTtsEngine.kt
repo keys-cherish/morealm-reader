@@ -94,7 +94,7 @@ class EdgeTtsEngine(
     override suspend fun speak(text: String, speed: Float): Flow<AudioChunk> = callbackFlow {
         if (text.isBlank()) {
             trySend(AudioChunk(ByteArray(0), "done"))
-            close()
+            channel.close()
             return@callbackFlow
         }
 
@@ -109,14 +109,14 @@ class EdgeTtsEngine(
         try {
             doSynthesizeSsml(ssml, cacheKey, started)
             trySend(AudioChunk(ByteArray(0), "done"))
-            close()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             AppLog.warn(TAG, "speak failed: ${e.message}")
-            close(e)
+            channel.close(e)
         }
 
+        channel.close()
         awaitClose { cleanup() }
     }
 
@@ -175,7 +175,7 @@ class EdgeTtsEngine(
     ): Flow<AudioChunk> = callbackFlow {
         if (paragraphs.isEmpty()) {
             trySend(AudioChunk(ByteArray(0), "done"))
-            close()
+            channel.close()
             return@callbackFlow
         }
         val rateStr = formatRate(speed)
@@ -206,11 +206,8 @@ class EdgeTtsEngine(
                 val chunkStartLocalIdx = globalLocalIdx
                 val progressJob = launch {
                     for ((i, para) in chunk.withIndex()) {
-                        // 暂停时不再推进段索引（host 那边的 isPlaying 也会守门，
-                        // 但这里直接 break 能让 progress 协程更早安静下来）
                         runCatching { onParagraphStart(chunkStartLocalIdx + i) }
                         val durMs = estimateParaDurationMs(para, speed)
-                        // 最后一段后面没有 <break>，不要等
                         val gapMs = if (i < chunk.size - 1) breakMs else 0L
                         kotlinx.coroutines.delay(durMs + gapMs)
                     }
@@ -230,13 +227,14 @@ class EdgeTtsEngine(
                 globalLocalIdx += chunk.size
             }
             trySend(AudioChunk(ByteArray(0), "done"))
-            close()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             AppLog.warn(TAG, "speakChapter failed: ${e.message}")
-            close(e)
+            channel.close(e)
         }
+
+        channel.close()
         awaitClose { cleanup() }
     }
 
@@ -949,14 +947,14 @@ class EdgeTtsEngine(
     companion object {
         private const val TAG = "EdgeTTS"
         private const val AUDIO_SAMPLE_RATE = 24000
-        private const val MAX_ATTEMPTS = 2
+        private const val MAX_ATTEMPTS = 3
 
         /**
          * WSS idle 超时：wsCompletion 等待期间如果超过这么久没有新的音频 chunk
          * 到达，就认为 WSS half-open 并中断。15s 远大于正常 chunk 间隔（~200-500ms），
          * 同时短于用户体感"卡住了"的阈值。
          */
-        private const val IDLE_TIMEOUT_MS = 15_000L
+        private const val IDLE_TIMEOUT_MS = 30_000L
 
         /**
          * Plan C 单批 SSML 段内字符上限。Edge TTS 的 SSML 体积有上限（约 5-10 分钟

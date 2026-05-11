@@ -150,6 +150,10 @@ class AppPreferences @Inject constructor(
         val LONG_PRESS_UNDERLINE = booleanPreferencesKey("long_press_underline")
         /** 节日彩蛋去重：今天的彩蛋已弹过则跳过。值 = LocalDate.toString()（"2026-04-19"）。 */
         val LAST_HOLIDAY_SHOWN_DATE = stringPreferencesKey("last_holiday_shown_date")
+        /** DMRG 生成的彩蛋句子的离线缓存（错峰预计算第一道防线，启动时瞬时直出）。 */
+        val CACHED_HOLIDAY_GREETING = stringPreferencesKey("cached_holiday_greeting")
+        /** [CACHED_HOLIDAY_GREETING] 对应的上下文摘要 — 启动时用它判断缓存是否过期。 */
+        val CACHED_HOLIDAY_GREETING_KEY = stringPreferencesKey("cached_holiday_greeting_key")
         val SCREEN_TIMEOUT = intPreferencesKey("screen_timeout") // 0=system, -1=never, else seconds
         val SHOW_STATUS_BAR = booleanPreferencesKey("show_status_bar")
         val SHOW_CHAPTER_NAME = booleanPreferencesKey("show_chapter_name")
@@ -228,6 +232,14 @@ class AppPreferences @Inject constructor(
         // The classifier honours this set so a deleted "玄幻" folder doesn't reappear next
         // time a 3rd 玄幻 book is imported.
         val AUTO_FOLDER_IGNORED = stringSetPreferencesKey("auto_folder_ignored")
+        /**
+         * 自动分组总开关。默认 false —— 用户反馈"没用自动分组也被自动分组"，
+         * 改为只有显式打开才会在被动路径（导入、加书架、详情更新）触发分类。
+         *
+         * 用户主动「立即整理」始终绕过此开关（走 classifyForced/matchGroupForced），
+         * 因为「立即整理」本身就是用户主动选择按规则分组。
+         */
+        val AUTO_FOLDER_ENABLED = booleanPreferencesKey("auto_folder_enabled")
         /**
          * 章节内搜索的最近历史。换行分隔，最多 20 条；UI chip 展示。
          */
@@ -490,6 +502,14 @@ class AppPreferences @Inject constructor(
     /** 节日彩蛋去重：返回上次弹窗的日期字符串；空串表示从未弹过。 */
     val lastHolidayShownDate: Flow<String> = context.dataStore.data
         .map { it[Keys.LAST_HOLIDAY_SHOWN_DATE] ?: "" }
+
+    /** DMRG 句的缓存正文。空串=无缓存，Presenter 会先用兜底句、再异步注水。 */
+    val cachedHolidayGreeting: Flow<String> = context.dataStore.data
+        .map { it[Keys.CACHED_HOLIDAY_GREETING] ?: "" }
+
+    /** DMRG 缓存对应的 context 摘要（一致才能复用，否则需重算）。 */
+    val cachedHolidayGreetingKey: Flow<String> = context.dataStore.data
+        .map { it[Keys.CACHED_HOLIDAY_GREETING_KEY] ?: "" }
 
     val screenTimeout: Flow<Int> = context.dataStore.data
         .map { it[Keys.SCREEN_TIMEOUT] ?: -1 }
@@ -773,6 +793,17 @@ class AppPreferences @Inject constructor(
     suspend fun setHeadsetButtonPage(enabled: Boolean) = update(Keys.HEADSET_BUTTON_PAGE, enabled)
     suspend fun setVolumeKeyLongPress(mode: String) = update(Keys.VOLUME_KEY_LONG_PRESS, mode)
     suspend fun setLastHolidayShownDate(date: String) = update(Keys.LAST_HOLIDAY_SHOWN_DATE, date)
+
+    /**
+     * 把 DMRG 句和它的 context 摘要一并写入 — 一次 edit 块完成，避免两次 emission。
+     * `key` 由 Presenter 拼成 `date|holidayId|titleHash|minuteBucket` 形式。
+     */
+    suspend fun setCachedHolidayGreeting(text: String, key: String) {
+        context.dataStore.edit {
+            it[Keys.CACHED_HOLIDAY_GREETING] = text
+            it[Keys.CACHED_HOLIDAY_GREETING_KEY] = key
+        }
+    }
     suspend fun setResumeLastRead(enabled: Boolean) = update(Keys.RESUME_LAST_READ, enabled)
     suspend fun setShelfSortMode(mode: String) = update(Keys.SHELF_SORT_MODE, mode)
     suspend fun setLongPressUnderline(enabled: Boolean) = update(Keys.LONG_PRESS_UNDERLINE, enabled)
@@ -843,6 +874,19 @@ class AppPreferences @Inject constructor(
         context.dataStore.edit { prefs ->
             prefs[Keys.ALLOW_SOURCE_FALLBACK] = value
         }
+    }
+
+    /**
+     * 自动分组总开关。默认 false —— 被动路径（导入 / 加书架 / 详情更新）只在该开关
+     * 打开时才调 classify；用户主动「立即整理」始终绕过此开关。
+     */
+    val autoFolderEnabled: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.AUTO_FOLDER_ENABLED] ?: false }
+
+    suspend fun getAutoFolderEnabled(): Boolean = autoFolderEnabled.first()
+
+    suspend fun setAutoFolderEnabled(value: Boolean) {
+        update(Keys.AUTO_FOLDER_ENABLED, value)
     }
 
     // ── 搜索 / 换源 调度参数 ─────────────────────────────────────────────

@@ -3,6 +3,14 @@ package com.morealm.app.ui.shelf
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Sun
+import com.composables.icons.lucide.Moon
+import com.composables.icons.lucide.Plus
+import com.composables.icons.lucide.EllipsisVertical
+import com.composables.icons.lucide.ArrowDownNarrowWide
+import com.composables.icons.lucide.LayoutGrid
+import com.composables.icons.lucide.List
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -282,7 +290,16 @@ fun ShelfScreen(
                             }
                         }
                         Column {
-                            Text(greeting, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            // greeting 字号从 titleLarge 降到中间档（headlineSmall? 不，
+                            // 改用 titleMedium 加大字号 + Bold）—— 用户要求降低但仍大于
+                            // 「我的书架」(titleMedium SemiBold)。用 22.sp + Bold 是夹在
+                            // titleLarge(22sp default) 和 titleMedium(16sp) 之间的轻量值。
+                            Text(
+                                greeting,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground,
+                            )
                             Text(subtitle, style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
                         }
@@ -293,6 +310,7 @@ fun ShelfScreen(
                 containerColor = MaterialTheme.colorScheme.background,
                 titleContentColor = MaterialTheme.colorScheme.onBackground,
             ),
+            windowInsets = WindowInsets(0, 0, 0, 0),
             navigationIcon = {
                 if (batchMode || folderBatchMode) {
                     IconButton(onClick = {
@@ -381,105 +399,101 @@ fun ShelfScreen(
                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
                     }
                 } else {
-                // ── 顶栏布局（学 Legado）──
-                // 外面只保留 4 个高频图标：日夜间 / 排序 / 导入 / 三点 overflow。
-                // 立即整理 / 视图切换 / 搜索 全部进 overflow，避免顶栏挤成 7 个图标。
-                // 刷新按钮整体移除——后台静默刷新由 ShelfViewModel.init 触发，状态栏
-                // 角标（BookGridItem 的 lastCheckCount badge）替代过去的"红点"提示。
-                IconButton(onClick = onToggleDayNight) {
-                    Icon(
-                        if (isNightTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                // ── 顶栏 actions：胶囊容器包 3 个轻量图标 ──
+                //
+                // 视觉风格：圆角胶囊（外层 surfaceContainer/0.12 alpha）+ 3 个 Lucide 线性
+                // 图标（日夜 / 导入 / 三点）+ 两条 0.5dp 竖线分隔。极度轻量、透气、干净，
+                // 比之前 3 个独立 IconButton 视觉聚拢得多（截图 20）。
+                Row(
+                    modifier = Modifier
+                        .padding(end = 6.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
+                        .padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CapsuleAction(
+                        icon = if (isNightTheme) Lucide.Sun else Lucide.Moon,
                         contentDescription = "切换日夜间",
-                        tint = MaterialTheme.colorScheme.onBackground,
+                        onClick = onToggleDayNight,
                     )
-                }
-                val isOrganizing by viewModel.isOrganizing.collectAsStateWithLifecycle()
-                // 排序按钮已移到「我的书架」标题行，与切换视图按钮并列；
-                // 顶栏不再放排序入口，避免重复。详见 ShelfShelfTitleRow。
-                Box {
-                    IconButton(onClick = { showImportMenu = true }) {
-                        Icon(Icons.Default.Add, "导入", tint = MaterialTheme.colorScheme.onBackground)
+                    CapsuleDivider()
+                    val isOrganizing by viewModel.isOrganizing.collectAsStateWithLifecycle()
+                    Box {
+                        CapsuleAction(
+                            icon = Lucide.Plus,
+                            contentDescription = "导入",
+                            onClick = { showImportMenu = true },
+                        )
+                        DropdownMenu(expanded = showImportMenu, onDismissRequest = { showImportMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("导入文件") },
+                                leadingIcon = { Icon(Icons.Default.Description, null) },
+                                onClick = {
+                                    showImportMenu = false
+                                    filePickerLauncher.launch(arrayOf("*/*"))
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("导入文件夹") },
+                                leadingIcon = { Icon(Icons.Default.Folder, null) },
+                                onClick = { showImportMenu = false; folderPickerLauncher.launch(downloadUri) },
+                            )
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            DropdownMenuItem(
+                                text = { Text("新建分组") },
+                                leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
+                                onClick = { showImportMenu = false; showCreateGroupDialog = true },
+                            )
+                        }
                     }
-                    DropdownMenu(expanded = showImportMenu, onDismissRequest = { showImportMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("导入文件") },
-                            leadingIcon = { Icon(Icons.Default.Description, null) },
-                            onClick = {
-                                showImportMenu = false
-                                // mime 白名单在各家 OEM ROM 上不一致——同样的 .mobi 有的
-                                // 报 application/x-mobipocket-ebook，有的报 octet-stream，
-                                // 有的干脆给 text/x-markdown 之类。任何遗漏都会让 SAF picker
-                                // 灰显该文件并弹「不支持这类文件」toast。对齐 Legado 的做法：
-                                // 直接 */*，文件类型识别交给后置的 ShelfImportController.detectFormat
-                                // 按扩展名判断（mobi/azw3/epub/pdf/txt/cbz/...）。
-                                filePickerLauncher.launch(arrayOf("*/*"))
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("导入文件夹") },
-                            leadingIcon = { Icon(Icons.Default.Folder, null) },
-                            onClick = { showImportMenu = false; folderPickerLauncher.launch(downloadUri) },
-                        )
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                        DropdownMenuItem(
-                            text = { Text("新建分组") },
-                            leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
-                            onClick = { showImportMenu = false; showCreateGroupDialog = true },
-                        )
-                    }
-                }
-                // ── Overflow 三点菜单 ── 学 Legado：低频或可选项全部下沉到这里。
-                // 当前装：立即整理书架 / 切换视图 / 搜索。
-                var showOverflowMenu by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { showOverflowMenu = true }) {
-                        Icon(
-                            Icons.Default.MoreVert,
+                    CapsuleDivider()
+                    var showOverflowMenu by remember { mutableStateOf(false) }
+                    Box {
+                        CapsuleAction(
+                            icon = Lucide.EllipsisVertical,
                             contentDescription = "更多",
-                            tint = MaterialTheme.colorScheme.onBackground,
+                            onClick = { showOverflowMenu = true },
                         )
-                    }
-                    DropdownMenu(
-                        expanded = showOverflowMenu,
-                        onDismissRequest = { showOverflowMenu = false },
-                    ) {
-                        // 立即整理书架（魔棒）—— 用户笔记说这是高频操作，但顶栏拥挤
-                        // 时可以下沉。整理过程中文案改成"整理中…"并用进度色指示。
-                        DropdownMenuItem(
-                            text = { Text(if (isOrganizing) "整理中…" else "立即整理书架") },
-                            leadingIcon = {
-                                if (isOrganizing) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        strokeWidth = 2.dp,
-                                        color = MaterialTheme.colorScheme.primary,
-                                    )
-                                } else {
-                                    Icon(
-                                        Icons.Default.AutoFixHigh,
-                                        null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                    )
-                                }
-                            },
-                            enabled = !isOrganizing,
-                            onClick = {
-                                if (!isOrganizing) {
-                                    scope.launch { snackbarHost.showSnackbar("开始整理书架…") }
-                                    viewModel.organizeShelf()
-                                }
-                                showOverflowMenu = false
-                            },
-                        )
-                        // 切换视图入口已移到「我的书架」标题行，避免重复。
-                        DropdownMenuItem(
-                            text = { Text("搜索书架") },
-                            leadingIcon = { Icon(Icons.Default.Search, null) },
-                            onClick = {
-                                showSearch = true
-                                showOverflowMenu = false
-                            },
-                        )
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(if (isOrganizing) "整理中…" else "立即整理书架") },
+                                leadingIcon = {
+                                    if (isOrganizing) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Default.AutoFixHigh,
+                                            null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                },
+                                enabled = !isOrganizing,
+                                onClick = {
+                                    if (!isOrganizing) {
+                                        scope.launch { snackbarHost.showSnackbar("开始整理书架…") }
+                                        viewModel.organizeShelf()
+                                    }
+                                    showOverflowMenu = false
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("搜索书架") },
+                                leadingIcon = { Icon(Icons.Default.Search, null) },
+                                onClick = {
+                                    showSearch = true
+                                    showOverflowMenu = false
+                                },
+                            )
+                        }
                     }
                 }
                 } // end else (non-batch actions)
@@ -532,29 +546,31 @@ fun ShelfScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        // 字号从 titleLarge → titleMedium，权重 Bold → SemiBold。
-                        // 顶栏 greeting 已经是 titleLarge.bold 占主视觉位，这里若再用
-                        // 同级会喧宾夺主；降一档让标题做"分隔锚点"而不是"主标题"。
+                        // 字号 titleMedium → SemiBold；比 greeting (22sp Bold) 小一档，
+                        // 形成"主-次"层级（截图 21 视觉关系）。
                         "我的书架",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.92f),
                         modifier = Modifier.weight(1f),
                     )
-                    // 排序入口（线性矢量 Sort 图标，3 条递减线，匹配图 3）
+                    // 排序入口（独立、轻量、Lucide 线性矢量）—— 截图 21 排序按钮在胶囊外。
                     Box {
-                        IconButton(
-                            onClick = { showShelfSortMenu = true },
-                            modifier = Modifier.size(40.dp),
+                        androidx.compose.foundation.layout.Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(50))
+                                .clickable { showShelfSortMenu = true },
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Icon(
-                                Icons.AutoMirrored.Outlined.Sort,
+                            androidx.compose.material3.Icon(
+                                imageVector = Lucide.ArrowDownNarrowWide,
                                 contentDescription = "排序方式",
-                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-                                modifier = Modifier.size(22.dp),
+                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f),
+                                modifier = Modifier.size(18.dp),
                             )
                         }
                         DropdownMenu(
@@ -584,20 +600,27 @@ fun ShelfScreen(
                             }
                         }
                     }
-                    // 切换视图按钮 —— 当前 list → 显示 GridView 图标（提示"切到 grid"），反之亦然。
-                    // outlined 包没有 GridView/ViewList，用 filled + alpha 0.85 减弱视觉重量
-                    // 来贴近图 3 的线性轻量调性。
-                    IconButton(
-                        onClick = {
-                            viewModel.setShelfViewMode(if (isListView) "grid" else "list")
-                        },
-                        modifier = Modifier.size(40.dp),
+                    Spacer(Modifier.width(8.dp))
+                    // 视图切换：胶囊 segmented 容器，列表 / 网格两个按钮（截图 21）。
+                    // 选中态用 primary container 暗示，未选用 transparent；按钮间无分隔
+                    // 线（segmented 风格本身就有圆角差异区分边界）。
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
+                            .padding(3.dp),
                     ) {
-                        Icon(
-                            if (isListView) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList,
-                            contentDescription = if (isListView) "切换为网格视图" else "切换为列表视图",
-                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-                            modifier = Modifier.size(22.dp),
+                        SegmentedViewButton(
+                            icon = Lucide.List,
+                            contentDescription = "列表视图",
+                            selected = isListView,
+                            onClick = { viewModel.setShelfViewMode("list") },
+                        )
+                        SegmentedViewButton(
+                            icon = Lucide.LayoutGrid,
+                            contentDescription = "网格视图",
+                            selected = !isListView,
+                            onClick = { viewModel.setShelfViewMode("grid") },
                         )
                     }
                 }
@@ -1450,3 +1473,73 @@ private fun RenameGroupDialog(
 }
 
 // endregion
+
+// ── 顶栏胶囊 helper composables ──────────────────────────────────────────────
+//
+// 把书架顶栏右侧 3 个按钮（日夜 / 导入 / 三点）+ 「我的书架」行的视图切换包成
+// 圆角胶囊容器（截图 20 / 21 设计）。统一图标尺寸 18dp + Lucide 线性矢量风格，
+// 视觉极轻量、透气、干净。
+
+/** 胶囊容器内的单个动作按钮 —— 36dp 触发区 + 18dp 图标。 */
+@Composable
+private fun CapsuleAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    androidx.compose.foundation.layout.Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(50))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.material3.Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.78f),
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+/** 胶囊内分隔细线（0.5dp，纵向）。 */
+@Composable
+private fun CapsuleDivider() {
+    androidx.compose.foundation.layout.Box(
+        modifier = Modifier
+            .padding(vertical = 8.dp)
+            .width(0.5.dp)
+            .height(18.dp)
+            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f)),
+    )
+}
+
+/** 「我的书架」行视图切换的 segmented 按钮 —— 选中态用 surface 暗示。 */
+@Composable
+private fun SegmentedViewButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    androidx.compose.foundation.layout.Box(
+        modifier = Modifier
+            .size(width = 36.dp, height = 28.dp)
+            .clip(RoundedCornerShape(50))
+            .background(
+                if (selected) MaterialTheme.colorScheme.surface
+                else androidx.compose.ui.graphics.Color.Transparent
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.material3.Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (selected) MaterialTheme.colorScheme.onBackground
+                   else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+            modifier = Modifier.size(16.dp),
+        )
+    }
+}

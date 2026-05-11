@@ -1,13 +1,16 @@
 package com.morealm.app.ui.holiday
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -15,7 +18,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.holiday.Holiday
 
@@ -29,16 +31,25 @@ import com.morealm.app.domain.holiday.Holiday
  *  - 同时多个节日匹配时（如愚人节 ∩ 清明）只显示传入的那个；上层 [HolidayCatalog]
  *    返回 List 由 caller 选第一个
  *
+ * ## DMRG 注水过渡
+ * `messageText` 由 [com.morealm.app.presentation.holiday.HolidayPresenter] 提供，
+ * 启动 0 ms 时可能是 [Holiday.message] 兜底，后台异步算出 DMRG 个性化句后
+ * StateFlow 推新值进来。[AnimatedContent] 用 220ms 淡入 / 110ms 淡出过渡，
+ * 用户看到的是「文字呼吸式」自然替换，而不是闪动。
+ *
  * @param holiday 当天彩蛋节日
+ * @param messageText 弹窗正文；为空时回退到 [Holiday.message]
  * @param onDismiss 用户点空白 / 「知道了」时调
  * @param onPrimaryAction 「读今日故事」按钮 — 暂时复用 onDismiss，未来可跳推荐书
  */
 @Composable
 fun HolidayPopup(
     holiday: Holiday,
+    messageText: String? = null,
     onDismiss: () -> Unit,
     onPrimaryAction: () -> Unit = onDismiss,
 ) {
+    val text = messageText?.takeIf { it.isNotBlank() } ?: holiday.message
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
@@ -52,13 +63,25 @@ fun HolidayPopup(
         },
         text = {
             Column {
-                Text(
-                    holiday.message,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                AnimatedContent(
+                    targetState = text,
+                    transitionSpec = {
+                        fadeIn(
+                            animationSpec = tween(
+                                durationMillis = 220,
+                                easing = LinearOutSlowInEasing,
+                            ),
+                        ) togetherWith fadeOut(animationSpec = tween(durationMillis = 110))
+                    },
+                    label = "HolidayGreetingTransition",
+                ) { current ->
+                    Text(
+                        current,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
-                // 装饰横线 — 用 primary 微弱透明，避免空白感
                 Spacer(
                     Modifier
                         .fillMaxWidth()

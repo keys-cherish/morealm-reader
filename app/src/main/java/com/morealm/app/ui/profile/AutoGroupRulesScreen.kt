@@ -23,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
@@ -63,6 +64,7 @@ fun AutoGroupRulesScreen(
     val tags by viewModel.tags.collectAsStateWithLifecycle()
     val threshold by viewModel.threshold.collectAsStateWithLifecycle()
     val ignored by viewModel.ignored.collectAsStateWithLifecycle()
+    val enabled by viewModel.enabled.collectAsStateWithLifecycle()
     val toast by viewModel.exportToast.collectAsStateWithLifecycle()
     val pendingImport by viewModel.pendingImport.collectAsStateWithLifecycle()
 
@@ -157,10 +159,17 @@ fun AutoGroupRulesScreen(
             item("intro") {
                 IntroCard()
             }
+            item("enable_switch") {
+                EnableAutoGroupCard(
+                    enabled = enabled,
+                    onChange = viewModel::setEnabled,
+                )
+            }
             item("threshold") {
                 ThresholdCard(
                     value = threshold,
                     onChange = viewModel::setThreshold,
+                    enabled = enabled,
                 )
             }
             if (ignored.isNotEmpty()) {
@@ -169,6 +178,7 @@ fun AutoGroupRulesScreen(
                         ignoredIds = ignored,
                         tagLookup = tags,
                         onRestore = viewModel::unignoreTag,
+                        enabled = enabled,
                     )
                 }
             }
@@ -183,6 +193,7 @@ fun AutoGroupRulesScreen(
                         onKeywordsChange = { viewModel.updateKeywords(tag, it) },
                         onRename = { viewModel.renameTag(tag, it) },
                         onDelete = { viewModel.deleteUserTag(tag) },
+                        screenEnabled = enabled,
                     )
                 }
             }
@@ -202,6 +213,7 @@ fun AutoGroupRulesScreen(
                         onKeywordsChange = { viewModel.updateKeywords(tag, it) },
                         onRename = { viewModel.renameTag(tag, it) },
                         onDelete = null,  // 内置标签不可删
+                        screenEnabled = enabled,
                     )
                 }
             }
@@ -232,10 +244,63 @@ private fun IntroCard() {
     }
 }
 
+/**
+ * 自动分组总开关卡片。默认关闭 —— 关闭时被动路径（导入 / 加书架 / 详情更新）
+ * 完全不触发分类，仅「立即整理」按钮能强制走分类。下面所有规则卡片在关闭
+ * 状态下灰显，提示用户「先开了再调」。
+ */
 @Composable
-private fun ThresholdCard(value: Int, onChange: (Int) -> Unit) {
+private fun EnableAutoGroupCard(
+    enabled: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (enabled)
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+            else
+                MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onChange(!enabled) }
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (enabled) "已启用自动分组" else "未启用自动分组",
+                    fontWeight = FontWeight.Bold,
+                    color = if (enabled) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (enabled)
+                        "导入或加书时会按下方规则自动归类。点「立即整理」可立刻全量归类。"
+                    else
+                        "导入或加书不会被动分组。仍可在书架点「立即整理」临时归类。",
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(checked = enabled, onCheckedChange = onChange)
+        }
+    }
+}
+
+@Composable
+private fun ThresholdCard(value: Int, onChange: (Int) -> Unit, enabled: Boolean = true) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.45f),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
@@ -258,9 +323,11 @@ private fun ThresholdCard(value: Int, onChange: (Int) -> Unit) {
                 onValueChange = { onChange(it.toInt()) },
                 valueRange = 2f..10f,
                 steps = 7,
+                enabled = enabled,
             )
             Text(
-                "命中同一题材的书数量达到该阈值时，自动创建文件夹",
+                if (enabled) "命中同一题材的书数量达到该阈值时，自动创建文件夹"
+                else "启用自动分组后生效",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
             )
@@ -273,9 +340,12 @@ private fun IgnoredCard(
     ignoredIds: Set<String>,
     tagLookup: List<TagDefinition>,
     onRestore: (String) -> Unit,
+    enabled: Boolean = true,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.45f),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
@@ -371,6 +441,7 @@ private fun TagCard(
     onKeywordsChange: (String) -> Unit,
     onRename: (String) -> Unit,
     onDelete: (() -> Unit)? = null,
+    screenEnabled: Boolean = true,
 ) {
     var keywords by remember(tag.id, tag.keywords) { mutableStateOf(tag.keywords) }
     var name by remember(tag.id, tag.name) { mutableStateOf(tag.name) }
@@ -415,7 +486,9 @@ private fun TagCard(
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (screenEnabled) 1f else 0.45f),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {

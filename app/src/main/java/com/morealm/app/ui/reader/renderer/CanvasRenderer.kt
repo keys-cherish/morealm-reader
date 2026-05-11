@@ -673,10 +673,19 @@ fun CanvasRenderer(
             priorChapter.chapterIndex == chapterIndex &&
             priorChapter.isCompleted &&
             priorChapter.pages.isNotEmpty()
+        // 同章节但旧 chapter 还未完成（reflow 期间被快速取消重启时）—— 仍视为 reflow
+        // 路径，**不**走 placeholder 重置。否则用户快速拖 margin / 字号 slider 触发
+        // 高频 reflow 时，textChapter 会被重置为 pages=1 placeholder，下游 ChapterController
+        // 看到 chapter 被重置 → pagerState clamp → 页号丢失 → 用户感觉"间距调了无反应"
+        // 且页面位置突变。日志 MoRealm_log_20260511_212127 line 461 暴露：updateDeps
+        // pageCount=23→1 renderPC=23→1 curChIdx=null —— chapter 被重置的瞬间。
+        val sameChapterRelayout = priorChapter != null &&
+            priorChapter.chapterIndex == chapterIndex &&
+            priorChapter.pages.isNotEmpty()
 
-        if (!isRelayout) {
-            // 首次进入或跨章跳转：还没有可显示的真布局，退到 placeholder 占位。
-            // reflow 路径绝对不走这里 —— 旧 textChapter 留在 UI 上不动。
+        if (!isRelayout && !sameChapterRelayout) {
+            // 真正的首次进入 / 跨章跳转：旧 chapter 不可复用，给个 placeholder 占位。
+            // reflow 路径（同章 + 有 pages）一律走 else 分支，保留旧 chapter 不动。
             if (priorChapter == null || priorChapter.pages.isEmpty()) {
                 textChapter = placeholderChapter()
                 pageCount = 1
@@ -702,7 +711,13 @@ fun CanvasRenderer(
                     // reflow 路径下 onPageReady 不动 UI 状态：新 chapter 在 handle
                     // 内独立累积 pages，直到 onCompleted 才 atomic swap。否则会发生
                     // pages=44 → pages=1 → pages=2 ... 的回退-再增长（反弹）。
-                    if (isRelayout) return@layoutChapterAsync
+                    //
+                    // 用 sameChapterRelayout 而不是 isRelayout —— reflow 期间被快速
+                    // 取消重启时（用户狂拖 slider），priorChapter.isCompleted=false 但
+                    // 同章仍属于 reflow 场景；旧 isRelayout 判断这种情况返回 false 会
+                    // 让 onPageReady index=0 把 textChapter 写成 pages=1 incomplete，
+                    // 触发下游 pageCount clamp → 页号丢失 → 用户看到"间距调了无反应"。
+                    if (sameChapterRelayout) return@layoutChapterAsync
                     if (index == 0) {
                         textChapter = handle?.textChapter
                         // Phase 2b: 第一页就绪时立刻推回 cur，让 ScrollRenderer 尽早
@@ -1467,13 +1482,75 @@ fun CanvasRenderer(
     // 自动拿到新主题。
     val mtPrimary = MaterialTheme.colorScheme.primary
     val mtError = MaterialTheme.colorScheme.error
+
+    // ── 字号 reflow 文字重叠修复（v1.2 fix） ──
+    //
+    // 旧行为：fontSize slider 拖动 → contentPaint/titlePaint 引用立即变 → readerTheme
+    // 立即重建（remember key 在 paint 上） → PageCanvas 用新字号 paint 绘制
+    // **旧 textChapter** 的 column 位置 → 字宽变大 + column 位置（基于旧字宽算）不动
+    // → 字符相互重叠，视觉上文字糊成一片。
+    //
+    // 异步 reflow 路径（layoutChapterAsync）一直是把新章节累积到 handle.textChapter
+    // 里，等 onCompleted 才把 mutableState 切到新 chapter（atomic swap，避免 pageCount
+    // 反弹）—— 这段过渡期，UI 显示的 textChapter 还是旧的，但 paint 已经换新，故重叠。
+    //
+    // 修复：把 readerTheme 用到的 paint 与 textChapter 解耦 ——
+    //   • renderContentPaint / renderTitlePaint / renderChapterNumPaint 是独立 state
+    //   • 初始值 = 当前 paint（首次进入正确）
+    //   • LaunchedEffect(textChapter reference + isCompleted) 在 chapter 真正 swap 后
+    //     才把它们更新到 layoutInputs 当前 paint —— 此时 textChapter 的 column 位置
+    //     正是用这套 paint 排版的，字宽与 column 严格匹配。
+    //   • reflow 期间 layoutInputs.contentPaint 已经是新 paint，但 renderXxx 仍旧 →
+    //     PageContentDrawer 用旧 paint 画旧 column → 视觉冻结（字号未变化），不重叠。
+    //
+    // 与旧 paint key 的差别：日/夜切换、textColor 变化也会让 contentPaint 引用变；
+    // 此时 fontSizePx 不变，layout 不需要重排，renderXxx 直到 reflow 完成才切。但日/夜
+    // 切换路径上 currentChapterKey 里的 readerStyle.hashCode() 也会变，仍会触发一次
+    // reflow → onCompleted → renderXxx 跟切。视觉上有"几十毫秒后才生效颜色"的延迟，
+    // 但比重叠 bug 可接受得多。
+    var renderContentPaint by remember { mutableStateOf(contentPaint) }
+    var renderTitlePaint by remember { mutableStateOf(titlePaint) }
+    var renderChapterNumPaint by remember { mutableStateOf(chapterNumPaint) }
+
+    // ── 颜色与排版解耦（v1.2 字色立即生效修复） ──
+    //
+    // 问题：日/夜切换时 textColor 立即变化 → contentPaint 引用换新，但
+    // renderContentPaint（latched）要等 reflow 完成才 swap。若 readerTheme 直接用
+    // renderContentPaint，下游画字用的还是旧色 → 字色不变，必须翻页或重进才生效。
+    //
+    // 思路：渲染阶段从 latched paint 取**排版字段**（textSize / typeface /
+    // letterSpacing —— 这些只能等 reflow 完成才能换，否则字宽与 column 错位重叠），
+    // 颜色字段直接用 fresh argb（textArgb / chapterTitleColor / chapterAccentColor —— 跟随
+    // 主题立即变化）。复合方式：拷贝 latched paint 字段到新 TextPaint，再 apply fresh argb。
+    //
+    // 为什么用 copy 而非 in-place 改 renderXxxPaint.color：
+    //   • renderContentPaint 首次 swap 前 === layoutInputs.contentPaint（同对象）。
+    //     in-place 改 .color 不影响布局（layout 不读 color），但 Compose 看不到 paint
+    //     字段变化 → readerTheme 不重建 → canvasRecorder 不 invalidate → 缓存继续回放
+    //     旧色，依旧没修复。
+    //   • copy 出新对象让 paint 引用换新，PageCanvas line 180 的
+    //     `remember(titlePaint, contentPaint, chapterNumPaint, bgBitmap) { invalidate() }`
+    //     立刻触发，canvasRecorder 重录，下一帧用新色画字。
+    //   • copy 频次低（颜色或 latched paint 引用变才触发），每次 3 个 TextPaint 分配
+    //     无明显开销。
+    //
+    // 字号 reflow 期间（textArgb / chapterTitleColor / chapterAccentColor 未变）：
+    // remember key 全部不变 → readerTheme 不重建 → 仍用旧 composed paint → 字宽与
+    // 旧 chapter column 匹配，不重叠。reflow 完成 → renderXxxPaint swap → readerTheme
+    // 重建 → composed paint 用新字号 + 当前 fresh argb，路径自洽。
     val readerTheme = remember(
-        titlePaint, contentPaint, chapterNumPaint, bgArgb, bgBitmap, mtPrimary, mtError,
+        renderTitlePaint, renderContentPaint, renderChapterNumPaint, bgArgb, bgBitmap, mtPrimary, mtError,
+        textArgb, chapterTitleColor, chapterAccentColor,
     ) {
+        val composedContentPaint = TextPaint().apply { set(renderContentPaint); color = textArgb }
+        val composedTitlePaint = TextPaint().apply { set(renderTitlePaint); color = chapterTitleColor }
+        val composedChapterNumPaint = renderChapterNumPaint?.let {
+            TextPaint().apply { set(it); color = chapterAccentColor }
+        }
         ReaderRenderTheme(
-            titlePaint = titlePaint,
-            contentPaint = contentPaint,
-            chapterNumPaint = chapterNumPaint,
+            titlePaint = composedTitlePaint,
+            contentPaint = composedContentPaint,
+            chapterNumPaint = composedChapterNumPaint,
             bgArgb = bgArgb,
             bgBitmap = bgBitmap,
             selectionColor = mtPrimary.copy(alpha = 0.30f),
@@ -1481,6 +1558,18 @@ fun CanvasRenderer(
             searchResultColor = mtPrimary.copy(alpha = 0.25f),
             bookmarkColor = mtError,
         )
+    }
+
+    // textChapter 真正完成排版（reference 换新 + isCompleted=true）后，同步切 paint。
+    // key 用 chapter 自身引用 + isCompleted —— reflow 期间引用没换（仍是 priorChapter），
+    // 不触发；onCompleted 把 reference swap 到 handle.textChapter 才触发。
+    LaunchedEffect(textChapter, textChapter?.isCompleted) {
+        val ch = textChapter ?: return@LaunchedEffect
+        if (ch.isCompleted && ch.pages.isNotEmpty()) {
+            renderContentPaint = contentPaint
+            renderTitlePaint = titlePaint
+            renderChapterNumPaint = chapterNumPaint
+        }
     }
 
     // 把整段「params 构建 + UI 树」放在 LocalReaderRenderTheme 作用域内 —— 注意作用

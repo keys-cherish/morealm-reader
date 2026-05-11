@@ -629,6 +629,28 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         if (!scroller.isFinished) {
             scroller.abortAnimation()
             if (!isCancel && directionSet) {
+                // ── force-commit bitmap promotion 修复 ──
+                //
+                // 旧行为：abortAnim force-commit 只调 onPageTurnCompleted 让 ViewModel
+                // commit 到新页，但**不 promote** prev/nextBitmap 为 idleBitmap。
+                // 结果 view 自己 onDraw 时画的还是动画前的旧 idleBitmap，而 menu /
+                // PageInfoOverlay 显示的是新页数据（章节/进度/页号）—— 视觉错位：
+                // 「翻页动画中点中央触发菜单」后画面显示旧页但底栏 info 显示新页 0%，
+                // 用户报告为「进度时间消失/错乱」。
+                //
+                // 修复：与 [onAnimStop] 同步处理 —— 把当时已渲染好的对侧页 bitmap
+                // 升格成 idleBitmap，画面立刻切到与 ViewModel 一致的新页。pin 也跟
+                // onAnimStop 一致，等下次 ACTION_DOWN 解锁。
+                val settled = if (isNext) nextBitmap else prevBitmap
+                if (settled != null && !settled.isRecycled) {
+                    idleBitmap = settled
+                    idleBitmapPinned = true
+                    lastIdleKey = null
+                    AppLog.debug(
+                        "Simulation",
+                        "abortAnim force-commit promoted bitmapId=${System.identityHashCode(settled)} isNext=$isNext",
+                    )
+                }
                 AppLog.debug("Simulation", "SimulationView abortAnim force-commit isNext=$isNext")
                 onPageTurnCompleted?.invoke(isNext)
             }

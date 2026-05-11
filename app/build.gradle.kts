@@ -195,6 +195,9 @@ dependencies {
     implementation(libs.coil.compose)
     implementation("io.coil-kt:coil-svg:2.7.0")
 
+    // Icons — Lucide (线性轻量矢量，比 Material Icons 更透气)
+    implementation("com.composables:icons-lucide:1.1.0")
+
     // Media3
     implementation(libs.media3.session)
     implementation(libs.media3.exoplayer)

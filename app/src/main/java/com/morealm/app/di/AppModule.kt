@@ -631,6 +631,39 @@ private val MIGRATION_28_29 = object : Migration(28, 29) {
 }
 
 /**
+ * v29 → v30: replace_rules.excludeScope —— 反向作用域，对齐 Legado
+ * `ReplaceRule.excludeScope`，让一键搬家来的"这本书别套这条规则"配置真正生效。
+ *
+ * 设计要点：
+ * - **TEXT，nullable，无 default** —— 旧 row 升级后是 NULL，DAO 查询里
+ *   `excludeScope IS NULL OR excludeScope = ''` 等价"不排除任何书"，行为完全
+ *   不变（解释见 [ReplaceRule.excludeScope] 的 doc）。
+ * - 选 nullable 而非 `NOT NULL DEFAULT ''`：与 Legado entity 字段对齐
+ *   (`var excludeScope: String? = null`)，搬家时直接透传，避免 null/"" 双源歧义。
+ * - 不给该列加索引：scope 类查询走全表扫描即可（replace_rules 行数极少，通常 < 200）。
+ */
+private val MIGRATION_29_30 = object : Migration(29, 30) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `replace_rules` ADD COLUMN `excludeScope` TEXT")
+    }
+}
+
+/**
+ * v30 → v31：给 `books` 表加 `isComic` 列（默认 0 / false）。
+ *
+ * 漫画书标记。导入 MOBI/AZW3/CBZ 时由 ComicBookDetector 检测图片资源数 + 文本占比，
+ * 命中的本子打 isComic=true，打开时走独立的 ComicReaderScreen（LazyColumn + Coil）。
+ * 与小说渲染管线（ChapterProvider / CanvasRenderer）完全解耦，便于独立维护演进。
+ *
+ * 老书全部默认 0（== false，走原 ReaderScreen），不变动用户体验。
+ */
+private val MIGRATION_30_31 = object : Migration(30, 31) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `books` ADD COLUMN `isComic` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
  * v28 → v29 jsScript 字段曾在工作区临时存在，配套整文件 JS 书源（lifecycle 模型）的导入支持。
  * 后续放弃该方向（与 Legado 规则模型不兼容、维护负担过大），从未 commit / push 到 main。
  *
@@ -769,6 +802,8 @@ object AppModule {
                 MIGRATION_26_27,
                 MIGRATION_27_28,
                 MIGRATION_28_29,
+                MIGRATION_29_30,
+                MIGRATION_30_31,
             )
             // 不开 fallbackToDestructiveMigrationFrom。
             //

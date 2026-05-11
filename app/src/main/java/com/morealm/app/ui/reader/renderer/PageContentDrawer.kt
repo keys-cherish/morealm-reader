@@ -611,9 +611,8 @@ fun predecodePageImages(page: TextPage) {
         if (!line.isImage) continue
         for (col in line.columns) {
             if (col is ImageColumn) {
-                val path = col.src.removePrefix("file://")
                 val targetWidth = (col.end - col.start).toInt().coerceAtLeast(1)
-                ImageCache.get(path, targetWidth)
+                ImageCache.get(col.src, targetWidth)
             }
         }
     }
@@ -860,9 +859,8 @@ internal fun drawImageColumn(
     col: ImageColumn,
     line: TextLine,
 ) {
-    val path = col.src.removePrefix("file://")
     val targetWidth = (col.end - col.start).toInt().coerceAtLeast(1)
-    val bitmap = ImageCache.get(path, targetWidth) ?: return
+    val bitmap = ImageCache.get(col.src, targetWidth) ?: return
     // Maintain aspect ratio within the allocated slot (ported from Legado)
     val slotW = col.end - col.start
     val slotH = line.lineBottom - line.lineTop

@@ -1,6 +1,7 @@
 ﻿package com.morealm.app.ui.navigation
 
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -129,10 +130,12 @@ fun MoRealmNavHost(
                 val holidayPresenter: com.morealm.app.presentation.holiday.HolidayPresenter =
                     hiltViewModel()
                 val activeHoliday by holidayPresenter.activeHoliday.collectAsStateWithLifecycle()
+                val holidayGreeting by holidayPresenter.greetingText.collectAsStateWithLifecycle()
                 LaunchedEffect(Unit) { holidayPresenter.checkOnce() }
                 activeHoliday?.let { h ->
                     com.morealm.app.ui.holiday.HolidayPopup(
                         holiday = h,
+                        messageText = holidayGreeting,
                         onDismiss = { holidayPresenter.dismiss() },
                     )
                 }
@@ -496,22 +499,48 @@ fun MoRealmNavHost(
                         }
                     }
                 ) {
-                    ReaderScreen(
-                        bookId = bookId,
-                        onBack = { navController.safePopBackStackOrHome() },
-                        onNavigateToBook = { targetBookId ->
-                            navController.navigateToReader(targetBookId) {
-                                popUpTo("reader/${Uri.encode(bookId)}") { inclusive = true }
-                            }
-                        },
-                        onNavigateToReplaceRule = { ruleId ->
-                            navController.safeNavigate("replace_rules?editId=$ruleId")
-                        },
-                        onNavigateToFontManager = {
-                            navController.safeNavigate("font_manager")
-                        },
-                        themeViewModel = themeViewModel,
-                    )
+                    // ── 漫画 / 小说路由分流 ──
+                    //
+                    // 让 `reader/{bookId}` 路由内部根据 Book.isComic 决定渲染哪个屏，
+                    // 调用方（书架 / 搜索 / 详情等）一律走 navigateToReader 不需要关心。
+                    // [BookFormatProbeViewModel] 异步查 DB，加载期间显示空黑屏占位，
+                    // 拿到结果后路由到 ComicReaderScreen 或 ReaderScreen。
+                    val probe: com.morealm.app.presentation.reader.BookFormatProbeViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+                    val probeResult by probe.result.collectAsStateWithLifecycle()
+                    when (probeResult) {
+                        com.morealm.app.presentation.reader.BookFormatProbeViewModel.Result.Comic -> {
+                            com.morealm.app.ui.reader.comic.ComicReaderScreen(
+                                onBack = { navController.safePopBackStackOrHome() },
+                            )
+                        }
+                        com.morealm.app.presentation.reader.BookFormatProbeViewModel.Result.Novel,
+                        com.morealm.app.presentation.reader.BookFormatProbeViewModel.Result.NotFound -> {
+                            ReaderScreen(
+                                bookId = bookId,
+                                onBack = { navController.safePopBackStackOrHome() },
+                                onNavigateToBook = { targetBookId ->
+                                    navController.navigateToReader(targetBookId) {
+                                        popUpTo("reader/${Uri.encode(bookId)}") { inclusive = true }
+                                    }
+                                },
+                                onNavigateToReplaceRule = { ruleId ->
+                                    navController.safeNavigate("replace_rules?editId=$ruleId")
+                                },
+                                onNavigateToFontManager = {
+                                    navController.safeNavigate("font_manager")
+                                },
+                                themeViewModel = themeViewModel,
+                            )
+                        }
+                        null -> {
+                            // 加载中：纯黑占位，几十毫秒内 probe 会出结果
+                            androidx.compose.foundation.layout.Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(androidx.compose.ui.graphics.Color.Black),
+                            )
+                        }
+                    }
                 }
             }
 
