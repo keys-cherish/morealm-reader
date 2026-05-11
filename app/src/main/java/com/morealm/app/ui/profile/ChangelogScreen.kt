@@ -193,10 +193,43 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.2",
+        date = "2026-05-10",
+        title = "视觉重设计 · UI 全面焕新",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            // ── 新增 ──
+            ChangelogItem(ChangeType.NEW, "首页书架「我的书架」标题行：在「继续阅读」下方左标题右双按钮（排序 + 切换视图），与顶栏 greeting 形成清晰视觉分隔"),
+            ChangelogItem(ChangeType.NEW, "顶栏副文本显示今日阅读时长：「今日已阅读 X 小时 Y 分钟」替代原「享受阅读时光」，数据来自 ReadStatsRepository"),
+            ChangelogItem(ChangeType.NEW, "搜索结果来源标签 chip 化：文本源 primary 容器、非文本源 error 容器，与 SourceTag 视觉系统统一"),
+            ChangelogItem(ChangeType.NEW, "竖排版 Phase 1：排版引擎层加入 Axis 抽象 + vertical 渲染目录骨架；EpubParser 保留 <rt> 振假名 + readingDirection 偏好（UI 入口后续版本接通）"),
+
+            // ── 视觉重设计 ──
+            ChangelogItem(ChangeType.IMPROVE, "进度条全新设计：底部进度条填充段从「嵌入式」（左圆右直）改为「独立胶囊」（两端圆角）+ 横向渐变（亮紫 → primary），凸出立体光感"),
+            ChangelogItem(ChangeType.IMPROVE, "Tab 栏（PillNavigationBar）全新设计：半透明胶囊 + 顶部细高光 + 软阴影 + spring 滑动 dot 指示器；选中 icon glow + 弹性按压（scale 0.92 ↔ 1.0）"),
+            ChangelogItem(ChangeType.IMPROVE, "日志屏 UI 全新设计：每条第一行重排为 Level chip + Tag + Time（Mono 右对齐）；WARN 及以上 message 染 level 色；删除无用「详细日志记录」开关"),
+            ChangelogItem(ChangeType.IMPROVE, "阅读控制栏重排：进度条上、按钮下；按钮容器 32dp → 44dp（接近 Material 3 标准触摸目标 48dp）；章节标题与进度去除分隔符「·」"),
+            ChangelogItem(ChangeType.IMPROVE, "顶栏 / overflow 按钮整理：排序按钮从顶栏移到「我的书架」标题行；overflow 内的「切换视图」也移到标题行；同一动作单一入口"),
+
+            // ── 性能 ──
+            ChangelogItem(ChangeType.IMPROVE, "PillNavigationBar 动画状态读取从顶层 by 委托改为 lambda 内读 State —— 每次动画 invalidation 只触发 placement / render，跳过 composition + measure + layout"),
+            ChangelogItem(ChangeType.IMPROVE, "PillNavigationBar dot glow / icon glow 的 Brush 用 drawWithCache 缓存到 size 变化前，60fps 期间 0 次 GC"),
+
+            // ── 修复 ──
+            ChangelogItem(ChangeType.FIX, "滚动模式当前页号实时更新：底部 InfoBar 之前硬编码 pageIndex=0 / pageCount=0 全 fallback 到 chapter_progress；现在从 LazyScrollSection 首段 charPos 反查 TextChapter.getPageIndexByCharIndex 60fps 实时更新"),
+            ChangelogItem(ChangeType.FIX, "音量键翻页未生效修复"),
+            ChangelogItem(ChangeType.FIX, "仿真翻页快翻「走三步退一步」修复（仿真快翻 base race）"),
+            ChangelogItem(ChangeType.FIX, "个别书源闪退修复（P0 书源补齐 + AnalyzeRule WebJs 模式接通 BackstageWebView）"),
+            ChangelogItem(ChangeType.FIX, "首装时主题跟随系统暗色态"),
+            ChangelogItem(ChangeType.FIX, "拖动滑块时菜单栏自己消失修复（onSeekFullBook 内补 hideControls）"),
+            ChangelogItem(ChangeType.FIX, "拖动滑块改 conflate + 单 worker 串行，避免章预览风暴"),
+            ChangelogItem(ChangeType.FIX, "注 / 批 SVG 超大字 + 拖动期间 sliderValue / thumb 分裂修复"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.1",
         date = "2026-05-07",
         title = "稳态优化 · 进度条 / 边距 / 繁简 / 搜索",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             // ── 阅读器·进度与滑块 ──
             ChangelogItem(ChangeType.FIX, "拖底部进度条松手后 thumb 不再先回弹再恢复（seek preview 延迟到 ViewModel 真值流到再清，覆盖本地 + 网络章节加载窗口）"),
