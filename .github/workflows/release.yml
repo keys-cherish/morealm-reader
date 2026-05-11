@@ -110,14 +110,22 @@ jobs:
       # ── 构建签名 release APK ──
       - name: 构建 Release APK
         env:
-          # build.gradle.kts releaseSigningValue() 顺序：gradleProperty > local.properties > env
-          # CI 上 gradleProperty 与 local.properties 都没有，所以走 env
+          # build.gradle.kts releaseSigningValue() / qqGroupId 顺序均为
+          # gradleProperty > local.properties > env。CI 上前两者都没有，所以走 env。
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          # 注入到 BuildConfig.QQ_GROUP_ID（详见 app/build.gradle.kts qqGroupId 注释）。
+          # 缺则发出去的 release 在「关于墨境 → 联系我们」里看不到群号，相当于无效发版，故 fail-fast。
+          QQ_GROUP_ID: ${{ secrets.QQ_GROUP_ID }}
         run: |
           if [ -z "$RELEASE_STORE_PASSWORD" ] || [ -z "$RELEASE_KEY_ALIAS" ] || [ -z "$RELEASE_KEY_PASSWORD" ]; then
             echo "::error::缺少签名相关 secret（RELEASE_STORE_PASSWORD / RELEASE_KEY_ALIAS / RELEASE_KEY_PASSWORD）"
+            exit 1
+          fi
+          if [ -z "$QQ_GROUP_ID" ]; then
+            echo "::error::缺少 QQ_GROUP_ID secret —— 不带群号的 release 视为无效发版"
+            echo "::error::在 GitHub 仓库 Settings → Secrets and variables → Actions 配置 QQ_GROUP_ID"
             exit 1
           fi
           ./gradlew assembleRelease --no-daemon
