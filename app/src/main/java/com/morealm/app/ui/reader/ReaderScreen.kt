@@ -290,12 +290,15 @@ fun ReaderScreen(
 
     fun openWebSearch(query: String) {
         if (query.isBlank()) return
-        selectionWebPanel = "查词" to "https://www.google.com/search?q=${Uri.encode(query.trim())}"
+        // 用 Bing 中文词典（cn.bing.com 国内可访问），中英文混合查询都给词典 + 网页两种结果。
+        // 之前用 google.com/search 在国内被墙 → WebView 白屏（用户报告截图 16）。
+        selectionWebPanel = "查词" to "https://cn.bing.com/dict/search?q=${Uri.encode(query.trim())}"
     }
 
     fun openTranslate(text: String) {
         if (text.isBlank()) return
-        selectionWebPanel = "翻译" to "https://translate.google.com/?sl=auto&tl=zh-CN&text=${Uri.encode(text.trim())}&op=translate"
+        // 用 Bing Translator（cn.bing.com 国内可访问）—— translate.google.com 国内被墙。
+        selectionWebPanel = "翻译" to "https://cn.bing.com/translator?from=auto&to=zh-Hans&text=${Uri.encode(text.trim())}"
     }
 
     // Export file picker
@@ -1393,7 +1396,7 @@ private fun ChapterBookmarkPanel(
                                 ) {
                                     Text(
                                         "《${book!!.title}》整本书",
-                                        style = MaterialTheme.typography.bodySmall,
+                                        style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.primary,
                                         fontWeight = FontWeight.Bold,
                                         maxLines = 1,
@@ -1429,9 +1432,9 @@ private fun ChapterBookmarkPanel(
                                     // onSurface.copy(0.6) 的中性灰让用户看着像不可点。
                                     Text(
                                         ch.displayTitle(book),
-                                        style = MaterialTheme.typography.bodySmall,
+                                        style = MaterialTheme.typography.bodyMedium,
                                         color = if (isCurrent) MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
                                         fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -1685,7 +1688,33 @@ private fun SelectionWebPanel(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
                         WebView(ctx).apply {
-                            webViewClient = WebViewClient()
+                            // 移动版 UA — 默认 WebView UA 部分网站会返回桌面版页面，渲染溢出。
+                            // 用 Android Chrome UA，bing 等会返回更紧凑的移动版排版。
+                            settings.userAgentString =
+                                "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 " +
+                                    "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                            // 加载错误兜底 —— 之前用 google.com 在国内被墙时 WebView
+                            // 静默白屏（截图 16）。现在改成 bing 国内可访问，但仍可能遇到
+                            // 偶发网络失败，给用户一个明确的错误提示而不是白屏。
+                            webViewClient = object : WebViewClient() {
+                                override fun onReceivedError(
+                                    view: WebView,
+                                    request: android.webkit.WebResourceRequest?,
+                                    error: android.webkit.WebResourceError?,
+                                ) {
+                                    if (request?.isForMainFrame != true) return
+                                    val msg = error?.description?.toString() ?: "加载失败"
+                                    view.loadData(
+                                        """<html><body style="padding:24px;font-family:sans-serif;color:#444">
+                                        <h3>加载失败</h3>
+                                        <p>$msg</p>
+                                        <p style="color:#888;font-size:12px">检查网络后重试，或选中其他文字再试。</p>
+                                        </body></html>""".trimIndent(),
+                                        "text/html",
+                                        "UTF-8",
+                                    )
+                                }
+                            }
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
                             settings.loadWithOverviewMode = true

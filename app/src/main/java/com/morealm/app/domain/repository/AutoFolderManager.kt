@@ -70,26 +70,32 @@ class AutoFolderManager @Inject constructor(
             ?: return null
         val tagDef = tagRepo.getTag(primaryTag.tagId) ?: return null
 
-        // USER tags 直接走 v17 迁移建好的同 id 分组（不需要 promotion）。
-        // GENRE / SOURCE 都走下方 promotion 路径，差别只在 threshold —— SOURCE
-        // 用 1 表示「单本就给它建 source 文件夹」，因为同 source 的书天然
-        // 应该聚一起，不存在 GENRE 那种「凑够 3 本才像真兴趣」的语义。
-        if (tagDef.type == TagType.USER) {
-            return tagDef.id.takeIf { groupRepo.getById(it) != null }
-        }
+        // ── 阈值守门：最高优先级 ──
+        //
+        // 这是 v1.2 bug 修复 —— 之前的实现先检查「已有同 id 的文件夹？有就归过去」，
+        // 再做阈值。结果只要文件夹被任何方式创建过一次（手建 / migration / 之前
+        // 在低阈值时自动建），之后哪怕只有 1 本同 tag 书也会被归入，阈值形同虚设。
+        //
+        // 现在：先算 peers 数量（同 tag 的现有 AUTO 标记书 + 当前书），不达阈值
+        // 任何路径都 return null。SOURCE 标签历史豁免（effectiveThreshold=1）保留，
+        // 因为「来自同一书源就自动聚」是无歧义的用户预期，不像 GENRE 那种"3 本才像兴趣"。
         val effectiveThreshold = if (tagDef.type == TagType.SOURCE) 1 else threshold
-
-        // 1. Folder already exists for this genre? Use it.
-        existingGroupForGenre(tagDef)?.let { return it.id }
-
-        // 2. User ignored this genre? Don't create.
-        val ignored = prefs.getAutoFolderIgnored()
-        if (tagDef.id in ignored) return null
-
-        // 3. Threshold check — count AUTO-tagged books for this genre across the shelf.
         val peers = tagRepo.getBookIdsByTag(tagDef.id).toMutableSet()
         peers.add(book.id) // include the book that triggered this call
         if (peers.size < effectiveThreshold) return null
+
+        // USER tags 直接走 v17 迁移建好的同 id 分组（不需要 promotion）。
+        // GENRE / SOURCE 都走下方 promotion 路径。USER 在通过阈值前不归。
+        if (tagDef.type == TagType.USER) {
+            return tagDef.id.takeIf { groupRepo.getById(it) != null }
+        }
+
+        // 已经存在的 auto:tagId 文件夹（含同名手建）直接复用。
+        existingGroupForGenre(tagDef)?.let { return it.id }
+
+        // User ignored this genre? Don't create.
+        val ignored = prefs.getAutoFolderIgnored()
+        if (tagDef.id in ignored) return null
 
         // 4. Create the auto-folder.
         val groupId = "auto:${tagDef.id}"

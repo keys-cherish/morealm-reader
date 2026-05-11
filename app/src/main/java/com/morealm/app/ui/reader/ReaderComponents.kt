@@ -660,7 +660,7 @@ fun ReaderControlBar(
  *   - 显式传入避免假如 valueRange 不是 0..1 时 fraction 计算分歧
  */
 @Composable
-private fun EmbeddedPercentTrack(
+internal fun EmbeddedPercentTrack(
     fraction: Float,
     text: String,
     isDragging: Boolean,

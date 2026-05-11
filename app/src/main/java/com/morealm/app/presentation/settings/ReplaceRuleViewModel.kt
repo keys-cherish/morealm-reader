@@ -249,9 +249,8 @@ private data class LegadoReplaceRule(
         // Legado ms is Long; MoRealm timeoutMs is Int. Clamp to a sane range
         // so a stray "timeoutMillisecond": 999999 doesn't overflow Int.
         timeoutMs = timeoutMillisecond.coerceIn(500L, 30_000L).toInt(),
-        // Note: `group` and `excludeScope` are dropped — MoRealm has neither
-        // field today. Document this in the user-facing help text rather than
-        // pretending to support them.
+        kind = if (replacement.isBlank()) ReplaceRule.KIND_PURIFY else ReplaceRule.KIND_GENERAL,
+        excludeScope = excludeScope,
     )
 }
 
@@ -313,6 +312,7 @@ data class ReplaceRuleExportData(
     val timeoutMs: Int = 3000,
     /** kind 默认 0 (GENERAL)，让旧版本导出的 bundle 在新版本导入时仍能解析。 */
     val kind: Int = ReplaceRule.KIND_GENERAL,
+    val excludeScope: String? = null,
 )
 
 private fun ReplaceRule.toExportData(): ReplaceRuleExportData = ReplaceRuleExportData(
@@ -329,6 +329,7 @@ private fun ReplaceRule.toExportData(): ReplaceRuleExportData = ReplaceRuleExpor
     sortOrder = sortOrder,
     timeoutMs = timeoutMs,
     kind = kind,
+    excludeScope = excludeScope,
 )
 
 private fun ReplaceRuleExportData.toEntity(): ReplaceRule = ReplaceRule(
@@ -345,5 +346,6 @@ private fun ReplaceRuleExportData.toEntity(): ReplaceRule = ReplaceRule(
     sortOrder = sortOrder,
     timeoutMs = timeoutMs,
     kind = kind,
+    excludeScope = excludeScope,
 )
 // endregion

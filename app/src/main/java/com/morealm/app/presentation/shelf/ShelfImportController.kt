@@ -46,15 +46,48 @@ class ShelfImportController(
         scope.launch(Dispatchers.IO) {
             tryGrantPermission(uri)
 
-            val docFile = DocumentFile.fromSingleUri(context, uri) ?: return@launch
+            val docFile = DocumentFile.fromSingleUri(context, uri)
+            if (docFile == null) {
+                _folderImportState.value = FolderImportState(message = "无法读取所选文件")
+                return@launch
+            }
             val name = docFile.name ?: "Unknown"
+            val ext = name.substringAfterLast('.', "").lowercase()
             val format = detectFormat(name)
-            if (format == BookFormat.UNKNOWN) return@launch AppLog.warn("Import", "Unsupported format: $name")
-            if (bookRepo.findByLocalPath(uri.toString()) != null) return@launch AppLog.info("Import", "Already imported: $name")
+            if (format == BookFormat.UNKNOWN) {
+                _folderImportState.value = FolderImportState(
+                    message = if (ext.isNotEmpty()) "暂不支持的格式：$ext" else "暂不支持的格式",
+                )
+                AppLog.warn("Import", "Unsupported format: $name")
+                return@launch
+            }
+            if (bookRepo.findByLocalPath(uri.toString()) != null) {
+                _folderImportState.value = FolderImportState(
+                    message = "已在书架：$name",
+                )
+                AppLog.info("Import", "Already imported: $name")
+                return@launch
+            }
 
-            val book = applyAutoGroup(buildBookFromFile(uri, name, format))
-            bookRepo.insert(book)
-            AppLog.info("Import", "Imported: ${book.title} ($format)")
+            _folderImportState.value = FolderImportState(
+                running = true,
+                message = "正在导入：$name",
+            )
+            try {
+                val book = applyAutoGroup(buildBookFromFile(uri, name, format))
+                bookRepo.insert(book)
+                _folderImportState.value = FolderImportState(
+                    importedCount = 1,
+                    message = "已导入：${book.title}",
+                )
+                AppLog.info("Import", "Imported: ${book.title} ($format)")
+            } catch (e: Exception) {
+                _folderImportState.value = FolderImportState(
+                    message = "导入失败：${e.message?.take(40) ?: name}",
+                    error = e.message,
+                )
+                AppLog.error("Import", "Single import failed: ${e.message}", e)
+            }
         }
     }
 
@@ -214,6 +247,9 @@ class ShelfImportController(
                     BookFormat.PDF -> pb.book.copy(
                         coverUrl = PdfParser.extractCover(context, pb.file.uri),
                     )
+                    BookFormat.MOBI, BookFormat.AZW3 -> pb.book.copy(
+                        coverUrl = com.morealm.app.domain.parser.MobiParser.extractCover(context, pb.file.uri),
+                    )
                     else -> continue
                 }
                 bookRepo.update(applyAutoGroup(updated))
@@ -264,6 +300,16 @@ class ShelfImportController(
                 Book(id = UUID.randomUUID().toString(), title = baseName, author = author,
                     localPath = uri.toString(), format = format,
                     coverUrl = cover, addedAt = System.currentTimeMillis())
+            }
+            BookFormat.MOBI, BookFormat.AZW3 -> {
+                val cover = try { com.morealm.app.domain.parser.MobiParser.extractCover(context, uri) } catch (_: Exception) { null }
+                val isComic = try {
+                    com.morealm.app.domain.parser.ComicBookDetector.detect(context, uri, format)
+                } catch (_: Exception) { false }
+                Book(id = UUID.randomUUID().toString(), title = baseName, author = author,
+                    localPath = uri.toString(), format = format,
+                    coverUrl = cover, addedAt = System.currentTimeMillis(),
+                    isComic = isComic)
             }
             else -> Book(id = UUID.randomUUID().toString(), title = baseName, author = author,
                 localPath = uri.toString(), format = format, addedAt = System.currentTimeMillis())

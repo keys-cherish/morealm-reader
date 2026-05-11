@@ -81,6 +81,15 @@ data class Book(
     val tagsAssignedBy: String = "AUTO",
     /** When true, TagResolver never overwrites this book's tags or folderId. */
     val groupLocked: Boolean = false,
+
+    // ── Comic mode (since v31) ──
+    /**
+     * 漫画书标记。导入 MOBI/AZW3/CBZ 时由 [com.morealm.app.domain.parser.ComicBookDetector]
+     * 判断（图片资源数 ≥ 阈值 且 文本极少），打开时走独立 [com.morealm.app.ui.reader.comic.ComicReaderScreen]
+     * 渲染管线（LazyColumn + Coil，无 padding 无间距，进度按图片数）—— 与小说 ChapterProvider
+     * 文本管线完全解耦，便于独立维护演进。
+     */
+    val isComic: Boolean = false,
 )
 
 @Serializable

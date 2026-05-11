@@ -152,6 +152,7 @@ fun SearchScreen(
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = androidx.compose.ui.graphics.Color.Transparent,
             ),
+            windowInsets = WindowInsets(0, 0, 0, 0),
         )
 
         Spacer(Modifier.height(4.dp))

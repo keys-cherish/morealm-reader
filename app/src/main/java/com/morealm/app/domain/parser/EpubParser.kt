@@ -167,18 +167,47 @@ object EpubParser {
     private fun parseTocRefs(
         bookId: String, refs: List<TOCReference>, chapters: MutableList<BookChapter>,
     ) {
-        for (ref in refs) {
-            if (ref.resource != null) {
-                chapters.add(BookChapter(
-                    id = "", bookId = bookId, index = 0,
-                    title = ref.title.orEmpty().ifBlank { "未命名章节" },
-                    url = ref.completeHref,
-                ))
-            }
-            if (!ref.children.isNullOrEmpty()) {
-                parseTocRefs(bookId, ref.children, chapters)
+        // ── 父+子 navPoint 去重 ──
+        //
+        // EPUB TOC 常见结构：
+        //   <navPoint title="第三章 新的起飞" src="ch3.xhtml#sec_3">
+        //     <navPoint title="第三章" src="ch3.xhtml#sec_3"/>
+        //     <navPoint title="新的起飞" src="ch3.xhtml#sec_3a"/>
+        //   </navPoint>
+        // 老逻辑递归把 3 个全 add → 用户目录看到「第三章 新的起飞 / 第三章 / 新的起飞」
+        // 三条并列（截图 12 报告的 bug）。
+        //
+        // 修法：按 completeHref（含 fragment）去重，重复时**保留 title 最长**的那条 ——
+        // 通常父 navPoint title 是「第三章 新的起飞」（最完整描述），子是单独词组。
+        // 全局 map 跨整个递归共享，确保所有层级一起去重。
+        val seenByHref = HashMap<String, Int>() // href → index in chapters
+        fun addOrMerge(title: String, href: String) {
+            val existingIdx = seenByHref[href]
+            if (existingIdx != null) {
+                val ex = chapters[existingIdx]
+                if (title.length > ex.title.length) {
+                    chapters[existingIdx] = ex.copy(title = title.ifBlank { ex.title })
+                }
+            } else {
+                seenByHref[href] = chapters.size
+                chapters.add(
+                    BookChapter(
+                        id = "", bookId = bookId, index = 0,
+                        title = title.ifBlank { "未命名章节" },
+                        url = href,
+                    )
+                )
             }
         }
+        fun recurse(rs: List<TOCReference>) {
+            for (ref in rs) {
+                if (ref.resource != null) {
+                    addOrMerge(ref.title.orEmpty(), ref.completeHref)
+                }
+                if (!ref.children.isNullOrEmpty()) recurse(ref.children)
+            }
+        }
+        recurse(refs)
     }
 
     private fun tryExtractTitle(res: Resource): String? {
@@ -287,22 +316,66 @@ object EpubParser {
 
         AppLog.debug("EpubParser", "parseBody href=${res.href} imgs=${body.select("img").size} html=${body.outerHtml().take(300)}")
 
-        var html = body.outerHtml()
-        if (!startFragment.isNullOrBlank()) {
-            body.getElementById(startFragment)?.outerHtml()?.let { tag ->
-                val tagStart = tag.substringBefore("\n")
-                html = tagStart + html.substringAfter(tagStart)
-            }
-        }
-        if (!endFragment.isNullOrBlank() && endFragment != startFragment) {
-            body.getElementById(endFragment)?.outerHtml()?.let { tag ->
-                val tagStart = tag.substringBefore("\n")
-                html = html.substringBefore(tagStart)
-            }
-        }
-        if (html != body.outerHtml()) body = Jsoup.parse(html).body()
+        // ── Fragment 切割（DOM walk，替代脆弱的字符串切割） ──
+        //
+        // 老实现用 body.outerHtml() + substringBefore/After 来切 fragment 边界：
+        //   - 拿 startFragment 元素的 outerHtml 第一行作为 anchor 字符串
+        //   - 在整个 body html 中找该字符串切前/后
+        // 问题：当 anchor 字符串不唯一（同 class/同标签前缀多次出现），或者元素本身
+        // 没有换行（一行内 inline），切割会**错位或完全失败**。失败时整段 html
+        // 原样返回 → 同一 xhtml 内有多个 fragment 章节时，**每个都显示整文相同内容**
+        // —— 用户截图 13/14 报告「同一章不同节都是同一内容 + 反复加载」的根因。
+        //
+        // 新实现：基于 body 的直接子节点边界，按 DOM 文档顺序裁切：
+        //   1. 把 fragment id 元素往上 climb 到 body 的直接子节点（"anchor child"）
+        //   2. 收集 [startAnchor .. endAnchor) 之间的子节点，深拷贝到新 body
+        //   3. fragment 没找到时保守返回整 body（不报错）—— 个别 EPUB 把 anchor 放在
+        //      <a name="..."> 而不是 id，与 getElementById 不匹配，宁可显示重复内容
+        //      也好过显示空白
+        return sliceBodyByFragments(body, startFragment, endFragment)
+    }
 
-        return body
+    /**
+     * 按 fragment id 裁切 body 的子节点范围。详见 [parseBody] 的注释。
+     */
+    private fun sliceBodyByFragments(
+        body: org.jsoup.nodes.Element,
+        startFragment: String?,
+        endFragment: String?,
+    ): org.jsoup.nodes.Element {
+        if (startFragment.isNullOrBlank() && endFragment.isNullOrBlank()) return body
+        val startEl = startFragment?.takeIf { it.isNotBlank() }?.let { body.getElementById(it) }
+        val endEl = endFragment?.takeIf { it.isNotBlank() && it != startFragment }
+            ?.let { body.getElementById(it) }
+        // 两个 fragment 都解析失败 → 保守返回整 body
+        if (startEl == null && endEl == null && (startFragment != null || endFragment != null)) {
+            return body
+        }
+        val startAnchor = startEl?.let { ancestorChildOf(body, it) }
+        val endAnchor = endEl?.let { ancestorChildOf(body, it) }
+        val newBody = org.jsoup.nodes.Element("body")
+        // copy body 上的 class / lang 等属性，避免下游 CSS 失配
+        for (attr in body.attributes()) newBody.attr(attr.key, attr.value)
+
+        var include = (startAnchor == null)
+        for (child in body.children()) {
+            if (!include && child === startAnchor) include = true
+            if (include && child === endAnchor) break
+            if (include) newBody.appendChild(child.clone())
+        }
+        // 如果 newBody 是空的（startAnchor 在树深处但 climb 没找到合法子节点），
+        // 回退到 body 整段；避免章节渲染成空白。
+        return if (newBody.children().isEmpty()) body else newBody
+    }
+
+    /** 把 [el] 沿 parent 链 climb 到 [body] 的直接子节点；找不到返回 null。 */
+    private fun ancestorChildOf(
+        body: org.jsoup.nodes.Element,
+        el: org.jsoup.nodes.Element,
+    ): org.jsoup.nodes.Element? {
+        var cur: org.jsoup.nodes.Element? = el
+        while (cur != null && cur.parent() !== body) cur = cur.parent()
+        return cur
     }
 
     private fun processContent(

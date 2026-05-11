@@ -621,12 +621,21 @@ class ChapterProvider(
     ): Pair<Int, Float> {
         var absStartX = x
         var durY = y
-        // Read actual image dimensions for correct aspect ratio (ported from Legado)
-        val path = src.removePrefix("file://")
-        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path, opts)
-        val intrinsicW = opts.outWidth
-        val intrinsicH = opts.outHeight
+        // Read actual image dimensions for correct aspect ratio
+        val intrinsicW: Int
+        val intrinsicH: Int
+        if (src.startsWith("mobi-img://")) {
+            // mobi-img:// 协议：通过 ImageCache 按需解码拿 Bitmap dims
+            val bmp = ImageCache.get(src, visibleWidth)
+            intrinsicW = bmp?.width ?: 0
+            intrinsicH = bmp?.height ?: 0
+        } else {
+            val path = src.removePrefix("file://")
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, opts)
+            intrinsicW = opts.outWidth
+            intrinsicH = opts.outHeight
+        }
         var imgWidth: Int
         var imgHeight: Int
         if (intrinsicW > 0 && intrinsicH > 0) {

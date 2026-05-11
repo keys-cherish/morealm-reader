@@ -48,8 +48,15 @@ data class ParagraphTextPos(
  * **字符偏移**（精确到字符），而 bookmarkToAnchor 返回**行偏移**（精确到行内首字符）。
  * 选区/TTS 高亮需要字符级精度，bookmark 跳转用行级即可。
  *
- * @return null 如果 paragraphs 不含目标章 —— 调用方应等窗口加载完再重试，或退化到
- *         (chapterIndex, paragraphNum=1, charOffset=0)。
+ * **LOADING 占位段会被跳过**：`ChapterWindowSource` 在 resetTo / appendNext / prependPrev
+ * 期间会先 `paragraphs.add(loadingScrollParagraph(...))` 撑场子（其 paragraphNum=0、
+ * firstChapterPosition=0），等到 fetch+layout 完成才用真实段替换。如果不跳过，扫描会
+ * 把它当作"最末命中"返回，调用方拿 paragraphNum=0 构造 [ParagraphTextPos] 会触发
+ * `require(paragraphNum >= 1)` 崩溃。此函数语义上 LOADING 不算"目标章实段就绪"，
+ * 返回 null 让调用方等待真实段加载完再重试。
+ *
+ * @return null 如果 paragraphs 不含目标章实段（含"仅有 LOADING 占位"的瞬态）—— 调用方
+ *         应等窗口加载完再重试，或退化到 (chapterIndex, paragraphNum=1, charOffset=0)。
  */
 fun chapterPositionToParagraphPos(
     paragraphs: List<ScrollParagraph>,
@@ -64,6 +71,9 @@ fun chapterPositionToParagraphPos(
             if (hit != null) break
             continue
         }
+        // LOADING 占位（paragraphNum=0）不是真实排版段，跳过。
+        // 见函数文档「LOADING 占位段会被跳过」段说明。
+        if (p.isLoadingPlaceholder) continue
         if (p.firstChapterPosition <= chapterPosition) {
             hit = p
         } else {

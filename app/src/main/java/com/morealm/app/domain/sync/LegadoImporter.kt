@@ -904,8 +904,9 @@ object LegadoImporter {
      * - `isRegex` → `isRegex`（字段名一致）
      * - `timeoutMillisecond` → `timeoutMs`（注意 Long → Int，截断到 Int.MAX_VALUE）
      * - `sortOrder` (Legado 列名是 sortOrder，但字段名 `order`) → `sortOrder`
-     * - `kind` MoRealm 有 0/1 两类（GENERAL / PURIFY），Legado 没有这层概念 →
-     *   全部当 GENERAL；用户后续可以在替换规则页改
+     * - `excludeScope` → `excludeScope`（直接透传，保留 Legado 的换行分隔多值格式）
+     * - `kind` 智能推断：replacement 为空 → KIND_PURIFY（净化删除）；否则 KIND_GENERAL
+     *   （语义替换）。Legado 没有 kind 概念，但 replacement="" 的规则本质就是净化。
      */
     internal fun mapReplaceRule(dto: LegadoReplaceRuleDto): ReplaceRule = ReplaceRule(
         id = dto.id.toString(),
@@ -920,7 +921,8 @@ object LegadoImporter {
         enabled = dto.isEnabled,
         sortOrder = dto.sortOrder,
         timeoutMs = dto.timeoutMillisecond.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
-        kind = ReplaceRule.KIND_GENERAL,
+        kind = if (dto.replacement.isBlank()) ReplaceRule.KIND_PURIFY else ReplaceRule.KIND_GENERAL,
+        excludeScope = dto.excludeScope,
     )
 
     /**

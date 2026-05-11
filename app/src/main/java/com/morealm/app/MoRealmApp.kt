@@ -60,6 +60,7 @@ class MoRealmApp : Application(), ImageLoaderFactory {
         // 让低端机在系统内存吃紧时主动归还。CacheBook 读写时透传到本类。
         ChapterMemoryCache.register(this)
         LocalBookParser.txtTocRuleDao = txtTocRuleDao
+        com.morealm.app.domain.render.ImageCache.appContext = applicationContext
 
         // P1-B: pull every other-device book progress once at app start.
         // The sync class itself short-circuits to a no-op when WebDav is

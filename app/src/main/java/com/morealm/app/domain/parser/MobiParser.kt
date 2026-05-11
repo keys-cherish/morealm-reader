@@ -43,8 +43,6 @@ object MobiParser {
                 RegexOption.IGNORE_CASE
             )
 
-            var lastEnd = 0
-            var index = 0
             val matches = chapterRegex.findAll(text).toList()
 
             if (matches.isEmpty()) {
@@ -53,29 +51,70 @@ object MobiParser {
                     title = "全文",
                     startPosition = 0, endPosition = text.length.toLong(),
                 ))
-            } else {
-                matches.forEachIndexed { i, match ->
-                    if (match.range.first > lastEnd) {
-                        val title = if (index == 0 && i == 0) "前言"
-                            else cleanHtmlTitle(match.value)
-                        chapters.add(BookChapter(
-                            id = "${bookId}_$index", bookId = bookId, index = index,
-                            title = title,
-                            startPosition = lastEnd.toLong(),
-                            endPosition = match.range.first.toLong(),
-                        ))
-                        index++
-                    }
-                    lastEnd = match.range.first
+                return chapters
+            }
+
+            // ── 标题与内容对齐 ──
+            //
+            // 老代码：在每次 match 时新建章节，title 用**当前 match**，但 content
+            // range 是 [上次 match.start .. 当前 match.start]。结果第 i 个章节的
+            // title 来自定义其**结束**的 match，而不是定义其**开始**的 match ——
+            // 用户看到的"章节内容跟标题完全错位 1 位"现象（截图 12 三个并列
+            // "第三章 / 第三章 新的起飞 / 新的起飞"，每个章节内容显示的是邻章正文）。
+            //
+            // 修复：第 i 个 match 定义第 i 个章节的**起点**，title=match[i] 的清理值，
+            // content range=[match[i].start .. match[i+1].start]（最后一个用 text.length）。
+            // 第一个 match 之前如果有内容，单独作为"前言"。
+            val firstMatchStart = matches[0].range.first
+            if (firstMatchStart > 0) {
+                chapters.add(BookChapter(
+                    id = "${bookId}_0", bookId = bookId, index = 0,
+                    title = "前言",
+                    startPosition = 0,
+                    endPosition = firstMatchStart.toLong(),
+                ))
+            }
+            matches.forEachIndexed { i, m ->
+                val start = m.range.first
+                val end = if (i + 1 < matches.size) matches[i + 1].range.first else text.length
+                chapters.add(BookChapter(
+                    id = "", bookId = bookId, index = 0,
+                    title = cleanHtmlTitle(m.value),
+                    startPosition = start.toLong(),
+                    endPosition = end.toLong(),
+                ))
+            }
+
+            // ── 合并过短的相邻章节 ──
+            //
+            // EPUB/MOBI 的章节扉页常见结构：
+            //   <h1>第三章 新的起飞</h1>
+            //   <h2>第三章</h2>
+            //   <h3>新的起飞</h3>
+            // 三个 h 标签紧挨，正则匹配到 3 次 → 截图 12 的「第三章 新的起飞 / 第三章
+            // / 新的起飞」三条并列。修复：相邻章节内容 < 100 字符的合并到前一章，
+            // 标题取最长（"第三章 新的起飞" 通常比子标题信息量大）。100 字符够
+            // 容纳"扉页 + 副标题 + 空白"，不会误伤真正只是非常短的章节。
+            val MIN_CHAPTER_CHARS = 100
+            val merged = mutableListOf<BookChapter>()
+            for (ch in chapters) {
+                val last = merged.lastOrNull()
+                if (last != null && (ch.startPosition - last.startPosition) < MIN_CHAPTER_CHARS) {
+                    // 短到不像独立章节 —— 与上一章合并
+                    val combinedTitle = if (ch.title.length > last.title.length) ch.title else last.title
+                    merged[merged.size - 1] = last.copy(
+                        title = combinedTitle,
+                        endPosition = ch.endPosition,
+                    )
+                } else {
+                    merged.add(ch)
                 }
-                if (lastEnd < text.length) {
-                    chapters.add(BookChapter(
-                        id = "${bookId}_$index", bookId = bookId, index = index,
-                        title = if (matches.isNotEmpty()) cleanHtmlTitle(matches.last().value) else "结尾",
-                        startPosition = lastEnd.toLong(),
-                        endPosition = text.length.toLong(),
-                    ))
-                }
+            }
+
+            // 重排 id / index
+            chapters.clear()
+            merged.forEachIndexed { i, c ->
+                chapters.add(c.copy(id = "${bookId}_$i", index = i))
             }
         } catch (e: Exception) {
             AppLog.error(TAG, "parseChapters failed: ${e.message}")
@@ -89,9 +128,83 @@ object MobiParser {
             val text = getOrExtractText(context, uri)
             val start = chapter.startPosition.toInt().coerceIn(0, text.length)
             val end = chapter.endPosition.toInt().coerceIn(start, text.length)
-            stripHtml(text.substring(start, end))
+            val raw = text.substring(start, end)
+            formatMobiHtml(raw, uri)
         } catch (_: Exception) { "" }
     }
+
+    /**
+     * 把 MOBI HTML 片段转为阅读器可渲染的格式：
+     *   - 保留 `<img>` 标签并把 recindex / kindle:embed 引用替换为 mobi-img:// 协议
+     *   - 剥除 SVG 容器壳
+     *   - 其他 HTML 标签按 EPUB 风格清理（保留 br/p 换行语义）
+     *   - 漫画书（连续 img 段落）压缩多余空白，让相邻图片紧贴
+     */
+    private fun formatMobiHtml(html: String, uri: Uri): String {
+        val hash = uri.hashCode().toString()
+
+        // 1. 替换 KF7 recindex 属性（变体一）: <img recindex="00060" width="800" .../>
+        //    用非贪婪 [^>]*? 避免吞掉后续标签，\b 确保属性名边界精确。
+        var result = recindexAttrPattern.replace(html) { match ->
+            val idx = match.groupValues[1].trimStart('0').ifEmpty { "1" }
+            "<img src=\"mobi-img://$hash/$idx\"/>"
+        }
+
+        // 2. 替换 KF7 recindex src 形式（变体二）: <img src="recindex:00001"/>
+        result = recindexSrcPattern.replace(result) { match ->
+            val idx = match.groupValues[1].trimStart('0').ifEmpty { "1" }
+            "<img src=\"mobi-img://$hash/$idx\"/>"
+        }
+
+        // 3. 替换 KF8 kindle:embed 引用（含 SVG 包裹）
+        result = kindleEmbedPattern.replace(result) { match ->
+            val idx = match.groupValues[1].trimStart('0').ifEmpty { "1" }
+            "<img src=\"mobi-img://$hash/$idx\"/>"
+        }
+
+        // 4. 剥除 SVG 容器壳（保留内部已替换的 img）
+        result = svgWrapperPattern.replace(result) { match ->
+            val inner = match.groupValues[1]
+            if (inner.contains("<img")) inner else ""
+        }
+
+        // 5. 清理其他 HTML 标签（保留 img / br / p 换行语义）
+        result = result
+            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("<p[^>]*>", RegexOption.IGNORE_CASE), "\n")
+            .replace("</p>", "")
+            .replace(Regex("</?(?!img\\b)[a-zA-Z]+(?=[\\s>])[^<>]*>", RegexOption.IGNORE_CASE), "")
+            .replace("&nbsp;", " ")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+
+        // 6. 漫画书压缩：连续多个换行合并为单个 —— 让相邻图片紧贴，不让空段落
+        //    在阅读器里被排成空行造成"图片之间一大段黑"。
+        result = result.replace(Regex("[\\n\\r\\t ]*\\n[\\n\\r\\t ]*"), "\n")
+
+        return result.trim()
+    }
+
+    private val recindexAttrPattern = Regex(
+        """<img\b[^>]*?\brecindex\s*=\s*["']?(\d+)["']?[^>]*?/?>""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    private val recindexSrcPattern = Regex(
+        """<img\b[^>]*?\bsrc\s*=\s*["']recindex:(\d+)["'][^>]*?/?>""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    private val kindleEmbedPattern = Regex(
+        """<image\b[^>]+xlink:href\s*=\s*["']kindle:embed:(\d+)[^"']*["'][^>]*/?>""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    private val svgWrapperPattern = Regex(
+        """<svg[^>]*>([\s\S]*?)</svg>""",
+        RegexOption.IGNORE_CASE,
+    )
 
     @Synchronized
     private fun getOrExtractText(context: Context, uri: Uri): String {
@@ -102,12 +215,40 @@ object MobiParser {
         val text = extractPalmDocText(bytes) ?: extractRawFallback(bytes)
         cachedUri = uriStr
         cachedText = text
+        // 同步激活图片索引（仅解析 header + offset，不读图片字节）
+        MobiResourceLoader.activate(context, uri)
         return text
     }
 
     fun releaseCache() {
         cachedUri = null
         cachedText = null
+        MobiResourceLoader.release()
+    }
+
+    /**
+     * 提取 MOBI/AZW3 封面图（第一张图片 record）并写入 cacheDir。
+     * 返回本地文件路径供 Coil 加载，失败返回 null。
+     */
+    fun extractCover(context: Context, uri: Uri): String? {
+        val index = MobiResourceLoader.activate(context, uri) ?: return null
+        if (index.images.isEmpty()) return null
+        val bytes = MobiResourceLoader.readBytes(context, index.hash, 1) ?: return null
+        return try {
+            val cacheDir = java.io.File(context.cacheDir, "mobi_covers/${uri.hashCode()}")
+            cacheDir.mkdirs()
+            val ext = when {
+                index.images[0].mime.contains("png") -> "png"
+                index.images[0].mime.contains("gif") -> "gif"
+                else -> "jpg"
+            }
+            val file = java.io.File(cacheDir, "cover.$ext")
+            if (!file.exists()) file.writeBytes(bytes)
+            file.absolutePath
+        } catch (e: Exception) {
+            AppLog.warn(TAG, "extractCover failed: ${e.message}")
+            null
+        }
     }
 
     // ───────────────────────── MOBI / PalmDOC 解压路径 ─────────────────────────

@@ -41,7 +41,8 @@ class ShelfOrganizeController(
             val groups = groupRepo.getAllGroupsSync()
             var moved = 0
             bookRepo.getAllBooksSync().filter { it.folderId == null }.forEach { book ->
-                val target = autoGroupClassifier.matchGroup(book, groups)?.id ?: return@forEach
+                // 用户主动整理走 forced 路径，绕过自动分组开关。
+                val target = autoGroupClassifier.matchGroupForced(book, groups)?.id ?: return@forEach
                 bookRepo.update(book.copy(folderId = target))
                 moved++
             }
@@ -72,7 +73,8 @@ class ShelfOrganizeController(
                 for (book in bookRepo.getAllBooksSync()) {
                     if (book.groupLocked) continue
                     if (book.folderId != null && book.tagsAssignedBy == "MANUAL") continue
-                    val newId = autoGroupClassifier.classify(book)
+                    // 用户主动整理走 forced 路径，绕过自动分组开关；阈值/ignored 仍生效。
+                    val newId = autoGroupClassifier.classifyForced(book)
                     if (newId != book.folderId) {
                         bookRepo.update(book.copy(folderId = newId))
                         touched++

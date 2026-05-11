@@ -124,6 +124,33 @@ class ParagraphTextPosTest {
         assertEquals(989, pos.charOffset)
     }
 
+    @Test
+    fun `chapterPositionToParagraphPos - skips LOADING placeholder and returns null when only placeholder present`() {
+        // 回归：旧实现下 LOADING 占位段（paragraphNum=0, firstChapterPosition=0）被错认为
+        // 最末命中段，调用方拿 paragraphNum=0 构造 ParagraphTextPos 触发
+        // `require(paragraphNum >= 1)` 崩溃。修复后该函数应返回 null，让调用方等真实段加载。
+        // 触发场景：ChapterWindowSource.resetTo/appendNext/prependPrev 在 fetch+layout
+        // 期间先 add 一个 LOADING 占位，TTS auto-follow / jump LaunchedEffect 在此窗口期
+        // 调用本函数。
+        val window = listOf(loadingScrollParagraph(chapterIndex = 5, generationId = 1L))
+        val pos = chapterPositionToParagraphPos(window, chapterIndex = 5, chapterPosition = 0)
+        assertNull(pos)
+    }
+
+    @Test
+    fun `chapterPositionToParagraphPos - LOADING placeholder in window does not shadow real paragraph in same chapter`() {
+        // 防御性场景：窗口里同时存在 LOADING 占位和真实段（理论上 ChapterWindowSource
+        // 的 windowMutex 保证不会同时出现，但本函数不应该依赖外部不变量）。LOADING
+        // 必须被跳过，真实段正常命中。
+        val realWindow = buildThreeChapterWindow().filter { it.chapterIndex == 1 }
+        val mixedWindow = listOf(loadingScrollParagraph(chapterIndex = 1, generationId = 99L)) + realWindow
+        val pos = chapterPositionToParagraphPos(mixedWindow, chapterIndex = 1, chapterPosition = 12)
+        assertNotNull(pos)
+        // 与 `second paragraph mapping` 同口径：ch1 段 2 段首=10，pos=12 → offset=2
+        assertEquals(2, pos!!.paragraphNum)
+        assertEquals(2, pos.charOffset)
+    }
+
     // ── 3. toChapterPosition 反向 ──
 
     @Test

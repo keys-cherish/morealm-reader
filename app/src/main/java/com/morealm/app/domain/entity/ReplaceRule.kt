@@ -16,6 +16,18 @@ data class ReplaceRule(
     val bookId: String? = null,   // null = global, specific bookId = per-book
     val scopeTitle: Boolean = false,   // apply to chapter titles
     val scopeContent: Boolean = true,  // apply to chapter content
+    /**
+     * 反向作用域 —— 与 Legado `ReplaceRule.excludeScope` 同义：被列在这里的书名 / 源
+     * URL **不应用**该规则。Legado scope 用换行 `\n` 分隔多值；MoRealm 保留同一格式
+     * 以便 DAO 直接走 `LIKE '%xxx%'` 包含匹配。
+     *
+     * - `null` (默认) 表示无排除 —— 与现网行为完全一致，旧 row 升级到 v30 后保持 null。
+     * - 空串 `""` 视同 null，DAO 查询使用 `excludeScope IS NULL OR excludeScope = ''` 兜底。
+     *
+     * UI 目前没有专门编辑入口，主要通过一键搬家 Legado 时透传；后续如需暴露给用户，
+     * 在 [ReplaceRuleScreen] 里加 OutlinedTextField 即可。
+     */
+    val excludeScope: String? = null,
     val enabled: Boolean = true,
     val sortOrder: Int = 0,
     val timeoutMs: Int = 3000,    // regex timeout in ms

@@ -68,6 +68,19 @@ class AutoGroupRulesViewModel @Inject constructor(
     val ignored: StateFlow<Set<String>> = prefs.autoFolderIgnored
         .stateIn(viewModelScope, SharingStarted.Lazily, emptySet())
 
+    /**
+     * 自动分组总开关。默认 false —— 见 [AppPreferences.autoFolderEnabled]。
+     * Eagerly 让 Screen 一进来就拿到正确值，避免 UI 闪一下「启用→禁用」。
+     */
+    val enabled: StateFlow<Boolean> = prefs.autoFolderEnabled
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun setEnabled(value: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            prefs.setAutoFolderEnabled(value)
+        }
+    }
+
     private val _exportToast = MutableStateFlow<String?>(null)
     val exportToast: StateFlow<String?> = _exportToast.asStateFlow()
     fun consumeToast() { _exportToast.value = null }

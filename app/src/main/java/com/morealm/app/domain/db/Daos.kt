@@ -476,7 +476,61 @@ interface ReplaceRuleDao {
     @Query("SELECT * FROM replace_rules ORDER BY sortOrder")
     suspend fun getAllSync(): List<ReplaceRule>
 
-    @Query("SELECT * FROM replace_rules WHERE enabled = 1 AND (scope = '' OR scope = :bookName OR scope = :bookOrigin) ORDER BY sortOrder")
+    /**
+     * 与 Legado `findEnabledByContentScope` 同语义：
+     *
+     * 1. **scope 包含匹配** —— `LIKE '%name%'` / `LIKE '%origin%'` / NULL / 空串均放行。
+     *    Legado scope 字段允许换行 `\n` 分隔多书名 / 多源 URL（如 `示例书 C\nhttp://x.com`），
+     *    必须用 LIKE 才能命中；早先 `=` 精确匹配会让一键搬家来的多 scope 规则全部漏掉。
+     * 2. **excludeScope 反向排除** —— Legado 用同一字段做"排除清单"，被排除的书 / 源
+     *    不应用规则。NULL / 空串视为"不排除任何书"。
+     * 3. **scopeContent = 1** —— 内联到 SQL 而非 Kotlin filter，让该方法直接产出
+     *    "可应用于正文的有效规则"，调用方无需再次 filter。
+     *
+     * @return 按 sortOrder 排序的规则列表；调用方可直接 forEach 应用。
+     */
+    @Query(
+        """SELECT * FROM replace_rules WHERE enabled = 1 AND scopeContent = 1
+        AND (scope LIKE '%' || :name || '%' OR scope LIKE '%' || :origin || '%' OR scope IS NULL OR scope = '')
+        AND (excludeScope IS NULL OR excludeScope = ''
+             OR (excludeScope NOT LIKE '%' || :name || '%' AND excludeScope NOT LIKE '%' || :origin || '%'))
+        ORDER BY sortOrder"""
+    )
+    fun findEnabledByContentScope(name: String, origin: String): List<ReplaceRule>
+
+    /**
+     * 与 Legado `findEnabledByTitleScope` 同语义。SQL 与 [findEnabledByContentScope]
+     * 几乎一致，差异在 `scopeTitle = 1`（仅取被勾选"作用于标题"的规则）。
+     *
+     * 拆成两个方法而不是 union，是因为 ContentProcessor 对 title 和 content 走不同
+     * 处理流程（title 不切句、不加段首缩进），SQL 直接帮我们分组省去 Kotlin filter。
+     */
+    @Query(
+        """SELECT * FROM replace_rules WHERE enabled = 1 AND scopeTitle = 1
+        AND (scope LIKE '%' || :name || '%' OR scope LIKE '%' || :origin || '%' OR scope IS NULL OR scope = '')
+        AND (excludeScope IS NULL OR excludeScope = ''
+             OR (excludeScope NOT LIKE '%' || :name || '%' AND excludeScope NOT LIKE '%' || :origin || '%'))
+        ORDER BY sortOrder"""
+    )
+    fun findEnabledByTitleScope(name: String, origin: String): List<ReplaceRule>
+
+    /**
+     * 旧入口，保留向后兼容（少数测试 / 调试代码可能直接调用）。
+     * **新代码请用 [findEnabledByContentScope] / [findEnabledByTitleScope]** —— 这条
+     * 仍然走 LIKE/excludeScope 对齐的查询，但合并了 title+content scope，调用方需要自己
+     * 按 scopeTitle/scopeContent 再 filter。
+     */
+    @Deprecated(
+        "Use findEnabledByContentScope / findEnabledByTitleScope instead",
+        ReplaceWith("findEnabledByContentScope(bookName, bookOrigin)"),
+    )
+    @Query(
+        """SELECT * FROM replace_rules WHERE enabled = 1
+        AND (scope LIKE '%' || :bookName || '%' OR scope LIKE '%' || :bookOrigin || '%' OR scope IS NULL OR scope = '')
+        AND (excludeScope IS NULL OR excludeScope = ''
+             OR (excludeScope NOT LIKE '%' || :bookName || '%' AND excludeScope NOT LIKE '%' || :bookOrigin || '%'))
+        ORDER BY sortOrder"""
+    )
     fun getEnabledByScope(bookName: String, bookOrigin: String): List<ReplaceRule>
 }
 
