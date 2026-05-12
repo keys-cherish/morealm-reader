@@ -80,7 +80,8 @@ internal class PageTurnCoordinator(
         pageCount: Int,
         renderPageCount: Int,
     ) {
-        val changed = this.pageFactory !== pageFactory ||
+        val factoryChanged = this.pageFactory !== pageFactory
+        val changed = factoryChanged ||
             this.chapterIndex != chapterIndex ||
             this.pageCount != pageCount ||
             this.renderPageCount != renderPageCount
@@ -95,6 +96,26 @@ internal class PageTurnCoordinator(
                     " newFactory.prevChIdx=${pageFactory.snapshotPrevChapterIndex()}" +
                     " lastSettled=$lastSettledDisplayPage",
             )
+        }
+        // pageFactory 是上游唯一真值（Single Source of Truth）；lastReaderContent
+        // 是其派生 snapshot（持有当时的 pages list / TextPage 引用 / canvasRecorder）。
+        // factory 引用变化 = 派生缓存语义失效，必须同步清空。
+        //
+        // 实际触发场景：同章 reflow（拖间距 / 字号 commit）—— ReflowEngine.Ready
+        // 完成后 textChapter swap 到新对象，CanvasRenderer 的 pageFactory remember
+        // key 含 chapter 引用 → 新 ReaderPageFactory 实例 → pages 是新 TextPage list
+        // （每个 TextPage 持有 fresh canvasRecorder）。
+        //
+        // 不清的话：getPageAt 同章路径只校验 chapterIndex 相同就直接走
+        // content.pageForDisplay，返回旧 TextPage → 旧 page.canvasRecorder
+        // needRecord() 已 false → 回放旧缓存 → 当前页画面不刷新；只有翻页
+        // commitPageTurn 才会用新 factory 重建 ReaderPageContent。用户感受为
+        // 「调间距当前页无变化，翻页后才变」。
+        //
+        // 这不是补丁——这是把"上游真值变化 → 下游派生失效"的状态机不变量
+        // 收敛到 coordinator 内部，调用方不再需要散户手动清 lastReaderContent。
+        if (factoryChanged) {
+            lastReaderContent = null
         }
         this.pageFactory = pageFactory
         this.pagerState = pagerState
