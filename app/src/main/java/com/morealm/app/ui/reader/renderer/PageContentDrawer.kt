@@ -86,6 +86,12 @@ data class PageInfoOverlaySpec(
     val barHeightPx: Float,
     val verticalPaddingPx: Float,
     val textSizePx: Float,
+    /**
+     * status bar 高度（px）。top bar 整体向下偏移这么多，避免章节标题紧贴系统状态栏。
+     * status bar 隐藏时由调用方传 0f；显示时传 WindowInsets.statusBars 的高度。
+     * 默认 0 兼容老调用方。
+     */
+    val topInsetPx: Float = 0f,
     val showChapterName: Boolean,
     val showTimeBattery: Boolean,
     val headerLeft: String,
@@ -690,7 +696,7 @@ private fun drawPageInfoOverlay(
     drawInfoBar(
         canvas = canvas,
         width = width,
-        top = 0f,
+        top = spec.topInsetPx,
         isTop = true,
         slots = listOf(
             if (spec.showTimeBattery) spec.headerLeft else "none",

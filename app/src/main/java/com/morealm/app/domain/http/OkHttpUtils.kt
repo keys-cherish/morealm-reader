@@ -149,24 +149,96 @@ suspend fun Call.await(): Response = suspendCancellableCoroutine { block ->
 }
 
 /**
- * 把 ResponseBody 解码成字符串。charset 优先级：
- *   1. 显式 [encode] 参数（调用方知道目标编码时强制使用）
- *   2. Response Content-Type 的 charset（server 主动声明时优先尊重）
- *   3. UTF-8 fallback（无任何信号时的合理默认）
+ * 把 ResponseBody 解码成字符串。charset 优先级（与 Legado parity）：
+ *   1. 显式 [encode] 参数（调用方知道目标编码时强制使用——书源 searchUrl 等 option 里的
+ *      `"charset": "gbk"` 沿此路径透传）
+ *   2. Response Content-Type 的 charset（server 主动声明时尊重）
+ *   3. HTML body sniff：`<meta charset="...">` / `<meta http-equiv="Content-Type" content="...charset=...">`
+ *      —— 绝大多数老站不在 Content-Type 头里写 charset，但 HTML head 会声明
+ *   4. 字节 heuristic：高位字节序列符合 GBK 双字节模式 → GBK；否则 UTF-8
  *
- * 注意：调用方应在已知书源 charset（如 GBK 站）时通过 [encode] 透传，否则若 server 没在
- * Content-Type 里声明 charset（典型老站），UTF-8 fallback 解码 GBK bytes 会得到中文乱码。
+ * 为什么 step 3+4 不可省：书源作者通常只在 searchUrl option 里写 charset，章节正文 URL
+ * 没有 option JSON，charset 不透传；如果服务端响应 Content-Type 又不带 charset（典型老
+ * GBK 站），UTF-8 fallback 解码 GBK bytes → 中文乱码（图片中 `�` + 拉丁字符就是 mojibake
+ * 签名）。Legado 同等位置走 EncodingDetect sniff，本实现用更轻量的 meta + byte heuristic
+ * 达到同等覆盖。
  */
 fun ResponseBody.text(encode: String? = null): String {
     val responseBytes = bytes()
     encode?.let {
+        AppLog.debug("HttpCharset", "decode via explicit encode='$it' bytes=${responseBytes.size}")
         return runCatching { String(responseBytes, Charset.forName(it)) }
             .getOrElse { String(responseBytes, Charsets.UTF_8) }
     }
     contentType()?.charset()?.let { charset ->
+        AppLog.debug("HttpCharset", "decode via Content-Type charset=$charset bytes=${responseBytes.size}")
         return String(responseBytes, charset)
     }
+    sniffHtmlCharset(responseBytes)?.let { sniffed ->
+        AppLog.debug("HttpCharset", "decode via meta sniff charset=$sniffed bytes=${responseBytes.size}")
+        return runCatching { String(responseBytes, Charset.forName(sniffed)) }
+            .getOrElse { String(responseBytes, Charsets.UTF_8) }
+    }
+    if (looksLikeGbk(responseBytes)) {
+        AppLog.debug("HttpCharset", "decode via byte heuristic=GBK bytes=${responseBytes.size}")
+        return runCatching { String(responseBytes, Charset.forName("GBK")) }
+            .getOrElse { String(responseBytes, Charsets.UTF_8) }
+    }
+    AppLog.debug("HttpCharset", "decode via UTF-8 fallback bytes=${responseBytes.size}")
     return String(responseBytes, Charsets.UTF_8)
+}
+
+/**
+ * Sniff HTML head 前 4 KB（charset 声明通常在 `<head>` 顶部），按 ASCII 解后正则匹配。
+ *
+ * 命中两种常见声明：
+ *   - HTML5：`<meta charset="gbk">`
+ *   - HTML4：`<meta http-equiv="Content-Type" content="text/html; charset=gbk">`
+ *
+ * Why 4 KB：head 通常 < 2 KB；4 KB 给足边距同时控制扫描成本。bytes 先按 ISO-8859-1
+ * 解（单字节 1:1）确保 ASCII 字符位置不偏移，正则只在 ASCII 范围有效。
+ */
+private val META_CHARSET_REGEX = Regex(
+    """<meta[^>]+charset\s*=\s*["']?\s*([A-Za-z0-9_\-]+)""",
+    RegexOption.IGNORE_CASE,
+)
+
+private fun sniffHtmlCharset(bytes: ByteArray): String? {
+    val scanLen = minOf(bytes.size, 4096)
+    if (scanLen <= 0) return null
+    val ascii = String(bytes, 0, scanLen, Charsets.ISO_8859_1)
+    val match = META_CHARSET_REGEX.find(ascii) ?: return null
+    val name = match.groupValues[1].trim()
+    return name.takeIf { it.isNotEmpty() && runCatching { Charset.forName(it) }.isSuccess }
+}
+
+/**
+ * Last-resort heuristic：GBK 双字节高位匹配。
+ *
+ * GBK 双字节：lead byte 0x81-0xFE + trail byte 0x40-0xFE（除 0x7F）。统计样本中 GBK 对
+ * 数比例 > 5% 视为 GBK（与 LocalBookParser.looksLikeGbk 阈值一致）。仅当 step 1-3 都
+ * miss 时使用——典型场景：服务端没声明 charset，HTML 也没 meta charset 声明。
+ *
+ * 扫描上限 8 KB 控制开销：足够区分 UTF-8（高位字节有强约束）与 GBK（约束宽松）。
+ */
+private fun looksLikeGbk(bytes: ByteArray): Boolean {
+    val length = minOf(bytes.size, 8192)
+    if (length < 4) return false
+    var i = 0
+    var gbkPairs = 0
+    while (i < length - 1) {
+        val b = bytes[i].toInt() and 0xFF
+        if (b in 0x81..0xFE) {
+            val b2 = bytes[i + 1].toInt() and 0xFF
+            if (b2 in 0x40..0xFE && b2 != 0x7F) {
+                gbkPairs++
+                i += 2
+                continue
+            }
+        }
+        i++
+    }
+    return gbkPairs > length / 20
 }
 
 fun Request.Builder.addHeaders(headers: Map<String, String>) {

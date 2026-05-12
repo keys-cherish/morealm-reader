@@ -8,7 +8,12 @@ import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.rule.TocRule
 import com.script.ScriptBindings
 import com.script.rhino.RhinoScriptEngine
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -98,6 +103,44 @@ object BookChapterList {
                         break
                     }
                 }
+            }
+            else -> {
+                val pageUrls = chapterData.second
+                AppLog.info(TAG, "${bookSource.bookSourceName}: 并发抓取目录 ${pageUrls.size} 页")
+                val sem = Semaphore(4)
+                val nestedLists = coroutineScope {
+                    pageUrls.map { urlStr ->
+                        async {
+                            sem.withPermit {
+                                try {
+                                    val analyzeUrl = AnalyzeUrl(
+                                        mUrl = urlStr,
+                                        source = bookSource,
+                                        coroutineContext = coroutineContext,
+                                    )
+                                    val res = analyzeUrl.getStrResponseAwait()
+                                    val nextBody = res.body
+                                    if (nextBody.isNullOrBlank()) {
+                                        AppLog.warn(TAG, "next-toc-page empty body: $urlStr")
+                                        emptyList<ChapterResult>()
+                                    } else {
+                                        analyzeChapterPage(
+                                            bookUrl, urlStr, urlStr,
+                                            nextBody, tocRule, listRule, bookSource,
+                                        ).first
+                                    }
+                                } catch (e: Exception) {
+                                    AppLog.warn(
+                                        TAG,
+                                        "next-toc-page fetch failed: $urlStr: ${e.message?.take(120)}",
+                                    )
+                                    emptyList<ChapterResult>()
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+                nestedLists.forEach { chapterList.addAll(it) }
             }
         }
 

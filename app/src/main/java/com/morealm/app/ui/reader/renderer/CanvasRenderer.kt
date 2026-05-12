@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.entity.ReaderStyle
@@ -637,125 +638,94 @@ fun CanvasRenderer(
         chapterWindow.resetTo(chapterIndex, initialChapterPosition)
     }
 
+    // ── ReflowEngine 状态机（B 方案：根治 reflow cancel 丢失 + 移除 priorChapter 推导补丁）──
+    //
+    // 旧实现把 layoutChapterAsync 直接挂在 LaunchedEffect(currentChapterKey, layoutInputs)
+    // 里，scope 是 LaunchedEffect 自身的 —— 字号 / 边距 commit 后 layoutInputs 失效，
+    // LaunchedEffect 取消旧 scope → AsyncLayoutHandle.job 跟着取消 → onCompleted 永远跑
+    // 不到 → textChapter 永远不切到新排版。用户感受到「调间距无反应；要退出重进才生效」。
+    //
+    // ReflowEngine 用外部传入的 scope（rememberCoroutineScope —— 整个 CanvasRenderer
+    // composition 期间长存），submit 时主动 cancel 旧 handle 起新 handle；onCompleted 在
+    // engine.scope 内必定执行，不再被外层 LaunchedEffect cancel 间接打断。
+    //
+    // 同时 engine 内部用 3 态状态机（Idle / Reflowing / Ready）替代旧的 priorChapter /
+    // isRelayout / sameChapterRelayout 推导补丁：Reflowing.visible 保留旧完整 chapter，
+    // UI 看到「旧稳态 → 新稳态」单次原子切换，不再有 placeholder 重置 / pages 反弹。
+    //
+    // 设计与不变量见 [com.morealm.app.domain.render.ReflowEngine] 类文档。
+    val layoutInputsLatest = rememberUpdatedState(layoutInputs)
+    val reflowEngine = remember(scope) {
+        ReflowEngine(
+            scope = scope,
+            provider = { layoutInputsLatest.value.provider },
+        )
+    }
+    DisposableEffect(reflowEngine) {
+        onDispose { reflowEngine.cancel() }
+    }
+
+    // engine.state → textChapter / pageCount 单点派生 + 接线（prelayoutPut / onCurReady）。
+    // Reflowing 期间 textChapter 仍指向 visible（旧 chapter）；Ready 时 atomic swap 到新 chapter。
+    LaunchedEffect(reflowEngine) {
+        reflowEngine.state.collect { state ->
+            when (state) {
+                ReflowEngine.State.Idle -> Unit
+                is ReflowEngine.State.Reflowing -> {
+                    if (textChapter !== state.visible) {
+                        textChapter = state.visible
+                        pageCount = state.visible.pageSize.coerceAtLeast(1)
+                    }
+                }
+                is ReflowEngine.State.Ready -> {
+                    textChapter = state.chapter
+                    pageCount = state.chapter.pageSize.coerceAtLeast(1)
+                    if (state.chapter.pages.isNotEmpty() && state.chapter.isCompleted) {
+                        prelayoutPut(currentChapterKey, state.chapter)
+                    }
+                    onCurTextChapterReady(state.chapter.chapterIndex, state.chapter)
+                }
+            }
+        }
+    }
+
     LaunchedEffect(currentChapterKey, layoutInputs) {
-        // Cache hit: 立即显示完整布局（如来自 next/prev 预排版，或之前的 padding 配置）。
+        // Cache hit：直接 markReady，engine 内部切到 Ready，上面 state.collect 派生
+        // textChapter / pageCount / prelayoutPut / onCurReady。
         val cachedChapter = prelayoutCache[currentChapterKey]
         if (cachedChapter != null) {
-            textChapter = cachedChapter
-            pageCount = cachedChapter.pageSize.coerceAtLeast(1)
-            // Phase 2b: cache 命中也要推回 cur — 通常发生在 next/prev 转 cur 后，
-            // 此时 ChapterController 的 _curTextChapter 应该指向这章。idx 校验在 publish 端。
-            onCurTextChapterReady(chapterIndex, cachedChapter)
+            reflowEngine.markReady(cachedChapter)
             return@LaunchedEffect
         }
-
-        // ── 区分「首次布局」与「reflow」（根治样式滑块拖动反弹的关键） ──
-        //
-        // 老问题：用户拖字号/边距/行距 slider 时 currentChapterKey 高频变化，本
-        // LaunchedEffect 被 cancel + 重启。重启进入 onPageReady(index=0) 时无脑做
-        //   textChapter = handle.textChapter   // 1 页 incomplete 的新对象
-        //   pageCount   = 1
-        //   onCurTextChapterReady(idx, partial) // 推 pages=1 incomplete 给 ChapterController
-        // → 单向数据流被破坏：UI 看到 pages=44 completed=true → pages=1 incomplete
-        //   → pages=44 completed=true 的反弹；publishCurTextChapter / ProgressTrace
-        //   / safeDisplayMax 跟着震荡，整个 reader 陷入「重排-重组」死循环。
-        //
-        // 根治：reflow 期间完全不动 UI 状态。新章节在后台协程里把 handle.textChapter
-        // 内的 textPages 累积到位（cancelCheck 保证已 cancel 的协程不再 emit），
-        // 直到 onCompleted 触发**一次原子 swap** —— 用户视觉上：旧 44 页布局 →
-        // 新 44 页布局，无中间态。
-        //
-        // 判定 isRelayout：当前已有同章节的**已完成**布局。否则（首次进入 / 跨章
-        // 跳转 / 上次还在流式中被打断）按首次布局走流式 publish，让用户尽早看到
-        // 第一页（对齐 Legado）。
-        val priorChapter = textChapter
-        val isRelayout = priorChapter != null &&
-            priorChapter.chapterIndex == chapterIndex &&
-            priorChapter.isCompleted &&
-            priorChapter.pages.isNotEmpty()
-        // 同章节但旧 chapter 还未完成（reflow 期间被快速取消重启时）—— 仍视为 reflow
-        // 路径，**不**走 placeholder 重置。否则用户快速拖 margin / 字号 slider 触发
-        // 高频 reflow 时，textChapter 会被重置为 pages=1 placeholder，下游 ChapterController
-        // 看到 chapter 被重置 → pagerState clamp → 页号丢失 → 用户感觉"间距调了无反应"
-        // 且页面位置突变。日志 MoRealm_log_20260511_212127 line 461 暴露：updateDeps
-        // pageCount=23→1 renderPC=23→1 curChIdx=null —— chapter 被重置的瞬间。
-        val sameChapterRelayout = priorChapter != null &&
-            priorChapter.chapterIndex == chapterIndex &&
-            priorChapter.pages.isNotEmpty()
-
-        if (!isRelayout && !sameChapterRelayout) {
-            // 真正的首次进入 / 跨章跳转：旧 chapter 不可复用，给个 placeholder 占位。
-            // reflow 路径（同章 + 有 pages）一律走 else 分支，保留旧 chapter 不动。
-            if (priorChapter == null || priorChapter.pages.isEmpty()) {
-                textChapter = placeholderChapter()
-                pageCount = 1
-            }
-        }
-
-        if (content.isBlank()) {
-            val chapter = placeholderChapter(chapterTitle.ifBlank { "当前章节暂无正文" }).apply {
-                isCompleted = true
-            }
-            textChapter = chapter
-            pageCount = 1
-        } else {
-            var handle: com.morealm.app.domain.render.AsyncLayoutHandle? = null
-            handle = layoutInputs.provider.layoutChapterAsync(
+        reflowEngine.submit(
+            input = ReflowInput(
                 title = chapterTitle,
                 content = content,
                 chapterIndex = chapterIndex,
                 chaptersSize = chaptersSize,
-                scope = this,
                 omitChapterTitleBlock = omitChapterTitleBlock,
-                onPageReady = { index, _ ->
-                    // reflow 路径下 onPageReady 不动 UI 状态：新 chapter 在 handle
-                    // 内独立累积 pages，直到 onCompleted 才 atomic swap。否则会发生
-                    // pages=44 → pages=1 → pages=2 ... 的回退-再增长（反弹）。
-                    //
-                    // 用 sameChapterRelayout 而不是 isRelayout —— reflow 期间被快速
-                    // 取消重启时（用户狂拖 slider），priorChapter.isCompleted=false 但
-                    // 同章仍属于 reflow 场景；旧 isRelayout 判断这种情况返回 false 会
-                    // 让 onPageReady index=0 把 textChapter 写成 pages=1 incomplete，
-                    // 触发下游 pageCount clamp → 页号丢失 → 用户看到"间距调了无反应"。
-                    if (sameChapterRelayout) return@layoutChapterAsync
-                    if (index == 0) {
-                        textChapter = handle?.textChapter
-                        // Phase 2b: 第一页就绪时立刻推回 cur，让 ScrollRenderer 尽早
-                        // 拿到 cur reference（哪怕 isCompleted=false，pages 仍可访问已就绪部分）。
-                        // 对齐 Legado 流式排版思路：边排边可见。仅首次布局走这条路径。
-                        handle?.textChapter?.let { onCurTextChapterReady(chapterIndex, it) }
-                    }
-                    pageCount = handle?.textChapter?.pageSize?.coerceAtLeast(1) ?: 1
-                },
-                onCompleted = {
-                    // 首次布局 + reflow 都走这里做最终 swap。Compose 的 mutableStateOf
-                    // 比对 reference，handle.textChapter 是新对象，必触发一次重组；
-                    // pageCount 由 N（旧）→ M（新）也是单次 Int 变化。所有下游
-                    // （pageFactory remember key、publishCurTextChapter、safeDisplayMax）
-                    // 看到的都是「稳态 → 稳态」一步切换，不会反弹。
-                    textChapter = handle?.textChapter
-                    pageCount = handle?.textChapter?.pageSize?.coerceAtLeast(1) ?: 1
-                    // 把当前章节最终布局也存入 LRU：来回拖到相同 padding 值时秒回。
-                    handle?.textChapter?.let {
-                        prelayoutPut(currentChapterKey, it)
-                        // Phase 2b: 排版完成（isCompleted=true）后再推回一次，
-                        // 让 _curTextChapter 指向 final 状态（含完整 pageSize / 末页等信息）。
-                        onCurTextChapterReady(chapterIndex, it)
-                    }
-                },
-            )
-        }
+            ),
+            placeholderForEmpty = { placeholderChapter(chapterTitle.ifBlank { "当前章节暂无正文" }) },
+            onPartial = { partial ->
+                // 流式首屏 / 跨章：把 partial 推回 textChapter / pageCount，让 ScrollRenderer 早绘。
+                // 同章 reflow 路径 engine 内部已过滤，不会触发本回调（visible 保留显示旧 chapter）。
+                textChapter = partial
+                pageCount = partial.pageSize.coerceAtLeast(1)
+                if (partial.pages.isNotEmpty()) {
+                    onCurTextChapterReady(partial.chapterIndex, partial)
+                }
+            },
+        )
     }
 
     val chapter = textChapter
-    // 不再 keyed 到 currentChapterKey：拖动 padding 时旧 pages 作 fallback，
-    // layoutChapterAsync 出新结果再无缝切；避免拖动期间渲染层瞬间丢页面。
-    var lastRenderablePages by remember { mutableStateOf<List<TextPage>>(emptyList()) }
-    if (!chapter?.pages.isNullOrEmpty()) {
-        lastRenderablePages = chapter?.pages ?: emptyList()
-    }
+    // chapter.pages 不为空时直接用；否则 placeholder（初始 Idle / 跨章窗口）。
+    //
+    // ReflowEngine 不变量保证：Reflowing.visible 始终是上一次 Ready 的完整 chapter，
+    // 字号 / 边距 reflow 期间 textChapter 永不退回 placeholder=1page 状态。所以旧实现
+    // 的 `lastRenderablePages` fallback 已是死代码（已在 v1.3 清理）。
     val currentChapterPages = chapter?.pages?.takeIf { it.isNotEmpty() }
-        ?: lastRenderablePages.ifEmpty { placeholderChapter().pages }
+        ?: placeholderChapter().pages
     // Phase 2e: prev/next TextChapter 派生 — 优先用 ChapterController 同步腾挪后的真值
     // [syncPrevTextChapter] / [syncNextTextChapter]，回落 prelayoutCache 派生。
     //
@@ -1124,7 +1094,9 @@ fun CanvasRenderer(
         coordinator.ignoredSettledDisplayPage = initialPage
         coordinator.pendingSettledDirection = null
         coordinator.lastSettledDisplayPage = initialPage
-        coordinator.lastReaderContent = null
+        // lastReaderContent 由 coordinator.updateDeps 的 factoryChanged 不变量自动清空——
+        // chapter 切换会让 pageFactory remember 重建新实例，下次 recomposition updateDeps
+        // 检测引用变化即清空。此处散户清理是 v1.2 时代遗物，已冗余。
         pagerState.scrollToPage(initialPage)
     }
 
@@ -1205,11 +1177,36 @@ fun CanvasRenderer(
     // 与之前的区别：去掉了 initialChapterPosition / initialProgress / startFromLastPage
     // 作为 key。这些值由 restoreToken 代表（token 变 → 值必定已更新），不再独立触发。
     LaunchedEffect(
-        restoreToken, renderPageCount, pageCount, chapter?.isCompleted, progressRestored, pageAnimType,
+        restoreToken, renderPageCount, pageCount, chapter, progressRestored, pageAnimType,
     ) {
         if (progressRestored) return@LaunchedEffect
         if (restoreToken == 0L) return@LaunchedEffect
         if (chapter?.isCompleted != true) return@LaunchedEffect
+        // textChapter 与当前 chapter prop 一致性 invariant：
+        //
+        // 跨章瞬间（PREV / NEXT），CanvasRenderer 收到新 chapterIndex prop，但 ReflowEngine
+        // 仍处于上一章的 Ready 态（submit 跨章时如 priorState 是 Ready 则**不**重置 state，
+        // 给 onPartial 流式回调留出空间，避免 UI 一帧 placeholder 闪烁）。窗口期内
+        // textChapter.chapterIndex 仍是旧章；本 effect 算 target 用的 pageCount = chapter.pageSize
+        // 也是旧章页数（如 ch4=14 而非 ch3=19），导致 `startFromLastPage -> pageCount-1` 算出
+        // 旧章的 last index（13），写入 readerPageIndex / lastSettled → 用户看到「跨章 PREV
+        // 跳到 14/19 而不是 19/19」。日志 MoRealm_log_20260511_231359.txt line 147 验证：
+        // `chIdx=2 startFromLast=true pc=14 computedTarget=13`，pc 取自 ch4。
+        //
+        // 修法：textChapter.chapterIndex 必须等于当前 chapter prop chapterIndex 才能算对。
+        // 不一致时 return；chapter ref 已在本 effect key 里（替换原 `chapter?.isCompleted`），
+        // ReflowEngine.Ready(newChapter) 推到 collect 后 textChapter swap → 本 effect 重进。
+        //
+        // 这不是补丁——而是补齐「restoreProgress 的语义前提：在当前 chapter prop 上恢复位置」
+        // 所要求的一致性 invariant。LaunchedEffect 等下一帧重试是 Compose 一致性等待的标准模式。
+        if (chapter.chapterIndex != chapterIndex) {
+            AppLog.debug(
+                "BookmarkDebug",
+                "restoreProgress WAIT textChapter mismatch ch.idx=${chapter.chapterIndex}" +
+                    " prop.idx=$chapterIndex pc=$pageCount token=$restoreToken",
+            )
+            return@LaunchedEffect
+        }
         // renderPageCount <= 1 且不需要跳特定位置 → 只有 1 页，直接标记完成。
         // 但如果 startFromLastPage / initialChapterPosition / initialProgress 有值，
         // 说明需要跳到非首页 → 必须等 renderPageCount 增长到真实值才能定位。
@@ -1449,6 +1446,9 @@ fun CanvasRenderer(
         barHeightPx = with(density) { 64.dp.toPx() },
         verticalPaddingPx = with(density) { 8.dp.toPx() },
         textSizePx = with(density) { 10.sp.toPx() },
+        // status bar 显示时把顶栏整体下推，避免章节标题贴住系统状态栏；
+        // 隐藏时 WindowInsets.statusBars 自动回到 0。
+        topInsetPx = WindowInsets.statusBars.getTop(density).toFloat(),
         showChapterName = showChapterName,
         showTimeBattery = showTimeBattery,
         headerLeft = headerLeft,
@@ -1561,8 +1561,9 @@ fun CanvasRenderer(
     }
 
     // textChapter 真正完成排版（reference 换新 + isCompleted=true）后，同步切 paint。
-    // key 用 chapter 自身引用 + isCompleted —— reflow 期间引用没换（仍是 priorChapter），
-    // 不触发；onCompleted 把 reference swap 到 handle.textChapter 才触发。
+    // key 用 chapter 自身引用 + isCompleted —— ReflowEngine.Reflowing 期间 textChapter 仍
+    // 指向 visible（上一次 Ready 的 chapter），reference 不变 → 此 effect 不触发；engine
+    // 切到 Ready(newChapter) 时 collect 把 textChapter swap 到新对象 → 触发同步 paint。
     LaunchedEffect(textChapter, textChapter?.isCompleted) {
         val ch = textChapter ?: return@LaunchedEffect
         if (ch.isCompleted && ch.pages.isNotEmpty()) {
