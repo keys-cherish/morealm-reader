@@ -180,9 +180,15 @@ class ThemeViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             prefs.setFollowSystemTheme(enabled)
             if (enabled) {
-                // 立即应用一次：用户从「关」拨到「开」时，主题应该立刻和系统对齐，
-                // 不要等下一次系统暗色变化才生效。
-                applySystemDarkModeIfFollowing(systemIsDark)
+                // 直接切主题，不经过 applySystemDarkModeIfFollowing 的 followSystemTheme.value 检查
+                // —— StateFlow 可能还没收到 DataStore 的新值，检查会误判为 false 导致 return
+                val current = activeTheme.value
+                val currentIsNight = current?.isNightTheme ?: true
+                if (systemIsDark != currentIsNight) {
+                    val targetId = resolveAutoTargetThemeId(systemIsDark)
+                    themeRepo.activateTheme(targetId)
+                    AppLog.info("Theme", "Follow system toggled ON → $targetId (systemDark=$systemIsDark)")
+                }
             }
         }
     }

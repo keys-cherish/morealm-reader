@@ -204,6 +204,15 @@ interface BookSourceDao {
     @Query("DELETE FROM book_sources WHERE bookSourceUrl IN (:urls)")
     suspend fun deleteByUrls(urls: List<String>)
 
+    /**
+     * CheckSource 跑完后回写错误/时间戳。**用 UPDATE 而非 insert(REPLACE)** 的根因：
+     * 用户在校验进行中可能手动删除某个源，REPLACE 会把已删除的行复活（结合
+     * 后续 Compose 重组 + Service 异步写 → 可能触发闪退）。UPDATE 对不存在的 row
+     * 影响 0 行，自然不复活；同时只更新两个字段，比 REPLACE 整行高效（低 IO）。
+     */
+    @Query("UPDATE book_sources SET errorMsg = :errorMsg, lastCheckTime = :ts WHERE bookSourceUrl = :url")
+    suspend fun updateCheckResult(url: String, errorMsg: String?, ts: Long)
+
     @Query("DELETE FROM book_sources")
     suspend fun deleteAll()
 }

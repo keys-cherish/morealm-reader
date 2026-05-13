@@ -180,18 +180,23 @@ class CheckSourceService : Service() {
                     // 持久化校验结果到 BookSource 行（errorMsg / lastCheckTime），让角标
                     // 在重启后仍可见。`onResult` 是 [CheckSource.checkAll] 的非 suspend
                     // 回调（合约如此 — 见 CheckSource.kt:113），所以这里 spawn 一个子协程
-                    // 走 IO 写库，不能直接调 suspend 的 dao.insert。
-                    val live = sources.firstOrNull { it.bookSourceUrl == result.sourceUrl }
-                    if (live != null) {
-                        live.errorMsg = if (result.isValid) null else result.error
-                        live.lastCheckTime = System.currentTimeMillis()
-                        serviceScope.launch {
-                            runCatching { sourceDao.insert(live) }.onFailure {
-                                AppLog.warn(
-                                    "CheckSourceSvc",
-                                    "persist failed for ${result.sourceUrl}: ${it.message?.take(120)}",
-                                )
-                            }
+                    // 走 IO 写库，不能直接调 suspend 的 dao.updateCheckResult。
+                    //
+                    // 用 dao.updateCheckResult（UPDATE）而不是 insert(REPLACE)：
+                    // 校验过程中用户可能从 UI 手动删源，REPLACE 会把已删除的源复活
+                    // （Daos.kt:212 注释详述）。UPDATE 对不存在的行 0 影响，行为更安全且 IO 更小。
+                    serviceScope.launch {
+                        runCatching {
+                            sourceDao.updateCheckResult(
+                                url = result.sourceUrl,
+                                errorMsg = if (result.isValid) null else result.error,
+                                ts = System.currentTimeMillis(),
+                            )
+                        }.onFailure {
+                            AppLog.warn(
+                                "CheckSourceSvc",
+                                "persist failed for ${result.sourceUrl}: ${it.message?.take(120)}",
+                            )
                         }
                     }
                 }

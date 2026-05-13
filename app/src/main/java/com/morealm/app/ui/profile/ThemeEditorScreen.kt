@@ -1,16 +1,22 @@
 ﻿package com.morealm.app.ui.profile
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,11 +24,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
 import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.domain.render.CssParser
 import com.morealm.app.presentation.theme.ThemeViewModel
@@ -63,6 +73,9 @@ fun ThemeEditorScreen(
     var accentColor by remember { mutableStateOf("FF818CF8") }
     var customCss by remember { mutableStateOf("") }
     var editingColor by remember { mutableStateOf<String?>(null) }
+    // v1.3：阅读器背景图绑到主题。null 表示无背景图（透明 / 走背景色）。
+    // SAF Uri 字符串；rememberAsyncImagePainter 直接消费。
+    var backgroundImageUri by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(editingTheme, activeTheme) {
         val sourceTheme = editingTheme ?: activeTheme
@@ -71,6 +84,7 @@ fun ThemeEditorScreen(
         textColor = sourceTheme?.onBackgroundColor?.removePrefix("#") ?: "FFEDEDEF"
         accentColor = sourceTheme?.accentColor?.removePrefix("#") ?: "FF818CF8"
         customCss = editingTheme?.customCss ?: sourceTheme?.customCss.orEmpty()
+        backgroundImageUri = sourceTheme?.backgroundImageUri
         // 编辑现有主题：尊重 entity 已保存的 isNightTheme，并视为「用户已选定」不再联动；
         // 新建主题：以当前 bgColor 的亮度做默认值，让浅色背景默认归到「白天」、深色归到
         // 「夜晚」。比之前盲目拷 active.isNightTheme=true 友好得多——active 是 moRealm
@@ -150,6 +164,7 @@ fun ThemeEditorScreen(
                             bottomBackground = "#$bgColor",
                             readerBackground = "#$bgColor",
                             readerTextColor = "#$textColor",
+                            backgroundImageUri = backgroundImageUri,
                             customCss = customCss,
                         )
                         themeViewModel.importCustomTheme(theme)
@@ -281,6 +296,46 @@ fun ThemeEditorScreen(
                         { editingColor = if (editingColor == "accent") null else "accent" },
                         accentPalette, previewTextColor, previewAccentColor) { accentColor = it }
                 }
+            }
+            Spacer(Modifier.height(24.dp))
+
+            // ── 首页背景图（v1.3 新增：每个主题绑一张背景，应用到书架/我的等首页 Tab）──
+            //
+            // 与「阅读器背景」（在阅读设置里设置日/夜两张）解耦：
+            //   - 阅读器背景：阅读器内的纸面，不随主题切换
+            //   - 主题背景图：首页 Tab 的整体背景，随主题切换（例：夜枫主题带枫叶背景，
+            //     莫兰迪主题带磨砂质感）
+            //
+            // SAF takePersistableUriPermission 让 URI 重启后仍可访问；
+            // 失败（用户撤销权限/老 URI）静默吞，rememberAsyncImagePainter 会画灰底兜底。
+            Text("首页背景图", style = MaterialTheme.typography.titleSmall,
+                color = previewTextColor, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            val ctxForBg = LocalContext.current
+            val bgImageLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocument()
+            ) { uri ->
+                uri?.let {
+                    try {
+                        ctxForBg.contentResolver.takePersistableUriPermission(
+                            it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    } catch (_: Exception) {}
+                    backgroundImageUri = it.toString()
+                }
+            }
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.medium,
+                colors = CardDefaults.cardColors(containerColor = editorCardColor),
+            ) {
+                ThemeBgImageRow(
+                    imageUri = backgroundImageUri.orEmpty(),
+                    contentColor = previewTextColor,
+                    accentColor = previewAccentColor,
+                    onPick = { bgImageLauncher.launch(arrayOf("image/*")) },
+                    onClear = { backgroundImageUri = null },
+                )
             }
             Spacer(Modifier.height(24.dp))
 
@@ -424,6 +479,78 @@ private fun ThemeColorPickRow(
                 Spacer(Modifier.height(6.dp))
             }
             Spacer(Modifier.height(4.dp))
+        }
+    }
+}
+
+/**
+ * 主题编辑器内的背景图选择行 — 缩略图 + 选择/清除按钮。
+ *
+ * 与 ReadingSettingsScreen 的 BgImageRow 视觉一致，但上下文色彩跟 themeEditor 的
+ * preview 颜色走（contentColor / accentColor）—— 编辑器画的是「主题预览」，控件本身
+ * 也得在该主题色下可读，不然换深色主题时 outline 看不清。
+ */
+@Composable
+private fun ThemeBgImageRow(
+    imageUri: String,
+    contentColor: Color,
+    accentColor: Color,
+    onPick: () -> Unit,
+    onClear: () -> Unit,
+) {
+    val hasImage = imageUri.isNotEmpty()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onPick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (hasImage) {
+            Image(
+                painter = rememberAsyncImagePainter(
+                    ImageRequest.Builder(LocalContext.current)
+                        .data(imageUri)
+                        .size(120, 160)
+                        .crossfade(true)
+                        .build()
+                ),
+                contentDescription = "首页背景图",
+                modifier = Modifier
+                    .size(48.dp, 64.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, contentColor.copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(48.dp, 64.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(contentColor.copy(alpha = 0.08f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.Image, null,
+                    modifier = Modifier.size(20.dp),
+                    tint = contentColor.copy(alpha = 0.35f))
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(if (hasImage) "已设置" else "未设置",
+                style = MaterialTheme.typography.bodyLarge,
+                color = contentColor)
+            Text(
+                if (hasImage) "点击更换图片" else "点击选择图片",
+                style = MaterialTheme.typography.bodySmall,
+                color = contentColor.copy(alpha = 0.55f),
+            )
+        }
+        if (hasImage) {
+            TextButton(
+                onClick = onClear,
+                colors = ButtonDefaults.textButtonColors(contentColor = accentColor),
+            ) { Text("清除", style = MaterialTheme.typography.labelSmall) }
         }
     }
 }

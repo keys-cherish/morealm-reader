@@ -207,12 +207,18 @@ fun ShelfScreen(
         }
     }
 
-    // Resume last read book on first launch if setting is enabled
+    // Resume last read book on first launch if setting is enabled.
+    //
+    // 状态放在 ViewModel 里（hasResumedOnLaunch）—— 同一 Activity 进程下只触发一次。
+    // 不要用 remember/rememberSaveable：ShelfScreen 跳到 ReaderScreen 再返回时，
+    // composable 会重组，remember 会被清零导致死循环重入。
+    //
+    // LaunchedEffect 只依赖 lastRead/booksLoaded，不依赖 resumeLastRead ——
+    // 用户在设置里切换开关时不应立即跳转，只在下次启动应用时生效。
     val resumeLastRead by viewModel.resumeLastRead.collectAsStateWithLifecycle()
-    var hasResumed by remember { mutableStateOf(false) }
-    LaunchedEffect(resumeLastRead, lastRead, booksLoaded) {
-        if (resumeLastRead && !hasResumed && lastRead != null && booksLoaded) {
-            hasResumed = true
+    LaunchedEffect(lastRead, booksLoaded) {
+        if (resumeLastRead && viewModel.shouldResumeOnLaunch() && lastRead != null && booksLoaded) {
+            viewModel.markResumedOnLaunch()
             withFrameNanos { }
             delay(500)
             onBookClick(lastRead!!.id)

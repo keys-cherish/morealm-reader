@@ -242,6 +242,9 @@ fun LazyScrollRenderer(
     // [LazyListState.requestScrollToItem]）必须由 caller 在 paragraphs mutation 同协程
     // 上下文执行。所以 listState 必须由外部传入；本组件不再 rememberLazyListState。
 
+    // 程序触发的 scroll（jumpToken / TTS follow）期间为 true，防止误设 hasUserScrolled
+    var programmaticScrollActive by remember { mutableStateOf(false) }
+
     // ── 命令式跳转（书签 / TOC / 续读）──
     //
     // 同书内跳转的难点：listState 的 initial 参数只在首次 compose 生效（rememberSaveable
@@ -364,6 +367,7 @@ fun LazyScrollRenderer(
             "tts auto-follow: animateScrollToItem $targetIdx" +
                 " (chPos=$ttsHighlightChapterPosition, chIdx=$ttsHighlightChapterIndex, visible=$firstVisible..$lastVisible)",
         )
+        programmaticScrollActive = true
         listState.animateScrollToItem(targetIdx)
     }
 
@@ -478,6 +482,7 @@ fun LazyScrollRenderer(
     LaunchedEffect(jumpToken) {
         if (jumpToken != 0L) {
             hasUserScrolled = false
+            programmaticScrollActive = true
             scrollDirection = 0
             lastScrollPair = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
             AppLog.debug(
@@ -495,8 +500,20 @@ fun LazyScrollRenderer(
                 listState.firstVisibleItemScrollOffset,
             )
         }
-            .filter { it.first }
-            .collect { (_, first, offset) ->
+            .collect { (scrolling, first, offset) ->
+                if (!scrolling && programmaticScrollActive) {
+                    // programmatic scroll (jumpToken / restoreProgress) 结束，
+                    // 等 scroll 停止后再清标记，防止 settle 期间误判为用户滚动
+                    programmaticScrollActive = false
+                    lastScrollPair = first to offset
+                    return@collect
+                }
+                if (!scrolling) return@collect
+                if (programmaticScrollActive) {
+                    // 程序触发的 scroll 进行中，只更新 lastScrollPair，不设 hasUserScrolled
+                    lastScrollPair = first to offset
+                    return@collect
+                }
                 val previous = lastScrollPair
                 scrollDirection = when {
                     first > previous.first || first == previous.first && offset > previous.second -> 1

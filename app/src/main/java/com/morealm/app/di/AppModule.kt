@@ -14,6 +14,9 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import javax.inject.Singleton
 
 private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -872,4 +875,26 @@ object AppModule {
     @Provides
     @Singleton
     fun provideUpdateChecker(): UpdateChecker = UpdateChecker()
+
+    /**
+     * 进程生命周期的 [CoroutineScope]，专门承载「启动后必须跑完、不能被 UI 销毁打断」
+     * 的后台任务（导入备份 / WebDav 恢复 / 长时间数据写入）。
+     *
+     * SupervisorJob —— 一个子任务抛异常时不会株连兄弟（例如导入失败不影响后续日志/UI bus）；
+     * Dispatchers.IO —— 默认走 IO 线程池，匹配 DB/文件/网络的典型负载。
+     *
+     * 业务侧用法：@Inject @ApplicationScope private val appScope: CoroutineScope，
+     * 然后 `appScope.launch { ... }` 替代 `viewModelScope.launch { ... }`。结果反馈
+     * 走 [com.morealm.app.domain.sync.BackupStatusBus] / WebDavStatusBus 这类 singleton
+     * 总线，UI 不依赖发起方 ViewModel 是否还活着。
+     *
+     * 修复的具体 bug：`BackupImportScreen` 在「确认恢复」后立刻 `onBack()`，
+     * `BackupRestoreViewModel.viewModelScope` 被 onCleared 取消 → 导入协程刚 launch
+     * 就抛 `JobCancellationException: Job was cancelled`，数据库写一半即终止。
+     */
+    @Provides
+    @Singleton
+    @ApplicationScope
+    fun provideApplicationScope(): CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
 }
