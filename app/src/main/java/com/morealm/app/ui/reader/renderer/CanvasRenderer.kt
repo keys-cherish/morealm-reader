@@ -1750,9 +1750,9 @@ fun CanvasRenderer(
                                     0 to 0 -> tapActionTopLeft      // TL
                                     0 to 1 -> "prev"                // TC: prev page
                                     0 to 2 -> tapActionTopRight     // TR
-                                    1 to 0 -> "prev"                // ML: prev page
+                                    1 to 0 -> tapActionBottomLeft   // ML: 跟随「轻按左侧」设置
                                     1 to 1 -> "menu"                // MC: show menu
-                                    1 to 2 -> "next"                // MR: next page
+                                    1 to 2 -> tapActionBottomRight  // MR: 跟随「轻按右侧」设置
                                     2 to 0 -> tapActionBottomLeft   // BL
                                     2 to 1 -> "next"                // BC: next page
                                     2 to 2 -> tapActionBottomRight  // BR
@@ -2967,29 +2967,6 @@ private fun PageContentBox(
                     hitTestPageRough(page, dragOffset.x, dragOffset.y)?.let(onSelectionEndMove)
                 })
             }
-        }
-        if (autoPageOverlayProgress > 0 && autoPageNextPage != null && isCurrentDisplayPage) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(with(LocalDensity.current) { autoPageOverlayProgress.toDp() })
-                    .align(Alignment.TopStart),
-            ) {
-                PageCanvas(
-                    page = autoPageNextPage,
-                    selectionStart = null,
-                    selectionEnd = null,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .align(Alignment.TopStart)
-                    .offset(y = with(LocalDensity.current) { autoPageOverlayProgress.toDp() })
-                .background(autoPageAccentColor),
-            )
         }
         PageReaderInfoOverlay(
             pages = listOf(page),

@@ -66,8 +66,12 @@ import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.entity.displayTitle
 import com.morealm.app.domain.entity.isAutoSplitChapter
 import com.morealm.app.presentation.reader.ReaderSearchController
+import com.morealm.app.presentation.reader.ReaderToolBarViewModel
 import com.morealm.app.presentation.source.SourceLoginViewModel
 import com.morealm.app.ui.source.SourceLoginOverlay
+import com.morealm.app.ui.reader.toolbar.ReaderEditGuideTooltip
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.ui.theme.MoRealmColors
@@ -105,6 +109,7 @@ fun ReaderScreen(
      * key 即 Activity 级单例，和 BookSourceManageScreen / 详情页共用登录状态机。
      */
     loginViewModel: SourceLoginViewModel = hiltViewModel(),
+    toolBarViewModel: ReaderToolBarViewModel = hiltViewModel(),
 ) {
     val book by viewModel.book.collectAsStateWithLifecycle()
     val chapters by viewModel.chapters.collectAsStateWithLifecycle()
@@ -220,6 +225,13 @@ fun ReaderScreen(
     val ftrRight by viewModel.settings.footerRight.collectAsStateWithLifecycle()
     val moColors = LocalMoRealmColors.current
 
+    // Toolbar editor state
+    val toolbarLayout by toolBarViewModel.layout.collectAsStateWithLifecycle()
+    val toolbarEditing by toolBarViewModel.editing.collectAsStateWithLifecycle()
+    val toolbarMarkedHide by toolBarViewModel.markedHide.collectAsStateWithLifecycle()
+    val toolbarGuideSeen by toolBarViewModel.guideSeen.collectAsStateWithLifecycle()
+    var showToolbarGuide by remember { mutableStateOf(false) }
+
     // Apply screen orientation
     val activity = LocalContext.current as? android.app.Activity
     LaunchedEffect(screenOrientation) {
@@ -328,6 +340,7 @@ fun ReaderScreen(
     // Back button: dismiss overlays first, then exit
     BackHandler(enabled = true) {
         when {
+            toolbarEditing -> toolBarViewModel.exitEditMode()
             showFullSearch -> showFullSearch = false
             showBookmarks -> showBookmarks = false
             showChapterList -> showChapterList = false
@@ -534,10 +547,6 @@ fun ReaderScreen(
         // Resolve background image priority:
         // 1. Per-style customBgImage (from reader bottom panel)
         // 2. Global day/night bg image (from Reading Settings)
-        //
-        // 老版本有第 3 层 fallback：activeStyle?.bgImageUri / bgImageUriNight。但这
-        // 两个字段在 v29 已经从 ReaderStyle 删除（颜色/背景图职责归 prefs / 主题），
-        // 现在只剩两层。
         val readerBgImage = customBgImage.ifEmpty {
             val globalBg = if (isNight) readerBgImageNight else readerBgImageDay
             globalBg
@@ -590,7 +599,13 @@ fun ReaderScreen(
                 restoreToken = renderedChapter.restoreToken,
                 pageAnimType = pageAnim.toPageAnimType(),
                 onProgressRestored = { viewModel.clearNavigateDirection() },
-                onTapCenter = { viewModel.toggleControls() },
+                onTapCenter = {
+                    if (toolbarEditing) {
+                        toolBarViewModel.exitEditMode()
+                    } else {
+                        viewModel.toggleControls()
+                    }
+                },
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
                 onVisiblePageChanged = { idx, title, progress, chapterPosition ->
                     viewModel.onVisiblePageChanged(idx, title, progress, chapterPosition)
@@ -630,7 +645,13 @@ fun ReaderScreen(
                 restoreToken = renderedChapter.restoreToken,
                 onProgressRestored = { viewModel.clearNavigateDirection() },
                 pageAnimType = pageAnim.toPageAnimType(),
-                onTapCenter = { viewModel.toggleControls() },
+                onTapCenter = {
+                    if (toolbarEditing) {
+                        toolBarViewModel.exitEditMode()
+                    } else {
+                        viewModel.toggleControls()
+                    }
+                },
                 onProgress = { pct -> viewModel.updateScrollProgress(pct) },
                 onVisiblePageChanged = { index, title, progress, chapterPosition ->
                     viewModel.onVisiblePageChanged(index, title, progress, chapterPosition)
@@ -805,7 +826,7 @@ fun ReaderScreen(
             )
         }
 
-        // Bottom control bar
+        // Bottom control bar (stays visible during edit mode — buttons wiggle in place)
         AnimatedVisibility(
             visible = showControls,
             enter = fadeIn(tween(300)),
@@ -859,6 +880,13 @@ fun ReaderScreen(
                     }
                     viewModel.setAutoPageInterval(next)
                 },
+                editing = toolbarEditing,
+                layout = toolbarLayout,
+                markedHide = toolbarMarkedHide,
+                onEnterEdit = toolBarViewModel::enterEditMode,
+                onExitEdit = toolBarViewModel::exitEditMode,
+                onToggleToolVisibility = toolBarViewModel::toggleToolVisibility,
+                onReorder = toolBarViewModel::reorder,
                 // #3 全书拖动：(章号, 章内%) → loadChapter restoreProgress
                 // 不在这里 hideControls：onSeekFullBook 在拖动期间会被「跨章预览」
                 // (ReaderControlBar 内的 conflate worker) 反复触发，每次都 hide 会让
@@ -874,23 +902,42 @@ fun ReaderScreen(
             )
         }
 
-        // Floating day/night toggle button (always visible, independent of control bar).
-        // Anchored at BottomCenter so the toggle is reachable with either thumb regardless
-        // of handedness — previously BottomEnd, which crowded right-handed page-turn taps.
-        //
-        // UX-1 (沉浸感): 阅读时常驻浮动按钮违背"沉浸式阅读"直觉. 不删除 (用户依赖该入口),
-        //   但削弱 alpha (0.6→0.35 / 0.7→0.5) 让它"半隐", 并把 padding 从 16dp→22dp
-        //   让按钮远离 BC 翻页区, 减少用户对误触的视觉担忧.
-        if (!showControls && !showSettings && !showTtsPanel && !showChapterList && !showBookmarks && !showFullSearch) {
-            androidx.compose.material3.FilledIconButton(
-                onClick = { themeViewModel?.toggleDayNight() },
+        // Toolbar edit mode: buttons wiggle in place inside ReaderControlBar.
+        // First-time guide tooltip pointing at the bottom bar.
+        LaunchedEffect(showControls, toolbarGuideSeen) {
+            if (showControls && !toolbarGuideSeen && !toolbarEditing) {
+                showToolbarGuide = true
+            }
+        }
+        if (showToolbarGuide && !toolbarEditing) {
+            ReaderEditGuideTooltip(
+                visible = true,
+                onDismiss = {
+                    showToolbarGuide = false
+                    toolBarViewModel.markGuideSeen()
+                },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 22.dp)
-                    .size(36.dp),
+                    .padding(bottom = 180.dp)
+                    .padding(horizontal = 24.dp),
+            )
+        }
+
+        // Day/night toggle — above bottom bar, right-aligned. Only visible when controls are showing.
+        AnimatedVisibility(
+            visible = showControls && !toolbarEditing,
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(150)),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 140.dp),
+        ) {
+            androidx.compose.material3.FilledIconButton(
+                onClick = { themeViewModel?.toggleDayNight() },
+                modifier = Modifier.size(36.dp),
                 colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
-                    contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f),
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ),
             ) {
                 androidx.compose.material3.Icon(

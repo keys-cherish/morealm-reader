@@ -2,12 +2,14 @@ package com.morealm.app.presentation.profile
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.morealm.app.di.ApplicationScope
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.BackupRepository
 import com.morealm.app.domain.sync.WebDavClient
 import com.morealm.app.domain.sync.WebDavStatusBus
 import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -20,6 +22,13 @@ import javax.inject.Inject
 class WebDavViewModel @Inject constructor(
     private val prefs: AppPreferences,
     private val backupRepo: BackupRepository,
+    /**
+     * 进程级 scope —— 用于 [webDavBackup] / [webDavRestore] 等「启动后必须跑完」
+     * 的协程。WebDavScreen 在恢复确认对话框点完确认后，用户很可能立即按返回退
+     * 出本页，[viewModelScope] 随之 cancel，导入半截被砍。状态反馈走
+     * [WebDavStatusBus]（application 级 singleton），UI 永远能收到结果。
+     */
+    @ApplicationScope private val appScope: CoroutineScope,
 ) : ViewModel() {
 
     // ── WebDav settings (read) ──
@@ -182,7 +191,12 @@ class WebDavViewModel @Inject constructor(
         val device = webDavDeviceName.value.trim()
         val onlyLatest = onlyLatestBackup.value
 
-        viewModelScope.launch(Dispatchers.IO) {
+        // appScope（不是 viewModelScope）—— 备份可能耗时数秒到数十秒，用户在等待
+        // 期间退出 WebDavScreen 是常见操作；旧实现绑在 viewModelScope 上会让退栈
+        // 直接 cancel 上传，云端可能拿到半截或没拿到任何数据。状态写入 _webDavStatus
+        // 在 VM 已 cleared 时是无害的 dead write；用户下次打开本页时由
+        // [WebDavStatusBus] 的 replay=1 历史状态补显。
+        appScope.launch(Dispatchers.IO) {
             _webDavStatus.value = "备份中..."
             try {
                 val client = backupRepo.createWebDavClient(url, user, pass)
@@ -190,6 +204,7 @@ class WebDavViewModel @Inject constructor(
                 val backupData = backupRepo.generateBackupBytes()
                 if (backupData == null) {
                     _webDavStatus.value = "备份数据生成失败"
+                    WebDavStatusBus.emit(WebDavStatusBus.Status(WebDavStatusBus.Source.MANUAL, "备份数据生成失败", success = false))
                     return@launch
                 }
                 val ts = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
@@ -200,9 +215,12 @@ class WebDavViewModel @Inject constructor(
                 client.upload("$dir/backup_latest${deviceSuffix}.zip", backupData)
                 prefs.setLastAutoBackup(System.currentTimeMillis())
                 _webDavStatus.value = "备份成功"
+                WebDavStatusBus.emit(WebDavStatusBus.Status(WebDavStatusBus.Source.MANUAL, "备份成功", success = true))
                 AppLog.info("WebDAV", "Backup uploaded: ${backupData.size} bytes (onlyLatest=$onlyLatest, device=$device)")
             } catch (e: Exception) {
-                _webDavStatus.value = "备份失败：${e.message}"
+                val msg = "备份失败：${e.message}"
+                _webDavStatus.value = msg
+                WebDavStatusBus.emit(WebDavStatusBus.Status(WebDavStatusBus.Source.MANUAL, msg, success = false))
                 AppLog.error("WebDAV", "Backup failed", e)
             }
         }
@@ -221,20 +239,31 @@ class WebDavViewModel @Inject constructor(
         val device = webDavDeviceName.value.trim()
         val deviceSuffix = if (device.isNotEmpty()) "_${device.replace(Regex("[^A-Za-z0-9_-]"), "")}" else ""
         val path = remotePath?.takeIf { it.isNotBlank() } ?: "$dir/backup_latest${deviceSuffix}.zip"
+        val password = backupPassword.value
 
-        viewModelScope.launch(Dispatchers.IO) {
+        // appScope —— 恢复对话框「确认覆盖」按下后，用户经常立即退栈回 ProfileScreen，
+        // viewModelScope 一被 cancel 数据库就会写一半。`backupRepo.importBackupFromBytes`
+        // 内部 BackupManager.mutex 串行化 + 字段级 runCatching，保证即便走到 appScope
+        // 也是幂等 / 安全的。
+        appScope.launch(Dispatchers.IO) {
             _webDavStatus.value = "恢复中..."
             try {
                 val client = backupRepo.createWebDavClient(url, user, pass)
                 val data = client.download(path)
                 if (data.isEmpty()) {
-                    _webDavStatus.value = "未找到备份文件"
+                    val msg = "未找到备份文件"
+                    _webDavStatus.value = msg
+                    WebDavStatusBus.emit(WebDavStatusBus.Status(WebDavStatusBus.Source.MANUAL, msg, success = false))
                     return@launch
                 }
-                val ok = backupRepo.importBackupFromBytes(data, backupPassword.value)
-                _webDavStatus.value = if (ok) "恢复成功" else "恢复失败（密码错误或备份损坏？）"
+                val ok = backupRepo.importBackupFromBytes(data, password)
+                val msg = if (ok) "恢复成功" else "恢复失败（密码错误或备份损坏？）"
+                _webDavStatus.value = msg
+                WebDavStatusBus.emit(WebDavStatusBus.Status(WebDavStatusBus.Source.MANUAL, msg, success = ok))
             } catch (e: Exception) {
-                _webDavStatus.value = "恢复失败：${e.message}"
+                val msg = "恢复失败：${e.message}"
+                _webDavStatus.value = msg
+                WebDavStatusBus.emit(WebDavStatusBus.Status(WebDavStatusBus.Source.MANUAL, msg, success = false))
                 AppLog.error("WebDAV", "Restore failed", e)
             }
         }

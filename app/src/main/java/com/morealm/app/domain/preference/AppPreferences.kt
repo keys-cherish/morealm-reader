@@ -244,6 +244,9 @@ class AppPreferences @Inject constructor(
          * 章节内搜索的最近历史。换行分隔，最多 20 条；UI chip 展示。
          */
         val READER_SEARCH_HISTORY = stringPreferencesKey("reader_search_history")
+        // ── 阅读器工具栏编辑 ──────────────────────────────────────────────
+        val READER_TOOLBAR_LAYOUT = stringPreferencesKey("reader_toolbar_layout")
+        val READER_TOOLBAR_EDIT_GUIDE_SEEN = booleanPreferencesKey("reader_toolbar_edit_guide_seen")
         // Threshold (= number of books carrying the same genre tag) before the
         // classifier promotes that tag into a real folder. Lower = folders appear
         // sooner with less curation; higher = only "real" interests get a folder.
@@ -456,7 +459,7 @@ class AppPreferences @Inject constructor(
         .map { it[Keys.PAGE_ANIM] ?: "vertical" }
 
     val tapLeftAction: Flow<String> = context.dataStore.data
-        .map { it[Keys.TAP_LEFT_ACTION] ?: "next" }
+        .map { it[Keys.TAP_LEFT_ACTION] ?: "prev" }
 
     val volumeKeyPage: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.VOLUME_KEY_PAGE] ?: true }
@@ -593,9 +596,9 @@ class AppPreferences @Inject constructor(
     suspend fun setChineseConvertMode(mode: Int) = update(Keys.CHINESE_CONVERT_MODE, mode)
 
     // Tap zone actions
-    val tapActionTopLeft: Flow<String> = context.dataStore.data.map { it[Keys.TAP_ACTION_TOP_LEFT] ?: "prev" }
+    val tapActionTopLeft: Flow<String> = context.dataStore.data.map { it[Keys.TAP_ACTION_TOP_LEFT] ?: it[Keys.TAP_LEFT_ACTION] ?: "prev" }
     val tapActionTopRight: Flow<String> = context.dataStore.data.map { it[Keys.TAP_ACTION_TOP_RIGHT] ?: "next" }
-    val tapActionBottomLeft: Flow<String> = context.dataStore.data.map { it[Keys.TAP_ACTION_BOTTOM_LEFT] ?: "prev" }
+    val tapActionBottomLeft: Flow<String> = context.dataStore.data.map { it[Keys.TAP_ACTION_BOTTOM_LEFT] ?: it[Keys.TAP_LEFT_ACTION] ?: "prev" }
     val tapActionBottomRight: Flow<String> = context.dataStore.data.map { it[Keys.TAP_ACTION_BOTTOM_RIGHT] ?: "next" }
     suspend fun setTapAction(key: Preferences.Key<String>, action: String) = update(key, action)
 
@@ -653,6 +656,17 @@ class AppPreferences @Inject constructor(
 
     val recordLog: Flow<Boolean> = context.dataStore.data.map { it[Keys.RECORD_LOG] ?: false }
     suspend fun setRecordLog(enabled: Boolean) = update(Keys.RECORD_LOG, enabled)
+
+    // ── 阅读器工具栏编辑 ──────────────────────────────────────────────────
+    val readerToolbarLayout: Flow<String> = context.dataStore.data
+        .map { it[Keys.READER_TOOLBAR_LAYOUT] ?: "" }
+
+    suspend fun setReaderToolbarLayout(json: String) = update(Keys.READER_TOOLBAR_LAYOUT, json)
+
+    val readerToolbarEditGuideSeen: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.READER_TOOLBAR_EDIT_GUIDE_SEEN] ?: false }
+
+    suspend fun setReaderToolbarEditGuideSeen(seen: Boolean) = update(Keys.READER_TOOLBAR_EDIT_GUIDE_SEEN, seen)
 
     suspend fun <T> update(key: Preferences.Key<T>, value: T) {
         context.dataStore.edit { it[key] = value }
@@ -787,7 +801,21 @@ class AppPreferences @Inject constructor(
     }
     suspend fun setDisclaimerAccepted() = update(Keys.DISCLAIMER_ACCEPTED, true)
     suspend fun setPageAnim(anim: String) = update(Keys.PAGE_ANIM, anim)
-    suspend fun setTapLeftAction(action: String) = update(Keys.TAP_LEFT_ACTION, action)
+    suspend fun setTapLeftAction(action: String) {
+        update(Keys.TAP_LEFT_ACTION, action)
+        update(Keys.TAP_ACTION_TOP_LEFT, action)
+        update(Keys.TAP_ACTION_BOTTOM_LEFT, action)
+        // 左侧设为 prev/next 时，右侧自动翻转为相反动作（典型阅读器交互）
+        val opposite = when (action) {
+            "next" -> "prev"
+            "prev" -> "next"
+            else -> null
+        }
+        if (opposite != null) {
+            update(Keys.TAP_ACTION_TOP_RIGHT, opposite)
+            update(Keys.TAP_ACTION_BOTTOM_RIGHT, opposite)
+        }
+    }
     suspend fun setVolumeKeyPage(enabled: Boolean) = update(Keys.VOLUME_KEY_PAGE, enabled)
     suspend fun setVolumeKeyReverse(enabled: Boolean) = update(Keys.VOLUME_KEY_REVERSE, enabled)
     suspend fun setHeadsetButtonPage(enabled: Boolean) = update(Keys.HEADSET_BUTTON_PAGE, enabled)

@@ -193,10 +193,27 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.3",
+        date = "2026-05-13",
+        title = "阅读体验 + 书源稳定性修复",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            ChangelogItem(ChangeType.NEW, "阅读器底部工具栏可自定义：长按进入编辑模式，拖动改位置，加号添加 / 减号隐藏"),
+            ChangelogItem(ChangeType.NEW, "主题编辑器加「首页背景图」字段，每个自定义主题可以绑一张"),
+            ChangelogItem(ChangeType.FIX, "滚动模式上下滚动自动跳章"),
+            ChangelogItem(ChangeType.FIX, "换源大多数返回空目录"),
+            ChangelogItem(ChangeType.FIX, "校验书源过程中删源会闪退"),
+            ChangelogItem(ChangeType.FIX, "校验完成可以勾选删除无效书源"),
+            ChangelogItem(ChangeType.FIX, "Legado 主题导入颜色异常（洋红 / 透明）"),
+            ChangelogItem(ChangeType.FIX, "跟随系统主题打开开关后不立即生效"),
+            ChangelogItem(ChangeType.FIX, "阅读设置「左侧轻按」改完不生效"),
+            ChangelogItem(ChangeType.FIX, "阅读器工具栏加号被遮挡 + 颜色容易被误以为不可点击"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.2",
         date = "2026-05-10",
         title = "视觉重设计 · UI 全面焕新",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             // ── 新增 ──
             ChangelogItem(ChangeType.NEW, "首页书架「我的书架」标题行：在「继续阅读」下方左标题右双按钮（排序 + 切换视图），与顶栏 greeting 形成清晰视觉分隔"),

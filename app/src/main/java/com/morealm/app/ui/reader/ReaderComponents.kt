@@ -5,6 +5,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -31,6 +34,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.input.pointer.pointerInput
+import com.morealm.app.domain.entity.ReaderTool
+import com.morealm.app.domain.entity.ReaderToolLayout
+import com.morealm.app.domain.entity.ReaderToolZone
+import com.morealm.app.ui.reader.toolbar.icon
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -210,6 +220,13 @@ fun ReaderControlBar(
     onTts: () -> Unit, onSettings: () -> Unit, onChapterSelect: () -> Unit,
     onSearch: () -> Unit = {},
     onAutoPage: () -> Unit = {},
+    editing: Boolean = false,
+    layout: ReaderToolLayout = ReaderToolLayout.Default,
+    onEnterEdit: () -> Unit = {},
+    onExitEdit: () -> Unit = {},
+    onToggleToolVisibility: (ReaderTool) -> Unit = {},
+    onReorder: (ReaderToolZone, Int, Int) -> Unit = { _, _, _ -> },
+    markedHide: Set<ReaderTool> = emptySet(),
     /**
      * #3 进度条拖动跳转：松手时调一次。
      *
@@ -531,90 +548,179 @@ fun ReaderControlBar(
             // 改为 44dp 容器 + 22dp icon（接近 Material3 标准触摸目标 48dp）。
             // 章节标题预览已上移到顶部独立行，这里专注按钮均匀分布。
             Spacer(Modifier.height(4.dp))
+            val wiggleAngle by androidx.compose.animation.core.animateFloatAsState(
+                targetValue = if (editing) 2f else 0f,
+                animationSpec = if (editing) {
+                    androidx.compose.animation.core.infiniteRepeatable(
+                        animation = androidx.compose.animation.core.tween(100),
+                        repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+                    )
+                } else androidx.compose.animation.core.tween(200),
+                label = "wiggle"
+            )
+
+            val visibleTools = if (editing) {
+                // 编辑模式：先 Bottom 再 Hidden，Hidden 后绘制不会被遮挡
+                val bottom = layout.toolsIn(ReaderToolZone.Bottom)
+                val hidden = layout.order.filter {
+                    (layout.zones[it] ?: it.defaultZone) == ReaderToolZone.Hidden
+                }
+                bottom + hidden
+            } else {
+                // 常态：只显示Bottom的
+                layout.toolsIn(ReaderToolZone.Bottom)
+            }
+            val toolActions = mapOf(
+                ReaderTool.Catalog to onChapterSelect,
+                ReaderTool.Search to onSearch,
+                ReaderTool.Audio to onTts,
+                ReaderTool.AutoPage to onAutoPage,
+                ReaderTool.Settings to onSettings,
+            )
+
+            var draggedTool by remember { mutableStateOf<ReaderTool?>(null) }
+            var dragOffset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+            var dropTargetIndex by remember { mutableIntStateOf(-1) }
+
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = if (editing) 8.dp else 0.dp)
+                    .pointerInput(editing) {
+                        if (!editing) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                val longPress = withTimeoutOrNull(500L) {
+                                    waitForUpOrCancellation()
+                                }
+                                if (longPress == null) {
+                                    com.morealm.app.core.log.AppLog.info("ToolbarEdit", "长按触发编辑模式")
+                                    onEnterEdit()
+                                    waitForUpOrCancellation()
+                                }
+                            }
+                        }
+                    },
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 IconButton(
                     onClick = onBack,
+                    enabled = !editing,
                     modifier = Modifier
                         .size(44.dp)
-                        .semantics {
-                            contentDescription = "返回书架"
-                            role = Role.Button
-                        },
+                        .graphicsLayer { rotationZ = if (editing) wiggleAngle else 0f }
                 ) {
-                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回",
+                    Icon(
+                        Icons.AutoMirrored.Outlined.ArrowBack,
+                        "返回",
                         tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(22.dp))
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
-                IconButton(
-                    onClick = onChapterSelect,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .semantics {
-                            contentDescription = "目录"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, "目录",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(22.dp))
-                }
-                IconButton(
-                    onClick = onSearch,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .semantics {
-                            contentDescription = "全文搜索"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Outlined.Search, "搜索",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(22.dp))
-                }
-                IconButton(
-                    onClick = onTts,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .semantics {
-                            contentDescription = "朗读"
-                            role = Role.Button
-                        },
-                ) {
-                    // 麦克风图标 + primary tint —— 仍是激活态视觉重心，跟其他 outlined
-                    // 灰色按钮形成对比；image 16 的 mic 也是这个走法。
-                    Icon(Icons.Outlined.Mic, "朗读",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(22.dp))
-                }
-                IconButton(
-                    onClick = onAutoPage,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .semantics {
-                            contentDescription = "自动翻页"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Outlined.Timer, "自动翻页",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(22.dp))
-                }
-                IconButton(
-                    onClick = onSettings,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .semantics {
-                            contentDescription = "阅读设置"
-                            role = Role.Button
-                        },
-                ) {
-                    Icon(Icons.Outlined.TextFields, "设置",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(22.dp))
+
+                visibleTools.forEachIndexed { idx, tool ->
+                    val isDragging = draggedTool == tool
+                    val isDropTarget = dropTargetIndex == idx
+                    val currentZone = layout.zones[tool] ?: tool.defaultZone
+                    val isHidden = currentZone == ReaderToolZone.Hidden
+                    val isMarkedHide = tool in markedHide
+                    Box(
+                        modifier = Modifier
+                            .zIndex(if (isDragging) 10f else 0f)
+                            .graphicsLayer {
+                                scaleX = if (isDragging) 1.1f else 1f
+                                scaleY = if (isDragging) 1.1f else 1f
+                                alpha = if (isDragging) 0.5f else if (isMarkedHide || isHidden) 0.75f else 1f
+                                translationX = if (isDragging) dragOffset.x else 0f
+                                translationY = if (isDragging) dragOffset.y else 0f
+                                clip = false
+                            }
+                            .then(
+                                if (isDropTarget && editing) Modifier.border(
+                                    2.dp,
+                                    MaterialTheme.colorScheme.primary,
+                                    RoundedCornerShape(12.dp)
+                                ) else Modifier
+                            )
+                    ) {
+                        val action = toolActions[tool] ?: {}
+                        IconButton(
+                            onClick = action,
+                            enabled = !editing,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .graphicsLayer {
+                                    rotationZ = if (editing && !isDragging) (if (idx % 2 == 0) wiggleAngle else -wiggleAngle) else 0f
+                                }
+                                .pointerInput(editing, tool) {
+                                    if (editing) {
+                                        awaitEachGesture {
+                                            val down = awaitFirstDown(requireUnconsumed = false)
+                                            val longPress = withTimeoutOrNull(500L) {
+                                                waitForUpOrCancellation()
+                                            }
+                                            if (longPress == null) {
+                                                draggedTool = tool
+                                                dragOffset = androidx.compose.ui.geometry.Offset.Zero
+                                                var prevPos = down.position
+                                                var event = awaitPointerEvent()
+                                                while (event.changes.any { it.pressed }) {
+                                                    val change = event.changes.first()
+                                                    val delta = change.position - prevPos
+                                                    dragOffset += delta
+                                                    prevPos = change.position
+                                                    val itemWidth = 60.dp.toPx()
+                                                    val draggedIdx = visibleTools.indexOf(tool)
+                                                    val offsetItems = (dragOffset.x / itemWidth).toInt()
+                                                    val targetIdx = (draggedIdx + offsetItems).coerceIn(0, visibleTools.size - 1)
+                                                    dropTargetIndex = if (targetIdx != draggedIdx) targetIdx else -1
+                                                    change.consume()
+                                                    event = awaitPointerEvent()
+                                                }
+                                                if (dropTargetIndex >= 0 && dropTargetIndex != visibleTools.indexOf(tool)) {
+                                                    onReorder(ReaderToolZone.Bottom, visibleTools.indexOf(tool), dropTargetIndex)
+                                                }
+                                                draggedTool = null
+                                                dragOffset = androidx.compose.ui.geometry.Offset.Zero
+                                                dropTargetIndex = -1
+                                            }
+                                        }
+                                    }
+                                }
+                        ) {
+                            Icon(
+                                tool.icon(),
+                                tool.label,
+                                tint = if (isMarkedHide || isHidden) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                       else if (tool == ReaderTool.Audio) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        if (editing && tool.removable && !isDragging) {
+                            val showPlus = isMarkedHide || isHidden
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(16.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (showPlus) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.error
+                                    )
+                                    .clickable { onToggleToolVisibility(tool) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    if (showPlus) Icons.Default.Add else Icons.Default.Remove,
+                                    null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

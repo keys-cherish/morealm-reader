@@ -89,6 +89,21 @@ class ShelfViewModel @Inject constructor(
     val resumeLastRead: StateFlow<Boolean> = prefs.resumeLastRead
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    /**
+     * 进程级标记：本次 Activity 生命周期内，「启动后继续阅读」是否已经触发过。
+     *
+     * # 死循环根因
+     * 原实现用 `remember { mutableStateOf(false) }` 持有 hasResumed —
+     * ShelfScreen 跳到 ReaderScreen 时退出组合，按返回回到书架后 remember 重置为
+     * false，LaunchedEffect 立即再次 fire → 进入同一本书 → 返回 → 再进 → 死循环。
+     *
+     * 修复：状态搬到 ViewModel（同一 NavBackStackEntry 下存活），首次触发后置 true，
+     * 后续重组直接被 hasResumedOnLaunch 拦截。
+     */
+    private var hasResumedOnLaunch: Boolean = false
+    fun markResumedOnLaunch() { hasResumedOnLaunch = true }
+    fun shouldResumeOnLaunch(): Boolean = !hasResumedOnLaunch
+
     fun resumeLastRead(onNavigate: (String) -> Unit) {
         viewModelScope.launch {
             val book = lastReadBook.value ?: return@launch

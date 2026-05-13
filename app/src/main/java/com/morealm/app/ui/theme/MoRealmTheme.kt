@@ -12,14 +12,35 @@ import androidx.compose.ui.graphics.luminance
 import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.domain.entity.BuiltinThemes
 
-/** Parse "#AARRGGBB" or "#RRGGBB" hex string to Compose Color */
+/** Parse color string to Compose Color. Supports:
+ *  - "#AARRGGBB" / "#RRGGBB" hex
+ *  - Integer ARGB (e.g. "-1" = white, Legado format)
+ *  - Empty/invalid → transparent fallback (never magenta) */
 fun String.toComposeColor(): Color {
-    val hex = removePrefix("#")
-    val value = hex.toLongOrNull(16) ?: return Color.Magenta
+    if (isBlank()) return Color.Transparent
+    val trimmed = trim()
+    // Legado 整数格式: "-1" = 0xFFFFFFFF (白), "-16777216" = 0xFF000000 (黑)
+    trimmed.toLongOrNull()?.let { intVal ->
+        return Color(intVal.toInt())
+    }
+    val raw = trimmed.removePrefix("#")
+    // Legado 用 Integer.toHexString() 不零填充，7位实际是8位ARGB省略前导零
+    val hex = when (raw.length) {
+        7 -> "0$raw"
+        5 -> "0$raw"
+        else -> raw
+    }
+    val value = hex.toLongOrNull(16) ?: return Color.Transparent
     return when (hex.length) {
         8 -> Color(value.toInt())
         6 -> Color((0xFF000000 or value).toInt())
-        else -> Color.Magenta
+        3 -> {
+            val r = hex[0].digitToInt(16)
+            val g = hex[1].digitToInt(16)
+            val b = hex[2].digitToInt(16)
+            Color(0xFF000000 or ((r * 17L) shl 16) or ((g * 17L) shl 8) or (b * 17L))
+        }
+        else -> Color.Transparent
     }
 }
 

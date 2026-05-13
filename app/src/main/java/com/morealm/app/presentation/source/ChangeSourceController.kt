@@ -211,7 +211,6 @@ class ChangeSourceController(
         )
         scope.launch(Dispatchers.IO) {
             val sb = candidate.searchBook
-            val tocUrl = sb.tocUrl.ifBlank { sb.bookUrl }
 
             // Step 1: 找新源
             val newSource = sourceRepo.getByUrl(candidate.sourceUrl) ?: run {
@@ -228,7 +227,27 @@ class ChangeSourceController(
             val cacheKey = candidate.sourceUrl + "|" + sb.bookUrl
             val newToc: List<ChapterResult> = try {
                 tocCache[cacheKey] ?: withTimeout(prefs.getSourceSearchTimeoutMs()) {
-                    WebBook.getChapterListAwait(newSource, sb.bookUrl, tocUrl)
+                    // 根因：搜索结果 sb.tocUrl 永远为空（BookList 不读 tocUrl，搜索规则也没有这字段），
+                    // 很多源详情页 URL ≠ 目录页 URL（详情 /book/123，目录 /book/123/chapters）。
+                    // 直接拿 bookUrl 当 tocUrl 跑 chapterList 规则会大概率匹配不到元素 → 空目录。
+                    // 修复：与 CheckSource.check() 一致，先 getBookInfoAwait 让 infoRule.tocUrl 把真目录 URL 填进 sb.tocUrl。
+                    //
+                    // 最优化：仅当 source 有 infoRule.tocUrl 规则时才发起 bookInfo 请求 ——
+                    // 若 infoRule.tocUrl 为空/null，BookInfo 也只会把 sb.tocUrl 兜底为 baseUrl（=bookUrl），
+                    // 等于没变化，此时调 getBookInfoAwait 纯属浪费 1 次 HTTP。
+                    val hasTocRule = !newSource.getBookInfoRule().tocUrl.isNullOrBlank()
+                    if (sb.tocUrl.isBlank() && hasTocRule) {
+                        runCatching { WebBook.getBookInfoAwait(newSource, sb) }
+                            .onFailure {
+                                AppLog.warn(
+                                    "ChangeSource",
+                                    "getBookInfoAwait failed on '${newSource.bookSourceName}': " +
+                                        "${it.message?.take(100)} — 用 bookUrl 兜底继续"
+                                )
+                            }
+                    }
+                    val effectiveTocUrl = sb.tocUrl.ifBlank { sb.bookUrl }
+                    WebBook.getChapterListAwait(newSource, sb.bookUrl, effectiveTocUrl)
                 }.also { tocCache[cacheKey] = it }
             } catch (e: Exception) {
                 AppLog.warn(
@@ -275,9 +294,11 @@ class ChangeSourceController(
                 .onFailure { AppLog.warn("ChangeSource", "saveChapters failed: ${it.message}") }
 
             // Step 5: 写回 Book
+            //   sb.tocUrl 此时已被 Step 2 中的 getBookInfoAwait 回填（或保持空走 bookUrl 兜底路径）。
+            //   写回 null 表示「下次刷新走 bookUrl」，避免存了无效空串。
             val updated = book.copy(
                 bookUrl = sb.bookUrl,
-                tocUrl = tocUrl.ifBlank { null },
+                tocUrl = sb.tocUrl.ifBlank { null },
                 origin = sb.origin,
                 originName = sb.originName.ifBlank { candidate.sourceName },
                 sourceId = sb.origin,
