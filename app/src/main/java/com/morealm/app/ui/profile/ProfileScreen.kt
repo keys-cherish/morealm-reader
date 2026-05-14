@@ -134,6 +134,17 @@ fun ProfileScreen(
     val snackbarHost = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    // 主题导入消息订阅 —— ViewModel 的 importMessage SharedFlow 通过 snackbar 提示用户：
+    //   - 成功："已导入主题：XXX"
+    //   - ReadConfig 命中："检测到「阅读样式配置」..."（关键 toast，告知用户 JSON 类型识别情况）
+    //   - 失败："主题导入失败：XXX"
+    // 用 snackbarHost 而非 Toast：与现有「删除主题撤销」共用一个 host，UI 上不重叠
+    androidx.compose.runtime.LaunchedEffect(themeViewModel) {
+        themeViewModel.importMessage.collect { msg ->
+            snackbarHost.showSnackbar(msg)
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier.fillMaxSize()

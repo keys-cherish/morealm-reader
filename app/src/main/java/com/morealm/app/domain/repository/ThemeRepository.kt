@@ -4,8 +4,10 @@ import android.content.Context
 import android.content.res.Configuration
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.db.ThemeDao
+import com.morealm.app.domain.entity.LegadoReadConfig
 import com.morealm.app.domain.entity.LegadoThemeConfig
 import com.morealm.app.domain.entity.ThemeEntity
+import com.morealm.app.domain.entity.toThemeEntities
 import com.morealm.app.domain.http.okHttpClient
 import com.morealm.app.domain.http.newCallByteArrayResponse
 import com.morealm.app.domain.preference.AppPreferences
@@ -68,16 +70,64 @@ class ThemeRepository @Inject constructor(
         activateTheme(savedTheme.id)
     }
 
-    suspend fun importLegadoTheme(jsonString: String): ThemeEntity {
-        val legadoConfig = json.decodeFromString<LegadoThemeConfig>(jsonString)
-        val entity = legadoConfig.toThemeEntity().withResolvedBg()
-        saveAndActivate(entity)
-        return entity
+    /**
+     * Legado 主题导入结果。两个分支语义：
+     *  - [ThemeImported]：标准 Legado **主题配置（ThemeConfig）**，含 themeName/primaryColor 等
+     *    app 主题色字段，导入后得到 1 个 [ThemeEntity]。
+     *  - [ReadConfigImported]：Legado **阅读样式配置（ReadBookConfig.Config）**，含 bgStr/textColor/
+     *    lineSpacingExtra 等字段（与主题色完全不同 schema）。当前只消费颜色 + 背景部分，得到「日 + 夜」
+     *    两个 [ThemeEntity]；`inaccessibleBgPaths` 列出无法跨包访问的沙盒路径，UI 应给 toast 提醒。
+     *  - [Failed]：JSON 既不像 ThemeConfig 也不像 ReadConfig，或反序列化抛错。
+     *
+     * 走 sealed 类而非异常是因为「ReadConfig 命中」不是错误而是合法分支，UI 要据此 toast 区别处理。
+     */
+    sealed class LegadoImportResult {
+        data class ThemeImported(val theme: ThemeEntity) : LegadoImportResult()
+        data class ReadConfigImported(
+            val themes: List<ThemeEntity>,
+            val inaccessibleBgPaths: List<String>,
+        ) : LegadoImportResult()
+        data class Failed(val message: String) : LegadoImportResult()
+    }
+
+    /**
+     * 智能识别 Legado 主题 / 阅读样式 JSON。识别策略 —— 看 JSON 顶层 object 字段：
+     *  - 含 `themeName` 或 `primaryColor` → ThemeConfig
+     *  - 含 `bgStr` 或 `textColor`（同时大概率有 `lineSpacingExtra`）→ ReadBookConfig.Config
+     *
+     * 双 schema 都试解析；先匹配的赢，匹配失败兜底走 ThemeConfig（老行为）。
+     */
+    suspend fun importLegadoTheme(jsonString: String): LegadoImportResult {
+        val trimmed = jsonString.trim()
+        // 1. 快速识别 schema —— bgStr 是 ReadConfig 独有的强标识，主题色 ThemeConfig 没这字段
+        val looksLikeReadConfig = trimmed.contains("\"bgStr\"") ||
+            (trimmed.contains("\"textColor\"") && trimmed.contains("\"lineSpacingExtra\""))
+        return runCatching {
+            if (looksLikeReadConfig) {
+                val readConfig = json.decodeFromString<LegadoReadConfig>(trimmed)
+                val inaccessibleBg = mutableListOf<String>()
+                val (dayTheme, nightTheme) = readConfig.toThemeEntities(inaccessibleBg)
+                // 路径检查 + copy 到 internal（如果可读）
+                val resolved = listOf(dayTheme, nightTheme).map { it.withResolvedBg(inaccessibleBg) }
+                themeDao.upsertAll(resolved)
+                activateTheme(resolved.first().id)  // 默认激活白天
+                AppLog.info("Theme", "ReadConfig imported as 2 themes (day+night), inaccessible bg paths: ${inaccessibleBg.size}")
+                LegadoImportResult.ReadConfigImported(resolved, inaccessibleBg)
+            } else {
+                val legadoConfig = json.decodeFromString<LegadoThemeConfig>(trimmed)
+                val entity = legadoConfig.toThemeEntity().withResolvedBg(mutableListOf())
+                saveAndActivate(entity)
+                LegadoImportResult.ThemeImported(entity)
+            }
+        }.getOrElse { e ->
+            AppLog.error("Theme", "Failed to import Legado theme JSON", e)
+            LegadoImportResult.Failed(e.message ?: e::class.simpleName ?: "解析失败")
+        }
     }
 
     suspend fun importLegadoThemes(jsonArray: String): List<ThemeEntity> {
         val configs = json.decodeFromString<List<LegadoThemeConfig>>(jsonArray)
-        val entities = configs.map { it.toThemeEntity().withResolvedBg() }
+        val entities = configs.map { it.toThemeEntity().withResolvedBg(mutableListOf()) }
         themeDao.upsertAll(entities)
         return entities
     }
@@ -90,14 +140,31 @@ class ThemeRepository @Inject constructor(
      * `legado/help/config/ThemeConfig.kt`) but stores in internal storage to
      * avoid the runtime storage-permission dance.
      *
+     * 新增 file:// 绝对路径分支（Legado ReadConfig 导入用）：
+     *   - 路径在 Legado 沙盒（/storage/emulated/0/Android/data/外部开源阅读器实现）→ Android 11+
+     *     scoped storage 限制，跨包根本读不到 → 把路径加进 [inaccessibleBgPaths] 让 UI toast，
+     *     uri 抹掉为 null（主题颜色照常生效，只是背景没图）
+     *   - 路径在公共目录或我们能读到 → 试 copy 到 internal bgCacheDir 复用 http 分支同样的 file://
+     *     重定向逻辑
+     *
      * Failure modes — all non-fatal, theme still imports:
      *  - Network down / 404 / non-image response → log + null bg
      *  - Disk write fails → log + null bg
+     *  - 沙盒路径 → 路径写 inaccessibleBgPaths 让 UI 提示用户手动指定 / 拷贝
      *  - Cache hit (file already exists) → reuse, no download
      */
-    private suspend fun ThemeEntity.withResolvedBg(): ThemeEntity {
+    private suspend fun ThemeEntity.withResolvedBg(
+        inaccessibleBgPaths: MutableList<String>,
+    ): ThemeEntity {
         val url = backgroundImageUri ?: return this
-        if (!url.startsWith("http", ignoreCase = true)) return this
+        return when {
+            url.startsWith("http", ignoreCase = true) -> resolveHttpBg(url)
+            url.startsWith("file://") -> resolveFileBg(url.removePrefix("file://"), inaccessibleBgPaths)
+            else -> this
+        }
+    }
+
+    private suspend fun ThemeEntity.resolveHttpBg(url: String): ThemeEntity {
         return runCatching {
             val ext = when {
                 url.contains(".png", true) -> ".png"
@@ -115,6 +182,36 @@ class ThemeRepository @Inject constructor(
             copy(backgroundImageUri = "file://${file.absolutePath}")
         }.getOrElse { e ->
             AppLog.error("Theme", "Background image download failed: $url", e)
+            copy(backgroundImageUri = null)
+        }
+    }
+
+    /**
+     * 处理 Legado ReadConfig 里的绝对路径背景图 —— 多数情况指向 Legado 自己的沙盒目录，
+     * Android 11+ 跨包根本读不到。能读到时复制到 MoRealm 自己的 bgCacheDir 让后续主题
+     * 切换/重启后仍可用；读不到时把路径加到 inaccessibleBgPaths 让 UI toast，uri 抹空。
+     */
+    private fun ThemeEntity.resolveFileBg(
+        path: String,
+        inaccessibleBgPaths: MutableList<String>,
+    ): ThemeEntity {
+        val src = File(path)
+        // canRead() 在沙盒路径上会返回 false（即便文件存在），是最直接的可访问性检测
+        if (!src.exists() || !src.canRead()) {
+            inaccessibleBgPaths.add(path)
+            AppLog.warn("Theme", "Legado bg path inaccessible (cross-package sandbox): $path")
+            return copy(backgroundImageUri = null)
+        }
+        return runCatching {
+            val ext = src.extension.ifBlank { "jpg" }
+            val dst = File(bgCacheDir, md5(path) + ".$ext")
+            if (!dst.exists() || dst.length() != src.length()) {
+                src.inputStream().use { input -> dst.outputStream().use { input.copyTo(it) } }
+            }
+            copy(backgroundImageUri = "file://${dst.absolutePath}")
+        }.getOrElse { e ->
+            AppLog.error("Theme", "Background image copy failed: $path", e)
+            inaccessibleBgPaths.add(path)
             copy(backgroundImageUri = null)
         }
     }
