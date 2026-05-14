@@ -237,6 +237,8 @@ internal fun SimulationPager(
                             params.chapterHighlights.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
                         val pageTextColor = if (params.chapterTextColorSpans.isEmpty()) emptyList() else
                             params.chapterTextColorSpans.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
+                        val pageUnderlines = if (params.chapterUnderlines.isEmpty()) emptyList() else
+                            params.chapterUnderlines.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
                         renderPageToBitmap(
                             w, h, params.bgColor, page,
                             params.titlePaint, params.contentPaint,
@@ -245,6 +247,7 @@ internal fun SimulationPager(
                             pageInfoOverlay = params.pageInfoOverlay,
                             highlights = pageHighlights,
                             textColorSpans = pageTextColor,
+                            underlines = pageUnderlines,
                         )
                     } catch (e: OutOfMemoryError) {
                         AppLog.error("Simulation", "bitmap OOM w=${w} h=${h}", e)
@@ -419,6 +422,8 @@ internal fun SimulationPager(
                             params.chapterHighlights.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
                         val pageTextColor = if (params.chapterTextColorSpans.isEmpty()) emptyList() else
                             params.chapterTextColorSpans.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
+                        val pageUnderlines = if (params.chapterUnderlines.isEmpty()) emptyList() else
+                            params.chapterUnderlines.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
                         renderPageToBitmap(
                             w, h, params.bgColor, page,
                             params.titlePaint, params.contentPaint,
@@ -427,6 +432,7 @@ internal fun SimulationPager(
                             pageInfoOverlay = params.pageInfoOverlay,
                             highlights = pageHighlights,
                             textColorSpans = pageTextColor,
+                            underlines = pageUnderlines,
                         )
                     } else null
                 }

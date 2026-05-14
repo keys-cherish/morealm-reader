@@ -51,6 +51,12 @@ data class HighlightSpan(
     val startChapterPos: Int,
     val endChapterPos: Int,
     val colorArgb: Int,
+    /**
+     * 下划线线型 —— 仅当 span 来自 [com.morealm.app.domain.entity.Highlight.KIND_UNDERLINE]
+     * 时被消费。背景 / 字体色两条渲染路径不读这字段，保留默认 0 即可。值对应
+     * `Highlight.UNDERLINE_STYLE_SOLID / DASHED / DOTTED / WAVY`。
+     */
+    val underlineStyle: Int = 0,
 )
 
 /** Bookmark triangle size (px) drawn at top-right corner */
@@ -146,6 +152,13 @@ fun PageCanvas(
      */
     textColorSpans: List<HighlightSpan> = emptyList(),
     /**
+     * 下划线高亮 ([com.morealm.app.domain.entity.Highlight.kind] = 2)。
+     * 与 [highlights] / [textColorSpans] 三独立桶；同结构 [HighlightSpan]，多带
+     * [HighlightSpan.underlineStyle] 决定线型。同样会强制走 hasOverlay 直绘路径
+     * （canvasRecorder 里不缓存动态线型）。
+     */
+    underlines: List<HighlightSpan> = emptyList(),
+    /**
      * 跳转后的整段褪色高亮状态（已由上层做了"同章"过滤）。
      *
      * **关键设计**：alpha 的 `Animatable.value` 读取**只**发生在下面的
@@ -200,6 +213,8 @@ fun PageCanvas(
     val highlightsKey = highlights.size
     @Suppress("UNUSED_VARIABLE")
     val textColorSpansKey = textColorSpans.size
+    @Suppress("UNUSED_VARIABLE")
+    val underlinesKey = underlines.size
     // 字体色 span 也算 overlay：和背景高亮一样，画字符时实时染色无法走 canvasRecorder
     // 缓存（缓存里色已经定死）；用户增删 textColor 高亮时也要走直绘路径。
     //
@@ -208,7 +223,7 @@ fun PageCanvas(
     // alpha.value 的真正读取仍在下面 Canvas DrawScope 内。
     val hasOverlay = selectionStart != null || aloudLineIndex >= 0 ||
         page.lines.any { it.isReadAloud } || highlights.isNotEmpty() ||
-        textColorSpans.isNotEmpty() || revealHighlight != null
+        textColorSpans.isNotEmpty() || underlines.isNotEmpty() || revealHighlight != null
     Canvas(modifier = modifier.fillMaxSize()) {
         val canvas = drawContext.canvas.nativeCanvas
         val w = size.width.toInt()
@@ -259,6 +274,7 @@ fun PageCanvas(
                 canvasWidth = size.width,
                 highlights = effectiveHighlights,
                 textColorSpans = textColorSpans,
+                underlines = underlines,
             )
         } else {
             // No overlay — use CanvasRecorder: record once, replay on subsequent frames
@@ -296,6 +312,42 @@ private val sharedHighlightPaint by lazy {
 private val sharedSpacingPaint by lazy { TextPaint() }
 private val sharedBookmarkPath by lazy { android.graphics.Path() }
 
+/**
+ * 下划线专用 paint —— STROKE 模式 + ANTI_ALIAS。strokeWidth / color / pathEffect 在每条
+ * 下划线绘制前重新设置（共享单例避免 60fps 下每帧 new Paint）。
+ *
+ * 注意：调用方在用完后必须把 pathEffect 重置为 null，避免被同帧后续的 stroke 调用
+ * 意外继承——目前没有其他 stroke 路径走这个 paint，但保险。
+ */
+private val sharedUnderlinePaint by lazy {
+    Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+}
+
+/**
+ * 按下划线 style 选 PathEffect。
+ *
+ * 复用同名 stroke-width 缩放尺度：虚线/点划线/波浪的视觉密度跟字号联动，
+ * 避免大字号下虚线段太短像实线、小字号下太长间隙明显。
+ *
+ * @param style 0=直线 / 1=虚线 / 2=点划线 / 3=波浪线
+ * @param strokeWidth 当前下划线的笔宽，用作 PathEffect 参数的基数
+ */
+private fun underlinePathEffect(style: Int, strokeWidth: Float): android.graphics.PathEffect? {
+    val base = strokeWidth.coerceAtLeast(1.5f)
+    return when (style) {
+        com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_DASHED ->
+            android.graphics.DashPathEffect(floatArrayOf(base * 6f, base * 3f), 0f)
+        com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_DOTTED ->
+            android.graphics.DashPathEffect(floatArrayOf(base * 1.2f, base * 2.5f), 0f)
+        com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_WAVY ->
+            android.graphics.DiscretePathEffect(base * 2f, base * 0.9f)
+        else -> null  // SOLID
+    }
+}
+
 fun drawPageContent(
     canvas: android.graphics.Canvas,
     page: TextPage,
@@ -323,6 +375,12 @@ fun drawPageContent(
      * 与 [highlights] 互不影响，可同时存在（同一段文字可同时是背景高亮 + 字色强调）。
      */
     textColorSpans: List<HighlightSpan> = emptyList(),
+    /**
+     * 下划线高亮（kind=2）。在文字基线下方画线，按 [HighlightSpan.underlineStyle]
+     * 切换线型（0 直线 / 1 虚线 / 2 点划线 / 3 波浪线）。与 [highlights] / [textColorSpans]
+     * 完全独立 —— 同一段文字可以同时是「背景 + 字色 + 下划线」三层叠加。
+     */
+    underlines: List<HighlightSpan> = emptyList(),
 ) {
     val highlightPaint = sharedHighlightPaint
     val spacingPaint = sharedSpacingPaint
@@ -382,6 +440,55 @@ fun drawPageContent(
                     canvas.drawRect(leftX, lineTop, rightX, lineBottom, highlightPaint)
                 }
             }
+        }
+
+        // 1c. Underline highlights (kind=2)
+        //
+        // 与 1b 用同一套 column-overlap 算法找到 leftX/rightX，但画的不是 FILL 矩形
+        // 而是 STROKE 直线，Y 落在 line.lineBottom 附近（文字基线略下）。线型由
+        // [HighlightSpan.underlineStyle] 控制 PathEffect：
+        //   - 0 SOLID  → null（实线）
+        //   - 1 DASHED → DashPathEffect 长划
+        //   - 2 DOTTED → DashPathEffect 点划
+        //   - 3 WAVY   → DiscretePathEffect 近似波浪（segment=4 deviation=2，
+        //                视觉上像手绘下划线，比真正 quadTo() 波形画起来开销小一半）
+        //
+        // strokeWidth 跟字号成正比（0.07×textSize），既避免大字号时显得纤弱，又避免
+        // 小字号时压住文字下沿。
+        if (underlines.isNotEmpty()) {
+            val lineStart = line.chapterPosition
+            val lineCharCount = line.charSize
+            val lineEnd = lineStart + lineCharCount
+            // 下划线 Y：lineBottom 上方 ~descent 的位置，刚好压在字符底部。
+            val underlineY = lineBottom - paint.fontMetrics.descent * 0.35f
+            val strokeWidth = (paint.textSize * 0.07f).coerceAtLeast(1.5f)
+            for (u in underlines) {
+                if (u.startChapterPos >= lineEnd || u.endChapterPos <= lineStart) continue
+                var charPos = lineStart
+                var leftX: Float? = null
+                var rightX: Float? = null
+                for (col in line.columns) {
+                    if (col is TextBaseColumn) {
+                        val colStart = charPos
+                        val colEnd = charPos + col.charData.length
+                        if (colEnd > u.startChapterPos && colStart < u.endChapterPos) {
+                            if (leftX == null) leftX = col.start
+                            rightX = col.end
+                        }
+                        charPos = colEnd
+                    }
+                }
+                if (leftX != null && rightX != null) {
+                    val p = sharedUnderlinePaint
+                    p.color = u.colorArgb
+                    p.strokeWidth = strokeWidth
+                    p.pathEffect = underlinePathEffect(u.underlineStyle, strokeWidth)
+                    canvas.drawLine(leftX, underlineY, rightX, underlineY, p)
+                }
+            }
+            // 重置共享 paint 的 pathEffect，避免后续 Paint 使用者误继承（drawLine 后
+            // 紧接着 drawText 不会用 sharedUnderlinePaint，但保险起见显式 null）。
+            sharedUnderlinePaint.pathEffect = null
         }
 
         // 2. Selection highlights
@@ -647,6 +754,7 @@ fun renderPageToBitmap(
     pageInfoOverlay: PageInfoOverlaySpec? = null,
     highlights: List<HighlightSpan> = emptyList(),
     textColorSpans: List<HighlightSpan> = emptyList(),
+    underlines: List<HighlightSpan> = emptyList(),
     selectionStart: TextPos? = null,
     selectionEnd: TextPos? = null,
     selColorArgb: Int = DEFAULT_SELECTION_COLOR.toArgb(),
@@ -676,6 +784,7 @@ fun renderPageToBitmap(
         selColorArgb = selColorArgb,
         highlights = highlights,
         textColorSpans = textColorSpans,
+        underlines = underlines,
         canvasWidth = width.toFloat(),
     )
     pageInfoOverlay?.let { overlay ->

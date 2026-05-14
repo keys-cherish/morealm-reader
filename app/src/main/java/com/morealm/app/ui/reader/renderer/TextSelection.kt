@@ -16,6 +16,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -310,6 +313,12 @@ fun SelectionToolbar(
      * 落库时 [com.morealm.app.domain.entity.Highlight.kind] = 1。
      */
     onTextColor: ((colorArgb: Int) -> Unit)? = null,
+    /**
+     * 下划线回调；(colorArgb, style)。style 取值 0..3 对应直线/虚线/点划线/波浪线。
+     * null 时 UNDERLINE 按钮自动从渲染列表里摘掉，调色板/线型面板也不渲染。
+     * 与 onHighlight / onTextColor 走同一套 PRESETS 配色，但落库 kind=2 走另一条数据路径。
+     */
+    onUnderline: ((colorArgb: Int, style: Int) -> Unit)? = null,
     onDismiss: () -> Unit,
     config: com.morealm.app.domain.entity.SelectionMenuConfig =
         com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
@@ -324,19 +333,21 @@ fun SelectionToolbar(
     /** TEXT_COLOR 按钮的独立调色板开关。与 [paletteVisible] 互斥：
      *  打开其中一个就关掉另一个，避免两层调色板叠在一起占满 toolbar 高度。 */
     var textColorPaletteVisible by remember { mutableStateOf(false) }
+    /** UNDERLINE 按钮的"线型+颜色"网格开关。与上两者三方互斥。 */
+    var underlinePaletteVisible by remember { mutableStateOf(false) }
     val arrowColor = MaterialTheme.colorScheme.surfaceContainerHigh
 
-    // 按 position 切分，并把 HIDDEN / 不可用的 HIGHLIGHT / TEXT_COLOR 摘掉。
-    // 如果 onHighlight 为 null，HIGHLIGHT 即使在 config 里被设为 MAIN/EXPANDED 也忽略；
-    // onTextColor 为 null 时同理摘掉 TEXT_COLOR。
-    val grouped = remember(config, onHighlight, onTextColor) {
+    // 按 position 切分，并把 HIDDEN / 不可用的 HIGHLIGHT / TEXT_COLOR / UNDERLINE 摘掉。
+    val grouped = remember(config, onHighlight, onTextColor, onUnderline) {
         val raw = config.groupedByPosition()
         val filterHighlight = onHighlight == null
         val filterTextColor = onTextColor == null
+        val filterUnderline = onUnderline == null
         fun List<com.morealm.app.domain.entity.SelectionMenuItem>?.cleaned() =
             this.orEmpty().filter {
                 (!filterHighlight || it != com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT) &&
-                    (!filterTextColor || it != com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR)
+                    (!filterTextColor || it != com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR) &&
+                    (!filterUnderline || it != com.morealm.app.domain.entity.SelectionMenuItem.UNDERLINE)
             }
         val main = raw[com.morealm.app.domain.entity.SelectionMenuPosition.MAIN].cleaned().take(3)
         val ext = raw[com.morealm.app.domain.entity.SelectionMenuPosition.EXPANDED].cleaned()
@@ -434,11 +445,24 @@ fun SelectionToolbar(
                                 onLookup = onLookup,
                                 onToggleHighlight = {
                                     paletteVisible = !paletteVisible
-                                    if (paletteVisible) textColorPaletteVisible = false
+                                    if (paletteVisible) {
+                                        textColorPaletteVisible = false
+                                        underlinePaletteVisible = false
+                                    }
                                 },
                                 onToggleTextColor = {
                                     textColorPaletteVisible = !textColorPaletteVisible
-                                    if (textColorPaletteVisible) paletteVisible = false
+                                    if (textColorPaletteVisible) {
+                                        paletteVisible = false
+                                        underlinePaletteVisible = false
+                                    }
+                                },
+                                onToggleUnderline = {
+                                    underlinePaletteVisible = !underlinePaletteVisible
+                                    if (underlinePaletteVisible) {
+                                        paletteVisible = false
+                                        textColorPaletteVisible = false
+                                    }
                                 },
                             )
                         }
@@ -479,11 +503,24 @@ fun SelectionToolbar(
                                         onLookup = onLookup,
                                         onToggleHighlight = {
                                             paletteVisible = !paletteVisible
-                                            if (paletteVisible) textColorPaletteVisible = false
+                                            if (paletteVisible) {
+                                                textColorPaletteVisible = false
+                                                underlinePaletteVisible = false
+                                            }
                                         },
                                         onToggleTextColor = {
                                             textColorPaletteVisible = !textColorPaletteVisible
-                                            if (textColorPaletteVisible) paletteVisible = false
+                                            if (textColorPaletteVisible) {
+                                                paletteVisible = false
+                                                underlinePaletteVisible = false
+                                            }
+                                        },
+                                        onToggleUnderline = {
+                                            underlinePaletteVisible = !underlinePaletteVisible
+                                            if (underlinePaletteVisible) {
+                                                paletteVisible = false
+                                                textColorPaletteVisible = false
+                                            }
                                         },
                                     )
                                 }
@@ -617,6 +654,129 @@ fun SelectionToolbar(
                             }
                         }
                     }
+                    // ── Underline palette ──
+                    //
+                    // 与 highlight / textColor 三方互斥的下划线面板。布局：
+                    //   - 顶行 4 个线型小按钮（实/虚/点划/波浪），用当前选中色画一段示例
+                    //   - 底行 5 色 PRESETS + 擦除按钮，点色即触发 onUnderline(argb, style)
+                    //
+                    // 用户的语义流：先点线型选 style（暂存到 selectedStyle），再点颜色
+                    // 触发回调。默认 style=0（实线），保证用户进面板第一眼就能直接选色。
+                    val showUnderlinePalette = underlinePaletteVisible && onUnderline != null &&
+                        (com.morealm.app.domain.entity.SelectionMenuItem.UNDERLINE in mainItems ||
+                            (expanded && com.morealm.app.domain.entity.SelectionMenuItem.UNDERLINE in expandedItems))
+                    var selectedUnderlineStyle by remember(showUnderlinePalette) {
+                        mutableStateOf(com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_SOLID)
+                    }
+                    androidx.compose.animation.AnimatedVisibility(visible = showUnderlinePalette) {
+                        Column {
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                thickness = 0.5.dp,
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
+                            // 顶行：4 种线型选择器。选中态用 primary 边框，未选中用淡边框
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                            ) {
+                                val styles = listOf(
+                                    com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_SOLID to "实线",
+                                    com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_DASHED to "虚线",
+                                    com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_DOTTED to "点划",
+                                    com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_WAVY to "波浪",
+                                )
+                                val accent = MaterialTheme.colorScheme.primary
+                                val onSurface = MaterialTheme.colorScheme.onSurface
+                                styles.forEach { (style, label) ->
+                                    val selected = selectedUnderlineStyle == style
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable { selectedUnderlineStyle = style }
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    ) {
+                                        // 16dp 宽的线型缩略：用 Canvas 画一段 stroke，复用渲染层
+                                        // 的 PathEffect 逻辑保持视觉一致
+                                        androidx.compose.foundation.Canvas(
+                                            modifier = Modifier.size(28.dp, 12.dp),
+                                        ) {
+                                            val y = size.height * 0.6f
+                                            val nativePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                                                this.style = android.graphics.Paint.Style.STROKE
+                                                strokeCap = android.graphics.Paint.Cap.ROUND
+                                                strokeWidth = 2.4f
+                                                color = (if (selected) accent else onSurface.copy(alpha = 0.7f)).toArgb()
+                                                pathEffect = when (style) {
+                                                    com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_DASHED ->
+                                                        android.graphics.DashPathEffect(floatArrayOf(8f, 4f), 0f)
+                                                    com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_DOTTED ->
+                                                        android.graphics.DashPathEffect(floatArrayOf(2f, 4f), 0f)
+                                                    com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_WAVY ->
+                                                        android.graphics.DiscretePathEffect(3f, 1.4f)
+                                                    else -> null
+                                                }
+                                            }
+                                            drawIntoCanvas { c ->
+                                                c.nativeCanvas.drawLine(0f, y, size.width, y, nativePaint)
+                                            }
+                                        }
+                                        Text(
+                                            label,
+                                            fontSize = 9.sp,
+                                            color = if (selected) accent else onSurface.copy(alpha = 0.6f),
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        )
+                                    }
+                                }
+                            }
+                            // 底行：擦除按钮 + 5 色。点色触发 onUnderline(argb, selectedStyle)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                            ) {
+                                if (onEraseHighlight != null) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                MaterialTheme.colorScheme.surfaceVariant
+                                                    .copy(alpha = 0.6f),
+                                            )
+                                            .clickable { onEraseHighlight() },
+                                    ) {
+                                        Icon(
+                                            Icons.Default.FormatColorReset,
+                                            contentDescription = "清除下划线",
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                                .copy(alpha = 0.75f),
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
+                                }
+                                HighlightPalette.PRESETS.forEach { argb ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(argb))
+                                            .clickable {
+                                                onUnderline?.invoke(argb, selectedUnderlineStyle)
+                                            },
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
             // Arrow pointing down toward selection
@@ -640,6 +800,7 @@ private fun ItemButton(
     onLookup: () -> Unit,
     onToggleHighlight: () -> Unit,
     onToggleTextColor: () -> Unit,
+    onToggleUnderline: () -> Unit,
 ) {
     when (item) {
         com.morealm.app.domain.entity.SelectionMenuItem.COPY ->
@@ -658,6 +819,8 @@ private fun ItemButton(
         // 视觉上和"高亮"图标的填色块明确区分，用户一眼分辨"改字色"vs"涂背景"。
         com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR ->
             MenuBtn(Icons.Default.FormatColorText, "字体色", onToggleTextColor)
+        com.morealm.app.domain.entity.SelectionMenuItem.UNDERLINE ->
+            MenuBtn(Icons.Default.FormatUnderlined, "下划线", onToggleUnderline)
     }
 }
 

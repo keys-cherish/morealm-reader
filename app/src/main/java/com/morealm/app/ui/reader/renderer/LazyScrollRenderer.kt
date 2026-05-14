@@ -220,6 +220,12 @@ fun LazyScrollRenderer(
      */
     chapterTextColorSpans: List<HighlightSpan> = emptyList(),
     /**
+     * 当前章节范围内的下划线 spans（kind=2）。语义同 [chapterHighlights]，多带
+     * [HighlightSpan.underlineStyle] 决定线型；段渲染时按段范围过滤后透传给
+     * [drawScrollParagraphContent]。
+     */
+    chapterUnderlines: List<HighlightSpan> = emptyList(),
+    /**
      * 章首预加载阈值（距窗口顶 N 段触发 [onNearTop]）。
      *
      * 默认 20 —— 与 solution.txt（temp/solution.txt）的「现代化预加载」原则对齐：
@@ -706,12 +712,15 @@ fun LazyScrollRenderer(
                     chapterHighlights.filter { it.startChapterPos < paraEnd && it.endChapterPos > paraStart }
                 val paragraphTextColorSpans = if (chapterTextColorSpans.isEmpty()) emptyList() else
                     chapterTextColorSpans.filter { it.startChapterPos < paraEnd && it.endChapterPos > paraStart }
+                val paragraphUnderlines = if (chapterUnderlines.isEmpty()) emptyList() else
+                    chapterUnderlines.filter { it.startChapterPos < paraEnd && it.endChapterPos > paraStart }
                 ScrollParagraphItem(
                     paragraph = paragraph,
                     revealHighlight = if (isRevealTarget) revealHighlight else null,
                     isSelected = selectedParagraphKey == paragraph.key,
                     paragraphHighlights = paragraphHighlights,
                     paragraphTextColorSpans = paragraphTextColorSpans,
+                    paragraphUnderlines = paragraphUnderlines,
                     onTap = { offsetInPara, anchorInWindow ->
                         onTapParagraph(paragraph, offsetInPara, anchorInWindow)
                     },
@@ -769,6 +778,11 @@ private fun ScrollParagraphItem(
      * 在画字符时按 mid-char 命中替换 paint.color，不画背景。
      */
     paragraphTextColorSpans: List<HighlightSpan> = emptyList(),
+    /**
+     * 命中本段的下划线 spans (kind=2)。透传给 [drawScrollParagraphContent] 在
+     * 基线下方画线，按 [HighlightSpan.underlineStyle] 切换线型。
+     */
+    paragraphUnderlines: List<HighlightSpan> = emptyList(),
     onTap: (charOffsetInParagraph: Int, anchorInWindow: Offset) -> Unit = { _, _ -> },
     onLongPress: (charOffsetInParagraph: Int, anchorInWindow: Offset) -> Unit = { _, _ -> },
 ) {
@@ -856,6 +870,7 @@ private fun ScrollParagraphItem(
                 chapterNumPaint = theme.chapterNumPaint,
                 paragraphHighlights = paragraphHighlights,
                 paragraphTextColorSpans = paragraphTextColorSpans,
+                paragraphUnderlines = paragraphUnderlines,
             )
         }
     }

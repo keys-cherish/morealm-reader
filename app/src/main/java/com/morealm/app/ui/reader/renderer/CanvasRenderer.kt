@@ -211,6 +211,11 @@ fun CanvasRenderer(
      */
     onAddTextColor: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
     /**
+     * 用户选择下划线 → 持久化高亮 [com.morealm.app.domain.entity.Highlight.kind] = 2，
+     * 多带 [Highlight.underlineStyle] 决定 4 种线型（0=直线 / 1=虚线 / 2=点划线 / 3=波浪线）。
+     */
+    onAddUnderline: ((start: Int, end: Int, content: String, colorArgb: Int, style: Int) -> Unit)? = null,
+    /**
      * Layout-publish callbacks — Phase 2 MD3-aligned 同步腾挪基础。
      *
      * 对齐 Legado [外部开源阅读器实现] 的精神：当排版完成
@@ -824,6 +829,25 @@ fun CanvasRenderer(
                     startChapterPos = h.startChapterPos,
                     endChapterPos = h.endChapterPos,
                     colorArgb = h.colorArgb,
+                )
+            }
+    }
+    /**
+     * 下划线高亮（kind == [Highlight.KIND_UNDERLINE]）。
+     *
+     * 与背景 / 字体色一样按 chapter-pos 范围记位置，多带一个 [HighlightSpan.underlineStyle]
+     * 给渲染层切线型（solid / dashed / dotted / wavy）。
+     */
+    val underlineSpans = remember(chapterHighlights) {
+        chapterHighlights
+            .filter { it.kind == Highlight.KIND_UNDERLINE }
+            .map { h ->
+                HighlightSpan(
+                    id = h.id,
+                    startChapterPos = h.startChapterPos,
+                    endChapterPos = h.endChapterPos,
+                    colorArgb = h.colorArgb,
+                    underlineStyle = h.underlineStyle,
                 )
             }
     }
@@ -1603,6 +1627,7 @@ fun CanvasRenderer(
         // SimulationParams.chapter*Spans，SimulationPager 渲染 bitmap 时按页过滤后画。
         highlightSpans = highlightSpans,
         textColorSpans = textColorSpans,
+        underlineSpans = underlineSpans,
         onProgress = onProgress,
         onTapCenter = onTapCenter,
         onImageClick = onImageClick,
@@ -1911,12 +1936,14 @@ fun CanvasRenderer(
                 },
                 onEraseHighlight = onEraseHighlight,
                 onAddTextColor = onAddTextColor,
+                onAddUnderline = onAddUnderline,
                 selectionMenuConfig = selectionMenuConfig,
                 // 滚动模式接通用户高亮（kind=0 背景）/ 字体强调色（kind=1）渲染。
                 // 这两个 List 已由 wrapper（CanvasRenderer 主体）从 chapterHighlights
                 // 派生为 [HighlightSpan]，分别按 kind 分桶 —— 直接透传即可。
                 chapterHighlights = highlightSpans,
                 chapterTextColorSpans = textColorSpans,
+                chapterUnderlines = underlineSpans,
                 // 原始 Highlight 列表 + 删除/分享回调：滚动模式 tap 命中已存高亮 → 弹
                 // action menu 路径用，与分页模式的 chapterHighlights / onDeleteHighlight /
                 // onShareHighlight 一一对应。
@@ -2276,6 +2303,7 @@ fun CanvasRenderer(
             // 字体色：和 onAddHighlight 同样的传递逻辑；wrapper 内部把 selection
             // 转成 chapter-pos 范围再回调。
             onAddTextColor = onAddTextColor,
+            onAddUnderline = onAddUnderline,
             menuConfig = selectionMenuConfig,
         )
 
@@ -2843,6 +2871,11 @@ private fun PageContentBox(
      */
     chapterTextColorSpans: List<HighlightSpan> = emptyList(),
     /**
+     * 当前章节的下划线 spans（kind=2）。语义同 [chapterHighlights]，每页只取有交集
+     * 的子集传给 [PageCanvas]。多带 [HighlightSpan.underlineStyle] 决定线型。
+     */
+    chapterUnderlines: List<HighlightSpan> = emptyList(),
+    /**
      * 跳转后整段褪色高亮的状态对象（已由上层做了"同章"过滤）。
      *
      * **故意不**在 PageContentBox 这层读 `alpha.value` —— 那样会让 alpha 动画
@@ -2905,6 +2938,8 @@ private fun PageContentBox(
         chapterHighlights.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
     val pageTextColorSpans = if (chapterTextColorSpans.isEmpty()) emptyList() else
         chapterTextColorSpans.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
+    val pageUnderlines = if (chapterUnderlines.isEmpty()) emptyList() else
+        chapterUnderlines.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
     Box(modifier = Modifier.fillMaxSize().background(backgroundColor)) {
         // Diagnostic: trace selection cursor handle visibility for non-SCROLL modes.
         // Logged once per state digest change (LaunchedEffect). Tells us:
@@ -2944,6 +2979,7 @@ private fun PageContentBox(
             readAloudChapterPosition = readAloudChapterPosition,
             highlights = pageHighlights,
             textColorSpans = pageTextColorSpans,
+            underlines = pageUnderlines,
             // reveal 不在这层做 page-bounds 过滤；交给 PageCanvas 在 DrawScope 里
             // 一起判断 + 读 alpha.value，把"渲染决策"集中在绘制阶段。
             revealHighlight = revealHighlight,
@@ -3028,6 +3064,8 @@ private fun ReaderSelectionToolbar(
      * 自动 clear。
      */
     onAddTextColor: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
+    /** 用户选择下划线 → 加 kind=2 Highlight，带 underlineStyle 决定线型。 */
+    onAddUnderline: ((start: Int, end: Int, content: String, colorArgb: Int, style: Int) -> Unit)? = null,
     /** 用户自定义按钮配置。透传给底层 [SelectionToolbar]。 */
     menuConfig: com.morealm.app.domain.entity.SelectionMenuConfig =
         com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
@@ -3137,6 +3175,19 @@ private fun ReaderSelectionToolbar(
                 val sEnd = selectedEndChapterPosition()
                 if (sEnd > sStart && text.isNotBlank()) {
                     cb(sStart, sEnd, text, argb)
+                }
+                selectionState.clear()
+            }
+        },
+        // 下划线：(argb, style) 二参回调，落库 kind=2 + underlineStyle。同样选完
+        // 立即 clear 选区，避免色板停留遮挡阅读区。
+        onUnderline = onAddUnderline?.let { cb ->
+            { argb, style ->
+                val text = selectedText()
+                val sStart = selectedStartChapterPosition()
+                val sEnd = selectedEndChapterPosition()
+                if (sEnd > sStart && text.isNotBlank()) {
+                    cb(sStart, sEnd, text, argb, style)
                 }
                 selectionState.clear()
             }

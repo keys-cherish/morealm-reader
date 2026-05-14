@@ -78,6 +78,12 @@ class SimulationParams(
      * 当前章节的字体强调色 spans（kind=1，替换 paint.color）。
      */
     val chapterTextColorSpans: List<com.morealm.app.ui.reader.renderer.HighlightSpan> = emptyList(),
+    /**
+     * 当前章节的下划线 spans（kind=2）。语义同 [chapterHighlights]，多带
+     * [HighlightSpan.underlineStyle] 决定线型。仿真翻页 bitmap 渲染时透传给
+     * renderPageToBitmap 在基线下方画线。
+     */
+    val chapterUnderlines: List<com.morealm.app.ui.reader.renderer.HighlightSpan> = emptyList(),
     val pageForTurn: (displayIndex: Int, relativePos: Int) -> TextPage? = { displayIndex, relativePos ->
         pages.getOrNull(displayIndex + relativePos)
     },

@@ -128,6 +128,8 @@ fun LazyScrollSection(
     onAddHighlight: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
     onEraseHighlight: ((start: Int, end: Int) -> Unit)? = null,
     onAddTextColor: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
+    /** 用户选择下划线 → 加 kind=2 Highlight，带 underlineStyle 决定线型。 */
+    onAddUnderline: ((start: Int, end: Int, content: String, colorArgb: Int, style: Int) -> Unit)? = null,
     selectionMenuConfig: SelectionMenuConfig = SelectionMenuConfig.DEFAULT,
     /**
      * 当前章节范围内的用户高亮（kind=0，画底色矩形）。透传给
@@ -139,6 +141,11 @@ fun LazyScrollSection(
      * 当前章节范围内的字体强调色 spans（kind=1，替换 paint.color）。
      */
     chapterTextColorSpans: List<HighlightSpan> = emptyList(),
+    /**
+     * 当前章节范围内的下划线 spans（kind=2）。透传给 [LazyScrollRenderer]，再
+     * 在每段渲染时按段范围过滤。多带 [HighlightSpan.underlineStyle] 决定线型。
+     */
+    chapterUnderlines: List<HighlightSpan> = emptyList(),
     /**
      * 当前章节范围内的高亮原始对象（含 id / content / colorArgb / range）。
      *
@@ -521,6 +528,7 @@ fun LazyScrollSection(
             selectedParagraphKey = null,
             chapterHighlights = effectiveChapterHighlights,
             chapterTextColorSpans = chapterTextColorSpans,
+            chapterUnderlines = chapterUnderlines,
             // ── tap 段落 → 三步 dispatch ──
             //
             // 1. 编辑选区 / 已存高亮菜单弹着 → 任何 tap 优先把它们清掉（dismiss-on-tap），
@@ -766,6 +774,12 @@ fun LazyScrollSection(
                 onTextColor = onAddTextColor?.let { cb ->
                     { argb ->
                         cb(sel.startChapterPos, sel.endChapterPos, sel.text, argb)
+                        scrollSelection = null
+                    }
+                },
+                onUnderline = onAddUnderline?.let { cb ->
+                    { argb, style ->
+                        cb(sel.startChapterPos, sel.endChapterPos, sel.text, argb, style)
                         scrollSelection = null
                     }
                 },

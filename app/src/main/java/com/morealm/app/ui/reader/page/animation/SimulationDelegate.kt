@@ -92,6 +92,11 @@ internal fun rememberSimulationParams(
      * 当前章节的字体强调色 spans（kind=1）渲染数据。
      */
     textColorSpans: List<com.morealm.app.ui.reader.renderer.HighlightSpan>,
+    /**
+     * 当前章节的下划线 spans（kind=2）渲染数据。透传到 SimulationParams 让
+     * SimulationPager 渲染 bitmap 时画下划线。
+     */
+    underlineSpans: List<com.morealm.app.ui.reader.renderer.HighlightSpan>,
     onProgress: (Int) -> Unit,
     onTapCenter: () -> Unit,
     onImageClick: (String) -> Unit,
@@ -150,6 +155,7 @@ internal fun rememberSimulationParams(
                 pageInfoOverlay = pageInfoOverlaySpec,
                 chapterHighlights = highlightSpans,
                 chapterTextColorSpans = textColorSpans,
+                chapterUnderlines = underlineSpans,
                 pageForTurn = { displayIndex, relativePos ->
                     pageFactory.pageForTurn(displayIndex, relativePos)
                 },

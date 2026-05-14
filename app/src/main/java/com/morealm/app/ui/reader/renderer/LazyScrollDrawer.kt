@@ -41,6 +41,8 @@ import com.morealm.app.domain.render.TextHtmlColumn
  *        这里只判断与每行 chapterPosition 区间是否重叠后画一个矩形。
  * @param paragraphTextColorSpans 命中本段的字体强调色 spans (kind=1)。在画字符时
  *        按 mid-char 命中替换 paint.color，画完恢复，避免污染共享 paint。
+ * @param paragraphUnderlines 命中本段的下划线 spans (kind=2)。在文字基线下方画线，
+ *        按 [HighlightSpan.underlineStyle] 切换 PathEffect 实现 4 种线型。
  */
 internal fun drawScrollParagraphContent(
     canvas: Canvas,
@@ -50,6 +52,7 @@ internal fun drawScrollParagraphContent(
     chapterNumPaint: TextPaint?,
     paragraphHighlights: List<HighlightSpan> = emptyList(),
     paragraphTextColorSpans: List<HighlightSpan> = emptyList(),
+    paragraphUnderlines: List<HighlightSpan> = emptyList(),
 ) {
     if (paragraph.lines.isEmpty()) return // LOADING 段或异常空段
 
@@ -99,6 +102,41 @@ internal fun drawScrollParagraphContent(
                     canvas.drawRect(leftX, paragraphLineTop, rightX, paragraphLineBottom, highlightPaint)
                 }
             }
+        }
+
+        // 1b. 下划线（kind=2）—— 同样的 column-overlap 算法，但 STROKE 在 baseline 下方画线，
+        // 按 [HighlightSpan.underlineStyle] 切换 PathEffect（实线 / 虚线 / 点划线 / 波浪线）。
+        // 与 PageContentDrawer 同源逻辑，paint / PathEffect helper 都共用全局单例避免每帧 alloc。
+        if (paragraphUnderlines.isNotEmpty()) {
+            val lineStart = line.chapterPosition
+            val lineEnd = lineStart + line.charSize
+            val underlineY = paragraphLineBottom - paint.fontMetrics.descent * 0.35f
+            val strokeWidth = (paint.textSize * 0.07f).coerceAtLeast(1.5f)
+            for (u in paragraphUnderlines) {
+                if (u.startChapterPos >= lineEnd || u.endChapterPos <= lineStart) continue
+                var charPos = lineStart
+                var leftX: Float? = null
+                var rightX: Float? = null
+                for (col in line.columns) {
+                    if (col is TextBaseColumn) {
+                        val colStart = charPos
+                        val colEnd = charPos + col.charData.length
+                        if (colEnd > u.startChapterPos && colStart < u.endChapterPos) {
+                            if (leftX == null) leftX = col.start
+                            rightX = col.end
+                        }
+                        charPos = colEnd
+                    }
+                }
+                if (leftX != null && rightX != null) {
+                    val p = drawerUnderlinePaint
+                    p.color = u.colorArgb
+                    p.strokeWidth = strokeWidth
+                    p.pathEffect = drawerUnderlinePathEffect(u.underlineStyle, strokeWidth)
+                    canvas.drawLine(leftX, underlineY, rightX, underlineY, p)
+                }
+            }
+            drawerUnderlinePaint.pathEffect = null
         }
 
         // 2. 装饰条（章号末行下方的 accent bar）—— 与 drawPageContent L347-355 等价
@@ -179,6 +217,31 @@ internal fun drawScrollParagraphContent(
 /** 高亮矩形 paint（装饰条等用）。UI 主线程独占。 */
 private val drawerHighlightPaint by lazy {
     Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+}
+
+/**
+ * 下划线专用 paint（STROKE 模式）。仅 UI 主线程访问，pathEffect/color/strokeWidth
+ * 在画前重设。与 PageContentDrawer.sharedUnderlinePaint 等价但本文件作用域。
+ */
+private val drawerUnderlinePaint by lazy {
+    Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+}
+
+/** 4 种下划线 style 的 PathEffect 选择器；与 PageContentDrawer.underlinePathEffect 等价。 */
+private fun drawerUnderlinePathEffect(style: Int, strokeWidth: Float): android.graphics.PathEffect? {
+    val base = strokeWidth.coerceAtLeast(1.5f)
+    return when (style) {
+        com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_DASHED ->
+            android.graphics.DashPathEffect(floatArrayOf(base * 6f, base * 3f), 0f)
+        com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_DOTTED ->
+            android.graphics.DashPathEffect(floatArrayOf(base * 1.2f, base * 2.5f), 0f)
+        com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_WAVY ->
+            android.graphics.DiscretePathEffect(base * 2f, base * 0.9f)
+        else -> null
+    }
 }
 
 /** letterSpacing / TextHtmlColumn 临时 paint。UI 主线程独占。 */
