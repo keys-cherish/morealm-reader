@@ -200,6 +200,8 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
         items = listOf(
             ChangelogItem(ChangeType.NEW, "阅读器底部工具栏可自定义：长按进入编辑模式，拖动改位置，加号添加 / 减号隐藏"),
             ChangelogItem(ChangeType.NEW, "主题编辑器加「首页背景图」字段，每个自定义主题可以绑一张"),
+            ChangelogItem(ChangeType.NEW, "轻量漫画模式：MOBI / AZW3 等图片书自动识别并切到漫画阅读器"),
+            ChangelogItem(ChangeType.FIX, "MOBI 格式解析问题"),
             ChangelogItem(ChangeType.FIX, "滚动模式上下滚动自动跳章"),
             ChangelogItem(ChangeType.FIX, "换源大多数返回空目录"),
             ChangelogItem(ChangeType.FIX, "校验书源过程中删源会闪退"),
