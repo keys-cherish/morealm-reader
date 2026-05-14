@@ -52,10 +52,15 @@ class ReaderHighlightController(
         colorArgb: Int,
         note: String = "",
         /**
-         * 高亮种类：0=背景高亮（默认）/ 1=字体强调色。
-         * 渲染层据此决定画 bgFill 还是替换前景色，详见 [Highlight.KIND_TEXT_COLOR]。
+         * 高亮种类：0=背景高亮（默认）/ 1=字体强调色 / 2=下划线。
+         * 渲染层据此决定画 bgFill / 替换前景色 / 还是基线下画 stroke 线。
          */
         kind: Int = Highlight.KIND_BACKGROUND,
+        /**
+         * 下划线线型 —— 仅当 [kind] == [Highlight.KIND_UNDERLINE] 时被消费。
+         * 取值 0..3，对应 [Highlight.UNDERLINE_STYLE_SOLID / DASHED / DOTTED / WAVY]。
+         */
+        underlineStyle: Int = Highlight.UNDERLINE_STYLE_SOLID,
     ) {
         if (startChapterPos >= endChapterPos) {
             AppLog.warn("Highlight", "add() rejected: empty range $startChapterPos..$endChapterPos")
@@ -75,10 +80,11 @@ class ReaderHighlightController(
             colorArgb = colorArgb,
             note = note,
             kind = kind,
+            underlineStyle = underlineStyle,
         )
         scope.launch(Dispatchers.IO) {
             highlightRepo.insert(highlight)
-            AppLog.info("Highlight", "added id=${highlight.id} ch=$chapterIndex range=$startChapterPos..$endChapterPos kind=$kind len=${highlight.content.length}")
+            AppLog.info("Highlight", "added id=${highlight.id} ch=$chapterIndex range=$startChapterPos..$endChapterPos kind=$kind underlineStyle=$underlineStyle len=${highlight.content.length}")
         }
     }
 

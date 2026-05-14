@@ -56,11 +56,30 @@ data class Highlight(
      * 不破坏老数据。
      */
     val kind: Int = KIND_BACKGROUND,
+    /**
+     * 下划线线型 —— 仅在 [kind] == [KIND_UNDERLINE] 时被消费，其余 kind 忽略此字段。
+     *
+     *   - 0 ([UNDERLINE_STYLE_SOLID])  直线
+     *   - 1 ([UNDERLINE_STYLE_DASHED]) 虚线
+     *   - 2 ([UNDERLINE_STYLE_DOTTED]) 点划线
+     *   - 3 ([UNDERLINE_STYLE_WAVY])   波浪线
+     *
+     * 默认 0 —— v31→v32 migration 给历史行加列时填 0，等价于直线下划线，对老数据
+     * 不变动行为（虽然老数据里实际上 kind 不会是 UNDERLINE，所以也读不到这一列）。
+     */
+    val underlineStyle: Int = UNDERLINE_STYLE_SOLID,
 ) {
     companion object {
         /** 背景高亮（默认） —— 在文字下铺一层透明色块。 */
         const val KIND_BACKGROUND = 0
         /** 字体强调色 —— 替换文字前景色，不画背景。 */
         const val KIND_TEXT_COLOR = 1
+        /** 下划线 —— 在文字基线下方画线，按 [underlineStyle] 切换线型。 */
+        const val KIND_UNDERLINE = 2
+
+        const val UNDERLINE_STYLE_SOLID = 0
+        const val UNDERLINE_STYLE_DASHED = 1
+        const val UNDERLINE_STYLE_DOTTED = 2
+        const val UNDERLINE_STYLE_WAVY = 3
     }
 }

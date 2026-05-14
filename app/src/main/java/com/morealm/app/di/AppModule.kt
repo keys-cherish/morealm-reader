@@ -667,6 +667,19 @@ private val MIGRATION_30_31 = object : Migration(30, 31) {
 }
 
 /**
+ * v31 → v32：highlights 表加 `underlineStyle` 列 —— 配合 [Highlight.KIND_UNDERLINE] 新增
+ * 的下划线高亮类型（0 直线 / 1 虚线 / 2 点划线 / 3 波浪线）。
+ *
+ * 历史 highlight 行 kind ∈ {0, 1}，不会读这一列，DEFAULT 0 既兼容老数据又给新 underline
+ * 行一个合理的零值兜底（直线最常见）。整张表只新增一列，沿用 ADD COLUMN 不需要重建。
+ */
+private val MIGRATION_31_32 = object : Migration(31, 32) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `highlights` ADD COLUMN `underlineStyle` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
  * v28 → v29 jsScript 字段曾在工作区临时存在，配套整文件 JS 书源（lifecycle 模型）的导入支持。
  * 后续放弃该方向（与 Legado 规则模型不兼容、维护负担过大），从未 commit / push 到 main。
  *
@@ -807,6 +820,7 @@ object AppModule {
                 MIGRATION_28_29,
                 MIGRATION_29_30,
                 MIGRATION_30_31,
+                MIGRATION_31_32,
             )
             // 不开 fallbackToDestructiveMigrationFrom。
             //

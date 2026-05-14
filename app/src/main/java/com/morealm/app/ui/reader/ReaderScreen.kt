@@ -707,6 +707,19 @@ fun ReaderScreen(
                         kind = com.morealm.app.domain.entity.Highlight.KIND_TEXT_COLOR,
                     )
                 },
+                // 下划线：选区菜单 UNDERLINE 面板选「线型 + 颜色」→ 落库 kind=2，
+                // underlineStyle 记线型。chapterIndex 同上取 renderedChapter.index。
+                onAddUnderline = { start, end, content, argb, style ->
+                    viewModel.highlight.add(
+                        chapterIndex = renderedChapter.index,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                        kind = com.morealm.app.domain.entity.Highlight.KIND_UNDERLINE,
+                        underlineStyle = style,
+                    )
+                },
                 onShareHighlight = { highlight ->
                     val ok = com.morealm.app.ui.reader.share.HighlightShareCard
                         .shareAsImage(context, highlight)

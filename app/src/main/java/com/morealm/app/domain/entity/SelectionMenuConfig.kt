@@ -25,6 +25,13 @@ enum class SelectionMenuItem(val displayName: String) {
      * 背景而是替换前景字色。默认在 EXPANDED 桶里（不强占主行）。
      */
     TEXT_COLOR("字体色"),
+    /**
+     * 下划线 —— 点击展开"线型 + 颜色"面板（4 种线型 × 5 色），落库时
+     * [com.morealm.app.domain.entity.Highlight.kind] = 2，
+     * [com.morealm.app.domain.entity.Highlight.underlineStyle] 记线型。
+     * 渲染层在基线下方画线，按 style 切换 PathEffect。默认在 EXPANDED 桶。
+     */
+    UNDERLINE("下划线"),
     ;
 
     companion object {
@@ -127,6 +134,7 @@ data class SelectionMenuConfig(
                 SelectionMenuEntry(SelectionMenuItem.TRANSLATE, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.SHARE, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.TEXT_COLOR, SelectionMenuPosition.EXPANDED),
+                SelectionMenuEntry(SelectionMenuItem.UNDERLINE, SelectionMenuPosition.EXPANDED),
             )
         )
 
