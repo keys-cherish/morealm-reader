@@ -153,7 +153,9 @@ fun ReaderScreen(
     // 横排 6 个翻页动画路径对竖排无感知，避免后期维护地狱（详见
     // VerticalReaderView 顶部注释）。
     val readingDirectionStr by viewModel.settings.readingDirection.collectAsStateWithLifecycle()
-    val isVerticalReading = readingDirectionStr == "vertical_rl"
+    // "vertical_rl" 或 "vertical_lr" 都走竖排独立路径；区分 RL/LR 由 VerticalReaderView
+    // 内部把 readingDirectionStr 传给 ChapterProvider.layoutChapter 决定列方向。
+    val isVerticalReading = readingDirectionStr == "vertical_rl" || readingDirectionStr == "vertical_lr"
     val fontFamily by viewModel.settings.fontFamily.collectAsStateWithLifecycle()
     val fontSize by viewModel.settings.fontSize.collectAsStateWithLifecycle()
     val lineHeight by viewModel.settings.lineHeight.collectAsStateWithLifecycle()
@@ -567,6 +569,13 @@ fun ReaderScreen(
         }
         val isTxtFormat = book?.format == com.morealm.app.domain.entity.BookFormat.TXT
         val displayContent = renderedChapter.content.ifEmpty { content }
+        // restoreToken != 0L 表示 ChapterController 至少 publish 过一次有效章节
+        // （loadChapter / commitChapterShiftNext/Prev 都赋 System.nanoTime()）。
+        // 用它代替 displayContent.isNotBlank() 当渲染门槛，避免 EPUB 占位章
+        // (banquan/neirong 这种 body 实质为空) 翻进来时整个阅读区不渲染、黑屏 +
+        // 没 touch listener 导致点击无反应——空 content 走 CanvasRenderer 内
+        // ReflowEngine.placeholderForEmpty 一页占位即可。
+        val hasReaderTarget = renderedChapter.restoreToken != 0L
 
         // Keep the last real reader surface on screen. During initial loading, avoid rendering
         // a synthetic 1/1 empty chapter that shows up as a visible white/loading flicker in LDPlayer.
@@ -612,8 +621,13 @@ fun ReaderScreen(
                 },
                 onNextChapter = { viewModel.nextChapter() },
                 onPrevChapter = { viewModel.prevChapter() },
+                direction = if (readingDirectionStr == "vertical_lr") {
+                    com.morealm.app.domain.render.ReadingDirection.VERTICAL_LR
+                } else {
+                    com.morealm.app.domain.render.ReadingDirection.VERTICAL_RL
+                },
             )
-        } else if (displayContent.isNotBlank()) {
+        } else if (hasReaderTarget) {
             // 把 ttsChapterPosition 的 collect 收敛进这个 leaf composable —— 段切
             // 时只重组 [ReadAloudPositionScope] 自己 + 内部 lambda 里的 CanvasRenderer
             // 调用，不再让外层 ReaderScreen 整体 recompose。CanvasRenderer 自身的
@@ -639,7 +653,12 @@ fun ReaderScreen(
                 paddingTop = marginTopVal,
                 paddingBottom = marginBottomVal,
                 bgImageUri = readerBgImage,
-                startFromLastPage = navigateDirection < 0,
+                // 与 [ReaderChapterController.commitChapterShiftPrev] 注释保持一致：
+                // 上一章按钮预期跳"章头"（与下一章对称）。renderedChapter.initialProgress
+                // 已经表达目标位置（PREV 按钮置 0、页内手势跨章会置具体值），不再用
+                // navigateDirection 推 startFromLastPage 否则会优先级覆盖 initialProgress
+                // 让 PREV 始终跳末页（用户实测 bug）。
+                startFromLastPage = false,
                 initialProgress = renderedChapter.initialProgress,
                 initialChapterPosition = renderedChapter.initialChapterPosition,
                 restoreToken = renderedChapter.restoreToken,
@@ -802,7 +821,7 @@ fun ReaderScreen(
         }
 
         // Loading indicator
-        if (loading && displayContent.isBlank()) {
+        if (loading && !hasReaderTarget) {
             CircularProgressIndicator(
                 modifier = Modifier.align(Alignment.Center).size(32.dp),
                 color = MaterialTheme.colorScheme.primary,
@@ -1088,11 +1107,23 @@ fun ReaderScreen(
         }
 
         // Chapter list panel (with search + bookmark tab)
+        // 高亮的「当前章」与控制栏 controlChapterIndex 保持同一来源：SCROLL 模式下用
+        // visiblePage.chapterIndex（跟随可视段实际滚到哪一章），其余模式用 currentIndex。
+        // 避免「顶栏第二章 / 目录高亮第一章」的不一致——用户用 SCROLL 翻到下一章内容时，
+        // 顶栏跟可视段走变成下一章，目录高亮也应该同步。
+        val panelCurrentChapter = if (
+            pageTurnMode == PageTurnMode.SCROLL &&
+            visiblePage.chapterIndex in chapters.indices
+        ) {
+            visiblePage.chapterIndex
+        } else {
+            currentIndex
+        }
         ChapterBookmarkPanel(
             visible = showChapterList || showBookmarks,
             chapters = chapters,
             bookmarks = viewModel.bookmarks.collectAsStateWithLifecycle().value,
-            currentChapter = currentIndex,
+            currentChapter = panelCurrentChapter,
             selectedSideTab = if (showBookmarks) 1 else 0,
             linkedBooks = linkedBooks,
             book = book,
@@ -1105,11 +1136,15 @@ fun ReaderScreen(
             onChapterClick = { chapterIndex ->
                 showChapterList = false
                 val clicked = chapters.getOrNull(chapterIndex)
+                val windowDump = viewModel.chapterWindow.loadedChapters.toList()
                 com.morealm.app.core.log.AppLog.info(
                     "ChapterIdxDebug",
                     "onChapterClick listIdx=$chapterIndex" +
+                        " pageTurnMode=$pageTurnMode" +
+                        " currentIndex=$currentIndex visiblePage.chIdx=${visiblePage.chapterIndex}" +
                         " ch.index=${clicked?.index} ch.title=\"${clicked?.title}\"" +
-                        " ch.url=${clicked?.url}",
+                        " ch.url=${clicked?.url}" +
+                        " window.loaded=$windowDump",
                 )
                 viewModel.loadChapter(chapterIndex)
             },

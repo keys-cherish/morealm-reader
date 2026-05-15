@@ -60,7 +60,7 @@ object LocalBookParser {
         format: BookFormat,
         chapter: BookChapter,
     ): String = withContext(Dispatchers.IO) {
-        when (format) {
+        val raw = when (format) {
             BookFormat.TXT -> readTxtChapter(context, uri, chapter)
             BookFormat.EPUB -> EpubParser.readChapter(context, uri, chapter)
             BookFormat.MOBI, BookFormat.AZW3 -> MobiParser.readChapter(context, uri, chapter)
@@ -69,6 +69,22 @@ object LocalBookParser {
             BookFormat.UMD -> UmdParser.readChapter(context, uri, chapter)
             else -> ""
         }
+        // 空章节兜底：解析失败 / 真分隔页 / NCX 链接断了等情况，给用户清晰提示，
+        // 而不是显示一片空白让人以为 reader 卡死。判定：trim 后字符串长度 < 8
+        // 且不含 <img>（保护漫画/插图章节，它们文本极少但有图）。
+        if (raw.isEmptyChapter()) {
+            "（本章暂无内容）\n\n该章节可能是分隔页、版权页或源文件解析未拿到正文。" +
+                "如多个章节都空白，请尝试重新导入文件或换源。"
+        } else {
+            raw
+        }
+    }
+
+    private fun String.isEmptyChapter(): Boolean {
+        val t = this.trim()
+        if (t.isEmpty()) return true
+        if (this.contains("<img", ignoreCase = true)) return false
+        return t.length < 8
     }
 
     // ── TXT ──────────────────────────────────────────────

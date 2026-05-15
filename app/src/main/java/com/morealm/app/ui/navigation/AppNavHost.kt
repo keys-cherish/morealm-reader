@@ -507,7 +507,7 @@ fun MoRealmNavHost(
                     // 拿到结果后路由到 ComicReaderScreen 或 ReaderScreen。
                     val probe: com.morealm.app.presentation.reader.BookFormatProbeViewModel = androidx.hilt.navigation.compose.hiltViewModel()
                     val probeResult by probe.result.collectAsStateWithLifecycle()
-                    when (probeResult) {
+                    when (val r = probeResult) {
                         com.morealm.app.presentation.reader.BookFormatProbeViewModel.Result.Comic -> {
                             com.morealm.app.ui.reader.comic.ComicReaderScreen(
                                 onBack = { navController.safePopBackStackOrHome() },
@@ -530,6 +530,14 @@ fun MoRealmNavHost(
                                     navController.safeNavigate("font_manager")
                                 },
                                 themeViewModel = themeViewModel,
+                            )
+                        }
+                        is com.morealm.app.presentation.reader.BookFormatProbeViewModel.Result.BadFile -> {
+                            // 文件健康检查失败 —— 不进 reader 避免 OOM/黑屏，显示错误页
+                            BadBookFileScreen(
+                                bookTitle = r.bookTitle,
+                                reason = r.reason,
+                                onBack = { navController.safePopBackStackOrHome() },
                             )
                         }
                         null -> {
@@ -644,10 +652,33 @@ fun MoRealmNavHost(
  * `reader/{bookId}` 匹配失败并抛 IllegalArgumentException。统一在拼路由这一步
  * 编码；composable 接收侧 entry.arguments?.getString("bookId") 自带 URL 解码。
  */
+/**
+ * Reader 导航限流状态：(bookId, 最近一次 navigate 时间)。
+ *
+ * 用户快速连点书架同一本书 N 次会让 Nav stack 累积 N 个 reader entry，
+ * 用户需按返回 N 次才回到主页。500ms throttle 已经足够覆盖手指连点 + 触发延迟
+ * （Compose ripple 反馈通常 100-200ms），同时不阻塞用户「真的想多次进入不同
+ * 章节」的场景（点 A → 退出 → 点 B 这种 500ms 间隔足够大）。
+ */
+private var lastReaderNavBookId: String? = null
+private var lastReaderNavTime: Long = 0L
+private const val READER_NAV_THROTTLE_MS = 500L
+
 private fun NavController.navigateToReader(
     bookId: String,
     builder: (androidx.navigation.NavOptionsBuilder.() -> Unit)? = null,
 ) {
+    val now = System.currentTimeMillis()
+    if (bookId == lastReaderNavBookId && now - lastReaderNavTime < READER_NAV_THROTTLE_MS) {
+        com.morealm.app.core.log.AppLog.info(
+            "Nav",
+            "navigateToReader throttled bookId=$bookId (Δ=${now - lastReaderNavTime}ms)",
+        )
+        return
+    }
+    lastReaderNavBookId = bookId
+    lastReaderNavTime = now
+    com.morealm.app.core.log.AppLog.info("Nav", "navigateToReader bookId=$bookId")
     safeNavigate("reader/${Uri.encode(bookId)}", builder)
 }
 
@@ -665,7 +696,11 @@ private fun NavController.navigateToDetail(
 private fun NavController.safeNavigate(route: String, builder: (androidx.navigation.NavOptionsBuilder.() -> Unit)? = null) {
     try {
         if (builder != null) navigate(route, builder) else navigate(route)
-    } catch (_: IllegalStateException) { }
+    } catch (e: IllegalStateException) {
+        // 不再静默吞 —— predictive back 触发的 ISE 是预期的，但其他 ISE（如 nav graph 错配）
+        // 之前被一并埋没，导致「点击没响应 + 无日志」类问题排查不出。改 warn 暴露。
+        com.morealm.app.core.log.AppLog.warn("Nav", "safeNavigate swallowed ISE route=$route msg=${e.message}")
+    }
 }
 
 private fun NavController.safePopBackStack(): Boolean {
@@ -686,4 +721,57 @@ private fun NavController.safePopBackStackOrHome(): Boolean {
             true
         }
     } catch (_: IllegalStateException) { false }
+}
+
+/**
+ * 书籍文件健康检查失败时显示的占位错误页。给用户清晰错误 + 返回按钮，避免
+ * 进 reader 后触发 OOM 或黑屏卡死。常见触发场景：0 字节占位 EPUB、下载残缺、
+ * 文件被系统清理但书架条目还在。
+ */
+@Composable
+private fun BadBookFileScreen(
+    bookTitle: String,
+    reason: String,
+    onBack: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.foundation.layout.Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "⚠",
+                style = MaterialTheme.typography.displayMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(bottom = 16.dp),
+            )
+            Text(
+                text = "无法打开《${bookTitle}》",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            Text(
+                text = reason,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 4.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            Text(
+                text = "建议长按书架上的这本书删除，确认源文件无误后重新导入。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 24.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            OutlinedButton(onClick = onBack) {
+                Text("返回书架")
+            }
+        }
+    }
 }

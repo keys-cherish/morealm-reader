@@ -387,11 +387,22 @@ fun LazyScrollRenderer(
             .collect(onScrollingChanged)
     }
 
-    // ── snapshotFlow #2：可见首段变化 —— 顶栏标题/章号更新 ──
+    // ── snapshotFlow #2：可见**中心**段变化 —— 顶栏标题/章号/进度 ──
     //
-    // 用 firstVisibleItemIndex + scrollOffset pair；段切换或精确像素都触发，但通过
-    // distinctUntilChanged 自动过滤同段同偏移的重复 emit（fling 期间偏移连续变化，
-    // 这里不能用 sample 因 caller 需要实时拿最新偏移做 bookmark 持久化）。
+    // 关键：用「视野中心段」而不是「firstVisibleItem」。
+    //
+    // 之前用 firstVisibleItem 的 bug：从目录点 ch 28 时，windowSource.resetTo 先塞个
+    // ch 27 的 LOADING placeholder 撑场（让 LazyColumn 不退到空态），然后跳 token
+    // 用 scrollToItem(item=1, offset=-(viewport/2)) 把 ch 28 首段锚到视野中心。
+    // 负 offset 在 placeholder 之前没内容时被 LazyColumn clamp 到 (first=0, offset=0)，
+    // 视野顶端就是 placeholder_27 —— firstVisibleItem.chapterIndex = 27 →
+    // onVisibleParagraphChanged(p=placeholder_27) → setCurrentChapterIndexFromScroll(27) →
+    // saveProgress 写 chapter=27 覆盖刚跳的 ch 28（见 temp/MoRealm_log_20260515_192231）。
+    //
+    // 「当前章节」语义上是用户**视野中心**正在读的那段所属章，不是视野顶端那段。
+    // 视野顶端经常是上一段的尾巴或前一章的 placeholder，按 firstVisible 派生会让章号
+    // 在章界震荡（半屏切换感）；按 viewport center 派生 = 视觉重心切到新章时再切，
+    // 跳章 / 滚章 / 书签都一致。
     //
     // 用 LaunchedEffect(listState) 而非 LaunchedEffect(paragraphs) —— paragraphs 是
     // SnapshotStateList，其内容变化由 snapshotFlow 内部读取自动驱动；用 paragraphs
@@ -399,12 +410,23 @@ fun LazyScrollRenderer(
     // 状态丢失，连环重复 emit（旧实现中是空气墙 / 瞬移 bug 的命门之一，见
     // temp/solution.txt 「斩断 derivedStateOf 副作用风暴」）。
     LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+        snapshotFlow { listState.viewportCenterItemInfo() }
             .distinctUntilChanged()
-            .collect { (idx, offset) ->
-                paragraphs.getOrNull(idx)?.let { p ->
-                    onVisibleParagraphChanged(p, offset)
+            .collect { info ->
+                if (info == null) return@collect  // layout 未 measure / 跳章过渡帧
+                val (idx, offset) = info
+                val p = paragraphs.getOrNull(idx) ?: return@collect
+                if (p.contentType == ScrollParagraphType.LOADING) {
+                    // 占位段不算"用户在读" —— 跳章后下一章 LOADING 占位可能临时落在
+                    // viewport 中心（centerY 落不到的边界 case），不该让 saveProgress
+                    // 写到占位章号上覆盖真实进度。
+                    AppLog.debug(
+                        "LazyScroll",
+                        "skip LOADING placeholder at center: idx=$idx chapterIndex=${p.chapterIndex} offset=$offset",
+                    )
+                    return@collect
                 }
+                onVisibleParagraphChanged(p, offset)
             }
     }
 
@@ -413,17 +435,19 @@ fun LazyScrollRenderer(
     // 进度只需要"百分比变化时"通知 caller（caller 通常更新底栏 + 持久化），
     // sample(150L) 把 fling 期间一秒几十次的状态变化压成 ~6 次，再叠加
     // distinctUntilChanged 让最终上报 ~1 次/百分比阶。
+    //
+    // 同 #2 用 viewport center + 跳过占位；如果用 firstVisibleItem，章界处进度会从
+    // 100%(上一章) 跳到 0%(下一章) 但上一章还占视野大半 —— 用户看到的内容和进度条不一致。
     LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+        snapshotFlow { listState.viewportCenterItemInfo() }
             .sample(150L)
-            .map { (idx, offset) ->
-                val p = paragraphs.getOrNull(idx)
-                if (p == null) {
-                    null
-                } else {
-                    val totalChars = chapterCharSizeProvider(p.chapterIndex).coerceAtLeast(1)
-                    p.chapterIndex to calcChapterProgress(p, offset.toFloat(), totalChars)
-                }
+            .map { info ->
+                if (info == null) return@map null
+                val (idx, offset) = info
+                val p = paragraphs.getOrNull(idx) ?: return@map null
+                if (p.contentType == ScrollParagraphType.LOADING) return@map null
+                val totalChars = chapterCharSizeProvider(p.chapterIndex).coerceAtLeast(1)
+                p.chapterIndex to calcChapterProgress(p, offset.toFloat(), totalChars)
             }
             .filter { it != null }
             .map { it!! }
@@ -441,16 +465,15 @@ fun LazyScrollRenderer(
     //   - #3.5 debounce：等待无新事件→单次输出（停下才出）→ 持久化
     // 两条链共用同一 snapshotFlow source，但 operator 不同，目标 sink 不同。
     LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+        snapshotFlow { listState.viewportCenterItemInfo() }
             .debounce(800L)
-            .map { (idx, offset) ->
-                val p = paragraphs.getOrNull(idx)
-                if (p == null) {
-                    null
-                } else {
-                    val totalChars = chapterCharSizeProvider(p.chapterIndex).coerceAtLeast(1)
-                    p.chapterIndex to calcChapterProgress(p, offset.toFloat(), totalChars)
-                }
+            .map { info ->
+                if (info == null) return@map null
+                val (idx, offset) = info
+                val p = paragraphs.getOrNull(idx) ?: return@map null
+                if (p.contentType == ScrollParagraphType.LOADING) return@map null
+                val totalChars = chapterCharSizeProvider(p.chapterIndex).coerceAtLeast(1)
+                p.chapterIndex to calcChapterProgress(p, offset.toFloat(), totalChars)
             }
             .filter { it != null }
             .map { it!! }
@@ -605,15 +628,31 @@ fun LazyScrollRenderer(
     // 仅在 chapterIndex 变化时触发依赖此 state 的子组件重组（这里没用，留给上层 topbar
     // 取用：caller 通过 onVisibleParagraphChanged 拿章 idx；如未来 LazyScrollRenderer
     // 内部也要用这个推导值，可直接读 currentChapterIdx.value）。
+    //
+    // 同 #2 / #3 / #3.5 用 viewport center + 跳过 LOADING 占位，保持「当前章」**单一
+    // 定义**：四个 site 同一份语义，避免日志和真实 saveProgress 不一致（老实现里这条
+    // 派生与 #2 都用 firstVisibleItem，一旦割裂 bug 定位会变难）。
     val currentChapterIdx by remember(paragraphs) {
         derivedStateOf {
-            paragraphs.getOrNull(listState.firstVisibleItemIndex)?.chapterIndex ?: -1
+            val info = listState.viewportCenterItemInfo() ?: return@derivedStateOf -1
+            val p = paragraphs.getOrNull(info.first) ?: return@derivedStateOf -1
+            if (p.contentType == ScrollParagraphType.LOADING) -1 else p.chapterIndex
         }
     }
     // 把派生值喂回日志只为非空使用，避免被编译器优化掉（Compose 不读不算）。
     LaunchedEffect(currentChapterIdx) {
         if (currentChapterIdx >= 0) {
-            AppLog.debug("LazyScroll", "currentChapter derived: $currentChapterIdx")
+            // 顺手把 visibleItems 关键状态吐出来，方便后续日志诊断 viewport 中心定位
+            val info = listState.layoutInfo
+            val centerY = (info.viewportStartOffset + info.viewportEndOffset) / 2
+            val first = info.visibleItemsInfo.firstOrNull()
+            val last = info.visibleItemsInfo.lastOrNull()
+            AppLog.debug(
+                "LazyScroll",
+                "currentChapter derived: $currentChapterIdx centerY=$centerY visibleCount=${info.visibleItemsInfo.size}" +
+                    " firstItem(idx=${first?.index} offset=${first?.offset} size=${first?.size} chapter=${paragraphs.getOrNull(first?.index ?: -1)?.chapterIndex} loading=${paragraphs.getOrNull(first?.index ?: -1)?.contentType == ScrollParagraphType.LOADING})" +
+                    " lastItem(idx=${last?.index} offset=${last?.offset} size=${last?.size})",
+            )
         }
     }
 
@@ -920,4 +959,44 @@ private fun computeCharOffsetInParagraph(paragraph: ScrollParagraph, x: Float, y
     if (hitCol !is TextBaseColumn) return -1
     val charIdxInChapter = line.chapterPosition + charsBefore
     return (charIdxInChapter - paragraph.firstChapterPosition).coerceAtLeast(0)
+}
+
+/**
+ * 视野**中心**所属 item 的 (index, scrollOffsetInItem)。
+ *
+ * 用于派生「用户正在读哪一章」—— 不能用 [LazyListState.firstVisibleItemIndex]，
+ * 跳章场景下 firstVisibleItem 会落到前一章的 LOADING placeholder 上（详见
+ * 调用点的 snapshotFlow #2 KDoc）。
+ *
+ * 算法：
+ *   1. 视野中心像素 centerY = (viewportStart + viewportEnd) / 2
+ *   2. 遍历 [androidx.compose.foundation.lazy.LazyListLayoutInfo.visibleItemsInfo]，
+ *      找 `offset <= centerY <= offset+size-1` 的项
+ *   3. 没命中（罕见：item gap、size=0）→ 退到 visibleItems 首项（最接近顶端）
+ *   4. visibleItems 完全为空（layout pass 未完成 / 跳章后 1-2 帧）→ 返回 null，
+ *      caller 应跳过本次 emit。**绝不**回退到 firstVisibleItem* —— 那是回到 bug。
+ *
+ * 返回 null 的场景：
+ *   - 跳章后到下一帧 measure 完成之间 (`scrollToItem` 设置了新 scrollPosition.index，
+ *     但 `layoutInfo` 还未 re-measure)，`visibleItemsInfo` 此时可能为空 / 旧值。
+ *     测试日志：跳到 ch7 后 ~11ms 内本 helper 被读，layoutInfo 还是 ch0 的旧布局。
+ *   - 首帧 layoutInfo 还没 measure。
+ *
+ * 返回的 offsetInItem = centerY - centerItem.offset，语义是「视野中心像素深入当前
+ * item 内的偏移」。给 [com.morealm.app.domain.render.calcChapterProgress] 做章内
+ * 进度估算时，含义比 firstVisibleItemScrollOffset（item 顶被滚出 viewport 的量）
+ * 更贴近"用户读到哪了"。
+ *
+ * 性能：每帧调一次，visibleItemsInfo 典型 3-7 项，find 是 O(n) 小常数；
+ * snapshotFlow 自动 dedup，distinctUntilChanged 把同 (idx, offset) emit 滤掉。
+ */
+private fun LazyListState.viewportCenterItemInfo(): Pair<Int, Int>? {
+    val info = layoutInfo
+    val visible = info.visibleItemsInfo
+    if (visible.isEmpty()) return null
+    val centerY = (info.viewportStartOffset + info.viewportEndOffset) / 2
+    val centerItem = visible.find { centerY in it.offset..(it.offset + it.size - 1) }
+        ?: visible.first()
+    val offsetInItem = (centerY - centerItem.offset).coerceAtLeast(0)
+    return centerItem.index to offsetInItem
 }

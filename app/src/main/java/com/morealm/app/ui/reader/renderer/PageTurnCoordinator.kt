@@ -250,6 +250,31 @@ internal class PageTurnCoordinator(
     fun turnPageByTap(direction: ReaderPageDirection, readerPageIndexSetter: (Int) -> Unit) {
         val factory = pageFactory ?: return
         val state = pagerState ?: return
+        // ── 跨章 race 防御（修复"点卷首页一下跳到下一章"）──
+        //
+        // commitChapterShiftNext lazy-layout 路径下，coord.chapterIndex 已推到新章
+        // （如 16→17），但 pageFactory 仍是旧章 idx=16 的 snapshot（layoutChapterAsync
+        // 还没排完新章）。这个过渡窗口内如果用户连续点 NEXT，本函数用 factory.pageCount=1
+        // （旧章 1 页）+ moveToNext=null 判定 → 误判为 boundary → 又一次 CHAPTER ADVANCE
+        // → 跳过中间章节。
+        //
+        // 日志命中实例：某 EPUB卷首页 pages=1，第一次 tap NEXT 把 coord 推到 17，913ms 后
+        // 第二次 tap 时 factory.curChIdx 仍是 16、pageCount 仍是 1，又 boundary advance
+        // 到 18，用户感受「点了第一卷直接跳第二章」。
+        //
+        // 防御：factory.curChIdx ≠ coord.chapterIndex 时拒绝处理本次 tap，让用户等
+        // pageFactory 同步到新章后再继续操作。stopScroll 是为了重置 pageDelegate
+        // isRunning（虽然下面 keyTurnPage 还没调用，但 stopScroll 是无副作用的安全清理）。
+        val factoryChIdx = factory.snapshotCurrentChapterIndex()
+        if (factoryChIdx != null && factoryChIdx != chapterIndex) {
+            AppLog.info(
+                "ReaderTap",
+                "turnPageByTap SWALLOW race: factory.curChIdx=$factoryChIdx coord.chIdx=$chapterIndex" +
+                    " dir=$direction (chapter advance in flight, pageFactory not synced)",
+            )
+            pageDelegateState.stopScroll()
+            return
+        }
         // Reset per-turn state before evaluating a new page-turn attempt.
         if (!pageDelegateState.keyTurnPage(direction)) return
         val lastSettledBeforeSync = lastSettledDisplayPage

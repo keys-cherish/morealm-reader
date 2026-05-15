@@ -150,6 +150,11 @@ fun VerticalReaderView(
     onVisiblePageChanged: (chapterIndex: Int, title: String, readProgress: String, chapterPosition: Int) -> Unit,
     onNextChapter: () -> Unit,
     onPrevChapter: () -> Unit,
+    /**
+     * 列方向：[ReadingDirection.VERTICAL_RL] 章标在屏幕右侧 / 翻页 RTL；
+     * [ReadingDirection.VERTICAL_LR] 章标在左 / 翻页 LTR。其他枚举值视为 RL（兜底）。
+     */
+    direction: ReadingDirection = ReadingDirection.VERTICAL_RL,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -228,7 +233,7 @@ fun VerticalReaderView(
                             content = content,
                             chapterIndex = chapterIndex,
                             chaptersSize = chaptersSize,
-                            readingDirection = ReadingDirection.VERTICAL_RL,
+                            readingDirection = direction,
                         )
                     }.onFailure {
                         AppLog.warn("VerticalReaderView", "layout failed for ch=$chapterIndex: ${it.message}")
@@ -307,31 +312,29 @@ fun VerticalReaderView(
                     }
                 }
 
-                // 根据 pageAnimType 选 pager primitive。SLIDE/COVER 走 page/animation
-                // 包共享的无状态 primitive（开 reverseLayout + userScrollEnabled 让
-                // pager 自管手势），NONE 自带 HorizontalPager 仅供瞬切。
-                // 见参数文档：SLIDE_VERTICAL/SIMULATION/SCROLL 都 fallback 到 SLIDE。
+                // 根据 pageAnimType 选 pager primitive。reverseLayout 随 direction：
+                // VERTICAL_RL = true（视觉上 next 页在左，匹配日式阅读）；
+                // VERTICAL_LR = false（next 在右，章标在左、正文向右铺开时翻页同向）。
+                val rtlPager = direction == ReadingDirection.VERTICAL_RL
                 when (pageAnimType) {
                     PageAnimType.COVER -> CoverPager(
                         pagerState = pagerState,
                         modifier = Modifier.fillMaxSize(),
-                        reverseLayout = true,
+                        reverseLayout = rtlPager,
                         userScrollEnabled = true,
                         pageContent = pageContent,
                     )
                     PageAnimType.NONE -> HorizontalPager(
                         state = pagerState,
                         pageSize = PageSize.Fill,
-                        reverseLayout = true,
+                        reverseLayout = rtlPager,
                         userScrollEnabled = true,
                         modifier = Modifier.fillMaxSize(),
                     ) { idx -> pageContent(idx) }
-                    // SLIDE / SLIDE_VERTICAL / SIMULATION / SCROLL 都走 SlidePager。
-                    // 参数文档解释了为什么后三个 fallback。
                     else -> SlidePager(
                         pagerState = pagerState,
                         modifier = Modifier.fillMaxSize(),
-                        reverseLayout = true,
+                        reverseLayout = rtlPager,
                         userScrollEnabled = true,
                         pageContent = pageContent,
                     )

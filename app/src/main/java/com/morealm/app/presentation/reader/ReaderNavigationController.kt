@@ -72,7 +72,9 @@ class ReaderNavigationController(
                 AppLog.debug("Nav", "prevChapter via sync moveToPrevChapter")
                 return
             }
-            chapter.loadChapter(prevIdx, restoreProgress = 100)
+            // restoreProgress = 0：与 nextChapter() 对称，"上一章"按钮跳到上一章章头
+            // （而不是章尾）。用户预期：导航按钮上下章都跳目标章开头。
+            chapter.loadChapter(prevIdx, restoreProgress = 0)
         }
     }
 

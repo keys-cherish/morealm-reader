@@ -223,22 +223,22 @@ class ReaderChapterController(
             return false
         }
         // next content 必须可取到——否则 _chapterContent 同步无源。
-        // 优先从 _nextPreloadedChapter（公开 StateFlow）取，其次 nextChapterCache（@Volatile）。
+        // **单一可信来源** _nextPreloadedChapter (StateFlow<PreloadedReaderChapter?>)。
+        // index 不匹配（被快速 PREV/NEXT 切换覆盖到别的章）就 REJECT，绝不走无 index
+        // 的裸 String 路径——这是 22:41 那次 PREV 后内容/序号错位的根因。
         val nextPreloaded = _nextPreloadedChapter.value
-        val nextContent: String = when {
-            nextPreloaded != null && nextPreloaded.index == nextIdx -> nextPreloaded.content
-            nextChapterCache != null -> nextChapterCache!!
-            else -> {
+        val nextContent: String = nextPreloaded
+            ?.takeIf { it.index == nextIdx }
+            ?.content
+            ?: run {
                 AppLog.warn(
                     "ReadBook",
                     "commitChapterShiftNext REJECT next content not cached (cur=$curIdx)" +
                         " | _nextTextChapter.idx=${_nextTextChapter.value?.chapterIndex}" +
-                        " nextPreloaded.idx=${nextPreloaded?.index} wantNextIdx=$nextIdx" +
-                        " nextCache.len=${nextChapterCache?.length}",
+                        " nextPreloaded.idx=${nextPreloaded?.index} wantNextIdx=$nextIdx",
                 )
                 return false
             }
-        }
         // 仿 legado ReadBook.moveToNextChapter：_nextTextChapter 未就绪时不 REJECT，
         // 改为推进 index + 置 _curTextChapter = null，由 CanvasRenderer 主路径重排。
         // 只要 nextContent 已缓存（上面那段 when 保证），视觉上就是「章头标题→加载态
@@ -279,9 +279,7 @@ class ReaderChapterController(
             restoreToken = System.nanoTime(),
         )
         _prevPreloadedChapter.value = PreloadedReaderChapter(curIdx, oldCurTitle, oldCurContent)
-        prevChapterCache = oldCurContent
         _nextPreloadedChapter.value = null
-        nextChapterCache = null
         // visible state 同步——避免 progress controller 看到 stale chapterIndex 导致进度错配
         if (::scrollProgressState.isInitialized) scrollProgressState.value = 0
         if (::visiblePageState.isInitialized) {
@@ -331,21 +329,21 @@ class ReaderChapterController(
             AppLog.debug("ReadBook", "commitChapterShiftPrev REJECT at first chapter")
             return false
         }
+        // 与 commitChapterShiftNext 对称——单一可信来源 _prevPreloadedChapter，
+        // index 不匹配就 REJECT 回退老路径，绝不走裸 String fallback。
         val prevPreloaded = _prevPreloadedChapter.value
-        val prevContent: String = when {
-            prevPreloaded != null && prevPreloaded.index == prevIdx -> prevPreloaded.content
-            prevChapterCache != null -> prevChapterCache!!
-            else -> {
+        val prevContent: String = prevPreloaded
+            ?.takeIf { it.index == prevIdx }
+            ?.content
+            ?: run {
                 AppLog.warn(
                     "ReadBook",
                     "commitChapterShiftPrev REJECT prev content not cached (cur=$curIdx)" +
                         " | _prevTextChapter.idx=${_prevTextChapter.value?.chapterIndex}" +
-                        " prevPreloaded.idx=${prevPreloaded?.index} wantPrevIdx=$prevIdx" +
-                        " prevCache.len=${prevChapterCache?.length}",
+                        " prevPreloaded.idx=${prevPreloaded?.index} wantPrevIdx=$prevIdx",
                 )
                 return false
             }
-        }
         // 仿 legado ReadBook.moveToPrevChapter：_prevTextChapter 未就绪时不 REJECT，
         // 改为推进 index + 置 _curTextChapter = null，由 CanvasRenderer 主路径重排。
         // 连点 PREV 不再落回 loadChapter，避免 coordinator REBUILD 整屏闪。
@@ -378,15 +376,16 @@ class ReaderChapterController(
             index = prevIdx,
             title = chapterList[prevIdx].title,
             content = prevContent,
-            initialProgress = 100,
+            // 修复 Bug 3：用户按"上一章"按钮预期跳上一章**章头**，与"下一章"对称。
+            // 之前对齐 Legado moveToPrevChapter 的"章尾"语义和按钮文字直觉冲突。
+            initialProgress = 0,
             initialChapterPosition = 0,
             restoreToken = System.nanoTime(),
         )
         _nextPreloadedChapter.value = PreloadedReaderChapter(curIdx, oldCurTitle, oldCurContent)
-        nextChapterCache = oldCurContent
         _prevPreloadedChapter.value = null
-        prevChapterCache = null
-        if (::scrollProgressState.isInitialized) scrollProgressState.value = 100
+        // 与 initialProgress=0 / initialChapterPosition=0 保持一致：上一章按钮跳章头（Bug 3）
+        if (::scrollProgressState.isInitialized) scrollProgressState.value = 0
         if (::visiblePageState.isInitialized) {
             visiblePageState.value = visiblePageState.value.copy(
                 chapterIndex = prevIdx,
@@ -428,10 +427,17 @@ class ReaderChapterController(
     val loginPrompt: SharedFlow<BookSource> =
         _loginPrompt.asSharedFlow()
 
-    @Volatile
-    var nextChapterCache: String? = null
-    @Volatile
-    var prevChapterCache: String? = null
+    // 旧的 `nextChapterCache` / `prevChapterCache`（@Volatile var String?）已废除——
+    // 裸 String 不带 index 语义，commitChapterShift{Next,Prev} 的 fallback 路径
+    // (`xxxCache != null -> xxxCache!!`) 无法验证「这是不是我想要的那一章」，
+    // 快速来回切章时被异步 preload 覆盖到别的章 → 一旦 commit 走 fallback 就把
+    // 错章节内容当成对的章用，导致 _currentChapterIndex 跟 _chapterContent 错位
+    // （日志 224128 22:41:01：commitChapterShiftPrev 18→17，但 chapter content
+    //  sample='清风明月枝头动' 实为 idx=16 卷首页内容；用户看到 UI 错位）。
+    //
+    // 根治：单一可信来源 `_prev/nextPreloadedChapter: StateFlow<PreloadedReaderChapter?>`，
+    // 类型上携带 (index, title, content) 元组，commit 路径强制校验 .index == 期望章号，
+    // 不匹配 → REJECT → 回退老 loadChapter 异步路径（重读 + 重排）。
     var chapterLoadJob: kotlinx.coroutines.Job? = null
     var chapterLoadToken: Int = 0
     var lastPreCacheCenter: Int = -1
@@ -473,8 +479,6 @@ class ReaderChapterController(
         )
         chapterLoadJob?.cancel()
         chapterLoadToken++
-        nextChapterCache = null
-        prevChapterCache = null
         _nextPreloadedChapter.value = null
         _prevPreloadedChapter.value = null
         _chapters.value = listOf(errorChapter)
@@ -711,6 +715,16 @@ class ReaderChapterController(
         if (index < 0 || index >= chapterList.size) return
 
         val prevIndex = _currentChapterIndex.value
+        // [DIAGNOSTIC 2026-05-14] 排查「点目录第一卷跳到第二章」：在入口打出
+        // 「上层传进来的 index + 实际取到的章节 (title/url) + 上一章 index」一行，
+        // 与 ReaderScreen onChapterClick 的 ChapterIdxDebug 行配对验证目标章是否对得上。
+        val targetCh = chapterList[index]
+        com.morealm.app.core.log.AppLog.info(
+            "ChapterIdxDebug",
+            "ChapterController.loadChapter ENTRY index=$index prevIndex=$prevIndex" +
+                " target.title=\"${targetCh.title}\" target.url=${targetCh.url}" +
+                " restoreProg=$restoreProgress restorePos=$restoreChapterPosition",
+        )
         chapterLoadJob?.cancel()
         val loadToken = ++chapterLoadToken
         _loading.value = true
@@ -736,9 +750,11 @@ class ReaderChapterController(
 
         chapterLoadJob = scope.launch(Dispatchers.IO) {
             try {
-                // Capture cache to local val for thread safety (cache is @Volatile)
-                val nextCached = nextChapterCache
-                val prevCached = prevChapterCache
+                // 章节内容获取走单一可信源 _next/prevPreloadedChapter（带 index 校验）。
+                // 旧裸 String cache 字段已废除，避免「快速 PREV/NEXT 切换时 cache 被
+                // 覆盖到别的章但 commit 当对的章用」的错位 bug。
+                val nextPreloaded = _nextPreloadedChapter.value?.takeIf { it.index == index && index == prevIndex + 1 }
+                val prevPreloaded = _prevPreloadedChapter.value?.takeIf { it.index == index && index == prevIndex - 1 }
                 // Track which cache path was used so we can defer clearing preloaded
                 // chapter state until AFTER _renderedChapter is published — avoids a
                 // frame where the UI sees null preloaded data but hasn't received the
@@ -746,19 +762,15 @@ class ReaderChapterController(
                 var usedNextCache = false
                 var usedPrevCache = false
                 val content = when {
-                    nextCached != null && index == prevIndex + 1 -> {
-                        nextChapterCache = null
+                    nextPreloaded != null -> {
                         usedNextCache = true
-                        nextCached
+                        nextPreloaded.content
                     }
-                    prevCached != null && index == prevIndex - 1 -> {
-                        prevChapterCache = null
+                    prevPreloaded != null -> {
                         usedPrevCache = true
-                        prevCached
+                        prevPreloaded.content
                     }
                     else -> {
-                        nextChapterCache = null
-                        prevChapterCache = null
                         _nextPreloadedChapter.value = null
                         _prevPreloadedChapter.value = null
                         val raw = if (isWebBook) {
@@ -888,7 +900,6 @@ class ReaderChapterController(
                 }
                 val replaced = applyReplaceRules(raw)
                 val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
-                nextChapterCache = converted
                 _nextPreloadedChapter.value = PreloadedReaderChapter(nextIndex, chapterList[nextIndex].title, converted)
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -915,7 +926,6 @@ class ReaderChapterController(
                 }
                 val replaced = applyReplaceRules(raw)
                 val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
-                prevChapterCache = converted
                 _prevPreloadedChapter.value = PreloadedReaderChapter(prevIndex, chapterList[prevIndex].title, converted)
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1145,8 +1155,6 @@ class ReaderChapterController(
      * 不清 _chapterContent（当前章），调用方负责后续 loadChapter 重排版。
      */
     fun clearPreloadedChapters() {
-        nextChapterCache = null
-        prevChapterCache = null
         _nextPreloadedChapter.value = null
         _prevPreloadedChapter.value = null
     }

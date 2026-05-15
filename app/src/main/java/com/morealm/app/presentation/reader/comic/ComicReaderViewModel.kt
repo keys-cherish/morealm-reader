@@ -7,7 +7,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Book
-import com.morealm.app.domain.parser.MobiResourceLoader
+import com.morealm.app.domain.entity.BookFormat
+import com.morealm.app.domain.parser.ComicResourceLoader
+import com.morealm.app.domain.parser.EpubComicResourceLoader
+import com.morealm.app.domain.parser.MobiComicResourceLoader
 import com.morealm.app.domain.repository.BookRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -47,36 +50,59 @@ class ComicReaderViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             val book = bookRepo.getById(bookId)
             if (book == null) {
-                _state.value = _state.value.copy(error = "未找到该书")
+                _state.value = _state.value.copy(error = "未找到该书", loading = false)
                 return@launch
             }
             val uri = book.localPath?.let { Uri.parse(it) }
             if (uri == null) {
-                _state.value = _state.value.copy(error = "未找到本地文件路径", book = book)
+                _state.value = _state.value.copy(error = "未找到本地文件路径", book = book, loading = false)
+                return@launch
+            }
+
+            // 按 format 派发 loader。EPUB 用 epublib spine 顺序解析图片；MOBI/AZW3 用 PDB
+            // record offset 直读。两条管线对 ComicReaderScreen 透明 —— 都通过
+            // ComicResourceRegistry 按 hash 反查读字节。
+            val loader: ComicResourceLoader? = when (book.format) {
+                BookFormat.MOBI, BookFormat.AZW3 -> MobiComicResourceLoader
+                BookFormat.EPUB -> EpubComicResourceLoader
+                else -> null
+            }
+            if (loader == null) {
+                _state.value = _state.value.copy(
+                    error = "暂不支持的漫画格式：${book.format}",
+                    book = book,
+                    loading = false,
+                )
                 return@launch
             }
             val index = try {
-                MobiResourceLoader.activate(context, uri)
+                loader.activate(context, uri)
             } catch (e: Exception) {
-                AppLog.warn(TAG, "activate failed: ${e.message}")
+                AppLog.warn(TAG, "activate failed (${book.format}): ${e.message}")
                 null
             }
-            if (index == null || index.images.isEmpty()) {
-                _state.value = _state.value.copy(error = "未在该文件中解析到图片", book = book)
+            // loading=false 必须设 —— 老路径漏设导致 error 路径仍卡在 CircularProgressIndicator
+            // （UI 黑底 + 中央小转圈，用户感知为「黑屏」）。
+            if (index == null || index.totalImages == 0) {
+                _state.value = _state.value.copy(
+                    error = "未在该文件中解析到图片",
+                    book = book,
+                    loading = false,
+                )
                 return@launch
             }
-            val startIndex = book.lastReadPosition.coerceIn(0, index.images.size - 1)
+            val startIndex = book.lastReadPosition.coerceIn(0, index.totalImages - 1)
             _state.value = _state.value.copy(
                 book = book,
                 bookUri = uri,
                 hash = index.hash,
-                totalImages = index.images.size,
+                totalImages = index.totalImages,
                 startIndex = startIndex,
                 currentIndex = startIndex,
                 loading = false,
                 error = null,
             )
-            AppLog.info(TAG, "loaded: ${index.images.size} images, startIndex=$startIndex")
+            AppLog.info(TAG, "loaded: ${index.totalImages} images (${book.format}) startIndex=$startIndex")
         }
     }
 
