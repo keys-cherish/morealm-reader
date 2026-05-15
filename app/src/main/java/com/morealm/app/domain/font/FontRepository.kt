@@ -177,13 +177,36 @@ class FontRepository @Inject constructor(
         loadAssetTypeface(fontFamily)?.let { return it }
         // 系统 fallback：保留默认 noto_serif_sc → SERIF（用户习惯的阅读体验）；
         // noto_sans_sc / inter 走 SANS_SERIF 让"宋体↔黑体"切换肉眼可见有差异。
+        //
+        // 楷体 / 仿宋的 ttf 未打包到 assets（完整体积巨大，需用户手动跑
+        // scripts/build-font-subsets.sh 生成子集）。如果都 fallback 到 Typeface.SERIF，
+        // 用户切换肉眼无变化——这就是群里反馈的"楷体和仿宋显示一样"的根因。
+        // 临时区分方案：楷体用 SERIF italic（接近楷书的流畅倾斜气质），仿宋保 SERIF normal。
+        // 一旦用户从「设置→字体→导入」装了真正的 ttf，前面 customFontPath / loadAssetTypeface
+        // 路径会优先命中，本 fallback 自动让位。
         return when (fontFamily) {
             "noto_sans_sc", "inter" -> Typeface.SANS_SERIF
-            "noto_serif_sc", "kaiti", "fangsong",
+            "kaiti" -> Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+            "noto_serif_sc", "fangsong",
             "crimson_pro", "cormorant" -> Typeface.SERIF
             "system", "" -> Typeface.DEFAULT
             else -> Typeface.DEFAULT
         }
+    }
+
+    /**
+     * 是否处于"asset ttf 缺失，走系统 fallback"状态。
+     * 让 UI 层（[com.morealm.app.ui.settings.ReadingSettingsScreen]）能在字体选项
+     * 上方挂一行提示：「未安装字体文件，当前为近似 fallback；如需精准字体，请到
+     * 『设置 → 字体 → 导入』装一份 .ttf」。
+     *
+     * 判定：family 在 [assetFontFiles] 映射里 + 真正加载结果为 null。命中本判定的
+     * 当前仅楷体 / 仿宋两个（中文真子集体积巨大，未打包；拉丁字体已直接打包到 assets）。
+     */
+    fun isAssetMissing(fontFamily: String): Boolean {
+        if (fontFamily !in assetFontFiles) return false
+        // loadAssetTypeface 已带缓存，多次调用零成本
+        return loadAssetTypeface(fontFamily) == null
     }
 
     /**

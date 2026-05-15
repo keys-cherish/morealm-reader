@@ -229,6 +229,11 @@ class ReaderViewModel @Inject constructor(
                 chapter.reloadCurrentChapter()
             }
         }
+        // 亮度持久化 collect 放在 _readerBrightness 字段声明附近的另一个 init 块里
+        // （见本文件下方）—— 不能在这个 init 块启动，因为 Kotlin 按声明顺序初始化，
+        // _readerBrightness 字段在本 init 块之后才声明，viewModelScope.launch 用
+        // Main.immediate 立即同步执行 collect lambda，访问到尚未初始化的 _readerBrightness
+        // 会抛 NPE（崩溃栈：ReaderViewModel.<init>:234, 2026-05-14 22:46:56）。
     }
 
     // ── Forwarded StateFlows (for backward compatibility with ReaderScreen) ──
@@ -332,8 +337,21 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
+    // 亮度初值 -1f = 跟随系统；下面的 init 块从 AppPreferences 注入持久化值
+    // （DataStore Flow 首次 emit 在 collect 启动后异步到达，可能短暂闪一下跟随系统，
+    // 但等异步首值过来后立刻补到用户上次的设定值）。
     private val _readerBrightness = MutableStateFlow(-1f)
     val readerBrightness: StateFlow<Float> = _readerBrightness.asStateFlow()
+
+    // 必须在 _readerBrightness 声明之后启动 collect —— Kotlin 按声明顺序初始化，
+    // 上面那个大 init 块（class 顶部）执行时本字段还是 null，那时启动 collect 会因
+    // Main.immediate 同步触发 lambda 而访问到 null 字段 → NPE 闪退（2026-05-14 复现）。
+    // 放在字段后的独立 init 块保证字段已就位。
+    init {
+        viewModelScope.launch {
+            prefs.readerBrightness.collect { _readerBrightness.value = it }
+        }
+    }
 
     private val _autoPageInterval = MutableStateFlow(0)
     val autoPageInterval: StateFlow<Int> = _autoPageInterval.asStateFlow()
@@ -493,7 +511,12 @@ class ReaderViewModel @Inject constructor(
         const val ANCHOR_RETENTION_MS = 2_000L
     }
 
-    fun setReaderBrightness(value: Float) { _readerBrightness.value = value }
+    fun setReaderBrightness(value: Float) {
+        // 内存先落，让 slider 拖动无延迟；DataStore 写入异步跟上
+        // （update 函数内部已经线程安全，DataStore 自带 coalesce 写盘）。
+        _readerBrightness.value = value
+        viewModelScope.launch { prefs.setReaderBrightness(value) }
+    }
 
     // ── Forwarded functions (thin delegations) ──
 

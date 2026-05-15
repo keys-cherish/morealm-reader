@@ -102,10 +102,11 @@ class ChapterProvider(
     ): TextChapter {
         val textChapter = TextChapter(chapterIndex, title, chaptersSize, readingDirection)
         val textPages = arrayListOf<TextPage>()
-        if (readingDirection == ReadingDirection.VERTICAL_RL) {
+        if (readingDirection.isVertical) {
             layoutInternalVertical(
                 title, content, chapterIndex, chaptersSize, textChapter, textPages,
                 omitChapterTitleBlock = omitChapterTitleBlock,
+                direction = readingDirection,
             )
         } else {
             layoutInternal(
@@ -156,12 +157,13 @@ class ChapterProvider(
             val ctx = coroutineContext
             try {
                 val textPages = arrayListOf<TextPage>()
-                if (readingDirection == ReadingDirection.VERTICAL_RL) {
+                if (readingDirection.isVertical) {
                     layoutInternalVertical(
                         title, content, chapterIndex, chaptersSize,
                         textChapter, textPages, channel, onPageReady,
                         omitChapterTitleBlock = omitChapterTitleBlock,
                         cancelCheck = { ctx.ensureActive() },
+                        direction = readingDirection,
                     )
                 } else {
                     layoutInternal(
@@ -245,9 +247,20 @@ class ChapterProvider(
         val isHtml = content.trimStart().let {
             it.startsWith("<") && (it.contains("<p") || it.contains("<div") || it.contains("<img"))
         }
-        val paragraphs = if (isHtml) parseHtmlParagraphs(content) else {
+        val rawParagraphs = if (isHtml) parseHtmlParagraphs(content) else {
             content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
         }
+        // EPUB 章首常有正文级 h1-h6 章节标题段（如《某 EPUB》的
+        // `<h2 class="head1">第一章</h2><h2 class="head">惊蛰</h2>`）。ChapterProvider
+        // 下面会用 chapter.title 自画一份「chapter num 小字 + 主标题大字 + 装饰横线」
+        // 的好看标题块——这是我们刻意保留的视觉亮点；如果正文 h 段再渲染一次就是双份。
+        //
+        // 处理：把正文 paragraphs 里所有 isChapterTitle 段先剥掉，让正文只剩 image / 正文段。
+        // 副作用：极少数书在正文中部用 h3 表达子标题也会被吃掉——可接受的折中。
+        val paragraphs = rawParagraphs.filterNot { it.isChapterTitle }
+        // contentProvidesChapterTitle 仍走 firstOrNull 老语义：仅当正文**第一段**就是
+        // 与 chapter.title 同名的纯文本（且未匹配上 h 段）时跳过自画——这是兼容那些
+        // 直接把章名写在第一段 <p> 里、不用 h 标签的 EPUB 流派。
         val contentProvidesChapterTitle = paragraphs.firstOrNull()?.let { first ->
             first.isChapterTitle || isSameChapterTitle(first.text, title)
         } == true
@@ -451,6 +464,11 @@ class ChapterProvider(
         onPageReady: ((Int, TextPage) -> Unit)? = null,
         omitChapterTitleBlock: Boolean = false,
         cancelCheck: (() -> Unit)? = null,
+        /**
+         * 竖排列方向。VERTICAL_RL = 第 0 列贴右边（日式 / 古典），章节标题在屏幕右侧；
+         * VERTICAL_LR = 第 0 列贴左边，章节标题在屏幕左侧（用户选项）。其他逻辑同。
+         */
+        direction: ReadingDirection = ReadingDirection.VERTICAL_RL,
     ) {
         // ── 几何 ───────────────────────────────────────────────────────────
         // charYStep：列内每字 Y 步进 = 字号 × 1.5。
@@ -494,9 +512,12 @@ class ChapterProvider(
         val isHtml = content.trimStart().let {
             it.startsWith("<") && (it.contains("<p") || it.contains("<div") || it.contains("<img"))
         }
-        val paragraphs = if (isHtml) parseHtmlParagraphs(content) else {
+        val rawParagraphs = if (isHtml) parseHtmlParagraphs(content) else {
             content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
         }
+        // 与横排 layoutInternal 同款：剥掉所有正文 h 标题段，让自画路径独占章首标题；
+        // 详细思路见横排同步注释。
+        val paragraphs = rawParagraphs.filterNot { it.isChapterTitle }
         val contentProvidesChapterTitle = paragraphs.firstOrNull()?.let { first ->
             first.isChapterTitle || isSameChapterTitle(first.text, title)
         } == true
@@ -512,8 +533,14 @@ class ChapterProvider(
             val col = TextLine(isTitle = isTitle, isLeftLine = true)
             col.paragraphNum = paragraphNum
             col.chapterPosition = chapterPosition
-            // 几何：列从右到左排，第 0 列贴右边界 paddingRight。
-            val columnLeftX = pageWidth - paddingRight - (columnIdxFromRight + 1) * columnXStep
+            // 几何：
+            //   VERTICAL_RL — 第 0 列贴右边界 paddingRight，往左推进（日式 / 古典）
+            //   VERTICAL_LR — 第 0 列贴左边界 paddingLeft，往右推进（章节标题在左 / 正文在右）
+            val columnLeftX = if (direction == ReadingDirection.VERTICAL_LR) {
+                paddingLeft + columnIdxFromRight * columnXStep
+            } else {
+                pageWidth - paddingRight - (columnIdxFromRight + 1) * columnXStep
+            }
             col.columnLeftX = columnLeftX
             col.columnRightX = columnLeftX + columnXStep
             // lineTop / lineBottom 仍是 Y——竖排里整列共享同一个 Y 范围（= 正文区上下边界）。
@@ -1061,6 +1088,13 @@ class ChapterProvider(
         val markedHtml = html
             .replace(chapterNumOpenRegex, "\n$chapterTitleMarker$chapterNumMarker")
             .replace(chapterSubOpenRegex, "\n$chapterTitleMarker$chapterSubMarker")
+            // 兼容 EPUB 用 h1-h6 表达章节大小标题：某 EPUB EPUB 的
+            // `<h2 class="head1">第一章</h2><h2 class="head">惊蛰</h2>` 走这条。
+            // 不细分 head1/head（class 名因 EPUB 作者而异），统一标 chapterTitle —
+            // 真章节标题与 chapter.title 通常匹配，contentProvidesChapterTitle 会
+            // 检测并跳过 ChapterProvider 自画的标题块。
+            .replace(hTagOpenRegex, "\n$chapterTitleMarker")
+            .replace(hTagCloseRegex, "\n")
         val text = markedHtml
             .replace(AppPattern.htmlDivCloseRegex, "\n")
             .replace(AppPattern.htmlBrRegex, "\n")
@@ -1090,7 +1124,13 @@ class ChapterProvider(
     }
 
     private fun normalizeParagraph(paragraph: String): String? {
-        val trimmed = paragraph.trim { it.code <= 0x20 || it == '\u3000' }
+        // trim \u8c13\u8bcd\u5fc5\u987b\u8986\u76d6**\u6240\u6709** Unicode \u7a7a\u767d\u5b57\u7b26\u2014\u2014\u5426\u5219\u53ea\u542b NBSP (U+00A0) / FIGURE SPACE
+        // (U+2007) / NARROW NBSP (U+202F) \u7b49"\u770b\u4f3c\u7a7a\u767d\u4f46\u975e ASCII"\u5b57\u7b26\u7684\u6bb5\u843d\u4f1a\u88ab\u5f53\u6210\u6709\u5185\u5bb9
+        // \u6bb5\u843d\u4fdd\u7559\u4e0b\u6765\uff0c\u6e32\u67d3\u6210\u5927\u6bb5\u7a7a\u767d\u884c\uff08\u5178\u578b\u4f8b\u5b50\uff1aEPUB \u91cc <p>&#160;</p> \u5047\u7a7a\u6bb5\u843d\uff09\u3002
+        //
+        // \u6ce8\u610f\uff1aJava `Character.isWhitespace` **\u4e0d**\u8ba4 NBSP\uff08\u7279\u6b8a\u5904\u7406\uff09\uff0c\u6240\u4ee5\u5355\u7528\u5b83\u4e0d\u591f\uff1b
+        // \u8fd9\u91cc\u7ec4\u5408 isWhitespace + isSpaceChar \u624d\u80fd\u8986\u76d6\u5230 Unicode `Zs` \u7c7b\u522b\u7684\u5168\u90e8\u7a7a\u767d\u3002
+        val trimmed = paragraph.trim { it.isWhitespace() || Character.isSpaceChar(it) }
         return if (trimmed.isEmpty()) null else paragraphIndent + trimmed
     }
 
@@ -1141,6 +1181,11 @@ class ChapterProvider(
         private const val chapterSubMarker = "__MOREALM_CHAPTER_SUB__"
         private val chapterNumOpenRegex = Regex("<div\\s+class=[\"']chapter-num[\"']\\s*>", RegexOption.IGNORE_CASE)
         private val chapterSubOpenRegex = Regex("<div\\s+class=[\"']chapter-sub[\"']\\s*>", RegexOption.IGNORE_CASE)
+        // h1-h6 通用章标题识别：覆盖 EPUB 用 `<h2 class="head1">第一章</h2><h2 class="head">惊蛰</h2>`
+        // 这种结构作章节大小标题的写法（如《某 EPUB》），避免 ChapterProvider 自画一遍标题块
+        // 后正文里 h2 文本再渲染一遍 → 双份标题。
+        private val hTagOpenRegex = Regex("<h[1-6](?:\\s[^>]*)?>", RegexOption.IGNORE_CASE)
+        private val hTagCloseRegex = Regex("</h[1-6]>", RegexOption.IGNORE_CASE)
         private val chapterNumSplitRegex = Regex(
             """^(第[零一二三四五六七八九十百千万亿\d]+[章节卷集部篇回话幕折场]|[Cc]hapter\s+\d+|[Vv]ol(?:ume)?\s*\.?\s*\d+|序[章言]|终章|尾声|楔子|番外|引[子章]|\d+[.、]\s*)""",
         )

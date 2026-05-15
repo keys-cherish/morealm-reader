@@ -46,6 +46,9 @@ object ComicBookDetector {
         return when (format) {
             BookFormat.MOBI, BookFormat.AZW3 -> detectMobi(context, uri)
             BookFormat.CBZ -> true
+            BookFormat.EPUB -> runCatching { EpubParser.detectIsComic(context, uri) }
+                .onFailure { AppLog.warn(TAG, "detectEpub failed: ${it.message}") }
+                .getOrDefault(false)
             else -> false
         }
     }

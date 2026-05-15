@@ -71,14 +71,22 @@ enum class PageDirection { NONE, PREV, NEXT }
  * Phase 2（本次实现）只支持 SLIDE/COVER/NONE 翻页模式（HorizontalPager 内每页竖排）。
  * Phase 3 会扩展 ScrollPager / SimulationReadView 的竖排适配（参见 design doc）。
  */
-enum class ReadingDirection { HORIZONTAL, VERTICAL_RL }
+enum class ReadingDirection {
+    HORIZONTAL,
+    VERTICAL_RL,
+    VERTICAL_LR;
+
+    /** 是否任一竖排模式（文字垂直方向走，仅列方向不同）。 */
+    val isVertical: Boolean get() = this == VERTICAL_RL || this == VERTICAL_LR
+}
 
 /**
- * 偏好字符串 → enum。落库的 prefs.readingDirection 是 "horizontal" / "vertical_rl"，
- * 这里集中做反序列化避免散落 if/else。
+ * 偏好字符串 → enum。落库的 prefs.readingDirection 是 "horizontal" / "vertical_rl" /
+ * "vertical_lr"，这里集中做反序列化避免散落 if/else。
  */
 fun String?.toReadingDirection(): ReadingDirection = when (this) {
     "vertical_rl" -> ReadingDirection.VERTICAL_RL
+    "vertical_lr" -> ReadingDirection.VERTICAL_LR
     else -> ReadingDirection.HORIZONTAL
 }
 

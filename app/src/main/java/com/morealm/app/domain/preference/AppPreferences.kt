@@ -22,6 +22,15 @@ class AppPreferences @Inject constructor(
         val READER_FONT_SIZE = floatPreferencesKey("reader_font_size")
         val READER_LINE_HEIGHT = floatPreferencesKey("reader_line_height")
         val READER_MARGIN = intPreferencesKey("reader_margin")
+        /**
+         * 阅读器亮度：[0.01f, 1f] = 手动指定亮度（绕开系统亮度，由
+         * WindowManager.LayoutParams.screenBrightness 应用到当前 Window）；
+         * -1f = 跟随系统（BRIGHTNESS_OVERRIDE_NONE）。默认 -1f。
+         *
+         * 这条 key 之前没有持久化，导致用户手动调亮度后退出阅读器，ViewModel 销毁
+         * StateFlow 重置回 -1f，重进永远是跟随系统的样子——这是个明显的"设置丢失" bug。
+         */
+        val READER_BRIGHTNESS = floatPreferencesKey("reader_brightness")
         val READER_FONT_FAMILY = stringPreferencesKey("reader_font_family")
         val READER_TITLE_FONT_FAMILY = stringPreferencesKey("reader_title_font_family")
         val READER_TITLE_FONT_WEIGHT = intPreferencesKey("reader_title_font_weight")
@@ -337,6 +346,9 @@ class AppPreferences @Inject constructor(
 
     val readerMargin: Flow<Int> = context.dataStore.data
         .map { it[Keys.READER_MARGIN] ?: 24 }
+
+    val readerBrightness: Flow<Float> = context.dataStore.data
+        .map { it[Keys.READER_BRIGHTNESS] ?: -1f }
 
     val readerFontFamily: Flow<String> = context.dataStore.data
         .map { it[Keys.READER_FONT_FAMILY] ?: "noto_serif_sc" }
@@ -683,6 +695,7 @@ class AppPreferences @Inject constructor(
     suspend fun setReaderFontSize(size: Float) = update(Keys.READER_FONT_SIZE, size)
     suspend fun setReaderLineHeight(height: Float) = update(Keys.READER_LINE_HEIGHT, height)
     suspend fun setReaderMargin(margin: Int) = update(Keys.READER_MARGIN, margin)
+    suspend fun setReaderBrightness(value: Float) = update(Keys.READER_BRIGHTNESS, value)
     suspend fun setReaderFontFamily(family: String) = update(Keys.READER_FONT_FAMILY, family)
     suspend fun setReaderTitleFontFamily(family: String) = update(Keys.READER_TITLE_FONT_FAMILY, family)
     suspend fun setReaderTitleFontWeight(weight: Int) = update(Keys.READER_TITLE_FONT_WEIGHT, weight)

@@ -143,4 +143,29 @@ class MoRealmApp : Application(), ImageLoaderFactory {
             .crossfade(true)
             .build()
     }
+
+    /**
+     * 系统内存压力转发 —— 路由到 [ImageCache] / Coil / [ChapterMemoryCache]。
+     *
+     * 之前只有 ChapterMemoryCache.register 自挂了 ComponentCallbacks2，其他大块缓存
+     * （ImageCache 64MB Bitmap LRU + Coil 25% maxMemory）系统报 RUNNING_LOW 也不动 →
+     * 256MB heap 在漫画/插图 EPUB 场景被挤爆，触发 OOM（[11:25 user crash]）。
+     *
+     * level 阈值与 [ComponentCallbacks2] 标准一致：
+     * - 10 (MODERATE)、20 (UI_HIDDEN)、40 (BACKGROUND)：温和回收
+     * - 15 (LOW)、80 (CRITICAL)：激进回收
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        AppLog.info("App", "onTrimMemory level=$level")
+        runCatching { com.morealm.app.domain.render.ImageCache.onTrimMemory(level) }
+        // Coil2 自带 ComponentCallbacks2 监听（内置 MemoryCache.trimMemory），
+        // 仅在 CRITICAL 时再手动 clear 兜底 —— 它的默认策略对 80 也只 trim 一半。
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            runCatching {
+                coil.Coil.imageLoader(this).memoryCache?.clear()
+                AppLog.info("App", "Coil memoryCache cleared (CRITICAL)")
+            }.onFailure { AppLog.warn("App", "Coil clear failed: ${it.message}") }
+        }
+    }
 }

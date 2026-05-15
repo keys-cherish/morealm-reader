@@ -1184,6 +1184,19 @@ fun ReaderSettingsPanel(
                     )
                 }
             }
+            // 楷体 / 仿宋未打包 ttf 子集，资源缺失时 FontRepository 走系统 fallback：
+            // 楷体 → SERIF italic、仿宋 → SERIF normal，肉眼有差异但非真字体。
+            // 用户群里反馈过「楷体和仿宋显示一样」就是早期都 fallback 同一个 SERIF
+            // 导致；现在给个提示让用户知道想要真效果该走「字体管理 → 导入」。
+            if (selectedFont in setOf("kaiti", "fangsong") && customFontName.isEmpty()) {
+                Text(
+                    text = "未内置字体文件，当前为近似 fallback。如需真正字体请在「字体管理」导入 .ttf",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+            }
+
             // 自定义字体 chip：仅在用户已挑选自定义字体时出现，显示当前字体名 + ×清除。
             // 「字体管理…」按钮始终在第二行右侧，跳到 FontManagerScreen 处理批量导入与切换。
             Row(

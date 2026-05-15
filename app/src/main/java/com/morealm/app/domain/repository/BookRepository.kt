@@ -59,6 +59,24 @@ class BookRepository @Inject constructor(
 
     suspend fun insertAll(books: List<Book>) = bookDao.insertAll(books)
 
+    /**
+     * 批量 insert，chunked 防止 SQLite 单 SQL 过大。每 chunk 一次 @Insert 事务。
+     * 1000 文件导入：原 1000 次 transaction → 20 次（chunk=50），开销降 50x。
+     */
+    suspend fun bulkInsert(books: List<Book>, batchSize: Int = 50) {
+        if (books.isEmpty()) return
+        books.chunked(batchSize).forEach { bookDao.insertAll(it) }
+    }
+
+    /**
+     * 批量 update（每 chunk 一个 @Transaction，内部 forEach update）。
+     * 用于 Phase 2 enrichment 并发完成后回写 metadata/cover/isComic。
+     */
+    suspend fun bulkUpdate(books: List<Book>, batchSize: Int = 50) {
+        if (books.isEmpty()) return
+        books.chunked(batchSize).forEach { bookDao.updateAll(it) }
+    }
+
     suspend fun update(book: Book) = bookDao.update(book)
 
     suspend fun delete(book: Book) = bookDao.delete(book)

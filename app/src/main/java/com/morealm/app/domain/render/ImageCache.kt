@@ -1,9 +1,11 @@
 package com.morealm.app.domain.render
 
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.http.okHttpClient
 import com.morealm.app.domain.parser.MobiResourceLoader
 import okhttp3.Request
@@ -157,5 +159,36 @@ object ImageCache {
     /** 清空缓存并回收所有 Bitmap */
     fun clear() {
         cache.evictAll()
+    }
+
+    /**
+     * 由 [com.morealm.app.MoRealmApp.onTrimMemory] 转发系统内存压力信号。
+     *
+     * 之前 ImageCache 是「按 maxMemory/4 设容量然后不动」的死缓存——系统报
+     * RUNNING_LOW 时它不收缩，导致 256MB heap 在漫画/插图 EPUB 场景下被 64MB
+     * Bitmap 缓存 + Compose / ChapterProvider 的临时分配挤爆，触发 OOM。
+     *
+     * 阈值与 Android 框架约定一致：
+     * - **MODERATE / BACKGROUND / UI_HIDDEN (10/40/20)**：温和回收一半
+     * - **LOW / CRITICAL (15/80)**：全清
+     */
+    fun onTrimMemory(level: Int) {
+        when {
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
+                val before = cache.size()
+                cache.evictAll()
+                AppLog.info("ImageCache", "onTrimMemory($level) CRITICAL → evictAll (was ${before}KB)")
+            }
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> {
+                val before = cache.size()
+                cache.trimToSize(cache.maxSize() / 2)
+                AppLog.info("ImageCache", "onTrimMemory($level) LOW → trim ${before}KB→${cache.size()}KB")
+            }
+            level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> {
+                val before = cache.size()
+                cache.trimToSize(cache.maxSize() / 2)
+                AppLog.info("ImageCache", "onTrimMemory($level) MODERATE → trim ${before}KB→${cache.size()}KB")
+            }
+        }
     }
 }

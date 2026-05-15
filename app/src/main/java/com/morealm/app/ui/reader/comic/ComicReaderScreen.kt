@@ -73,7 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.morealm.app.domain.parser.MobiResourceLoader
+import com.morealm.app.domain.parser.ComicResourceRegistry
 import com.morealm.app.presentation.reader.comic.ComicReaderViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -409,7 +409,7 @@ private fun ComicPage(hash: String, imageIndex: Int, fitPage: Boolean = false) {
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(initialValue = null, hash, imageIndex) {
         value = withContext(Dispatchers.IO) {
-            val bytes = MobiResourceLoader.readBytes(context, hash, imageIndex) ?: return@withContext null
+            val bytes = ComicResourceRegistry.readBytes(context, hash, imageIndex) ?: return@withContext null
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         }
     }
