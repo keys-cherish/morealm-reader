@@ -103,8 +103,8 @@ class ChangeSourceController(
 ) {
     // ── Public state ──────────────────────────────────────────────────────
 
-    private val _showPicker = MutableStateFlow(false)
-    val showPicker: StateFlow<Boolean> = _showPicker.asStateFlow()
+    private val _isPickerVisible = MutableStateFlow(false)
+    val isPickerVisible: StateFlow<Boolean> = _isPickerVisible.asStateFlow()
 
     private val _candidates = MutableStateFlow<List<ChangeSourceCandidate>>(emptyList())
     val candidates: StateFlow<List<ChangeSourceCandidate>> = _candidates.asStateFlow()
@@ -161,7 +161,7 @@ class ChangeSourceController(
 
     /** 打开换源对话框并启动跨源搜索（默认走缓存窗口）。 */
     fun openPicker(book: Book) {
-        _showPicker.value = true
+        _isPickerVisible.value = true
         startSearch(book, force = false)
     }
 
@@ -172,7 +172,7 @@ class ChangeSourceController(
 
     /** 关闭对话框 + 取消搜索 + 清 toc cache。 */
     fun closePicker() {
-        _showPicker.value = false
+        _isPickerVisible.value = false
         cancelSearch()
         tocCache.clear()
     }
@@ -315,7 +315,7 @@ class ChangeSourceController(
                 hasDetail = true,
             )
             bookRepo.update(updated)
-            _showPicker.value = false
+            _isPickerVisible.value = false
             cancelSearch()
             tocCache.clear()
             AppLog.info(

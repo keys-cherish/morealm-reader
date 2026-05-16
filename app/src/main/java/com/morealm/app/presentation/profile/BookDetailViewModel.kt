@@ -72,7 +72,7 @@ class BookDetailViewModel @Inject constructor(
         prefs = prefs,
     )
 
-    val showSourcePicker: StateFlow<Boolean> = changeSource.showPicker
+    val isSourcePickerVisible: StateFlow<Boolean> = changeSource.isPickerVisible
     val changeSourceCandidates: StateFlow<List<ChangeSourceCandidate>> = changeSource.candidates
     val changeSourceProgress: StateFlow<List<ChangeSourceProgress>> = changeSource.progress
     val changeSourceSearching: StateFlow<Boolean> = changeSource.searching

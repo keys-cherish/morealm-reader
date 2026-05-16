@@ -74,9 +74,9 @@ fun ReadingSettingsScreen(
     val resumeLastRead by viewModel.resumeLastRead.collectAsStateWithLifecycle()
     val longPressUnderline by viewModel.longPressUnderline.collectAsStateWithLifecycle()
     val screenTimeout by viewModel.screenTimeout.collectAsStateWithLifecycle()
-    val showStatusBar by viewModel.showStatusBar.collectAsStateWithLifecycle()
-    val showChapterName by viewModel.showChapterName.collectAsStateWithLifecycle()
-    val showTimeBattery by viewModel.showTimeBattery.collectAsStateWithLifecycle()
+    val showStatusBar by viewModel.isStatusBarVisible.collectAsStateWithLifecycle()
+    val showChapterName by viewModel.isChapterNameVisible.collectAsStateWithLifecycle()
+    val showTimeBattery by viewModel.isTimeBatteryVisible.collectAsStateWithLifecycle()
     val titleAlign by viewModel.titleAlign.collectAsStateWithLifecycle()
     val customTxtChapterRegex by viewModel.customTxtChapterRegex.collectAsStateWithLifecycle()
 

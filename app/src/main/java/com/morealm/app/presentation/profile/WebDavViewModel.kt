@@ -112,11 +112,11 @@ class WebDavViewModel @Inject constructor(
     }
 
     // ── Restore confirmation ──
-    private val _showRestoreConfirmation = MutableStateFlow(false)
-    val showRestoreConfirmation: StateFlow<Boolean> = _showRestoreConfirmation.asStateFlow()
+    private val _isRestoreConfirmationVisible = MutableStateFlow(false)
+    val isRestoreConfirmationVisible: StateFlow<Boolean> = _isRestoreConfirmationVisible.asStateFlow()
 
-    private val _showBackupPicker = MutableStateFlow(false)
-    val showBackupPicker: StateFlow<Boolean> = _showBackupPicker.asStateFlow()
+    private val _isBackupPickerVisible = MutableStateFlow(false)
+    val isBackupPickerVisible: StateFlow<Boolean> = _isBackupPickerVisible.asStateFlow()
 
     private val _backupList = MutableStateFlow<List<WebDavClient.DavFile>>(emptyList())
     val backupList: StateFlow<List<WebDavClient.DavFile>> = _backupList.asStateFlow()
@@ -133,7 +133,7 @@ class WebDavViewModel @Inject constructor(
             return
         }
         _pendingRestorePath.value = null
-        _showRestoreConfirmation.value = true
+        _isRestoreConfirmationVisible.value = true
     }
 
     fun requestBackupPicker() {
@@ -144,7 +144,7 @@ class WebDavViewModel @Inject constructor(
             _webDavStatus.value = "请先配置 WebDAV"
             return
         }
-        _showBackupPicker.value = true
+        _isBackupPickerVisible.value = true
         _backupListLoading.value = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -158,7 +158,7 @@ class WebDavViewModel @Inject constructor(
                 _webDavStatus.value = "读取备份列表失败：${e.message}"
                 AppLog.error("WebDAV", "List backups failed", e)
                 _backupList.value = emptyList()
-                _showBackupPicker.value = false
+                _isBackupPickerVisible.value = false
             } finally {
                 _backupListLoading.value = false
             }
@@ -166,19 +166,19 @@ class WebDavViewModel @Inject constructor(
     }
 
     fun cancelBackupPicker() {
-        _showBackupPicker.value = false
+        _isBackupPickerVisible.value = false
     }
 
     fun selectBackupFile(file: WebDavClient.DavFile) {
         val dir = webDavDir.value.ifBlank { "MoRealm" }.trim('/')
         _pendingRestorePath.value = "$dir/${file.name}"
-        _showBackupPicker.value = false
-        _showRestoreConfirmation.value = true
+        _isBackupPickerVisible.value = false
+        _isRestoreConfirmationVisible.value = true
     }
 
     fun cancelWebDavRestore() {
         _pendingRestorePath.value = null
-        _showRestoreConfirmation.value = false
+        _isRestoreConfirmationVisible.value = false
     }
 
     fun webDavBackup() {
@@ -229,7 +229,7 @@ class WebDavViewModel @Inject constructor(
     fun webDavRestore() {
         val remotePath = _pendingRestorePath.value
         _pendingRestorePath.value = null
-        _showRestoreConfirmation.value = false
+        _isRestoreConfirmationVisible.value = false
         val url = webDavUrl.value
         val user = webDavUser.value
         val pass = webDavPass.value

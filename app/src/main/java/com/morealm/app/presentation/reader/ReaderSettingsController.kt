@@ -57,13 +57,13 @@ class ReaderSettingsController(
     val screenTimeout: StateFlow<Int> = prefs.screenTimeout
         .stateIn(scope, SharingStarted.Eagerly, -1)
 
-    val showChapterName: StateFlow<Boolean> = prefs.showChapterName
+    val isChapterNameVisible: StateFlow<Boolean> = prefs.isChapterNameVisible
         .stateIn(scope, SharingStarted.Eagerly, true)
 
-    val showTimeBattery: StateFlow<Boolean> = prefs.showTimeBattery
+    val isTimeBatteryVisible: StateFlow<Boolean> = prefs.isTimeBatteryVisible
         .stateIn(scope, SharingStarted.Eagerly, true)
 
-    val showStatusBar: StateFlow<Boolean> = prefs.showStatusBar
+    val isStatusBarVisible: StateFlow<Boolean> = prefs.isStatusBarVisible
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     val tapLeftAction: StateFlow<String> = prefs.tapLeftAction

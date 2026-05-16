@@ -142,9 +142,9 @@ fun ReaderScreen(
     // 当帧重写。CanvasRenderer 的 syncPrev/NextTextChapter prop 优先于 prelayoutCache 派生。
     val syncPrevTextChapterValue by viewModel.chapter.prevTextChapter.collectAsStateWithLifecycle()
     val syncNextTextChapterValue by viewModel.chapter.nextTextChapter.collectAsStateWithLifecycle()
-    val showControls by viewModel.showControls.collectAsStateWithLifecycle()
-    val showTtsPanel by viewModel.showTtsPanel.collectAsStateWithLifecycle()
-    val showSettings by viewModel.showSettingsPanel.collectAsStateWithLifecycle()
+    val showControls by viewModel.isControlsVisible.collectAsStateWithLifecycle()
+    val showTtsPanel by viewModel.isTtsPanelVisible.collectAsStateWithLifecycle()
+    val showSettings by viewModel.isSettingsPanelVisible.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
     // ── 排版方向偏好 ──
@@ -177,8 +177,8 @@ fun ReaderScreen(
     val volumeKeyLongPress by viewModel.settings.volumeKeyLongPress.collectAsStateWithLifecycle()
     val selectionMenuConfig by viewModel.settings.selectionMenuConfig.collectAsStateWithLifecycle()
     val screenTimeout by viewModel.settings.screenTimeout.collectAsStateWithLifecycle()
-    val showChapterNameSetting by viewModel.settings.showChapterName.collectAsStateWithLifecycle()
-    val showTimeBatterySetting by viewModel.settings.showTimeBattery.collectAsStateWithLifecycle()
+    val showChapterNameSetting by viewModel.settings.isChapterNameVisible.collectAsStateWithLifecycle()
+    val showTimeBatterySetting by viewModel.settings.isTimeBatteryVisible.collectAsStateWithLifecycle()
     val tapLeftAction by viewModel.settings.tapLeftAction.collectAsStateWithLifecycle()
     val paragraphSpacing by viewModel.settings.paragraphSpacing.collectAsStateWithLifecycle()
     val marginHorizontal by viewModel.settings.marginHorizontal.collectAsStateWithLifecycle()
@@ -391,7 +391,7 @@ fun ReaderScreen(
     }
 
     // ── Immersive mode: hide status bar in reader (ported from Legado BaseReadBookActivity) ──
-    val showStatusBar by viewModel.settings.showStatusBar.collectAsStateWithLifecycle()
+    val showStatusBar by viewModel.settings.isStatusBarVisible.collectAsStateWithLifecycle()
     DisposableEffect(showStatusBar) {
         val act = context as? android.app.Activity ?: return@DisposableEffect onDispose {}
         val window = act.window
@@ -1217,7 +1217,7 @@ fun ReaderScreen(
         // ── #5 EffectiveReplacesDialog ──
         // 显示当前章「真命中」的替换规则 + 繁简转换占位。
         // dismiss 时若用户做了改动（禁用 / 编辑 / 改繁简），重渲染当前章让规则立即生效。
-        val showEffectiveDialog by viewModel.showEffectiveReplacesDialog.collectAsStateWithLifecycle()
+        val showEffectiveDialog by viewModel.isEffectiveReplacesDialogVisible.collectAsStateWithLifecycle()
         if (showEffectiveDialog) {
             val hitContent by viewModel.hitContentRules.collectAsStateWithLifecycle()
             val hitTitle by viewModel.hitTitleRules.collectAsStateWithLifecycle()

@@ -46,13 +46,13 @@ class ReadingSettingsViewModel @Inject constructor(
     val screenTimeout: StateFlow<Int> = prefs.screenTimeout
         .stateIn(viewModelScope, SharingStarted.Eagerly, -1)
 
-    val showStatusBar: StateFlow<Boolean> = prefs.showStatusBar
+    val isStatusBarVisible: StateFlow<Boolean> = prefs.isStatusBarVisible
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    val showChapterName: StateFlow<Boolean> = prefs.showChapterName
+    val isChapterNameVisible: StateFlow<Boolean> = prefs.isChapterNameVisible
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
-    val showTimeBattery: StateFlow<Boolean> = prefs.showTimeBattery
+    val isTimeBatteryVisible: StateFlow<Boolean> = prefs.isTimeBatteryVisible
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     /**

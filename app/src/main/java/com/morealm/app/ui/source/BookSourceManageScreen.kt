@@ -752,7 +752,7 @@ fun BookSourceManageScreen(
     )
 
     // ── #2 CheckSource 完成弹窗 ──
-    val showInvalidDialog by viewModel.showInvalidResultsDialog.collectAsStateWithLifecycle()
+    val showInvalidDialog by viewModel.isInvalidResultsDialogVisible.collectAsStateWithLifecycle()
     if (showInvalidDialog) {
         val invalidResults by viewModel.invalidCheckResults.collectAsStateWithLifecycle()
         CheckResultsDialog(

@@ -51,7 +51,7 @@ fun BookDetailScreen(
     val book by viewModel.book.collectAsStateWithLifecycle()
     val currentSource by viewModel.currentSource.collectAsStateWithLifecycle()
     val loginStatusMap by loginViewModel.loginStatusMap.collectAsStateWithLifecycle()
-    val showSourcePicker by viewModel.showSourcePicker.collectAsStateWithLifecycle()
+    val showSourcePicker by viewModel.isSourcePickerVisible.collectAsStateWithLifecycle()
     val enabledSourcesCount by viewModel.enabledSourcesCount.collectAsStateWithLifecycle()
     val changeCandidates by viewModel.changeSourceCandidates.collectAsStateWithLifecycle()
     val changeProgress by viewModel.changeSourceProgress.collectAsStateWithLifecycle()
