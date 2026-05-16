@@ -386,6 +386,56 @@ interface ThemeDao {
     suspend fun getAllSync(): List<ThemeEntity>
 }
 
+/**
+ * 阅读记录 DAO —— 每日每本书的阅读时长持久层（粒度 = 进入阅读器~退出整段）。
+ *
+ * P1 数据层入口。配套：
+ * - entity [com.morealm.app.domain.entity.ReadRecord]
+ * - UI 入口（P3）：「我的 → 阅读记录」页面按 date 降序分组
+ * - 写入（P2）：ReaderViewModel.onCleared / lifecycle ON_PAUSE upsert
+ * - Legado 导入（P4）：LegadoImporter 备份 zip readRecord 表 → bookName fuzzy match
+ *
+ * 与 [ReadStatsDao] 关系：ReadStats 是天级汇总（不分书），本 DAO 是天 × 书 二维。两者并存
+ * 互不冲突：ReadStats 给顶栏"今日阅读 X 小时"，本 DAO 给阅读记录页面。
+ */
+@Dao
+interface ReadRecordDao {
+    /** 全部记录，按 date DESC + 同日 lastReadAt DESC。UI 收到后 groupBy date 分组 */
+    @Query("SELECT * FROM read_records ORDER BY date DESC, lastReadAt DESC")
+    fun all(): Flow<List<ReadRecord>>
+
+    /** 某天全部记录（"某日详情"页用） */
+    @Query("SELECT * FROM read_records WHERE date = :date ORDER BY lastReadAt DESC")
+    suspend fun getByDate(date: String): List<ReadRecord>
+
+    /** 某书全部阅读历史（书详情页"阅读历史" tab 用） */
+    @Query("SELECT * FROM read_records WHERE bookId = :bookId ORDER BY date DESC")
+    fun getByBook(bookId: String): Flow<List<ReadRecord>>
+
+    /**
+     * 拿单条 readTime（写入路径累加用）：进入阅读器时拿当日已有 readTime，
+     * 退出时 save(readRecord.copy(readTime = oldReadTime + sessionMs, lastReadAt = now))
+     */
+    @Query("SELECT readTime FROM read_records WHERE date = :date AND bookId = :bookId")
+    suspend fun getReadTime(date: String, bookId: String): Long?
+
+    /** upsert 单条（write path 调用） */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun save(record: ReadRecord)
+
+    /** Legado 批量导入 */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveAll(records: List<ReadRecord>)
+
+    /** 删某天（用户清理） */
+    @Query("DELETE FROM read_records WHERE date = :date")
+    suspend fun deleteByDate(date: String)
+
+    /** 全清（设置 → 清理阅读记录） */
+    @Query("DELETE FROM read_records")
+    suspend fun deleteAll()
+}
+
 @Dao
 interface ReadStatsDao {
     @Query("SELECT * FROM read_stats WHERE date = :date")

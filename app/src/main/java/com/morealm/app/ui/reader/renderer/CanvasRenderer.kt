@@ -672,6 +672,15 @@ fun CanvasRenderer(
 
     // engine.state → textChapter / pageCount 单点派生 + 接线（prelayoutPut / onCurReady）。
     // Reflowing 期间 textChapter 仍指向 visible（旧 chapter）；Ready 时 atomic swap 到新 chapter。
+    //
+    // **关键修复（2026-05-16）**：用 rememberUpdatedState 包 currentChapterKey / chapterIndex —
+    // 否则 LaunchedEffect(reflowEngine) 的协程闭包永远是首次 composition 时的 stale 值（reflowEngine
+    // 不变 → effect 不重启 → lambda 不更新），跨章后 state emit Ready(新章)，prelayoutPut 用 stale
+    // key 把新章 chapter 错位写入旧 key 槽位。下次 chapterIndex 又回到旧 key 槽 → cache 命中拿出错章
+    // → markReady(错章) → textChapter 与 prop 不匹配 → restoreProgress 永远 WAIT mismatch → 音量键
+    // 全部 DROPPED。日志 MoRealm_log_20260516_161529 line 452 实锤：chIdx=8 cacheHit=true cached.idx=7。
+    val currentChapterKeyLatest = rememberUpdatedState(currentChapterKey)
+    val chapterIndexLatest = rememberUpdatedState(chapterIndex)
     LaunchedEffect(reflowEngine) {
         reflowEngine.state.collect { state ->
             when (state) {
@@ -685,8 +694,12 @@ fun CanvasRenderer(
                 is ReflowEngine.State.Ready -> {
                     textChapter = state.chapter
                     pageCount = state.chapter.pageSize.coerceAtLeast(1)
-                    if (state.chapter.pages.isNotEmpty() && state.chapter.isCompleted) {
-                        prelayoutPut(currentChapterKey, state.chapter)
+                    // 守门：state.chapter.chapterIndex 必须匹配当前 prop chapterIndex（用 latest），
+                    // 否则跨章后台完成的旧 chapter 会用新章 key 写入 cache → 错位。
+                    if (state.chapter.pages.isNotEmpty() && state.chapter.isCompleted &&
+                        state.chapter.chapterIndex == chapterIndexLatest.value
+                    ) {
+                        prelayoutPut(currentChapterKeyLatest.value, state.chapter)
                     }
                     onCurTextChapterReady(state.chapter.chapterIndex, state.chapter)
                 }
@@ -714,10 +727,15 @@ fun CanvasRenderer(
             onPartial = { partial ->
                 // 流式首屏 / 跨章：把 partial 推回 textChapter / pageCount，让 ScrollRenderer 早绘。
                 // 同章 reflow 路径 engine 内部已过滤，不会触发本回调（visible 保留显示旧 chapter）。
-                textChapter = partial
-                pageCount = partial.pageSize.coerceAtLeast(1)
-                if (partial.pages.isNotEmpty()) {
-                    onCurTextChapterReady(partial.chapterIndex, partial)
+                // 守门：partial.chapterIndex 必须匹配当前最新 chapterIndex prop —— 旧 handle cancel
+                // 后可能合作式残留 1-2 帧 partial 推送，闭包里的 chapterIndex 是 submit 时刻的旧值，
+                // 不能用 `partial.chapterIndex == chapterIndex` 自比（都是旧），必须读 latest。
+                if (partial.chapterIndex == chapterIndexLatest.value) {
+                    textChapter = partial
+                    pageCount = partial.pageSize.coerceAtLeast(1)
+                    if (partial.pages.isNotEmpty()) {
+                        onCurTextChapterReady(partial.chapterIndex, partial)
+                    }
                 }
             },
         )
@@ -1194,10 +1212,56 @@ fun CanvasRenderer(
         }
     }
 
+    // SIMULATION 模式下 SimulationReadView 的引用 holder — 用于把外部 LaunchedEffect 派发
+    // 的音量键 / TtsPanel / 顶栏按钮翻页指令转给 view 跑贝塞尔动画。SimulationPager 在
+    // factory/update 时写入 view 实例，非 SIMULATION 模式下保持 null。
+    val simulationViewRef = remember { mutableStateOf<SimulationReadView?>(null) }
     LaunchedEffect(pageTurnCommand, progressRestored, pageAnimType, renderPageCount) {
         val direction = pageTurnCommand ?: return@LaunchedEffect
-        if (!progressRestored) return@LaunchedEffect
-        if (pageAnimType == PageAnimType.SCROLL) return@LaunchedEffect
+        // [DIAG VolumeKeyDiag] 临时诊断日志 — 验证音量键 / 仿真翻页跨章后命令吞掉根因
+        AppLog.info(
+            "VolumeKeyDiag",
+            "received dir=$direction progressRestored=$progressRestored pageAnimType=$pageAnimType renderPageCount=$renderPageCount chapterIdx=$chapterIndex restoreToken=$restoreToken",
+        )
+        if (!progressRestored) {
+            AppLog.info("VolumeKeyDiag", "DROPPED: !progressRestored (命令 pending 等下次 progressRestored 变 true)")
+            return@LaunchedEffect
+        }
+        if (pageAnimType == PageAnimType.SCROLL) {
+            AppLog.info("VolumeKeyDiag", "DROPPED: SCROLL 模式")
+            return@LaunchedEffect
+        }
+        // SIMULATION 模式：把翻页指令直接转发给 SimulationReadView 跑贝塞尔翻页动画。
+        // coordinator.turnPageByTap 只调 state.animateScrollToPage，SimulationView 不监听
+        // PagerState — 不走这条转发就完全无翻页动画反馈（仅 idleBitmap 直接替换）。
+        if (pageAnimType == PageAnimType.SIMULATION) {
+            val view = simulationViewRef.value
+            if (view != null && !view.isRunning) {
+                AppLog.info("VolumeKeyDiag", "CONSUMED + SimulationView.keyTurnPage dir=$direction")
+                onPageTurnCommandConsumed()
+                view.keyTurnPage(isNext = direction == ReaderPageDirection.NEXT)
+                return@LaunchedEffect
+            }
+            // 动画进行中：drop + consume。绝不 fallback 走 turnPageByTap —— 那会调用
+            // state.animateScrollToPage 改 PagerState.currentPage，但 SimulationView 正在
+            // 跑自己的动画无视 PagerState 变化，动画落地后位置跟 PagerState 错位。下一次
+            // 音量键算 startDisplayPage 时拿到错位的 PagerState 值，用户感受是「按了好几
+            // 次才翻一页」（其实是按了多次但中间几次写错 PagerState 导致下一次 startPage
+            // 算错）。
+            //
+            // consume 是为了让下一次按键能重新触发 LaunchedEffect（pageTurnCommand 同值
+            // 不会重启 effect，必须设回 null）。
+            if (view != null && view.isRunning) {
+                AppLog.info("VolumeKeyDiag", "DROPPED: SIMULATION view running (animation in flight, consume to allow next press)")
+                onPageTurnCommandConsumed()
+                return@LaunchedEffect
+            }
+            // view 尚未 mount：fall through 走 turnPageByTap（极少出现，仅首次进入仿真模式
+            // 的第一帧之前），这种情况 turnPageByTap 仍可改 PagerState，view mount 后下次
+            // 重组 idleBitmap 自动追上。
+            AppLog.info("VolumeKeyDiag", "SIMULATION view=null → fallback turnPageByTap")
+        }
+        AppLog.info("VolumeKeyDiag", "CONSUMED + turnPageByTap dir=$direction")
         onPageTurnCommandConsumed()
         coordinator.turnPageByTap(direction) { readerPageIndex = it }
     }
@@ -2111,6 +2175,7 @@ fun CanvasRenderer(
                 modifier = Modifier.fillMaxSize(),
                 simulationParams = simulationParams,
                 simulationDisplayPage = computedSimDisplayPage,
+                simulationViewRef = simulationViewRef,
                 onPageSettled = { settledPage ->
                     // Diagnostic [3o] — 验证假设：pagerState 在 SCROLL 时被
                     // 同步到 0，切到 SIMULATION 时若 HorizontalPager (在 SLIDE/
