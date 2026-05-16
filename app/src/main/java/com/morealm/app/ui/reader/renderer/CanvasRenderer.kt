@@ -1115,6 +1115,11 @@ fun CanvasRenderer(
             val cap = cached ?: renderPageCount.coerceAtLeast(1)
             (cap - 1).coerceAtLeast(0)
         } else 0
+        // [DIAG SimPagerSync] 临时诊断日志 — 验证 35→34 翻页变 2/15 根因，复现后降级 DEBUG 或删除
+        AppLog.info(
+            "SimPagerSync",
+            "ch-switch initialPage compute: chapterIndex=$chapterIndex startFromLastPage=$startFromLastPage initialProgress=$initialProgress initialChapterPosition=$initialChapterPosition renderPageCount=$renderPageCount cached=${prelayoutCache[currentChapterKey]?.pageSize} -> initialPage=$initialPage pagerState.currentPage(before)=${pagerState.currentPage} coord.lastSettled(before)=${coordinator.lastSettledDisplayPage}",
+        )
         coordinator.ignoredSettledDisplayPage = initialPage
         coordinator.pendingSettledDirection = null
         coordinator.lastSettledDisplayPage = initialPage
@@ -1122,6 +1127,11 @@ fun CanvasRenderer(
         // chapter 切换会让 pageFactory remember 重建新实例，下次 recomposition updateDeps
         // 检测引用变化即清空。此处散户清理是 v1.2 时代遗物，已冗余。
         pagerState.scrollToPage(initialPage)
+        // [DIAG SimPagerSync] 临时诊断日志 — 复现后降级 DEBUG 或删除
+        AppLog.info(
+            "SimPagerSync",
+            "ch-switch scrollToPage done: initialPage=$initialPage pagerState.currentPage(after)=${pagerState.currentPage} coord.lastSettled(after)=${coordinator.lastSettledDisplayPage} pageAnimType=$pageAnimType",
+        )
     }
 
     LaunchedEffect(chapter, pendingSearchSelection) {
@@ -1953,13 +1963,20 @@ fun CanvasRenderer(
                 onTapCenter = onTapCenter,
                 onVisiblePageChanged = { chIdx, title, prog, charPos ->
                     // 反查首段所在章节的 pageIndex/pageCount，更新底部 InfoBar 的页号显示。
-                    // 滚动跨章时 windowSource 给 prev/cur/next 三章共存，chIdx 不一定 == chapterIndex。
-                    val ch = when (chIdx) {
-                        chapter?.chapterIndex -> chapter
-                        prevTextChapter?.chapterIndex -> prevTextChapter
-                        nextTextChapter?.chapterIndex -> nextTextChapter
-                        else -> null
-                    }
+                    //
+                    // 根治 SCROLL InfoBar 1/32 不更新（嫌疑 A 实锤，见 ScrollInfoBar 诊断日志）：
+                    // windowSource 路径下 chapter/prev/nextTextChapter prop 全为 null —— v1.2 修复
+                    // 假设 prop 永远非空，windowSource 重构后没跟上，导致 ch=null → 反查 dead。
+                    // 改从 chapterWindow.chapterByIdx[chIdx] 拿（SnapshotStateMap 是 windowSource
+                    // 已加载章节的唯一真值），覆盖任意 prev/cur/next 章；prop 反查仅作翻页模式
+                    // （windowSource=null）的兜底。同 line 866/870 的派生模式。
+                    val ch = chapterWindow?.chapterByIdx?.get(chIdx)
+                        ?: when (chIdx) {
+                            chapter?.chapterIndex -> chapter
+                            prevTextChapter?.chapterIndex -> prevTextChapter
+                            nextTextChapter?.chapterIndex -> nextTextChapter
+                            else -> null
+                        }
                     if (ch != null) {
                         val ps = ch.pageSize
                         if (ps > 0) {

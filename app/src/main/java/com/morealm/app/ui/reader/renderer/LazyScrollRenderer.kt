@@ -233,11 +233,14 @@ fun LazyScrollRenderer(
      * 真撞墙才 load。值过小（< 10）会让 IO 跟不上 fling 速度产生 LOADING 占位段；
      * 过大（> 30）会让窗口频繁 prepend 占用内存。
      */
-    nearStartThreshold: Int = 20,
+    // 20 → 50：B2 加触发提前量。fling 物理速度大时 20 段 buffer 不够（fling 100ms 内
+    // 穿过 20 段），50 段让 prepend 触发与 fetch 完成（典型 100ms cache hit）节奏匹配。
+    nearStartThreshold: Int = 50,
     /**
      * 章末预加载阈值（距窗口底 N 段触发 [onNearBottom]）。同 [nearStartThreshold]。
      */
-    nearEndThreshold: Int = 20,
+    // 20 → 50：B2 对称提前量（同 nearStartThreshold KDoc）
+    nearEndThreshold: Int = 50,
     chapterCharSizeProvider: (chapterIndex: Int) -> Int = { 1 },
     modifier: Modifier = Modifier,
 ) {
