@@ -128,6 +128,12 @@ fun AnimatedPageReader(
     modifier: Modifier = Modifier,
     simulationParams: SimulationParams? = null,
     simulationDisplayPage: Int = 0,
+    /**
+     * SIMULATION 模式下的 SimulationReadView 引用 holder — caller 持有后可以把音量键 /
+     * TtsPanel / 顶栏按钮翻页指令直接转给 view.keyTurnPage 跑贝塞尔翻页动画。
+     * 非 SIMULATION 模式忽略；caller 不需要时传 null。
+     */
+    simulationViewRef: androidx.compose.runtime.MutableState<com.morealm.app.ui.reader.renderer.SimulationReadView?>? = null,
     onPageSettled: (Int) -> Unit = {},
     pageContent: @Composable (Int) -> Unit,
 ) {
@@ -142,6 +148,7 @@ fun AnimatedPageReader(
                     params = simulationParams,
                     currentDisplayPage = simulationDisplayPage,
                     modifier = modifier,
+                    simulationViewRef = simulationViewRef,
                     pageContent = pageContent,
                 )
             } else {
