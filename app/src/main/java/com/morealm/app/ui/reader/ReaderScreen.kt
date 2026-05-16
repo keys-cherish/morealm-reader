@@ -518,7 +518,7 @@ fun ReaderScreen(
                                         "(repeat=$repeatCount, threshold=$LONG_PRESS_CHAPTER_THRESHOLD)",
                                 )
                                 if (dir == ReaderPageDirection.NEXT) viewModel.nextChapter()
-                                else viewModel.prevChapter()
+                                else viewModel.prevChapter(toLast = false)  // 音量键长按 = 按钮性质 → 章头
                             }
                         }
                         else -> { /* off：长按不响应（吞键避免连续翻页） */ }
@@ -620,6 +620,7 @@ fun ReaderScreen(
                     viewModel.onVisiblePageChanged(idx, title, progress, chapterPosition)
                 },
                 onNextChapter = { viewModel.nextChapter() },
+                // 竖排版手势 PREV → 上一章末页（用 prevChapter default toLast=true）
                 onPrevChapter = { viewModel.prevChapter() },
                 direction = if (readingDirectionStr == "vertical_lr") {
                     com.morealm.app.domain.render.ReadingDirection.VERTICAL_LR
@@ -653,12 +654,13 @@ fun ReaderScreen(
                 paddingTop = marginTopVal,
                 paddingBottom = marginBottomVal,
                 bgImageUri = readerBgImage,
-                // 与 [ReaderChapterController.commitChapterShiftPrev] 注释保持一致：
-                // 上一章按钮预期跳"章头"（与下一章对称）。renderedChapter.initialProgress
-                // 已经表达目标位置（PREV 按钮置 0、页内手势跨章会置具体值），不再用
-                // navigateDirection 推 startFromLastPage 否则会优先级覆盖 initialProgress
-                // 让 PREV 始终跳末页（用户实测 bug）。
-                startFromLastPage = false,
+                // MoRealm 阅读器导航语义铁则（MEMORY.md「阅读器导航语义」段）：
+                //  - 按钮 PREV → 章头（startFromLastPage=false，与下一章按钮对称）
+                //  - 手势 PREV（仿真 / 滑动 / 覆盖 / 竖排）→ 上一章末页（startFromLastPage=true）
+                // 由 [RenderedReaderChapter.startFromLastPage] 表达：
+                // commitChapterShiftPrev(toLastPage=true) → 该字段 true → 这里透传到
+                // CanvasRenderer.startFromLastPage → initialPage = pageCount - 1。
+                startFromLastPage = renderedChapter.startFromLastPage,
                 initialProgress = renderedChapter.initialProgress,
                 initialChapterPosition = renderedChapter.initialChapterPosition,
                 restoreToken = renderedChapter.restoreToken,
@@ -681,6 +683,7 @@ fun ReaderScreen(
                     viewModel.updateVisibleReadAloudPosition(index, chapterPosition)
                 },
                 onNextChapter = { viewModel.nextChapter() },
+                // CanvasRenderer 手势 PREV（仿真 / 滑动 / 覆盖等）→ 上一章末页（default toLast=true）
                 onPrevChapter = { viewModel.prevChapter() },
                 pageTurnCommand = pageTurnCommand,
                 onPageTurnCommandConsumed = { pageTurnCommand = null },
@@ -805,6 +808,7 @@ fun ReaderScreen(
                     when (direction) {
                         com.morealm.app.ui.reader.renderer.ReaderPageDirection.NEXT ->
                             viewModel.commitChapterShiftNext()
+                        // 手势 PREV commit → 上一章末页（default toLast=true）
                         com.morealm.app.ui.reader.renderer.ReaderPageDirection.PREV ->
                             viewModel.commitChapterShiftPrev()
                         else -> false
@@ -880,7 +884,7 @@ fun ReaderScreen(
                 readProgress = visiblePage.readProgress,
                 scrollProgress = scrollProgress,
                 onBack = ::exitReader,
-                onPrevChapter = viewModel::prevChapter,
+                onPrevChapter = { viewModel.prevChapter(toLast = false) },  // 按钮 PREV → 章头（显式覆盖 default）
                 onNextChapter = viewModel::nextChapter,
                 onTts = {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1092,7 +1096,7 @@ fun ReaderScreen(
                 sleepMinutes = ttsSleepMinutes,
                 onPlayPause = viewModel::ttsPlayPause,
                 onStop = viewModel::ttsStop,
-                onPrevChapter = viewModel::prevChapter,
+                onPrevChapter = { viewModel.prevChapter(toLast = false) },  // 按钮 PREV → 章头（显式覆盖 default）
                 onNextChapter = viewModel::nextChapter,
                 onPrevParagraph = viewModel.tts::ttsPrevParagraph,
                 onNextParagraph = viewModel.tts::ttsNextParagraph,

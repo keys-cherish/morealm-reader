@@ -321,7 +321,17 @@ class ReaderChapterController(
      *   - `_nextPreloadedChapter` ← (curIdx, oldCurTitle, oldCurContent)
      *   - `_prevPreloadedChapter` ← null
      */
-    fun commitChapterShiftPrev(): Boolean {
+    /**
+     * 同步提交跨章 PREV（仿 Legado [外部开源阅读器实现]）。
+     *
+     * @param toLast `true`（**默认**）= 跳上一章**末页**（手势 PREV 连续阅读语义，常见路径）；
+     *               `false` = 跳上一章**章头**（按钮 PREV，显式覆盖默认）。
+     *
+     * 设计对齐 Legado：default 设为手势场景（更常见），按钮调用方显式传 `false`。
+     * 详见 MEMORY.md「阅读器导航语义」段。
+     */
+    fun commitChapterShiftPrev(toLast: Boolean = true): Boolean {
+        val toLastPage = toLast  // 内部沿用 toLastPage 命名，方便阅读现有 if (toLastPage) 分支
         val curIdx = _currentChapterIndex.value
         val prevIdx = curIdx - 1
         val chapterList = _chapters.value
@@ -376,10 +386,14 @@ class ReaderChapterController(
             index = prevIdx,
             title = chapterList[prevIdx].title,
             content = prevContent,
-            // 修复 Bug 3：用户按"上一章"按钮预期跳上一章**章头**，与"下一章"对称。
-            // 之前对齐 Legado moveToPrevChapter 的"章尾"语义和按钮文字直觉冲突。
+            // Bug 3 修复：按钮 PREV 跳章头（与"下一章"按钮对称）。
+            // **Bug 3 后续修复**（手势 PREV bug）：按 MEMORY.md 「阅读器导航语义」铁则，
+            // 手势 PREV（仿真翻页 / 滑动 / 覆盖 / 竖排手势）应跳**上一章末页**——连续阅读
+            // 体感。startFromLastPage=true 让 CanvasRenderer initialPage 算成 pageCount-1。
+            // 按钮路径 toLastPage=false（默认）→ startFromLastPage=false → 章头不变。
             initialProgress = 0,
             initialChapterPosition = 0,
+            startFromLastPage = toLastPage,
             restoreToken = System.nanoTime(),
         )
         _nextPreloadedChapter.value = PreloadedReaderChapter(curIdx, oldCurTitle, oldCurContent)

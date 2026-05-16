@@ -57,6 +57,19 @@ data class RenderedReaderChapter(
     val initialProgress: Int = 0,
     val initialChapterPosition: Int = 0,
     /**
+     * 手势 PREV 跨章语义：true = 跳上一章末页（连续阅读体感）；false = 跳章头。
+     *
+     * 按 MoRealm 阅读器导航语义铁则（MEMORY.md 「阅读器导航语义」段）：
+     *  - 按钮 PREV / NEXT（顶栏 / TtsPanel / 目录跳转）→ 章头（startFromLastPage=false）
+     *  - 手势 PREV（仿真翻页向右滑、滑动 / 覆盖手势、竖排手势）→ 上一章末页（startFromLastPage=true）
+     *  - 手势 NEXT → 下一章章头（同按钮，仍 false）
+     *
+     * `commitChapterShiftPrev(toLastPage = true)` 设此字段为 true；按钮路径默认 false。
+     * ReaderScreen 把它透传给 CanvasRenderer.startFromLastPage 参数；CanvasRenderer
+     * 内 line 988 / 1110 / 1309 据此把 initialPage 算成 pageCount - 1。
+     */
+    val startFromLastPage: Boolean = false,
+    /**
      * 每次 loadChapter 赋一个新值（System.nanoTime()），让 CanvasRenderer 的
      * restoreProgress LaunchedEffect 仅在"真正发起了新的恢复请求"时触发。
      *
@@ -531,7 +544,12 @@ class ReaderViewModel @Inject constructor(
     suspend fun saveProgressNowAndWait() = progress.saveProgressNowAndWait()
 
     fun nextChapter() = navigation.nextChapter()
-    fun prevChapter() = navigation.prevChapter()
+
+    /**
+     * 跨章 PREV（仿 Legado ReadBook.moveToPrevChapter）。
+     * @param toLast true（默认）= 跳上一章末页（手势）；false = 跳章头（按钮）。
+     */
+    fun prevChapter(toLast: Boolean = true) = navigation.prevChapter(toLast)
 
     /**
      * Phase 2 MD3 同步腾挪入口 — 由 ReaderScreen 在 onChapterCommit 调用。
@@ -551,12 +569,15 @@ class ReaderViewModel @Inject constructor(
         return ok
     }
 
-    /** 同 [commitChapterShiftNext] 但走 PREV 路径。 */
-    fun commitChapterShiftPrev(): Boolean {
-        val ok = chapter.commitChapterShiftPrev()
+    /**
+     * 同 [commitChapterShiftNext] 但走 PREV 路径（仿 Legado ReadBook.moveToPrevChapter）。
+     * @param toLast true（默认）= 跳上一章末页（手势）；false = 跳章头（按钮）。
+     */
+    fun commitChapterShiftPrev(toLast: Boolean = true): Boolean {
+        val ok = chapter.commitChapterShiftPrev(toLast)
         if (!ok) {
-            AppLog.debug("ReadBook", "commitChapterShiftPrev fallback to async prevChapter()")
-            navigation.prevChapter()
+            AppLog.debug("ReadBook", "commitChapterShiftPrev fallback to async prevChapter(toLast=$toLast)")
+            navigation.prevChapter(toLast)
         }
         return ok
     }
