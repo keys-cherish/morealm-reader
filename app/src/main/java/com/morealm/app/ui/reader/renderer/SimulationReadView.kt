@@ -22,7 +22,7 @@ import kotlin.math.hypot
  */
 class SimulationReadView(context: Context) : android.view.View(context) {
 
-    private val drawHelper = SimulationDrawHelper()
+    private val drawHelper = SimulationPageDrawer()
     private val scroller = Scroller(context, LinearInterpolator())
 
     // ── Page bitmaps ──

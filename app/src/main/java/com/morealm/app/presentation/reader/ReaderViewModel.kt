@@ -272,21 +272,21 @@ class ReaderViewModel @Inject constructor(
         chapter.loginPrompt
 
     // ── UI-only state (stays in ViewModel) ──
-    private val _showControls = MutableStateFlow(false)
-    val showControls: StateFlow<Boolean> = _showControls.asStateFlow()
+    private val _isControlsVisible = MutableStateFlow(false)
+    val isControlsVisible: StateFlow<Boolean> = _isControlsVisible.asStateFlow()
 
-    private val _showTtsPanel = MutableStateFlow(false)
-    val showTtsPanel: StateFlow<Boolean> = _showTtsPanel.asStateFlow()
+    private val _isTtsPanelVisible = MutableStateFlow(false)
+    val isTtsPanelVisible: StateFlow<Boolean> = _isTtsPanelVisible.asStateFlow()
 
-    private val _showSettingsPanel = MutableStateFlow(false)
-    val showSettingsPanel: StateFlow<Boolean> = _showSettingsPanel.asStateFlow()
+    private val _isSettingsPanelVisible = MutableStateFlow(false)
+    val isSettingsPanelVisible: StateFlow<Boolean> = _isSettingsPanelVisible.asStateFlow()
 
     /** EffectiveReplacesDialog (#5) 显示状态。toggle by Reader 顶栏按钮。 */
-    private val _showEffectiveReplacesDialog = MutableStateFlow(false)
-    val showEffectiveReplacesDialog: StateFlow<Boolean> = _showEffectiveReplacesDialog.asStateFlow()
+    private val _isEffectiveReplacesDialogVisible = MutableStateFlow(false)
+    val isEffectiveReplacesDialogVisible: StateFlow<Boolean> = _isEffectiveReplacesDialogVisible.asStateFlow()
 
-    fun showEffectiveReplacesDialog() { _showEffectiveReplacesDialog.value = true }
-    fun hideEffectiveReplacesDialog() { _showEffectiveReplacesDialog.value = false }
+    fun showEffectiveReplacesDialog() { _isEffectiveReplacesDialogVisible.value = true }
+    fun hideEffectiveReplacesDialog() { _isEffectiveReplacesDialogVisible.value = false }
 
     /**
      * EffectiveReplacesDialog 内禁用某条规则 — 写库 + 刷新缓存（不立即重渲染，等 dialog 关闭统一来）。
@@ -421,7 +421,7 @@ class ReaderViewModel @Inject constructor(
         )
     }
 
-    fun ttsStop() { tts.ttsStop(); _showTtsPanel.value = false }
+    fun ttsStop() { tts.ttsStop(); _isTtsPanelVisible.value = false }
 
     fun setChineseConvertMode(mode: Int) {
         // [DIAGNOSTIC 2026-05-10] 临时排查繁简反复切换后仍是繁体的问题，复现后删除。
@@ -593,12 +593,12 @@ class ReaderViewModel @Inject constructor(
     fun exportAsTxt(outputUri: Uri) = contentEdit.exportAsTxt(outputUri)
 
     // ── UI toggles ──
-    fun toggleControls() { _showControls.value = !_showControls.value }
-    fun hideControls() { _showControls.value = false }
-    fun toggleTtsPanel() { _showTtsPanel.value = !_showTtsPanel.value }
-    fun hideTtsPanel() { _showTtsPanel.value = false }
-    fun toggleSettingsPanel() { _showSettingsPanel.value = !_showSettingsPanel.value }
-    fun hideSettingsPanel() { _showSettingsPanel.value = false }
+    fun toggleControls() { _isControlsVisible.value = !_isControlsVisible.value }
+    fun hideControls() { _isControlsVisible.value = false }
+    fun toggleTtsPanel() { _isTtsPanelVisible.value = !_isTtsPanelVisible.value }
+    fun hideTtsPanel() { _isTtsPanelVisible.value = false }
+    fun toggleSettingsPanel() { _isSettingsPanelVisible.value = !_isSettingsPanelVisible.value }
+    fun hideSettingsPanel() { _isSettingsPanelVisible.value = false }
     fun setAutoPageInterval(seconds: Int) { _autoPageInterval.value = seconds }
     fun stopAutoPage() { _autoPageInterval.value = 0 }
     fun onTextSelected(text: String) { _selectedText.value = text }
@@ -634,7 +634,7 @@ class ReaderViewModel @Inject constructor(
             chapterIndex = chapter.currentChapterIndex.value,
             onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
         )
-        _showTtsPanel.value = true
+        _isTtsPanelVisible.value = true
     }
 
     fun updateReadAloudParagraphPositions(positions: List<Int>) {
@@ -752,8 +752,8 @@ class ReaderViewModel @Inject constructor(
         // blank screen and assumes the app is broken.
         viewModelScope.launch {
             chapter.chapterContent.collect { text ->
-                if (isEmptyContentPlaceholder(text) && !_showControls.value) {
-                    _showControls.value = true
+                if (isEmptyContentPlaceholder(text) && !_isControlsVisible.value) {
+                    _isControlsVisible.value = true
                 }
                 // If TTS triggered the chapter switch, hand the new content to the host
                 // so playback continues from paragraph 0.

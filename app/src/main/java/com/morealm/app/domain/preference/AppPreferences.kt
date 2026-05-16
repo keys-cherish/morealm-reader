@@ -529,13 +529,13 @@ class AppPreferences @Inject constructor(
     val screenTimeout: Flow<Int> = context.dataStore.data
         .map { it[Keys.SCREEN_TIMEOUT] ?: -1 }
 
-    val showStatusBar: Flow<Boolean> = context.dataStore.data
+    val isStatusBarVisible: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.SHOW_STATUS_BAR] ?: false }
 
-    val showChapterName: Flow<Boolean> = context.dataStore.data
+    val isChapterNameVisible: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.SHOW_CHAPTER_NAME] ?: true }
 
-    val showTimeBattery: Flow<Boolean> = context.dataStore.data
+    val isTimeBatteryVisible: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.SHOW_TIME_BATTERY] ?: true }
 
     /**

@@ -353,7 +353,7 @@ class BookSourceManageViewModel @Inject constructor(
     // 让 UI 完全无感 —— init 块订阅 Service 全局 StateFlow 后映射到本地。
     //
     // DB 持久化（errorMsg / lastCheckTime）已下沉到 Service，本类不再写 DB；
-    // dialog 触发逻辑（_invalidCheckResults / _showInvalidResultsDialog）保留在
+    // dialog 触发逻辑（_invalidCheckResults / _isInvalidResultsDialogVisible）保留在
     // 这里，因为 dialog 是 UI 的事，Service 不该懂 UI。
 
     private val _isChecking = MutableStateFlow(false)
@@ -414,7 +414,7 @@ class BookSourceManageViewModel @Inject constructor(
                             val invalid = _checkResults.value.values.filter { !it.isValid }
                             if (invalid.isNotEmpty()) {
                                 _invalidCheckResults.value = invalid
-                                _showInvalidResultsDialog.value = true
+                                _isInvalidResultsDialogVisible.value = true
                             }
                         }
                     }
@@ -448,15 +448,15 @@ class BookSourceManageViewModel @Inject constructor(
 
     // ── CheckSource 完成弹窗 ──
     /** 仅当有失效书源时为 true；UI 据此弹删除询问对话框。 */
-    private val _showInvalidResultsDialog = MutableStateFlow(false)
-    val showInvalidResultsDialog: StateFlow<Boolean> = _showInvalidResultsDialog.asStateFlow()
+    private val _isInvalidResultsDialogVisible = MutableStateFlow(false)
+    val isInvalidResultsDialogVisible: StateFlow<Boolean> = _isInvalidResultsDialogVisible.asStateFlow()
 
     /** 失效书源结果快照（弹窗展示数据源；包含 sourceUrl/sourceName/error）。 */
     private val _invalidCheckResults = MutableStateFlow<List<CheckSource.CheckResult>>(emptyList())
     val invalidCheckResults: StateFlow<List<CheckSource.CheckResult>> = _invalidCheckResults.asStateFlow()
 
     fun dismissInvalidResultsDialog() {
-        _showInvalidResultsDialog.value = false
+        _isInvalidResultsDialogVisible.value = false
     }
 
     /**
@@ -465,7 +465,7 @@ class BookSourceManageViewModel @Inject constructor(
      */
     fun deleteInvalidSources(sourceUrls: Collection<String>) {
         if (sourceUrls.isEmpty()) {
-            _showInvalidResultsDialog.value = false
+            _isInvalidResultsDialogVisible.value = false
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -478,7 +478,7 @@ class BookSourceManageViewModel @Inject constructor(
             )
             runCatching { sourceRepo.deleteByUrls(urlList) }
                 .onFailure { AppLog.warn("SourceManage", "deleteInvalidSources batch FAILED: ${it.message}") }
-            _showInvalidResultsDialog.value = false
+            _isInvalidResultsDialogVisible.value = false
             _importResult.value = "已删除 ${sourceUrls.size} 个失效书源"
             AppLog.info(
                 "SourceManage",
