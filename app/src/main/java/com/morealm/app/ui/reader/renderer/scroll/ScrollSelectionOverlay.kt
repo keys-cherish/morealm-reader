@@ -215,8 +215,16 @@ private fun HandleDot(
 ) {
     val density = LocalDensity.current
     val touchSize = with(density) { (touchRadiusPx * 2).toDp() }
-    var dragX by remember { mutableFloatStateOf(xInView) }
-    var dragY by remember { mutableFloatStateOf(yInView) }
+    // 关键修复（用户反馈"一选一大块"）：handle 位置（xInView/yInView）随 selection.cpRange
+    // 变化而变化 —— 之前 pointerInput key 用 (xInView, yInView) → 每次 selection 端点变就
+    // 重启 detectDragGestures → 用户拖动中途 detector 被销毁重建，drag 上下文丢失，
+    // 表现为"拖一下就跳一大块"或"drag 失效"。
+    //
+    // 修：pointerInput key 用 Unit（detector 不重启），用 rememberUpdatedState 让闭包
+    // 读到最新 anchor。drag 起点 onDragStart 时取 latest，后续 += delta 累加。
+    // 与 V1 CursorHandle 同款思路 (TextSelection.kt L915-950)。
+    val anchorX by rememberUpdatedState(xInView)
+    val anchorY by rememberUpdatedState(yInView)
     val onDragUpdated by rememberUpdatedState(onDrag)
     val onDragEndUpdated by rememberUpdatedState(onDragEnd)
 
@@ -229,20 +237,19 @@ private fun HandleDot(
                 )
             }
             .size(touchSize)
-            .pointerInput(xInView, yInView) {
-                dragX = xInView
-                dragY = yInView
+            .pointerInput(Unit) {
+                var draggedTo = Offset(anchorX, anchorY)
                 detectDragGestures(
                     onDragStart = { _ ->
-                        dragX = xInView
-                        dragY = yInView
+                        // 取最新 anchor 作 drag 起点，不依赖 pointerInput 重启
+                        draggedTo = Offset(anchorX, anchorY)
                     },
                     onDragEnd = { onDragEndUpdated() },
                     onDragCancel = { onDragEndUpdated() },
-                    onDrag = { _, delta ->
-                        dragX += delta.x
-                        dragY += delta.y
-                        onDragUpdated(Offset(dragX, dragY))
+                    onDrag = { change, delta ->
+                        change.consume()
+                        draggedTo += delta
+                        onDragUpdated(draggedTo)
                     },
                 )
             },
