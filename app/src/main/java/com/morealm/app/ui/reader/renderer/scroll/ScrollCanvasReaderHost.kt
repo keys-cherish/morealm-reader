@@ -231,14 +231,36 @@ fun ScrollCanvasReaderHost(
         }
     }
 
-    val engine = remember(viewWidth, viewHeight, paddingLeft, paddingRight, paddingTop, paddingBottom, contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing) {
+    // 给 engine paddingTop / paddingBottom 加上 InfoBar + status bar / nav bar inset 高度，
+    // 让正文（含章首大字 title 块）的起始 y 在 InfoBar 之下，避免被 InfoBar 遮挡。
+    // 与 V1 CanvasRenderer effectivePadTop = maxOf(padTopPx, cutoutTop) + topInfoBarPx 等价。
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val infoBarHeightPx = with(density) { 64.dp.toPx() }.toInt()
+    val statusBarPx = with(density) {
+        WindowInsets.statusBars.asPaddingValues().calculateTopPadding().toPx()
+    }.toInt()
+    val navBarPx = with(density) {
+        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding().toPx()
+    }.toInt()
+    val cutoutTopPx = with(density) {
+        WindowInsets.displayCutout.asPaddingValues().calculateTopPadding().toPx()
+    }.toInt()
+    val cutoutBottomPx = with(density) {
+        WindowInsets.displayCutout.asPaddingValues().calculateBottomPadding().toPx()
+    }.toInt()
+    val topInsetPx = maxOf(statusBarPx, cutoutTopPx)
+    val bottomInsetPx = maxOf(navBarPx, cutoutBottomPx)
+    val effectivePadTop = if (infoBar != null) paddingTop + topInsetPx + infoBarHeightPx else paddingTop + topInsetPx
+    val effectivePadBottom = if (infoBar != null) paddingBottom + bottomInsetPx + infoBarHeightPx else paddingBottom + bottomInsetPx
+
+    val engine = remember(viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom, contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing) {
         ScrollLayoutEngine(
             viewWidth = viewWidth,
             viewHeight = viewHeight,
             paddingLeft = paddingLeft,
             paddingRight = paddingRight,
-            paddingTop = paddingTop,
-            paddingBottom = paddingBottom,
+            paddingTop = effectivePadTop,
+            paddingBottom = effectivePadBottom,
             titlePaint = titlePaint,
             contentPaint = contentPaint,
             chapterNumPaint = chapterNumPaint,
@@ -706,8 +728,10 @@ fun ScrollCanvasReaderHost(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .fillMaxWidth()
-                    .padding(top = topInsetDp)
-                    .height(64.dp)
+                    // 渐变背景必须覆盖 status bar 区（用户反馈：之前 padding(top=topInsetDp)
+                    // 把整条 bar 推到 status bar 下方，导致 status bar 后透出章首块文字）。
+                    // 现在 height 包含 status bar 高度，背景画整个区域。
+                    .height(64.dp + topInsetDp)
                     .then(
                         if (infoBar.hasBgImage) Modifier
                         else Modifier.background(
@@ -718,7 +742,9 @@ fun ScrollCanvasReaderHost(
                             )
                         )
                     )
-                    .padding(horizontal = infoBar.paddingHorizontal.dp, vertical = 8.dp),
+                    // 内部 padding：把 ReaderInfoBar 实际文字推到 status bar 下方
+                    .padding(top = topInsetDp, start = infoBar.paddingHorizontal.dp,
+                        end = infoBar.paddingHorizontal.dp, bottom = 8.dp),
             )
             ReaderInfoBar(
                 slotLeft = if (infoBar.showChapterName) mapSlot(infoBar.footerLeft) else "none",
@@ -737,8 +763,7 @@ fun ScrollCanvasReaderHost(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
-                    .padding(bottom = bottomInsetDp)
-                    .height(64.dp)
+                    .height(64.dp + bottomInsetDp)
                     .then(
                         if (infoBar.hasBgImage) Modifier
                         else Modifier.background(
@@ -749,7 +774,8 @@ fun ScrollCanvasReaderHost(
                             )
                         )
                     )
-                    .padding(horizontal = infoBar.paddingHorizontal.dp, vertical = 8.dp),
+                    .padding(bottom = bottomInsetDp, start = infoBar.paddingHorizontal.dp,
+                        end = infoBar.paddingHorizontal.dp, top = 8.dp),
             )
         }
     }
