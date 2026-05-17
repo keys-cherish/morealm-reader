@@ -41,8 +41,8 @@ import com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec
 fun ChapterPaneCanvas(
     chapter: ScrollChapterLayout,
     highlightSpecs: List<ScrollHighlightDrawSpec> = emptyList(),
-    @Suppress("UNUSED_PARAMETER") viewportTop: Float = 0f,
-    @Suppress("UNUSED_PARAMETER") viewportBottom: Float = 0f,
+    /** Viewport y 范围 lambda（相对章顶）。null = 该章完全不在 viewport，整章 skip。 */
+    viewportRangeProvider: () -> Pair<Float, Float>? = { null },
     modifier: Modifier = Modifier,
 ) {
     val contentPaint = remember {
@@ -98,10 +98,20 @@ fun ChapterPaneCanvas(
         drawIntoCanvas { canvas ->
             val nc = canvas.nativeCanvas
 
-            // ─── 层 1：背景高亮 rect ───
+            // ─── 视口剔除：viewport 范围 lambda 在 draw scope 内读 state，
+            //              享受 draw-only re-execution（pixelOffset 变化只重 draw 不 measure）
+            val range = viewportRangeProvider()
+            if (range == null) return@drawIntoCanvas  // 整章不在视口（prev 章常态）
+
+            // 给一点缓冲（200px）避免边界 page 突然出现/消失闪烁
+            val viewportTop = range.first - 200f
+            val viewportBottom = range.second + 200f
+
+            // ─── 层 1：背景高亮 rect（仅画与 viewport 相交的 rect）───
             for (spec in bgSpecs) {
                 bgFillPaint.color = spec.argb
                 for (rect in spec.rects) {
+                    if (rect.bottom < viewportTop || rect.top > viewportBottom) continue
                     nc.drawRect(rect.left, rect.top, rect.right, rect.bottom, bgFillPaint)
                 }
             }
@@ -110,6 +120,10 @@ fun ChapterPaneCanvas(
             var pageOffsetY = 0f
             for (page in chapter.pages) {
                 val pageTop = pageOffsetY
+                val pageBottom = pageTop + page.height
+                pageOffsetY = pageBottom
+                // 视口剔除：page 完全在 viewport 之上 / 之下 → 整页 skip
+                if (pageBottom < viewportTop || pageTop > viewportBottom) continue
                 for (line in page.lines) {
                     if (line.isImage) continue  // M2.5 接入图片绘制
                     val paint: TextPaint
@@ -144,13 +158,14 @@ fun ChapterPaneCanvas(
                         }
                     }
                 }
-                pageOffsetY += page.height
+                // pageOffsetY 已在循环顶累加（move 到顶为视口剔除提前）
             }
 
-            // ─── 层 3：下划线（4 种线型：SOLID / DASHED / DOTTED / WAVY） ───
+            // ─── 层 3：下划线（4 种线型：SOLID / DASHED / DOTTED / WAVY），按 viewport 剔除 ───
             for (spec in underlineSpecs) {
                 val linePaint = underlinePaintFor(spec.argb, spec.underlineStyle)
                 for (rect in spec.rects) {
+                    if (rect.bottom < viewportTop || rect.top > viewportBottom) continue
                     val underlineY = rect.bottom - 2f  // 字符 baseline 下方 2px 处
                     when (spec.underlineStyle) {
                         Highlight.UNDERLINE_STYLE_WAVY -> drawWavyUnderline(

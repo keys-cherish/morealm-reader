@@ -7,9 +7,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
 
 /**
@@ -59,36 +63,58 @@ fun ScrollCanvasRenderer(
         applyScrollDelta(state, delta, onChapterShiftUpdated)
     }
 
+    // viewportHeightPx 通过 onSizeChanged 维护（容器尺寸变化 / 屏幕旋转时更新）
+    // ChapterPaneCanvas 视口剔除 lambda 用这个值算 viewport 在各块内的可见范围。
+    var viewportHeightPx by remember { mutableIntStateOf(0) }
+
     Layout(
         modifier = modifier
             .fillMaxSize()
+            .onSizeChanged { viewportHeightPx = it.height }
             .scrollable(state = scrollState, orientation = Orientation.Vertical),
         content = {
-            // 三块子节点固定顺序 prev/cur/next；null 章节 emit 空 Box 占位（保持
-            // measurables.size == 3，简化 measure 逻辑）。
-            if (state.prevChapter != null) {
+            // 三块子节点固定顺序 prev/cur/next；null 章节 emit 空 Box 占位。
+            // viewportRangeProvider lambda 在 draw scope 内调用：享受 draw-only re-execution
+            // （pixelOffset 高频变化只触发 ChapterPaneCanvas redraw，不触发 measure / recompose）。
+            val prev = state.prevChapter
+            val cur = state.currentChapter
+            val next = state.nextChapter
+            if (prev != null) {
                 ChapterPaneCanvas(
-                    chapter = state.prevChapter!!,
-                    viewportTop = 0f,   // M2.3 接入 viewport 计算
-                    viewportBottom = 0f,
+                    chapter = prev,
+                    viewportRangeProvider = {
+                        // prev 章在 view 中位置 = -offset - prevH；viewport 顶 view y = 0
+                        // → viewport 在 prev 章内 y 范围 = [offset + prevH, offset + prevH + viewportH]
+                        val offset = state.pixelOffset
+                        val top = offset + prev.totalHeight
+                        top to (top + viewportHeightPx)
+                    },
                 )
             } else {
                 Box(Modifier)
             }
-            if (state.currentChapter != null) {
+            if (cur != null) {
                 ChapterPaneCanvas(
-                    chapter = state.currentChapter!!,
-                    viewportTop = 0f,
-                    viewportBottom = 0f,
+                    chapter = cur,
+                    viewportRangeProvider = {
+                        val offset = state.pixelOffset
+                        offset to (offset + viewportHeightPx)
+                    },
                 )
             } else {
                 Box(Modifier)
             }
-            if (state.nextChapter != null) {
+            if (next != null) {
                 ChapterPaneCanvas(
-                    chapter = state.nextChapter!!,
-                    viewportTop = 0f,
-                    viewportBottom = 0f,
+                    chapter = next,
+                    viewportRangeProvider = {
+                        // next 章在 view 中位置 = -offset + curH；viewport 顶 view y = 0
+                        // → viewport 在 next 章内 y 范围 = [offset - curH, offset - curH + viewportH]
+                        val offset = state.pixelOffset
+                        val curH = state.currentChapter?.totalHeight ?: 0f
+                        val top = offset - curH
+                        top to (top + viewportHeightPx)
+                    },
                 )
             } else {
                 Box(Modifier)
