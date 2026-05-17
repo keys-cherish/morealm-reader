@@ -79,6 +79,7 @@ import com.morealm.app.ui.reader.toolbar.ReaderEditGuideTooltip
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.ui.theme.MoRealmColors
 import kotlinx.coroutines.flow.flowOf
@@ -669,6 +670,13 @@ fun ReaderScreen(
                 paddingTop = paddingTopPx,
                 paddingBottom = paddingBottomPx,
                 fontSize = fontSizePx,
+                // 主题派生 paint 参数（V1 CanvasRenderer 等价）：让正文 / 标题 / 章号都
+                // 用同一份 paint 配置，避免之前 hardcode Color.BLACK 在夜模式下黑底黑字。
+                textColorArgb = readerFg.toArgb(),
+                typeface = readerTypeface,
+                isNight = isNight,
+                letterSpacing = effectiveReaderStyle?.letterSpacing ?: 0f,
+                textBold = effectiveReaderStyle?.textBold ?: 0,
                 onChapterIndexChange = { newIdx -> viewModel.loadChapter(newIdx) },
                 onTapCenter = {
                     if (toolbarEditing) {

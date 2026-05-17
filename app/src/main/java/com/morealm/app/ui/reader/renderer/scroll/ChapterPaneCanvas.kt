@@ -1,10 +1,8 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
-import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.Typeface
 import android.text.TextPaint
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
@@ -41,36 +39,22 @@ import com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec
 @Composable
 fun ChapterPaneCanvas(
     chapter: ScrollChapterLayout,
+    /**
+     * 正文 paint —— 必须与排版时 [com.morealm.app.domain.render.scroll.ScrollLayoutEngine]
+     * 使用的 contentPaint 是同一份（同 fontSize / typeface / letterSpacing / bold），
+     * 否则字符宽度与 ScrollColumn.start/end 错位，画出来的字会偏移甚至吃字。
+     */
+    contentPaint: TextPaint,
+    titlePaint: TextPaint,
+    chapterNumPaint: TextPaint,
     highlightSpecs: List<ScrollHighlightDrawSpec> = emptyList(),
     /** Viewport y 范围 lambda（相对章顶）。null = 该章完全不在 viewport，整章 skip。 */
     viewportRangeProvider: () -> Pair<Float, Float>? = { null },
     modifier: Modifier = Modifier,
 ) {
-    val contentPaint = remember {
-        TextPaint().apply {
-            textSize = 48f
-            color = Color.BLACK
-            isAntiAlias = true
-        }
-    }
-    val titlePaint = remember {
-        TextPaint().apply {
-            textSize = 72f
-            color = Color.BLACK
-            typeface = Typeface.DEFAULT_BOLD
-            isAntiAlias = true
-        }
-    }
-    val chapterNumPaint = remember {
-        TextPaint().apply {
-            textSize = 36f
-            color = Color.parseColor("#FF9800")
-            isAntiAlias = true
-        }
-    }
-    val contentAscent = remember { -contentPaint.fontMetrics.ascent }
-    val titleAscent = remember { -titlePaint.fontMetrics.ascent }
-    val chapterNumAscent = remember { -chapterNumPaint.fontMetrics.ascent }
+    val contentAscent = remember(contentPaint) { -contentPaint.fontMetrics.ascent }
+    val titleAscent = remember(titlePaint) { -titlePaint.fontMetrics.ascent }
+    val chapterNumAscent = remember(chapterNumPaint) { -chapterNumPaint.fontMetrics.ascent }
 
     // 高亮 spec 按 kind 预分组（避免每帧再 filter）
     val bgSpecs = remember(highlightSpecs) { highlightSpecs.filter { it.kind == Highlight.KIND_BACKGROUND } }

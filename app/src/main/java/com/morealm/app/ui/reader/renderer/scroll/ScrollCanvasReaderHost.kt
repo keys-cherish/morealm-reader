@@ -64,6 +64,23 @@ fun ScrollCanvasReaderHost(
     paddingTop: Int = 120,
     paddingBottom: Int = 120,
     fontSize: Int = 48,
+    /**
+     * 正文字色（android argb）—— 与 [com.morealm.app.ui.reader.renderer.CanvasRenderer]
+     * 同源（来自 ReaderTheme.readerText.toArgb()）。null 走默认黑色，但 ReaderScreen
+     * 必传，避免夜间模式黑底黑字。
+     */
+    textColorArgb: Int? = null,
+    /**
+     * 用户字体（[android.graphics.Typeface]）。来自 ReaderScreen 的 readerTypeface。
+     * null 走默认；与 V1 CanvasRenderer 同源。
+     */
+    typeface: android.graphics.Typeface? = null,
+    /** 是否夜间模式 —— 决定 title / chapterNum 的颜色派生。 */
+    isNight: Boolean = false,
+    /** letterSpacing（ReaderStyle.letterSpacing）—— 字符间距乘 fontSize。 */
+    letterSpacing: Float = 0f,
+    /** 字重：0=normal / 1=bold / 2=light（ReaderStyle.textBold）。 */
+    textBold: Int = 0,
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
     // ── M4-revive 选区菜单 callbacks（直接复用 SelectionToolbar）──
@@ -85,32 +102,50 @@ fun ScrollCanvasReaderHost(
     infoBar: ScrollCanvasInfoBarConfig? = null,
     modifier: Modifier = Modifier,
 ) {
-    // M6.4 paint 暂用 hardcode（M6.5 阶段接 ReaderRenderTheme 替换为主题派生）。
-    // 颜色用 android.graphics.Color 是因为 TextPaint 用 Android Paint API（不是 Compose Color）。
-    val contentPaint = remember(fontSize, infoBar?.textColor) {
+    // ── M6.5 paint 派生（与 V1 CanvasRenderer line 393-433 同源算法）──
+    // 用 textColorArgb（fresh）+ fontSize + typeface + letterSpacing + bold 派生：
+    //   - contentPaint：正文，color = textColorArgb
+    //   - titlePaint：章首块大字标题，color = chapterTitleColor（夜模式浅色 / 日模式深色）
+    //   - chapterNumPaint：橙色"第 N 章" 章号小字，color = chapterAccentColor
+    // 不再 hardcode Color.BLACK → 夜模式自动适配。
+    val resolvedTextColor = textColorArgb ?: Color.BLACK
+    val chapterTitleColor = if (isNight) 0xFFE0E0E0.toInt() else 0xFF1A1A1A.toInt()
+    val chapterAccentColor = if (isNight) 0xFFCFA875.toInt() else 0xFFBFA175.toInt()
+
+    val contentPaint = remember(fontSize, typeface, resolvedTextColor, letterSpacing, textBold) {
         TextPaint().apply {
+            color = resolvedTextColor
             textSize = fontSize.toFloat()
-            color = infoBar?.textColor?.toArgb() ?: Color.BLACK
             isAntiAlias = true
+            this.typeface = when (textBold) {
+                1 -> Typeface.create(typeface ?: Typeface.DEFAULT, Typeface.BOLD)
+                else -> typeface ?: Typeface.DEFAULT
+            }
+            this.letterSpacing = letterSpacing
         }
     }
-    val titlePaint = remember(fontSize, infoBar?.textColor) {
+    val titlePaint = remember(fontSize, typeface, chapterTitleColor, letterSpacing) {
         TextPaint().apply {
-            textSize = fontSize * 1.5f
-            color = infoBar?.textColor?.toArgb() ?: Color.BLACK
-            typeface = Typeface.DEFAULT_BOLD
+            color = chapterTitleColor
+            textSize = fontSize * 1.45f
             isAntiAlias = true
+            isFakeBoldText = true
+            this.typeface = typeface ?: Typeface.DEFAULT_BOLD
+            this.letterSpacing = letterSpacing + 0.01f
         }
     }
-    val chapterNumPaint = remember(fontSize) {
+    val chapterNumPaint = remember(fontSize, typeface, chapterAccentColor, letterSpacing) {
         TextPaint().apply {
-            textSize = fontSize * 0.75f
-            color = Color.parseColor("#FF9800")
+            color = chapterAccentColor
+            textSize = fontSize * 0.85f
             isAntiAlias = true
+            isFakeBoldText = true
+            this.typeface = Typeface.create(typeface ?: Typeface.DEFAULT, Typeface.BOLD)
+            this.letterSpacing = letterSpacing + 0.04f
         }
     }
 
-    val engine = remember(viewWidth, viewHeight, paddingLeft, paddingRight, paddingTop, paddingBottom, fontSize, infoBar?.textColor) {
+    val engine = remember(viewWidth, viewHeight, paddingLeft, paddingRight, paddingTop, paddingBottom, contentPaint, titlePaint, chapterNumPaint) {
         ScrollLayoutEngine(
             viewWidth = viewWidth,
             viewHeight = viewHeight,
@@ -202,6 +237,9 @@ fun ScrollCanvasReaderHost(
         if (currentLayout != null) {
             ScrollCanvasRenderer(
                 state = state,
+                contentPaint = contentPaint,
+                titlePaint = titlePaint,
+                chapterNumPaint = chapterNumPaint,
                 onChapterShift = { _ ->
                     onChapterIndexChange(state.currentChapterIndex)
                 },
