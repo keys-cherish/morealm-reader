@@ -1,6 +1,7 @@
 package com.morealm.app.domain.render.scroll
 
 import android.text.TextPaint
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.TextMeasure
 import com.morealm.app.domain.render.ZhLayout
 import com.morealm.app.domain.render.textHeight
@@ -558,6 +559,26 @@ class ScrollLayoutEngine(
         }
 
         val totalHeight = pages.fold(0f) { acc, p -> acc + p.height }
+
+        // ── 诊断日志（吞字根因排查 2026-05-17）──
+        // 排版结束记录关键参数：viewWidth（外层传入）/ visibleWidth（扣 padding 后实际可排区）/
+        // maxColumnEnd（章内所有 column.end 最大值，应 ≤ visibleWidth，否则即吞字）。
+        // 如果 maxColumnEnd > visibleWidth → 排版算法有 bug；
+        // 如果 maxColumnEnd ≤ visibleWidth 但画面仍吞字 → 渲染层 Canvas 实际宽 < viewWidth。
+        var maxColumnEnd = 0f
+        for (page in pages) {
+            for (line in page.lines) {
+                for (col in line.columns) {
+                    if (col.end > maxColumnEnd) maxColumnEnd = col.end
+                }
+            }
+        }
+        AppLog.info(
+            "ScrollLayoutEngine",
+            "layoutChapter idx=$chapterIndex viewWidth=$viewWidth padding=L${paddingLeft}/R${paddingRight} " +
+                "visibleWidth=$visibleWidth maxColumnEnd=$maxColumnEnd " +
+                "overflow=${maxColumnEnd > visibleWidth} pages=${pages.size} totalHeight=$totalHeight",
+        )
 
         return ScrollChapterLayout(
             chapterIndex = chapterIndex,

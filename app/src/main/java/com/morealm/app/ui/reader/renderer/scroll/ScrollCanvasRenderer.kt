@@ -173,6 +173,18 @@ fun ScrollCanvasRenderer(
         val viewWidth = constraints.maxWidth
         val viewHeight = constraints.maxHeight
 
+        // 诊断日志（吞字根因排查）：层 Layout 拿到的真实容器 constraints vs
+        // 章节排版时使用的 viewWidth（来自 Host 入参，即 screenWidthDp.toPx()）。
+        // 若 constraints.maxWidth < chapter.viewWidth → ScrollCanvasReaderHost 接收的
+        // viewWidth 比实际容器宽，layout 出来的 column.end 超出可见区被截。
+        val curIdx = state.currentChapter?.chapterIndex ?: -1
+        val curLayoutVw = state.currentChapter?.viewWidth ?: -1
+        com.morealm.app.core.log.AppLog.info(
+            "ScrollCanvasRenderer",
+            "MEASURE constraints=${viewWidth}x${viewHeight} curChIdx=$curIdx curLayoutViewWidth=$curLayoutVw " +
+                "mismatch=${curLayoutVw > 0 && curLayoutVw != viewWidth}",
+        )
+
         // measure 各块 height = chapter.totalHeight；null 章节高度 = 0 占位
         val prevH = state.prevChapter?.totalHeight?.toInt() ?: 0
         val curH = state.currentChapter?.totalHeight?.toInt() ?: 0

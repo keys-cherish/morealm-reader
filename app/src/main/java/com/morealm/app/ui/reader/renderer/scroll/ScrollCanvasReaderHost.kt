@@ -5,7 +5,6 @@ import android.graphics.Typeface
 import android.text.TextPaint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -58,6 +57,8 @@ fun ScrollCanvasReaderHost(
     currentChapterIndex: Int,
     chapterCount: Int,
     loadChapterContent: suspend (Int) -> ScrollChapterContent?,
+    viewWidth: Int,
+    viewHeight: Int,
     paddingLeft: Int = 80,
     paddingRight: Int = 80,
     paddingTop: Int = 120,
@@ -84,13 +85,6 @@ fun ScrollCanvasReaderHost(
     infoBar: ScrollCanvasInfoBarConfig? = null,
     modifier: Modifier = Modifier,
 ) {
-    // 用 BoxWithConstraints 拿真实容器宽 / 高（reader 实际可用区域，扣除 TopAppBar /
-    // BottomBar / Notch 等占用后）。修复用户反馈"右边字被吃掉"：之前用
-    // screenWidthDp 算 viewWidth，但 reader 容器宽往往 < screen width，layout 按
-    // screen 排版导致行宽溢出可见区被屏幕截掉。
-    BoxWithConstraints(modifier.fillMaxSize()) {
-    val viewWidth = constraints.maxWidth
-    val viewHeight = constraints.maxHeight
     // M6.4 paint 暂用 hardcode（M6.5 阶段接 ReaderRenderTheme 替换为主题派生）。
     // 颜色用 android.graphics.Color 是因为 TextPaint 用 Android Paint API（不是 Compose Color）。
     val contentPaint = remember(fontSize, infoBar?.textColor) {
@@ -203,7 +197,7 @@ fun ScrollCanvasReaderHost(
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize()) {
         val currentLayout = state.currentChapter
         if (currentLayout != null) {
             ScrollCanvasRenderer(
@@ -376,6 +370,5 @@ fun ScrollCanvasReaderHost(
                     .padding(horizontal = infoBar.paddingHorizontal.dp, vertical = 8.dp),
             )
         }
-    }
     }
 }
