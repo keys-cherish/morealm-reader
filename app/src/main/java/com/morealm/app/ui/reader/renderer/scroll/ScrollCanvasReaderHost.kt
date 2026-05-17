@@ -263,25 +263,23 @@ fun ScrollCanvasReaderHost(
     // ── 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer.LaunchedEffect(jumpToken) 等价）──
     // 两阶段契约：caller 保证 restoreToken != 0L 时 currentChapter 已是目标章。
     // Host 监听 restoreToken + state.currentChapter 双 key：token 变 + cur layout ready 即滚。
+    //
+    // **关键守门（修跳章 bug）**：仅当 initialChapterPosition > 0 时才动 pixelOffset。
+    // V2 内部 applyScrollDelta swap → onChapterShift → viewModel.loadChapter(newIdx, pos=0)
+    // 会触发新 restoreToken。如果 JUMP 在 cp=0 也跑，pixelOffset 被强拉到 0 → 用户
+    // 视野从 swap 后的位置（章末 / 章首附近）跳到章顶 → 继续 fling 再 swap → 反复跳章。
+    // cp=0 时 V2 swap 已正确设置 pixelOffset，无需 JUMP 干预。
     LaunchedEffect(restoreToken, state.currentChapter) {
         if (restoreToken == 0L) return@LaunchedEffect
+        if (initialChapterPosition <= 0) return@LaunchedEffect  // 守门：cp=0 跳过 JUMP
         val layout = state.currentChapter ?: return@LaunchedEffect
         if (layout.chapterIndex != state.currentChapterIndex) return@LaunchedEffect
 
         // 计算目标 cp 在章节内的 y 坐标 = pageOffset 累加 + line.lineTop
-        val targetY = if (initialChapterPosition <= 0) {
-            0f
-        } else {
-            val hit = layout.findColumnAt(initialChapterPosition)
-            if (hit != null) {
-                var y = 0f
-                for (i in 0 until hit.page.pageIndex) y += layout.pages[i].height
-                y += hit.line.lineTop
-                y
-            } else {
-                0f
-            }
-        }
+        val hit = layout.findColumnAt(initialChapterPosition) ?: return@LaunchedEffect
+        var targetY = 0f
+        for (i in 0 until hit.page.pageIndex) targetY += layout.pages[i].height
+        targetY += hit.line.lineTop
 
         // 把目标段滚到视口上 1/3（与 V1 LazyScroll JUMP anchorOffset 同款思路），
         // 让用户看到目标的同时保留下文。
