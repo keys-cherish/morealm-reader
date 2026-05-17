@@ -589,18 +589,7 @@ class ScrollLayoutEngine(
     fun findColumnAt(
         layout: ScrollChapterLayout,
         chapterPosition: Int,
-    ): ScrollHitResult? {
-        if (chapterPosition < 0 || chapterPosition >= layout.totalCharCount) return null
-        for (page in layout.pages) {
-            for (line in page.lines) {
-                if (line.containsChapterPos(chapterPosition)) {
-                    val column = line.columns.firstOrNull { it.chapterPosition == chapterPosition }
-                    return ScrollHitResult(page, line, column)
-                }
-            }
-        }
-        return null
-    }
+    ): ScrollHitResult? = layout.findColumnAt(chapterPosition)
 
     /**
      * 反查反向：给定屏幕坐标（相对章顶 0..[ScrollChapterLayout.totalHeight]），找到承载
@@ -627,44 +616,7 @@ class ScrollLayoutEngine(
         layout: ScrollChapterLayout,
         x: Float,
         yWithinChapter: Float,
-    ): ScrollHitResult? {
-        if (yWithinChapter < 0f || yWithinChapter > layout.totalHeight) return null
-
-        // 找 page：累加 page.height 找含 y 的 page
-        var pageOffsetY = 0f
-        var matchedPage: ScrollPage? = null
-        var yInPage = 0f
-        for (page in layout.pages) {
-            val pageTop = pageOffsetY
-            val pageBottom = pageOffsetY + page.height
-            if (yWithinChapter in pageTop..pageBottom) {
-                matchedPage = page
-                yInPage = yWithinChapter - pageTop
-                break
-            }
-            pageOffsetY = pageBottom
-        }
-        val page = matchedPage ?: return null
-        if (page.lines.isEmpty()) return null  // 空页（章节兜底空页）
-
-        // 找 line：命中 lineTop..lineBottom；命中失败则吸附到最近 line（midY 距离最小）
-        val matchedLine = page.lines.firstOrNull { yInPage in it.lineTop..it.lineBottom }
-        val line = matchedLine ?: page.lines.minBy { l ->
-            val midY = (l.lineTop + l.lineBottom) / 2f
-            kotlin.math.abs(yInPage - midY)
-        }
-
-        // 行内找 column（空段 / 图片段返 null）
-        val column: ScrollColumn? = when {
-            line.columns.isEmpty() -> null
-            x < line.columns.first().start -> line.columns.first()
-            x >= line.columns.last().end -> line.columns.last()
-            else -> line.columns.firstOrNull { x in it.start..it.end }
-                ?: line.columns.last()  // 防御性兜底：单调 columns 理论上必命中，否则归末列
-        }
-
-        return ScrollHitResult(page, line, column)
-    }
+    ): ScrollHitResult? = layout.findColumnByPixel(x, yWithinChapter)
 
     /**
      * 当前排版参数的样式签名 —— 所有影响**字符坐标**的字段的全量、稳定、可比较拼接。
