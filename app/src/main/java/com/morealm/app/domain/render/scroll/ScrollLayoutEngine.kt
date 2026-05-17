@@ -1,0 +1,695 @@
+package com.morealm.app.domain.render.scroll
+
+import android.text.TextPaint
+import com.morealm.app.domain.render.TextMeasure
+import com.morealm.app.domain.render.textHeight
+
+/**
+ * 滚动 Canvas 引擎 —— 把原始章节文本排版成 [ScrollChapterLayout]（含每字符的像素坐标）。
+ *
+ * ── 范围与隔离原则 ──
+ *
+ * 1. **完全独立于 [com.morealm.app.domain.render.ChapterProvider]**：ChapterProvider
+ *    服务 SIMULATION/COVER/SLIDE 翻页模式，输出 TextChapter（page-based 翻页）。
+ *    本引擎服务新滚动 Canvas 模式（pixelOffset 三块面板），输出 [ScrollChapterLayout]。
+ *    两套引擎共存且互不依赖、互不引用，避免一处改影响另一处。
+ *
+ * 2. **完全独立于 [com.morealm.app.domain.render.ScrollParagraph]**：后者服务旧
+ *    LazyColumn 滚动路径（开发期间兜底）。新引擎不复用其数据结构；旧引擎在新引擎
+ *    稳定后整体删除。
+ *
+ * 3. **纯 domain 层**：禁止依赖 Compose / Android UI 类（TextPaint 是 android.text 系统
+ *    类，跨 domain/UI 可接受，与 [ChapterProvider] 一致）。
+ *
+ * 4. **可共用底层纯工具**：[TextMeasure]（字符宽度测量）/ [textHeight]（paint 行高扩展）
+ *    / `ZhLayout`（CJK 标点压缩，M1.3 接入）/ `PaintPool` 都是与业务无关的字符级工具，
+ *    与 [ChapterProvider] 共用不构成业务耦合（共用工具 ≠ 引擎关联）。
+ *
+ * ── 与 Legado 的关系 ──
+ *
+ * 数据结构 [ScrollColumn] / [ScrollLine] / [ScrollPage] / [ScrollChapterLayout] 参考
+ * Legado `TextColumn` / `TextLine` / `TextPage` / `TextChapter` 的字段语义，但命名加
+ * `Scroll` 前缀避免与本项目既有 `TextLine` / `TextPage`（在 PageLayout 路径下）冲突。
+ *
+ * 排版算法 M1.2-M1.5 参考 Legado [外部开源阅读器实现]
+ * 主流程独立实现；Compose / Canvas 渲染层（M2）走 MoRealm 自有。
+ */
+class ScrollLayoutEngine(
+    val viewWidth: Int,
+    val viewHeight: Int,
+    val paddingLeft: Int,
+    val paddingRight: Int,
+    val paddingTop: Int,
+    val paddingBottom: Int,
+    val titlePaint: TextPaint,
+    val contentPaint: TextPaint,
+    val paragraphIndent: String = "　　",
+    val textFullJustify: Boolean = true,
+    val titleMode: Int = 0,         // 0=left, 1=center, 2=hidden
+    val titleAlign: Int = 0,        // 0=left, 1=center, 2=right
+    val useZhLayout: Boolean = true,
+    val lineSpacingExtra: Float = 1.2f,
+    val paragraphSpacing: Int = 8,
+    val titleTopSpacing: Int = 0,
+    val titleBottomSpacing: Int = 0,
+    /** 章首块（橙色章序号 + 大字主标题 + 装饰线）专用 paint。null = 用 [titlePaint]。 */
+    val chapterNumPaint: TextPaint? = null,
+    /**
+     * 图片像素 dims 解析器 —— 注入式避免 domain 层耦合 ImageCache / BitmapFactory。
+     * 默认 [ScrollImageDimensionsResolver.NoOp]（走 4:3 fallback）；生产代码在 DI 模块注入
+     * 桥接 [com.morealm.app.domain.render.ImageCache] 的实现，单测可注入 mock。
+     */
+    val imageDimensionsResolver: ScrollImageDimensionsResolver = ScrollImageDimensionsResolver.NoOp,
+) {
+
+    val visibleWidth: Int = viewWidth - paddingLeft - paddingRight
+    val visibleHeight: Int = viewHeight - paddingTop - paddingBottom
+
+    private val contentTextMeasure: TextMeasure = TextMeasure(contentPaint)
+    private val contentTextHeight: Float = contentPaint.textHeight
+    private val contentLineHeight: Float = contentTextHeight * lineSpacingExtra
+
+    /**
+     * 章首块 title 主行用 paint / 测量器 / 行高。复用 [titlePaint]。
+     * 章首块行高直接用 textHeight（**不**乘 lineSpacingExtra），与旧
+     * [com.morealm.app.domain.render.ChapterProvider] 对齐——标题行紧凑。
+     */
+    private val titleTextMeasure: TextMeasure = TextMeasure(titlePaint)
+    private val titleTextHeight: Float = titlePaint.textHeight
+
+    /**
+     * 章首块章序号小字行用 paint / 测量器 / 行高。复用 [chapterNumPaint]，null 时 fallback
+     * [titlePaint]。
+     */
+    private val chapterNumTextMeasureSafe: TextMeasure = TextMeasure(chapterNumPaint ?: titlePaint)
+    private val chapterNumTextHeightSafe: Float = (chapterNumPaint ?: titlePaint).textHeight
+
+    /**
+     * 段首缩进的像素宽度 —— 作为**排版属性**应用（首行 lineCursor 起点 = indentWidth），
+     * 而**不**作为字符拼进 measureTextSplit。
+     *
+     * 设计理由（见 user feedback 2026-05-17）：
+     * - 缩进是 layout margin，不是原文字符 → 不占 ScrollColumn 位 → 高亮 rect 不延伸缩进区域
+     * - findColumnByPixel 命中段首 x < indentWidth 时吸附到段首第一个真实字符（M1.7 实现）
+     * - 持久化 chapterPosition 与原文字符 offset 严格 1:1，跨引擎一致
+     */
+    private val indentWidth: Float = contentPaint.measureText(paragraphIndent)
+
+    /**
+     * 段间空白像素值 —— 与旧 [com.morealm.app.domain.render.ChapterProvider] 量级对齐：
+     * `textHeight * paragraphSpacing / 10f`（Legado 同款单位语义）。
+     * paragraphSpacing 字段值 8 在 textSize 48 下 ≈ 0.8 × 行高，视觉自然。
+     *
+     * **跨页行为**：段末刚好跨页时**不**补到新页顶（强硬方案 1，纠正旧引擎可能的累加行为）。
+     * 视觉合理：新页从 paddingTop 起排下一段第一行，无额外段间距污染。
+     */
+    private val paragraphSpacingPx: Float = contentTextHeight * paragraphSpacing / 10f
+
+    /**
+     * 排版入口：把章节文本切成页 / 行 / 字符坐标。
+     *
+     * M1 实施进度（每个微步完成后此文档同步更新）：
+     *   M1.2 ✓ 纯文本路径：段切分 + 字符级 measure + 行打断 + visibleHeight 触发分页
+     *   M1.3 ⨯ ZhLayout CJK 行打断 + textFullJustify 末行对齐
+     *   M1.4 ✓ 章首样式块（章序号 + 主标题 + 装饰横条），cp 占用与旧引擎严格对齐
+     *   M1.5 ⨯ 图片段（占位 column + 实际像素高）
+     *
+     * @param chapterIndex 章 idx（全书内 0-based）
+     * @param title 章节显示标题（用于章首块；空 / titleMode==2 / omitChapterTitleBlock 时跳过）
+     * @param content 章节正文（已经 contentProcessor 处理；M1.5 前图片占位标记当普通文本）
+     * @param omitChapterTitleBlock true 时跳过章首块（用于本地 TXT 自动分章场景，
+     *        每段被当独立章但不画 N 次相同伪章名标题）；与 [titleMode] = 2 等价但作用域只在本次调用
+     * @return [ScrollChapterLayout]，含每字符的像素坐标和 chapterPosition
+     */
+    fun layoutChapter(
+        chapterIndex: Int,
+        title: String,
+        content: String,
+        omitChapterTitleBlock: Boolean = false,
+    ): ScrollChapterLayout {
+        // 段切分语义（精确对齐持久化坐标语义）：
+        //   - 按 `\n` 拆，段末 `\r` 去除（容忍 CRLF）
+        //   - 空段（连续 `\n\n` 之间的空字符串）**保留**：产生空 ScrollLine（columns 空、
+        //     高 = contentLineHeight）+ chapterPosition += 1（用户决策 2026-05-17：
+        //     空段占 1 个 cp，与原文 \n 位置 1:1 对齐）
+        val paragraphs = content.split('\n').map { it.trimEnd('\r') }
+
+        val pages = mutableListOf<ScrollPage>()
+        var currentPageLines = mutableListOf<ScrollLine>()
+        var currentY = paddingTop.toFloat()
+        var chapterPositionCounter = 0
+        var paragraphCounter = 0
+
+        fun flushPage() {
+            val height = currentPageLines.lastOrNull()?.lineBottom?.let { it + paddingBottom }
+                ?: (paddingTop + paddingBottom).toFloat()
+            pages.add(
+                ScrollPage(
+                    pageIndex = pages.size,
+                    lines = currentPageLines.toList(),
+                    height = height,
+                    chapterIndex = chapterIndex,
+                )
+            )
+            currentPageLines = mutableListOf()
+            currentY = paddingTop.toFloat()
+        }
+
+        // emitLine：把一行 columns 打包成 ScrollLine 追加到 currentPageLines；
+        // 行底超出 viewHeight - paddingBottom 时先 flushPage 再排该行到新页顶。
+        // firstCp / lastCp 由调用方根据 line 类型决定：
+        //   - 非空文本行：lineColumns.first/last.chapterPosition
+        //   - 空段 / 图片段：该 line 占的那 1 cp
+        // lineHeightOverride: 章首块用 titleTextHeight / chapterNumTextHeightSafe 替代
+        // contentLineHeight。null = 用默认 contentLineHeight（正文 / 空段）。
+        fun emitLine(
+            lineColumns: List<ScrollColumn>,
+            lineText: String,
+            paragraphNum: Int,
+            firstChapterPos: Int,
+            lastChapterPos: Int,
+            isTitle: Boolean = false,
+            isChapterNum: Boolean = false,
+            isTitleEnd: Boolean = false,
+            isImage: Boolean = false,
+            imageSrc: String? = null,
+            lineHeightOverride: Float? = null,
+        ) {
+            val effectiveLineHeight = lineHeightOverride ?: contentLineHeight
+            val proposedTop = currentY
+            val proposedBottom = proposedTop + effectiveLineHeight
+            val needNewPage = proposedBottom + paddingBottom > viewHeight && currentPageLines.isNotEmpty()
+            val finalTop: Float
+            val finalBottom: Float
+            if (needNewPage) {
+                flushPage()
+                finalTop = paddingTop.toFloat()
+                finalBottom = finalTop + effectiveLineHeight
+            } else {
+                finalTop = proposedTop
+                finalBottom = proposedBottom
+            }
+            currentPageLines.add(
+                ScrollLine(
+                    columns = lineColumns,
+                    lineTop = finalTop,
+                    lineBottom = finalBottom,
+                    paragraphNum = paragraphNum,
+                    isTitle = isTitle,
+                    text = lineText,
+                    firstChapterPos = firstChapterPos,
+                    lastChapterPos = lastChapterPos,
+                    isChapterNum = isChapterNum,
+                    isTitleEnd = isTitleEnd,
+                    isImage = isImage,
+                    imageSrc = imageSrc,
+                )
+            )
+            currentY = finalBottom
+        }
+
+        // emitImage：识别 `<img src="...">` → emit 单个 ScrollLine（columns 空 +
+        // isImage=true + imageSrc=src + height = 图片像素高度）。
+        // dims 解码走 [imageDimensionsResolver]；null 时 fallback 4:3（visibleWidth × 0.75）。
+        // 占 1 cp 与旧引擎 stringBuilder.append(" ") 严格对齐。
+        // 返回累加后的 chapterPositionCounter（含图片占的 1 cp）。
+        fun emitImage(src: String, paragraphNum: Int, startCp: Int): Int {
+            val dims = imageDimensionsResolver.resolve(src, visibleWidth)
+            val imgWidth: Int
+            val imgHeight: Int
+            if (dims != null && dims.first > 0 && dims.second > 0) {
+                val (intW, intH) = dims
+                var w = visibleWidth
+                var h = (intH.toFloat() * visibleWidth / intW).toInt()
+                if (h > visibleHeight) {
+                    w = (w.toFloat() * visibleHeight / h).toInt()
+                    h = visibleHeight
+                }
+                imgWidth = w; imgHeight = h
+            } else {
+                // Fallback 4:3，与旧 ChapterProvider.setTypeImage line 684 兜底一致
+                imgWidth = visibleWidth
+                imgHeight = (visibleWidth * 0.75f).toInt().coerceAtMost(visibleHeight)
+            }
+
+            // emitLine 用 lineHeightOverride 让图片行高 = imgHeight（不走 contentLineHeight）
+            emitLine(
+                lineColumns = emptyList(),  // 图片不含字符 column
+                lineText = " ",              // 占位文本与旧引擎对齐
+                paragraphNum = paragraphNum,
+                firstChapterPos = startCp,
+                lastChapterPos = startCp,
+                isImage = true,
+                imageSrc = src,
+                lineHeightOverride = imgHeight.toFloat(),
+            )
+            // 图片占 1 cp（旧引擎 stringBuilder.append(" ")）
+            return startCp + 1
+        }
+
+        // emitTitleParagraph：排版一段 title 文本（可跨行换行），段末追加 \n cp。
+        // 与正文段语义对齐：每字符占 1 cp，段末 \n 占 1 cp（旧 ChapterProvider 兼容关键）。
+        // 返回累加后的 chapterPositionCounter（含段末 \n）。
+        fun emitTitleParagraph(
+            text: String,
+            textMeasure: TextMeasure,
+            lineHeight: Float,
+            isChapterNum: Boolean,
+            isTitleEnd: Boolean,
+            paragraphNum: Int,
+            startCp: Int,
+        ): Int {
+            val (chars, widths) = textMeasure.measureTextSplit(text)
+            var lineColumns = mutableListOf<ScrollColumn>()
+            var lineCursorX = 0f  // 章首块不缩进
+            val lineTextBuilder = StringBuilder()
+            var cp = startCp
+
+            // 收集多行 emit 数据（章首块单段可跨行，但 isTitleEnd 只标末行）
+            data class TitleLineEmit(
+                val cols: List<ScrollColumn>,
+                val text: String,
+                val firstCp: Int,
+                val lastCp: Int,
+            )
+            val emitted = mutableListOf<TitleLineEmit>()
+
+            fun captureLine() {
+                if (lineColumns.isEmpty()) return
+                emitted.add(
+                    TitleLineEmit(
+                        cols = lineColumns.toList(),
+                        text = lineTextBuilder.toString(),
+                        firstCp = lineColumns.first().chapterPosition,
+                        lastCp = lineColumns.last().chapterPosition,
+                    ),
+                )
+                lineColumns = mutableListOf()
+                lineTextBuilder.clear()
+                lineCursorX = 0f
+            }
+
+            for (i in chars.indices) {
+                val w = widths[i]
+                if (lineCursorX + w > visibleWidth && lineColumns.isNotEmpty()) {
+                    captureLine()
+                }
+                lineColumns.add(
+                    ScrollColumn(
+                        charData = chars[i],
+                        start = lineCursorX,
+                        end = lineCursorX + w,
+                        chapterPosition = cp,
+                    ),
+                )
+                lineCursorX += w
+                lineTextBuilder.append(chars[i])
+                cp++
+            }
+            captureLine()
+
+            // 真正 emit：仅末行带 isTitleEnd（装饰横条只画一次）
+            for ((idx, e) in emitted.withIndex()) {
+                emitLine(
+                    lineColumns = e.cols,
+                    lineText = e.text,
+                    paragraphNum = paragraphNum,
+                    firstChapterPos = e.firstCp,
+                    lastChapterPos = e.lastCp,
+                    isTitle = true,
+                    isChapterNum = isChapterNum,
+                    isTitleEnd = isTitleEnd && idx == emitted.lastIndex,
+                    lineHeightOverride = lineHeight,
+                )
+            }
+
+            // 段末隐式 \n 占 1 cp（与旧 ChapterProvider stringBuilder.append('\n') 对齐）
+            cp++
+            return cp
+        }
+
+        // ── 章首样式块（M1.4）──
+        // 旧 ChapterProvider 对齐：titleMode != 2 且未 omit 且 title 非空时画章首块。
+        // 章首块字符占 cp（chapter-num + title + 各自段末 \n），cp 累加到 chapterPositionCounter。
+        // 这与旧引擎 stringBuilder 累加规则严格对齐，保证已存 Highlight.startChapterPos 在
+        // 新引擎下反查到同字符（跨引擎兼容关键）。
+        if (titleMode != 2 && !omitChapterTitleBlock && title.isNotBlank()) {
+            val (chapterNumText, titleText) = splitChapterNumAndTitle(title)
+            val hasChapterNum = chapterNumText != null
+            val hasTitle = titleText.isNotBlank()
+
+            // 1) chapter-num 行（如有）
+            if (hasChapterNum) {
+                paragraphCounter++
+                chapterPositionCounter = emitTitleParagraph(
+                    text = chapterNumText!!,
+                    textMeasure = chapterNumTextMeasureSafe,
+                    lineHeight = chapterNumTextHeightSafe,
+                    isChapterNum = true,
+                    isTitleEnd = !hasTitle,  // 没 title 时 chapter-num 是章首块末行
+                    paragraphNum = paragraphCounter,
+                    startCp = chapterPositionCounter,
+                )
+                // chapter-num 与 title 之间留 0.20 × chapterNumTextHeight 间距（旧引擎对齐）
+                if (hasTitle) currentY += chapterNumTextHeightSafe * 0.20f
+            }
+
+            // 2) title 主行（可多行：title 内含 \n 切分）
+            if (hasTitle) {
+                val titleLines = titleText.split('\n').filter { it.isNotBlank() }
+                for ((idx, line) in titleLines.withIndex()) {
+                    paragraphCounter++
+                    chapterPositionCounter = emitTitleParagraph(
+                        text = line,
+                        textMeasure = titleTextMeasure,
+                        lineHeight = titleTextHeight,
+                        isChapterNum = false,
+                        isTitleEnd = idx == titleLines.lastIndex,  // 最后一行 title 标 isTitleEnd
+                        paragraphNum = paragraphCounter,
+                        startCp = chapterPositionCounter,
+                    )
+                }
+            }
+
+            // 章首块结束后留间距：(contentTextHeight × 0.75f) coerceAtLeast (titleBottomSpacing / 2f)
+            // 对齐旧 ChapterProvider line 321：装饰横条空间 + 与正文的视觉分隔
+            currentY += maxOf(contentTextHeight * 0.75f, titleBottomSpacing / 2f)
+        }
+
+        for (paragraphText in paragraphs) {
+            paragraphCounter++
+
+            // ── 空段处理（用户决策 2026-05-17）──
+            // 输出空 ScrollLine（columns 空 + text 空 + 高 = contentLineHeight），并占 1 cp。
+            // 用户选中空段 = 选中那 1 个 cp；视觉上空段表现为「一行空白」。
+            if (paragraphText.isEmpty()) {
+                val emptyCp = chapterPositionCounter
+                emitLine(
+                    lineColumns = emptyList(),
+                    lineText = "",
+                    paragraphNum = paragraphCounter,
+                    firstChapterPos = emptyCp,
+                    lastChapterPos = emptyCp,
+                )
+                chapterPositionCounter++
+                // 段末 paragraphSpacing 跨页不补到新页顶（强硬方案 1）
+                currentY += paragraphSpacingPx
+                continue
+            }
+
+            // ── 非空段：缩进作为排版属性，不生成 column ──
+            // 段首第一行 lineCursorX 起点 = indentWidth；续行 / 图片后起点 = 0（无缩进）。
+            // 缩进区域（0..indentWidth）无 column，hit-test 阶段由 findColumnByPixel 吸附段首。
+            var lineColumns = mutableListOf<ScrollColumn>()
+            var lineCursorX = indentWidth
+            val lineTextBuilder = StringBuilder()
+
+            fun flushLine() {
+                if (lineColumns.isEmpty()) return
+                emitLine(
+                    lineColumns = lineColumns.toList(),
+                    lineText = lineTextBuilder.toString(),
+                    paragraphNum = paragraphCounter,
+                    firstChapterPos = lineColumns.first().chapterPosition,
+                    lastChapterPos = lineColumns.last().chapterPosition,
+                )
+                lineColumns = mutableListOf()
+                lineTextBuilder.clear()
+                lineCursorX = 0f  // 续行无缩进，从行首起
+            }
+
+            // emitTextChunk：把 chunk 字符级 emit 到当前 lineColumns 状态。
+            // 多 chunk 共享 lineCursorX —— img 拆段时 text 块间不强制换行（除非超宽）。
+            fun emitTextChunk(textChunk: String) {
+                if (textChunk.isEmpty()) return
+                val (chars, widths) = contentTextMeasure.measureTextSplit(textChunk)
+                for (i in chars.indices) {
+                    val w = widths[i]
+                    // 行内已有 column 且新字宽度让行超 visibleWidth → 换行；
+                    // 行内无 column 时（极宽单字 / emoji）强行单字符占一行避免死循环
+                    if (lineCursorX + w > visibleWidth && lineColumns.isNotEmpty()) {
+                        flushLine()
+                    }
+                    lineColumns.add(
+                        ScrollColumn(
+                            charData = chars[i],
+                            start = lineCursorX,
+                            end = lineCursorX + w,
+                            chapterPosition = chapterPositionCounter,
+                        ),
+                    )
+                    lineCursorX += w
+                    lineTextBuilder.append(chars[i])
+                    chapterPositionCounter++
+                }
+            }
+
+            // 段内 img 拆分：识别 `<img src="...">` 把段拆为 [text1, img1, text2, ...]
+            // 顺序 emit。img 前后强制换行（img 占整行）。
+            val imgMatches = imgRegex.findAll(paragraphText).toList()
+            if (imgMatches.isEmpty()) {
+                emitTextChunk(paragraphText)
+            } else {
+                var cursor = 0
+                for (m in imgMatches) {
+                    val before = paragraphText.substring(cursor, m.range.first)
+                    if (before.isNotEmpty()) emitTextChunk(before)
+                    flushLine()  // img 前强制 flush（img 占整行）
+                    chapterPositionCounter = emitImage(
+                        src = m.groupValues[1],
+                        paragraphNum = paragraphCounter,
+                        startCp = chapterPositionCounter,
+                    )
+                    lineCursorX = 0f  // img 后续 text 从新行起
+                    cursor = m.range.last + 1
+                }
+                if (cursor < paragraphText.length) {
+                    val tail = paragraphText.substring(cursor)
+                    if (tail.isNotEmpty()) emitTextChunk(tail)
+                }
+            }
+            flushLine()  // 段末行
+
+            // 段末隐式 \n 占 1 cp（与旧 ChapterProvider stringBuilder.append('\n') 严格对齐，
+            // 保证跨引擎 DB 高亮 chapterPos 兼容）
+            chapterPositionCounter++
+
+            // 段间空白：纯累加，不补跨页（方案 1 强硬纠正）
+            currentY += paragraphSpacingPx
+        }
+
+        if (currentPageLines.isNotEmpty()) {
+            flushPage()
+        }
+        // 空章节兜底：至少一空页，渲染层据此画"内容为空"占位
+        if (pages.isEmpty()) {
+            pages.add(
+                ScrollPage(
+                    pageIndex = 0,
+                    lines = emptyList(),
+                    height = (paddingTop + paddingBottom).toFloat(),
+                    chapterIndex = chapterIndex,
+                )
+            )
+        }
+
+        val totalHeight = pages.fold(0f) { acc, p -> acc + p.height }
+
+        return ScrollChapterLayout(
+            chapterIndex = chapterIndex,
+            title = title,
+            pages = pages,
+            totalHeight = totalHeight,
+            viewWidth = viewWidth,
+            styleSignature = computeStyleSignature(),
+            totalCharCount = chapterPositionCounter,
+        )
+    }
+
+    /**
+     * 反查：给定章内字符 offset，找到承载该字符的 [ScrollHitResult]。
+     *
+     * 用于：高亮 / 字体色 / 下划线 / 选区 handle / 搜索高亮 等所有按 chapterPosition
+     * 持久化的功能，渲染时反查到 line / column 后画 rect / 改色 / 拉 handle。
+     *
+     * 算法：线性扫 page→line，命中 line 后在 columns 内找精确 column。
+     * 复杂度 O(N × M)（N=page 数 < 50，M=line 数 < 30/page），平均 < 0.1ms。
+     * 不做二分：page/line cp range 虽单调但分支多（空 page / 空 line corner case），
+     * 线性实现可读性 + 正确性双优；性能差距可忽略。
+     *
+     * @return 命中 [ScrollHitResult]：
+     *   - 文本行命中：column 非 null（精确字符）
+     *   - 空段 / 图片段 line 命中：column = null（整行 rect 由调用方画）
+     *   越界（cp < 0 或 cp >= totalCharCount）返 null
+     */
+    fun findColumnAt(
+        layout: ScrollChapterLayout,
+        chapterPosition: Int,
+    ): ScrollHitResult? {
+        if (chapterPosition < 0 || chapterPosition >= layout.totalCharCount) return null
+        for (page in layout.pages) {
+            for (line in page.lines) {
+                if (line.containsChapterPos(chapterPosition)) {
+                    val column = line.columns.firstOrNull { it.chapterPosition == chapterPosition }
+                    return ScrollHitResult(page, line, column)
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * 反查反向：给定屏幕坐标（相对章顶 0..[ScrollChapterLayout.totalHeight]），找到承载
+     * 该坐标的 [ScrollHitResult]。
+     *
+     * 用于：长按选区起点 / handle drag 时定位字符 / 双击选词。
+     *
+     * 吸附规则（用户决策 2026-05-17，"不让用户觉得点在了空气上"）：
+     *
+     * **纵向（y）**：
+     * - y 落在 line.lineTop..lineBottom → 命中该 line
+     * - y 在 line 间空白（段间 spacing / page 内行间） → 吸附到最近的 line（midY 距离）
+     * - y 在 page padding 区（paddingTop 之上、paddingBottom 之下） → 吸附到该 page
+     *   首 / 末 line
+     * - y 越界（< 0 或 > totalHeight） → null（用户点击章节外）
+     *
+     * **横向（x）**：
+     * - 命中 line 是空段 / 图片段（columns 空） → column = null
+     * - x < line.columns.first().start（缩进区 / 行首左侧） → 吸附到 first column
+     * - x >= line.columns.last().end（行尾右侧） → 吸附到 last column
+     * - x 落在某 column.start..end → 命中该 column
+     */
+    fun findColumnByPixel(
+        layout: ScrollChapterLayout,
+        x: Float,
+        yWithinChapter: Float,
+    ): ScrollHitResult? {
+        if (yWithinChapter < 0f || yWithinChapter > layout.totalHeight) return null
+
+        // 找 page：累加 page.height 找含 y 的 page
+        var pageOffsetY = 0f
+        var matchedPage: ScrollPage? = null
+        var yInPage = 0f
+        for (page in layout.pages) {
+            val pageTop = pageOffsetY
+            val pageBottom = pageOffsetY + page.height
+            if (yWithinChapter in pageTop..pageBottom) {
+                matchedPage = page
+                yInPage = yWithinChapter - pageTop
+                break
+            }
+            pageOffsetY = pageBottom
+        }
+        val page = matchedPage ?: return null
+        if (page.lines.isEmpty()) return null  // 空页（章节兜底空页）
+
+        // 找 line：命中 lineTop..lineBottom；命中失败则吸附到最近 line（midY 距离最小）
+        val matchedLine = page.lines.firstOrNull { yInPage in it.lineTop..it.lineBottom }
+        val line = matchedLine ?: page.lines.minBy { l ->
+            val midY = (l.lineTop + l.lineBottom) / 2f
+            kotlin.math.abs(yInPage - midY)
+        }
+
+        // 行内找 column（空段 / 图片段返 null）
+        val column: ScrollColumn? = when {
+            line.columns.isEmpty() -> null
+            x < line.columns.first().start -> line.columns.first()
+            x >= line.columns.last().end -> line.columns.last()
+            else -> line.columns.firstOrNull { x in it.start..it.end }
+                ?: line.columns.last()  // 防御性兜底：单调 columns 理论上必命中，否则归末列
+        }
+
+        return ScrollHitResult(page, line, column)
+    }
+
+    /**
+     * 当前排版参数的样式签名 —— 所有影响**字符坐标**的字段的全量、稳定、可比较拼接。
+     *
+     * 上层缓存判定规则：`layout.styleSignature == engine.computeStyleSignature()` → 复用；
+     * 不等 → 触发整章重排版（[layoutChapter]）。
+     *
+     * 设计要点（必须满足，不留兼容口子）：
+     *
+     * 1. **完整性**：列出所有进入坐标计算的字段。颜色 / paint alpha 等不影响 metrics
+     *    的字段**不进**——它们变化只触发重绘，不触发重排版。漏字段 = 视觉残留 bug
+     *    （字段变了但缓存命中），多字段 = 不必要重排版（性能损失，但正确性 OK）。
+     * 2. **Float 精度稳定**：用 [Float.toBits] 输出 IEEE 754 位表示，消除跨 JVM
+     *    `Float.toString()` 表达差异（如 `48.0` vs `48`）。
+     * 3. **Typeface 实例敏感**：用 [System.identityHashCode] 而非 [Typeface.hashCode]。
+     *    [Typeface.equals] 在 SDK 间行为不一致；同字体不同 instance 的 metrics 也可能
+     *    异（OEM 自定义 fontFallback），因此 identity 敏感是保守正确选择。
+     *    上层应通过 PaintPool 复用 Typeface instance 以避免频繁失效。
+     * 4. **String 字段原文拼接**：[paragraphIndent] 直接拼内容（不拼长度）—— 缩进字符
+     *    类型（全角 / 半角 / Tab）也影响 measure 结果。
+     * 5. **直接字符串相等比较**：不做 SHA / hashCode 压缩。字段量级（~20 个）拼出
+     *    字符串约 200-300 字符，相等比较 O(N) 可忽略；hash 压缩反而引入碰撞风险。
+     */
+    fun computeStyleSignature(): String = buildString {
+        append("vw=").append(viewWidth).append(';')
+        append("vh=").append(viewHeight).append(';')
+        append("pl=").append(paddingLeft).append(';')
+        append("pr=").append(paddingRight).append(';')
+        append("pt=").append(paddingTop).append(';')
+        append("pb=").append(paddingBottom).append(';')
+        append("cts=").append(contentPaint.textSize.toBits()).append(';')
+        append("ctf=").append(System.identityHashCode(contentPaint.typeface)).append(';')
+        append("tts=").append(titlePaint.textSize.toBits()).append(';')
+        append("ttf=").append(System.identityHashCode(titlePaint.typeface)).append(';')
+        append("cnts=").append((chapterNumPaint?.textSize ?: titlePaint.textSize).toBits()).append(';')
+        append("cntf=").append(System.identityHashCode(chapterNumPaint?.typeface ?: titlePaint.typeface)).append(';')
+        append("lse=").append(lineSpacingExtra.toBits()).append(';')
+        append("ps=").append(paragraphSpacing).append(';')
+        append("indent='").append(paragraphIndent).append("';")
+        append("tm=").append(titleMode).append(';')
+        append("ta=").append(titleAlign).append(';')
+        append("tts2=").append(titleTopSpacing).append(';')
+        append("tbs=").append(titleBottomSpacing).append(';')
+        append("zh=").append(useZhLayout).append(';')
+        append("fj=").append(textFullJustify)
+    }
+
+    /**
+     * 拆分章节标题为 (chapter-num, title) 两部分。
+     *
+     * 示例：
+     *   "第一章 山边小村"  → ("第一章", "山边小村")
+     *   "Chapter 5 Hello"  → ("Chapter 5", "Hello")
+     *   "山边小村"         → (null, "山边小村")
+     *   "第一章"           → (null, "第一章")  // 无 rest，整串当 title
+     *
+     * 与旧 [com.morealm.app.domain.render.ChapterProvider.splitChapterNumAndTitle]
+     * 算法严格对齐（同正则），保证章首块视觉与 cp 占用语义一致。
+     */
+    private fun splitChapterNumAndTitle(title: String): Pair<String?, String> {
+        val trimmed = title.trim()
+        val match = chapterNumSplitRegex.find(trimmed)
+        if (match != null) {
+            val num = match.value.trim()
+            val rest = trimmed.substring(match.range.last + 1).trim()
+            return if (rest.isNotEmpty()) num to rest else null to trimmed
+        }
+        return null to trimmed
+    }
+
+    companion object {
+        /**
+         * 章序号识别正则 —— 抄自 [com.morealm.app.domain.render.ChapterProvider]
+         * companion 内同款表达式，保持识别行为完全一致。
+         * 覆盖：中文章节（第N章/节/卷/集/部/篇/回/话/幕/折/场）、英文 Chapter/Volume、
+         * 序章 / 终章 / 尾声 / 楔子 / 番外 / 引子 / 数字编号等。
+         */
+        private val chapterNumSplitRegex = Regex(
+            """^(第[零一二三四五六七八九十百千万亿\d]+[章节卷集部篇回话幕折场]|[Cc]hapter\s+\d+|[Vv]ol(?:ume)?\s*\.?\s*\d+|序[章言]|终章|尾声|楔子|番外|引[子章]|\d+[.、]\s*)""",
+        )
+
+        /**
+         * 图片占位标记识别正则 —— 与 [com.morealm.app.core.text.AppPattern.imgSrcPattern]
+         * 同款表达式，group 1 = src。
+         * 直接定义为 Regex 而非引用 Pattern 转换，避免每次调用开销。
+         */
+        private val imgRegex = Regex(
+            "<img[^>]+src=['\"]([^'\"]*)['\"][^>]*>",
+            RegexOption.IGNORE_CASE,
+        )
+    }
+}
