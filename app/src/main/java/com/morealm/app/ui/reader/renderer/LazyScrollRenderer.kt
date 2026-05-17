@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.sample
+import kotlin.math.abs
 
 /**
  * 段级选区前景色：primary-ish 蓝紫，alpha ≈ 0.18。
@@ -413,12 +414,51 @@ fun LazyScrollRenderer(
     // 状态丢失，连环重复 emit（旧实现中是空气墙 / 瞬移 bug 的命门之一，见
     // temp/solution.txt 「斩断 derivedStateOf 副作用风暴」）。
     LaunchedEffect(listState) {
+        // ScrollJumpDiag 状态机：只在「有意义事件」打日志，正常滚动静默。
+        // 之前每帧都打导致 1000 行 log 里 902 行是 ScrollJumpDiag，真信号被淹没
+        // （见 temp/MoRealm_log_20260516_231406.txt）。
+        var lastChIdx = Int.MIN_VALUE
+        var lastContentType: ScrollParagraphType? = null
+        var lastFirstIdx = Int.MIN_VALUE
         snapshotFlow { listState.viewportCenterItemInfo() }
             .distinctUntilChanged()
             .collect { info ->
                 if (info == null) return@collect  // layout 未 measure / 跳章过渡帧
                 val (idx, offset) = info
                 val p = paragraphs.getOrNull(idx) ?: return@collect
+                val firstIdx = listState.firstVisibleItemIndex
+
+                // 信号分类：
+                //  - firstIdx 跨帧 |Δ| > 5：fling/scroll 是 1 段/帧逐进，突变 = list
+                //    mutate / scrollToItem / prepend 后重锚 —— 跳章 bug 关键现场（WARN）
+                //  - chIdx 变：跨章 / prepend 假跳章
+                //  - contentType 变：LOADING ↔ NORMAL ↔ CHAPTER_TITLE / IMAGE
+                //  - 首次采样：建基线
+                val isFirstSample = lastChIdx == Int.MIN_VALUE
+                val chIdxChanged = !isFirstSample && p.chapterIndex != lastChIdx
+                val typeChanged = !isFirstSample && p.contentType != lastContentType
+                val firstIdxJump = !isFirstSample && abs(firstIdx - lastFirstIdx) > 5
+                if (firstIdxJump) {
+                    AppLog.warn(
+                        "ScrollJumpDiag",
+                        "⚠ firstVisible JUMP $lastFirstIdx→$firstIdx (Δ=${firstIdx - lastFirstIdx})" +
+                            " viewCenter.idx=$idx chIdx=${p.chapterIndex} para#=${p.paragraphNum}" +
+                            " contentType=${p.contentType} offset=$offset paraSize=${paragraphs.size}",
+                    )
+                } else if (isFirstSample || chIdxChanged || typeChanged) {
+                    AppLog.info(
+                        "ScrollJumpDiag",
+                        "viewportCenter idx=$idx chIdx=${p.chapterIndex} para#=${p.paragraphNum}" +
+                            " contentType=${p.contentType} firstVisible=$firstIdx" +
+                            " offset=$offset paraSize=${paragraphs.size}" +
+                            (if (chIdxChanged) " [chIdx $lastChIdx→${p.chapterIndex}]" else "") +
+                            (if (typeChanged) " [type $lastContentType→${p.contentType}]" else ""),
+                    )
+                }
+                lastChIdx = p.chapterIndex
+                lastContentType = p.contentType
+                lastFirstIdx = firstIdx
+
                 if (p.contentType == ScrollParagraphType.LOADING) {
                     // 占位段不算"用户在读" —— 跳章后下一章 LOADING 占位可能临时落在
                     // viewport 中心（centerY 落不到的边界 case），不该让 saveProgress
@@ -430,6 +470,31 @@ fun LazyScrollRenderer(
                     return@collect
                 }
                 onVisibleParagraphChanged(p, offset)
+            }
+    }
+
+    // ── SCROLL 跳章诊断：paragraphs 列表 mutation 单点采样 ──
+    //
+    // 用户反馈「上下滚动有时突然跳到上一章」。怀疑路径：prepend ch_prev 把 N 段插入
+    // 列表头部 → LazyColumn 没维持视觉锚点（firstVisibleItemIndex 仍是旧 idx，但对应
+    // 段已变成 ch_prev 内容）→ viewport center 检测到 ch_prev → 假跳章上报顶栏标题。
+    //
+    // 只在 paragraphs.size 真变化时打一行（mutation 是离散事件，不需要每帧采样）。
+    // 用 listState 做 key 而非 paragraphs：paragraphs 是 SnapshotStateList，引用稳定，
+    // snapshotFlow 内部读 size 已是响应式（同 viewport center effect 410-414 注释）。
+    LaunchedEffect(listState) {
+        snapshotFlow { paragraphs.size }
+            .distinctUntilChanged()
+            .collect { size ->
+                val firstIdx = listState.firstVisibleItemIndex
+                val firstOffset = listState.firstVisibleItemScrollOffset
+                val firstPara = paragraphs.getOrNull(firstIdx)
+                AppLog.info(
+                    "ScrollJumpDiag",
+                    "paragraphs MUTATE paraSize=$size firstVisibleIdx=$firstIdx" +
+                        " firstVisibleOffset=$firstOffset firstPara.chIdx=${firstPara?.chapterIndex}" +
+                        " firstPara.contentType=${firstPara?.contentType}",
+                )
             }
     }
 

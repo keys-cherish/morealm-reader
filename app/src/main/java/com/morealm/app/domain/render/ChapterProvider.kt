@@ -257,7 +257,12 @@ class ChapterProvider(
         //
         // 处理：把正文 paragraphs 里所有 isChapterTitle 段先剥掉，让正文只剩 image / 正文段。
         // 副作用：极少数书在正文中部用 h3 表达子标题也会被吃掉——可接受的折中。
-        val paragraphs = rawParagraphs.filterNot { it.isChapterTitle }
+        // stripDuplicateTitleSegments：再剥掉「正文开头被拆成多段普通 <p> 的 title 文本」
+        // （如 EPUB 把「第五章」+「梁王的珠宝」分两段写）—— 自画章标块照画，避免重复。
+        val paragraphs = stripDuplicateTitleSegments(
+            rawParagraphs.filterNot { it.isChapterTitle },
+            title,
+        )
         // contentProvidesChapterTitle 仍走 firstOrNull 老语义：仅当正文**第一段**就是
         // 与 chapter.title 同名的纯文本（且未匹配上 h 段）时跳过自画——这是兼容那些
         // 直接把章名写在第一段 <p> 里、不用 h 标签的 EPUB 流派。
@@ -515,9 +520,12 @@ class ChapterProvider(
         val rawParagraphs = if (isHtml) parseHtmlParagraphs(content) else {
             content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
         }
-        // 与横排 layoutInternal 同款：剥掉所有正文 h 标题段，让自画路径独占章首标题；
-        // 详细思路见横排同步注释。
-        val paragraphs = rawParagraphs.filterNot { it.isChapterTitle }
+        // 与横排 layoutInternal 同款：剥掉所有正文 h 标题段 + 剥掉拆段普通 <p> 形式的
+        // 重复 title 文本。详细思路见横排同步注释。
+        val paragraphs = stripDuplicateTitleSegments(
+            rawParagraphs.filterNot { it.isChapterTitle },
+            title,
+        )
         val contentProvidesChapterTitle = paragraphs.firstOrNull()?.let { first ->
             first.isChapterTitle || isSameChapterTitle(first.text, title)
         } == true
@@ -1141,6 +1149,39 @@ class ChapterProvider(
         return normalizedParagraph == normalizedTitle ||
             normalizedParagraph.endsWith(normalizedTitle) ||
             normalizedTitle.endsWith(normalizedParagraph)
+    }
+
+    /**
+     * 剥掉正文开头跟 chapter title 重复的 N 段文本（N=1..3）。
+     *
+     * 场景：EPUB 把章名拆成多段普通 `<p>` 写在正文开头（如「第五章」+「梁王的珠宝」），
+     * 既不是 `<h1-6>` 也不是单段完整 title —— `filterNot { isChapterTitle }` 漏掉它们，
+     * `isSameChapterTitle` 只看首段也匹不上。结果：ChapterProvider 自画的样式化章标
+     * 块（橙色章序号 + 大字主标题 + 装饰线）和正文重复 title 段同框，用户看到两份。
+     *
+     * 算法：N=3 → 2 → 1 由大到小尝试，前 N 段 normalized 文本拼接是否完全等于
+     * normalized title。命中即 drop 那 N 段。优先大 N 避免 N=1 部分匹配遗漏后续段。
+     *
+     * 不和 [isSameChapterTitle] 合并：后者决定「正文已含 title 就跳过自画」（保留正文），
+     * 本函数语义相反「自画照画，剥掉正文里多余的 title 文本」。两者互补，前者覆盖单段
+     * 完整 title 场景，本函数覆盖多段拆分场景。
+     *
+     * 不放进 [parseHtmlParagraphs]：parse 阶段没有 chapter.title 上下文，提到调用点更清晰。
+     */
+    private fun stripDuplicateTitleSegments(
+        paragraphs: List<LayoutParagraph>,
+        title: String,
+    ): List<LayoutParagraph> {
+        if (title.isBlank() || paragraphs.isEmpty()) return paragraphs
+        val normalizedTitle = normalizeTitleForCompare(title)
+        if (normalizedTitle.isEmpty()) return paragraphs
+        val maxN = minOf(3, paragraphs.size)
+        for (n in maxN downTo 1) {
+            val joined = paragraphs.take(n)
+                .joinToString("") { normalizeTitleForCompare(it.text) }
+            if (joined == normalizedTitle) return paragraphs.drop(n)
+        }
+        return paragraphs
     }
 
     private fun normalizeTitleForCompare(value: String): String = value

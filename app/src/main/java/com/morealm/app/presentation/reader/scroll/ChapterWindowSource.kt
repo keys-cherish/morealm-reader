@@ -311,9 +311,10 @@ class ChapterWindowSource(
         if (centerChapterIdx == chapterIdx) return
         val oldCenter = centerChapterIdx
         centerChapterIdx = chapterIdx
-        AppLog.debug(
-            "ChapterWindow",
-            "viewport center changed: $oldCenter -> $chapterIdx window=${loadedChapters.toList()} paras=${paragraphs.size}",
+        AppLog.info(
+            "ScrollJumpDiag",
+            "viewport center CHANGED $oldCenter→$chapterIdx window=${loadedChapters.toList()}" +
+                " paras=${paragraphs.size} inFlight=$inFlightChapters",
         )
         onCenterChapterChanged(chapterIdx)
         scope.launch { trimDistantChapters() }
@@ -612,10 +613,11 @@ class ChapterWindowSource(
                 loadedChapters.clear()
                 loadedChapters.addAll(merged)
             }
-            AppLog.debug(
-                "ChapterWindow",
-                "inserted chapter $chapterIdx (${newParas.size} paras, gen=$gen) at paraIdx=$insertParaIdx isAppend=$isAppend; " +
-                    "beforeWindow=$beforeWindow beforeParas=$beforeParas window=${loadedChapters.toList()} totalParas=${paragraphs.size}",
+            AppLog.info(
+                "ScrollJumpDiag",
+                "inserted ch=$chapterIdx (${newParas.size} paras) at paraIdx=$insertParaIdx isAppend=$isAppend" +
+                    " beforeParas=$beforeParas afterParas=${paragraphs.size} delta=${paragraphs.size - beforeParas}" +
+                    " window=${loadedChapters.toList()} center=$centerChapterIdx",
             )
         }
     }
