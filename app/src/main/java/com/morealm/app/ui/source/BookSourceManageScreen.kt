@@ -59,7 +59,9 @@ fun BookSourceManageScreen(
 ) {
     val moColors = LocalMoRealmColors.current
     val context = LocalContext.current
-    val sources by viewModel.sources.collectAsStateWithLifecycle()
+    // 用 SourcesSnapshot wrapper（reference-equality）绕开 StateFlow / Compose State 内置
+    // 的 structural equality dedup —— combine 输出 list 内容相同时会被 dedup 导致 UI 不重组。
+    val sources = viewModel.sources.collectAsStateWithLifecycle().value.items
     val isImporting by viewModel.isImporting.collectAsStateWithLifecycle()
     val importProgress by viewModel.importProgress.collectAsStateWithLifecycle()
     val importResult by viewModel.importResult.collectAsStateWithLifecycle()
@@ -160,6 +162,14 @@ fun BookSourceManageScreen(
         importResult?.let {
             Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
             viewModel.clearImportResult()
+        }
+    }
+
+    // Toggle 失败回滚提示 —— atomic UPDATE 异常 / rows=0 时 ViewModel rollback overlay 并
+    // emit 错误描述。SharedFlow extraBufferCapacity=2 保证 UI 不丢消息。
+    LaunchedEffect(Unit) {
+        viewModel.toggleError.collect { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -566,7 +576,7 @@ fun BookSourceManageScreen(
                                 isLoggedIn = isLoggedIn,
                                 selected = source.bookSourceUrl in selectedUrls,
                                 selectionMode = selectionMode,
-                                onToggle = { viewModel.toggleSource(source) },
+                                onToggle = { viewModel.toggleSource(source.bookSourceUrl) },
                                 onEdit = { editingSource = source },
                                 onDelete = { viewModel.deleteSource(source) },
                                 onLogin = { loginViewModel.showLoginDialog(source) },
@@ -614,7 +624,7 @@ fun BookSourceManageScreen(
                                         isLoggedIn = isLoggedIn,
                                         selected = source.bookSourceUrl in selectedUrls,
                                         selectionMode = selectionMode,
-                                        onToggle = { viewModel.toggleSource(source) },
+                                        onToggle = { viewModel.toggleSource(source.bookSourceUrl) },
                                         onEdit = { editingSource = source },
                                         onDelete = { viewModel.deleteSource(source) },
                                         onLogin = { loginViewModel.showLoginDialog(source) },
@@ -817,6 +827,16 @@ private fun SourceItem(
     var showMenu by remember { mutableStateOf(false) }
     // 进入多选态时立即关闭已经打开的菜单，避免"点菜单弹出后紧跟长按进多选"残留
     LaunchedEffect(selectionMode) { if (selectionMode) showMenu = false }
+    // source.enabled 已经是 ViewModel 层 combine(rawSources, _toggleOverlay) 派生的
+    // **原子合并**值——overlay 写入和真值更新在同一 emission 内一起到达 UI，无需 UI 端
+    // 再做 enabledOverride fallback（之前的 UI fallback 因 onEach 改 overlay 与 stateIn
+    // emit 跨 transaction 引发 Compose snapshot race，日志 191200 实锤）。
+    LaunchedEffect(source.enabled) {
+        com.morealm.app.core.log.AppLog.info(
+            "SourceToggleDiag",
+            "SourceItem render url=${source.bookSourceUrl} enabled=${source.enabled}",
+        )
+    }
     val enabledColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val disabledColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
     val bgColorAnim = animateColorAsState(

@@ -31,6 +31,9 @@ class SourceRepository @Inject constructor(
 
     suspend fun getByUrl(url: String): BookSource? = sourceDao.getByUrl(url)
 
+    /** 原子翻转 enabled 字段，详见 [BookSourceDao.toggleEnabled]。 */
+    suspend fun toggleEnabled(url: String): Int = sourceDao.toggleEnabled(url)
+
     suspend fun insert(source: BookSource) = sourceDao.insert(source)
 
     suspend fun importAll(sources: List<BookSource>) = sourceDao.insertAll(sources)

@@ -193,7 +193,6 @@ fun ReaderScreen(
     // 重组（贴文里的「重组风暴」）。下沉到 [ReadAloudPositionScope] 这个 leaf
     // composable，仅它和 CanvasRenderer 那一层重组。
     val pendingSearchSelection by viewModel.pendingSearchSelection.collectAsStateWithLifecycle()
-    val customCss by viewModel.settings.customCss.collectAsStateWithLifecycle()
     val customBgImage by viewModel.settings.customBgImage.collectAsStateWithLifecycle()
     val readerBgImageDay by viewModel.settings.readerBgImageDay.collectAsStateWithLifecycle()
     val readerBgImageNight by viewModel.settings.readerBgImageNight.collectAsStateWithLifecycle()
@@ -1046,8 +1045,6 @@ fun ReaderScreen(
                 onMarginBottomCommit = { v ->
                     viewModel.settings.setMarginBottom(v)
                 },
-                customCss = customCss,
-                onCustomCssChange = viewModel.settings::setCustomCss,
                 customBgImage = customBgImage,
                 onCustomBgImageChange = viewModel.settings::setCustomBgImage,
                 readerStyles = readerStyles,

@@ -884,8 +884,6 @@ fun ReaderSettingsPanel(
     onMarginTopCommit: (Int) -> Unit = {},
     marginBottom: Int = 24,
     onMarginBottomCommit: (Int) -> Unit = {},
-    customCss: String = "",
-    onCustomCssChange: (String) -> Unit = {},
     customBgImage: String = "",
     onCustomBgImageChange: (String) -> Unit = {},
     readerStyles: List<com.morealm.app.domain.entity.ReaderStyle> = emptyList(),
@@ -1449,13 +1447,9 @@ fun ReaderSettingsPanel(
 
             Spacer(Modifier.height(16.dp))
 
-            // ── Custom CSS ──
-            CssEditorSection(
-                css = customCss,
-                onCssChange = onCustomCssChange,
-            )
-
-            Spacer(Modifier.height(16.dp))
+            // 自定义 CSS 编辑入口已迁移到「我的」→「主题编辑」(ThemeEditorScreen)，
+            // 阅读器底部抽屉只保留即时可见效果的常用设置（字号 / 行距 / 边距 / 配色），
+            // 长文本编辑挪到全屏页面避免拥挤。
 
             // ── Screen orientation ──
             Text("屏幕方向", style = MaterialTheme.typography.labelMedium,

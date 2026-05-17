@@ -35,9 +35,78 @@ class BookSourceManageViewModel @Inject constructor(
         val sourceName: String = "",
     )
 
-    val sources: StateFlow<List<BookSource>> = sourceRepo.getAllSources()
-        .onEach { AppLog.debug("SourceManage", "sources emit size=${it.size}") }
+    private val rawSources: StateFlow<List<BookSource>> = sourceRepo.getAllSources()
+        .onEach { upstream ->
+            AppLog.debug("SourceManage", "sources emit size=${upstream.size} enabled=${upstream.count { it.enabled }}")
+        }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * 乐观 UI overlay —— url → 用户**意图**的 enabled 值。
+     *
+     * 为什么需要：Material3 Switch 是 stateless，视觉完全受 checked 参数控制。
+     * toggleSource → DB UPDATE 是原子的，但 Room InvalidationTracker emit 延迟
+     * 1-2 秒，期间 sources 不变 → Switch checked 参数不变 → 用户点击后 Switch
+     * 弹回原态，感受"按了没反应"。
+     *
+     * 修复：点击瞬间写入 overlay；[sources] 在 ViewModel 层用 `combine` 把 overlay
+     * 合并进每个 BookSource.enabled（原子单 StateFlow），UI 只读单一真值 source，
+     * 避免 onEach 改 overlay 与 stateIn emit 跨 transaction 的 Compose snapshot race
+     * （日志 191200 实锤：emit enabled=424 但 SourceItem 收到 src.enabled=false）。
+     */
+    private val _toggleOverlay = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+
+    /**
+     * 对外暴露的 sources —— 已合并 overlay。combine 保证 rawSources 和 overlay 在
+     * 同一 emission 内一起更新，UI 重组时不会读到不一致快照。Room 真值赶上 overlay 时
+     * 自动剥离 overlay 项，保持 list 反映「乐观意图 + 已确认真值」混合。
+     */
+    /**
+     * Reference-equality wrapper —— 强制每次 combine emit 都新建 instance，绕开 StateFlow
+     * 和 Compose SnapshotMutableState 内置的 structural equality dedup。日志 192744 实锤：
+     * combine block emit 11 次（click 11 次连点），但 SourceItem 只在初始重组一次——
+     * 内容相同的 list 被 stateIn / collectAsState 全程 dedup。用非 data class 包裹
+     * 让默认 equals 走 reference identity，每次 emit 必触发 UI 重组。
+     */
+    class SourcesSnapshot(val items: List<BookSource>)
+
+    val sources: StateFlow<SourcesSnapshot> = rawSources
+        .combine(_toggleOverlay) { srcList, overlay ->
+            val merged = if (overlay.isEmpty()) srcList
+            else srcList.map { src ->
+                overlay[src.bookSourceUrl]?.let { src.copy(enabled = it) } ?: src
+            }
+            SourcesSnapshot(merged)
+        }
+        .onEach { snapshot ->
+            AppLog.info(
+                "SourceToggleDiag",
+                "combine emit size=${snapshot.items.size} enabled=${snapshot.items.count { it.enabled }} overlay=${_toggleOverlay.value.size}",
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, SourcesSnapshot(emptyList()))
+
+    init {
+        // overlay 清理移到独立 collector：rawSources 真值赶上 overlay 时剥离。
+        // 这里清理只影响 _toggleOverlay 自己；下次 combine 重新派生 sources 不再加 override。
+        viewModelScope.launch {
+            rawSources.collect { upstream ->
+                _toggleOverlay.update { overlay ->
+                    if (overlay.isEmpty()) return@update overlay
+                    overlay.filter { (url, optimistic) ->
+                        upstream.firstOrNull { it.bookSourceUrl == url }?.enabled != optimistic
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Toggle 失败事件 —— SQL UPDATE 异常 / 0 rows 时 emit 错误描述，UI Snackbar 提示用户。
+     * extraBufferCapacity=2 允许快速失败两次都到达 UI（连点 / 短时间多次失败）。
+     */
+    private val _toggleError = MutableSharedFlow<String>(extraBufferCapacity = 2)
+    val toggleError: SharedFlow<String> = _toggleError.asSharedFlow()
 
     /**
      * 列表分组模式（持久化在 AppPreferences）：
@@ -123,7 +192,7 @@ class BookSourceManageViewModel @Inject constructor(
     fun exportToUri(uri: android.net.Uri, urls: Collection<String>?) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val all = sources.value
+                val all = sources.value.items
                 val list = if (urls.isNullOrEmpty()) all
                 else all.filter { it.bookSourceUrl in urls }
                 if (list.isEmpty()) {
@@ -166,7 +235,7 @@ class BookSourceManageViewModel @Inject constructor(
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
-            val targets = sources.value.filter {
+            val targets = sources.value.items.filter {
                 it.bookSourceUrl in urls && it.enabled != enabled
             }
             if (targets.isEmpty()) {
@@ -199,10 +268,65 @@ class BookSourceManageViewModel @Inject constructor(
 
     fun clearImportResult() { _importResult.value = null }
 
-    fun toggleSource(source: BookSource) {
-        viewModelScope.launch(Dispatchers.IO) {
-            sourceRepo.insert(source.copy(enabled = !source.enabled))
+    /**
+     * 切换书源启用状态。**用原子 SQL UPDATE 而不是 read-modify-write**。
+     *
+     * 历史 bug 链：
+     *   1. 旧实现接 BookSource 参数 → Compose lambda 闭包陷阱，连点时 source.enabled
+     *      永远是初值 → 每次写同样的 new 值 → Room 看 list 没变不 emit → UI 不刷新。
+     *   2. 改成接 url + DAO read 后再 write，闭包问题解决；但还有 race：
+     *      `viewModelScope.launch(Dispatchers.IO)` 各 launch 抢 IO 池独立运行，
+     *      连点时多个 launch 几乎同时 getByUrl 都读到旧值 → 都写同样的 new 值
+     *      → Room 不 emit → UI 不刷新（日志 184231 line 444-446：7ms 内 3 次
+     *      was=true → false，全部读到 stale）。
+     *   3. 现在：单条 SQL `UPDATE ... SET enabled = 1 - enabled`，read 与 write
+     *      在同一 statement 原子完成。N 次并发 = N 次真翻转，Room 即时 emit。
+     *
+     * 副作用：lastUpdateTime 不再同步更新（旧 insert 路径会保留传入对象的全字段，
+     * 包括用户期望的"修改时间"）。现需要时另开 @Query UPDATE 加 lastUpdateTime
+     * 字段更新，或在 caller 显式调 `sourceRepo.insert` 走老路径。
+     */
+    fun toggleSource(url: String) {
+        // 乐观更新串行化：用 synchronized 防 update CAS retry（lambda 重跑会基于不同
+        // sources.value snapshot 计算 optimistic，连点 N 次实际翻转可能 ≠ N）。点击事件
+        // 本来就在 main thread 串行，synchronized 仅作为对 onEach 并发清理的保险。
+        synchronized(this) {
+            val cur = _toggleOverlay.value
+            // fallback 用 rawSources（DB 真值）—— 不是 sources（已合并 overlay，会自己叠加自己）
+            val current = cur[url] ?: rawSources.value.firstOrNull { it.bookSourceUrl == url }?.enabled
+            if (current == null) {
+                AppLog.warn("SourceToggleDiag", "toggleSource url=$url skip: no current value")
+                return
+            }
+            val newOptimistic = !current
+            _toggleOverlay.value = cur + (url to newOptimistic)
+            AppLog.info(
+                "SourceToggleDiag",
+                "toggleSource url=$url overlay $current→$newOptimistic (overlayHad=${cur[url] != null} rawEnabled=${rawSources.value.firstOrNull { it.bookSourceUrl == url }?.enabled})",
+            )
         }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { sourceRepo.toggleEnabled(url) }
+            result.onSuccess { rows ->
+                AppLog.info("SourceToggleDiag", "toggleSource url=$url rows=$rows (atomic UPDATE)")
+                if (rows == 0) {
+                    // 罕见：bookSourceUrl 在 toggle 期间被删除 / 拼写不对 / DB 异常
+                    rollbackOverlay(url, reason = "未找到该书源")
+                }
+            }.onFailure { e ->
+                AppLog.error("SourceToggleDiag", "toggleSource url=$url FAILED: ${e.message}", e)
+                rollbackOverlay(url, reason = "切换失败：${e.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    /**
+     * UPDATE 失败时回滚：移除 overlay[url] 让 UI 弹回 source.enabled 真值 + emit Toast。
+     * 不在 main thread call site 同步做（IO 协程内调用），用 MutableStateFlow.update 即可。
+     */
+    private suspend fun rollbackOverlay(url: String, reason: String) {
+        _toggleOverlay.update { it - url }
+        _toggleError.emit("$reason（已回滚）")
     }
 
     fun deleteSource(source: BookSource) {
@@ -222,7 +346,7 @@ class BookSourceManageViewModel @Inject constructor(
             val urlList = urls.toList()
             AppLog.info(
                 "SourceManage",
-                "deleteSources ENTRY wantUrls=${urls.size} totalSources=${sources.value.size} (batch deleteByUrls)",
+                "deleteSources ENTRY wantUrls=${urls.size} totalSources=${sources.value.items.size} (batch deleteByUrls)",
             )
             runCatching { sourceRepo.deleteByUrls(urlList) }
                 .onFailure { AppLog.error("SourceManage", "deleteSources batch FAILED", it) }
@@ -429,7 +553,7 @@ class BookSourceManageViewModel @Inject constructor(
      */
     fun startCheckSources() {
         if (_isChecking.value) return
-        val allSources = sources.value.filter { it.enabled }
+        val allSources = sources.value.items.filter { it.enabled }
         if (allSources.isEmpty()) {
             _importResult.value = "没有启用的书源"
             return
@@ -474,7 +598,7 @@ class BookSourceManageViewModel @Inject constructor(
             AppLog.info(
                 "SourceManage",
                 "deleteInvalidSources ENTRY wantUrls=${sourceUrls.size}" +
-                    " totalSources=${sources.value.size} (batch deleteByUrls)",
+                    " totalSources=${sources.value.items.size} (batch deleteByUrls)",
             )
             runCatching { sourceRepo.deleteByUrls(urlList) }
                 .onFailure { AppLog.warn("SourceManage", "deleteInvalidSources batch FAILED: ${it.message}") }
@@ -497,7 +621,7 @@ class BookSourceManageViewModel @Inject constructor(
             AppLog.info(
                 "SourceManage",
                 "removeInvalidSources ENTRY wantUrls=${invalidUrls.size}" +
-                    " totalSources=${sources.value.size} (batch deleteByUrls)",
+                    " totalSources=${sources.value.items.size} (batch deleteByUrls)",
             )
             runCatching { sourceRepo.deleteByUrls(urlList) }
                 .onFailure { AppLog.warn("SourceManage", "removeInvalidSources batch FAILED: ${it.message}") }

@@ -200,6 +200,17 @@ interface BookSourceDao {
     @Query("SELECT * FROM book_sources WHERE bookSourceUrl = :url")
     suspend fun getByUrl(url: String): BookSource?
 
+    /**
+     * 原子翻转 enabled 字段。修复 toggleSource race：用户连点同一开关时，read-modify-write
+     * 路径有多个 viewModelScope.launch 并发抢 IO，DAO.getByUrl 都读到 stale 值 → 多次写
+     * 同样的 new enabled → Room 看 list 没变不 emit → UI 永远停在初始视觉态。
+     *
+     * 用单条 SQL `enabled = 1 - enabled` 原子翻转：read 与 write 在同一 statement 内，
+     * 并发 N 次 = 真翻转 N 次。Room 的 invalidation tracker 即时触发 Flow 重发新 list。
+     */
+    @Query("UPDATE book_sources SET enabled = 1 - enabled WHERE bookSourceUrl = :url")
+    suspend fun toggleEnabled(url: String): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(source: BookSource)
 
