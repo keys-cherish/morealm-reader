@@ -419,12 +419,14 @@ fun ScrollCanvasReaderHost(
                 },
                 onLongPress = { offset ->
                     // longPress 触发选区命中（view-local y → chapter y）
+                    // anchorInBox = 长按 tap 点（view-local），给 SelectionToolbar 当 anchor。
                     val yInChapter = offset.y + state.pixelOffset
                     val sel = handleLongPress(
                         layout = currentLayout,
                         chapterIndex = currentLayout.chapterIndex,
                         x = offset.x,
                         yInChapter = yInChapter,
+                        anchorInBox = offset,
                     )
                     if (sel.isActive) selection = sel
                 },
@@ -445,12 +447,12 @@ fun ScrollCanvasReaderHost(
                 val cpRange = selection.cpRange
                 val endHit = currentLayout.findColumnAt(cpRange.last)
                 if (endHit != null) {
-                    val endLineBottom = computeLineBottomYInChapterPublic(currentLayout, cpRange.last)
-                    val anchorY = endLineBottom - state.pixelOffset
-                    val anchorX = (endHit.column?.end ?: 0f) + currentLayout.paddingLeft
+                    // popup anchor = 长按 tap 点（view-local，与 V1 LazyScrollSection
+                    // anchorInBox 等价）。这样 popup / 箭头始终指向用户最初按下位置，
+                    // 不会随 handle drag 而飘到选区末。
                     val selText = currentLayout.extractText(cpRange)
                     SelectionToolbar(
-                        offset = Offset(anchorX, anchorY),
+                        offset = selection.anchorInBox,
                         onCopy = {
                             onCopyText(selText)
                             selection = ScrollSelectionState.Empty

@@ -22,6 +22,15 @@ data class ScrollSelectionState(
     val startCp: Int,
     val endCp: Int,
     val isActive: Boolean = true,
+    /**
+     * 用户**长按 tap 点**在 reader Box 本地坐标系下的位置 —— SelectionToolbar Popup
+     * 用这个值定位（与 V1 LazyScrollSection anchorInBox 等价）。
+     *
+     * 与 [endCp] 推导的端点位置不同：用户拖 handle 扩选区时 endCp 跟着变，但 anchor
+     * 始终是最初长按那一点，让 popup 和箭头始终指向"用户的意图位置"而不是飘到选区末。
+     */
+    val anchorInBox: androidx.compose.ui.geometry.Offset =
+        androidx.compose.ui.geometry.Offset.Zero,
 ) {
     /** 归一化的 cp 范围（含起含止）。startCp 可能大于 endCp（反向 drag），用 min/max 归一。 */
     val cpRange: IntRange

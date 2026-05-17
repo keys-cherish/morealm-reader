@@ -35,6 +35,12 @@ fun handleLongPress(
     chapterIndex: Int,
     x: Float,
     yInChapter: Float,
+    /**
+     * 用户长按 tap 点在 reader Box 本地坐标系下的位置 —— 给 SelectionToolbar 当
+     * anchor，让 popup / 箭头始终指向用户最初按下的位置（而非选区末端）。
+     * 默认 Offset.Zero 保持单测兼容；UI 路径必须传真实坐标（view-local）。
+     */
+    anchorInBox: androidx.compose.ui.geometry.Offset = androidx.compose.ui.geometry.Offset.Zero,
 ): ScrollSelectionState {
     if (chapterIndex != layout.chapterIndex) return ScrollSelectionState.Empty
     val hit = layout.findColumnByPixel(x, yInChapter) ?: return ScrollSelectionState.Empty
@@ -44,6 +50,7 @@ fun handleLongPress(
         startCp = cp,
         endCp = cp,
         isActive = true,
+        anchorInBox = anchorInBox,
     )
 }
 
