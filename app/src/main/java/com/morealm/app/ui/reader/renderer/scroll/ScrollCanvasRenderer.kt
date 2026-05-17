@@ -70,6 +70,10 @@ fun ScrollCanvasRenderer(
     selectionChapterIndex: Int = -1,
     selectionCpRange: IntRange = IntRange.EMPTY,
     selectionArgb: Int = 0x4D5B6CFE.toInt(),
+    /** prev/cur/next 章的高亮 spec 投影（已按章过滤）。 */
+    prevHighlightSpecs: List<com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec> = emptyList(),
+    curHighlightSpecs: List<com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec> = emptyList(),
+    nextHighlightSpecs: List<com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec> = emptyList(),
     modifier: Modifier = Modifier,
     onChapterShift: (delta: Int) -> Unit = {},
     onProgress: (Float) -> Unit = {},
@@ -147,6 +151,7 @@ fun ScrollCanvasRenderer(
                     contentPaint = contentPaint,
                     titlePaint = titlePaint,
                     chapterNumPaint = chapterNumPaint,
+                    highlightSpecs = prevHighlightSpecs,
                     viewportRangeProvider = {
                         // prev 章在 view 中位置 = -offset - prevH；viewport 顶 view y = 0
                         // → viewport 在 prev 章内 y 范围 = [offset + prevH, offset + prevH + viewportH]
@@ -172,6 +177,7 @@ fun ScrollCanvasRenderer(
                     contentPaint = contentPaint,
                     titlePaint = titlePaint,
                     chapterNumPaint = chapterNumPaint,
+                    highlightSpecs = curHighlightSpecs,
                     revealHighlight = revealForCur,
                     searchHighlightCpRange = searchRangeForCur,
                     searchHighlightArgb = searchHighlightArgb,
@@ -191,6 +197,7 @@ fun ScrollCanvasRenderer(
                     contentPaint = contentPaint,
                     titlePaint = titlePaint,
                     chapterNumPaint = chapterNumPaint,
+                    highlightSpecs = nextHighlightSpecs,
                     viewportRangeProvider = {
                         // next 章在 view 中位置 = -offset + curH；viewport 顶 view y = 0
                         // → viewport 在 next 章内 y 范围 = [offset - curH, offset - curH + viewportH]

@@ -117,6 +117,11 @@ fun ScrollCanvasReaderHost(
     onChapterProgressLive: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
     /** 进度 persist 回调 —— debounce 800ms，停手才上报；caller 在此写 DB。 */
     onChapterProgressPersist: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
+    /**
+     * 全书所有高亮（含 KIND_BACKGROUND / KIND_TEXT_COLOR / KIND_UNDERLINE）。
+     * Host 内按 prev/cur/next 章过滤 + 投影为 spec → 透传给 ChapterPaneCanvas 绘制。
+     */
+    chapterHighlightsRaw: List<com.morealm.app.domain.entity.Highlight> = emptyList(),
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
     // ── M4-revive 选区菜单 callbacks（直接复用 SelectionToolbar）──
@@ -257,6 +262,25 @@ fun ScrollCanvasReaderHost(
     // SelectionOverlay 内部 HandleDot 子 Composable 24dp 触发区内处理，不影响整屏 scroll）。
     var selection by remember { mutableStateOf(ScrollSelectionState.Empty) }
 
+    // ── 高亮 spec 投影（V1 LazyScrollSection 按章过滤 + 渲染等价路径）──
+    // 当前章 / 上一章 / 下一章 layout 变化 OR highlightRaw 列表变化时重投影。
+    // 投影 = 按 cp 范围算 rects，与 ChapterPaneCanvas drawCpRangeRects 算法等价但缓存。
+    val prevHighlightSpecs = remember(state.prevChapter, chapterHighlightsRaw) {
+        state.prevChapter?.let {
+            com.morealm.app.domain.render.scroll.ScrollHighlightProjector.project(it, chapterHighlightsRaw)
+        } ?: emptyList()
+    }
+    val curHighlightSpecs = remember(state.currentChapter, chapterHighlightsRaw) {
+        state.currentChapter?.let {
+            com.morealm.app.domain.render.scroll.ScrollHighlightProjector.project(it, chapterHighlightsRaw)
+        } ?: emptyList()
+    }
+    val nextHighlightSpecs = remember(state.nextChapter, chapterHighlightsRaw) {
+        state.nextChapter?.let {
+            com.morealm.app.domain.render.scroll.ScrollHighlightProjector.project(it, chapterHighlightsRaw)
+        } ?: emptyList()
+    }
+
     // ── 电池 / 时间维护（与 CanvasRenderer line 380-389 同款）──
     val context = LocalContext.current
 
@@ -379,6 +403,9 @@ fun ScrollCanvasReaderHost(
                 searchHighlightArgb = searchHighlightArgb,
                 selectionChapterIndex = if (selection.isActive) selection.chapterIndex else -1,
                 selectionCpRange = if (selection.isActive) selection.cpRange else IntRange.EMPTY,
+                prevHighlightSpecs = prevHighlightSpecs,
+                curHighlightSpecs = curHighlightSpecs,
+                nextHighlightSpecs = nextHighlightSpecs,
                 onChapterShift = { _ ->
                     onChapterIndexChange(state.currentChapterIndex)
                 },

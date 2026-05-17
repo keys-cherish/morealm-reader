@@ -691,6 +691,8 @@ fun ReaderScreen(
                 // 故 live 和 persist 都打到这里即可（持久化按 controller 内 snapshot 节流）。
                 onChapterProgressLive = { _, prog -> viewModel.updateScrollProgress(prog) },
                 onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
+                // 用户高亮：传整本书所有 highlight，Host 内按章过滤 + 投影
+                chapterHighlightsRaw = viewModel.highlights.collectAsStateWithLifecycle().value,
                 onChapterIndexChange = { newIdx -> viewModel.loadChapter(newIdx) },
                 onTapCenter = {
                     if (toolbarEditing) {
