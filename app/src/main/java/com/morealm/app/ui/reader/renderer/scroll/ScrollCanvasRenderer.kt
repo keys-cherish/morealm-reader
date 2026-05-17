@@ -276,6 +276,14 @@ fun ScrollCanvasRenderer(
         layout(viewWidth, viewHeight) {
             // ─── 关键：placement-only state read ───
             val offset = state.pixelOffset.toInt()
+            // 诊断：章末大空白根因 — 看 cur/next 章节是否都加载 + placement 位置
+            com.morealm.app.core.log.AppLog.info(
+                "ScrollCanvasRenderer",
+                "PLACE offset=$offset curH=$curH nextH=$nextH " +
+                    "nextNull=${state.nextChapter == null} " +
+                    "curBot=${state.currentChapter?.paddingBottom ?: -1} " +
+                    "nextTop=${state.nextChapter?.paddingTop ?: -1}",
+            )
             // 三块拼接时章间 padding 重叠（避免 prev.paddingBottom + cur.paddingTop 双倍空白）：
             //   - prev 摆放位置 += prev.paddingBottom：让 prev 末 padding 重叠到 cur 章顶之上（不可见）
             //   - next 摆放位置 -= cur.paddingBottom：让 cur 末 padding 重叠到 next 章首 padding 内
