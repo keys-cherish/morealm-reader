@@ -45,6 +45,10 @@ class ReaderSettingsController(
     val volumeKeyPage: StateFlow<Boolean> = prefs.volumeKeyPage
         .stateIn(scope, SharingStarted.Eagerly, true)
 
+    /** 实验性：SCROLL 模式启用 Canvas V2 引擎。默认 false 走旧 LazyScrollRenderer。 */
+    val scrollCanvasV2: StateFlow<Boolean> = prefs.scrollCanvasV2
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
     val volumeKeyReverse: StateFlow<Boolean> = prefs.volumeKeyReverse
         .stateIn(scope, SharingStarted.Eagerly, false)
 

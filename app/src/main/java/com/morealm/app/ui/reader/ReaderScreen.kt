@@ -40,7 +40,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -55,7 +58,9 @@ import com.morealm.app.domain.entity.BuiltinThemes
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.ui.theme.toComposeColor
 import com.morealm.app.presentation.reader.ReaderViewModel
+import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.presentation.reader.PageTurnMode
+import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderHost
 import com.morealm.app.ui.reader.renderer.ReaderPageDirection
 import com.morealm.app.ui.reader.page.animation.toPageAnimType
 import com.morealm.app.ui.reader.TtsOverlayPanel
@@ -147,6 +152,7 @@ fun ReaderScreen(
     val showSettings by viewModel.isSettingsPanelVisible.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
+    val scrollCanvasV2Enabled by viewModel.settings.scrollCanvasV2.collectAsStateWithLifecycle()
     // ── 排版方向偏好 ──
     // 唯一被 ReaderScreen 关心的用法：在下方挑选 CanvasRenderer (横排)
     // 还是 VerticalReaderView (竖排) 渲染。绝不传给 CanvasRenderer——
@@ -626,6 +632,41 @@ fun ReaderScreen(
                 } else {
                     com.morealm.app.domain.render.ReadingDirection.VERTICAL_RL
                 },
+            )
+        } else if (scrollCanvasV2Enabled && pageTurnMode == PageTurnMode.SCROLL && hasReaderTarget) {
+            // ── M6 实验：SCROLL Canvas V2 引擎（独立排版 + 三块面板 + pixelOffset） ──
+            // feature flag scrollCanvasV2 默认 false 走旧 LazyScrollRenderer 路径；
+            // 用户在阅读设置打开 V2 toggle 走本分支验证跳章 bug 是否根治。
+            // 旧 LazyScrollRenderer 保留至用户测试通过后再删（用户决策 2026-05-17）。
+            val density = LocalDensity.current
+            val configuration = LocalConfiguration.current
+            val viewWidthPx = with(density) { configuration.screenWidthDp.dp.toPx().toInt() }
+            val viewHeightPx = with(density) { configuration.screenHeightDp.dp.toPx().toInt() }
+            val paddingHPx = with(density) { marginHorizontal.dp.toPx().toInt() }
+            val paddingTopPx = with(density) { marginTopVal.dp.toPx().toInt() }
+            val paddingBottomPx = with(density) { marginBottomVal.dp.toPx().toInt() }
+            val fontSizePx = with(density) { readerFontSize.sp.toPx().toInt() }
+            ScrollCanvasReaderHost(
+                currentChapterIndex = currentIndex,
+                chapterCount = chapters.size,
+                loadChapterContent = loadFn@{ idx ->
+                    val chap = chapters.getOrNull(idx) ?: return@loadFn null
+                    val bk = book ?: return@loadFn null
+                    val content = viewModel.chapter.loadWebChapterContent(bk, chap, idx)
+                    ScrollChapterContent(
+                        chapterIndex = idx,
+                        title = chap.title,
+                        content = content,
+                    )
+                },
+                viewWidth = viewWidthPx,
+                viewHeight = viewHeightPx,
+                paddingLeft = paddingHPx,
+                paddingRight = paddingHPx,
+                paddingTop = paddingTopPx,
+                paddingBottom = paddingBottomPx,
+                fontSize = fontSizePx,
+                onChapterIndexChange = { newIdx -> viewModel.loadChapter(newIdx) },
             )
         } else if (hasReaderTarget) {
             // 把 ttsChapterPosition 的 collect 收敛进这个 leaf composable —— 段切
