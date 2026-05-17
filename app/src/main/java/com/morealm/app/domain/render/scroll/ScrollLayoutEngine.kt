@@ -2,6 +2,7 @@ package com.morealm.app.domain.render.scroll
 
 import android.text.TextPaint
 import com.morealm.app.domain.render.TextMeasure
+import com.morealm.app.domain.render.ZhLayout
 import com.morealm.app.domain.render.textHeight
 
 /**
@@ -398,77 +399,140 @@ class ScrollLayoutEngine(
             }
 
             // ── 非空段：缩进作为排版属性，不生成 column ──
-            // 段首第一行 lineCursorX 起点 = indentWidth；续行 / 图片后起点 = 0（无缩进）。
-            // 缩进区域（0..indentWidth）无 column，hit-test 阶段由 findColumnByPixel 吸附段首。
-            var lineColumns = mutableListOf<ScrollColumn>()
-            var lineCursorX = indentWidth
-            val lineTextBuilder = StringBuilder()
+            // 段首第一行 lineCursorX 起点 = indentWidth；img 之后的 chunk 起点 = 0（无缩进）。
+            // 每个 chunk 独立 emit 完所有行（ZhLayout 行打断 / 简单贪心 fallback），chunk 间换行。
 
-            fun flushLine() {
-                if (lineColumns.isEmpty()) return
-                emitLine(
-                    lineColumns = lineColumns.toList(),
-                    lineText = lineTextBuilder.toString(),
-                    paragraphNum = paragraphCounter,
-                    firstChapterPos = lineColumns.first().chapterPosition,
-                    lastChapterPos = lineColumns.last().chapterPosition,
-                )
-                lineColumns = mutableListOf()
-                lineTextBuilder.clear()
-                lineCursorX = 0f  // 续行无缩进，从行首起
-            }
-
-            // emitTextChunk：把 chunk 字符级 emit 到当前 lineColumns 状态。
-            // 多 chunk 共享 lineCursorX —— img 拆段时 text 块间不强制换行（除非超宽）。
-            fun emitTextChunk(textChunk: String) {
-                if (textChunk.isEmpty()) return
-                val (chars, widths) = contentTextMeasure.measureTextSplit(textChunk)
+            // emit 一条最终 ScrollLine：负责 emit 调用 + chapterPositionCounter 累加 +
+            // text/column 拼装。startX 控制首字符 x 偏移（段首=indentWidth，续行/img后=0）。
+            // gap 控制 textFullJustify 非末行的字符间隙增量；末行 / 自然排列 = 0。
+            fun emitOneLine(
+                chars: List<String>,
+                widths: List<Float>,
+                startX: Float,
+                gap: Float,
+            ) {
+                if (chars.isEmpty()) return
+                val cols = ArrayList<ScrollColumn>(chars.size)
+                val sb = StringBuilder()
+                var x = startX
                 for (i in chars.indices) {
                     val w = widths[i]
-                    // 行内已有 column 且新字宽度让行超 visibleWidth → 换行；
-                    // 行内无 column 时（极宽单字 / emoji）强行单字符占一行避免死循环
-                    if (lineCursorX + w > visibleWidth && lineColumns.isNotEmpty()) {
-                        flushLine()
-                    }
-                    lineColumns.add(
+                    cols.add(
                         ScrollColumn(
                             charData = chars[i],
-                            start = lineCursorX,
-                            end = lineCursorX + w,
+                            start = x,
+                            end = x + w,
                             chapterPosition = chapterPositionCounter,
                         ),
                     )
-                    lineCursorX += w
-                    lineTextBuilder.append(chars[i])
+                    sb.append(chars[i])
                     chapterPositionCounter++
+                    x += w + (if (i < chars.lastIndex) gap else 0f)
+                }
+                emitLine(
+                    lineColumns = cols,
+                    lineText = sb.toString(),
+                    paragraphNum = paragraphCounter,
+                    firstChapterPos = cols.first().chapterPosition,
+                    lastChapterPos = cols.last().chapterPosition,
+                )
+            }
+
+            // emitTextChunk：用 ZhLayout（CJK 标点压缩 / 行打断）切行 + textFullJustify 末行不对齐。
+            // useZhLayout=false 时走简单贪心 fallback（visibleWidth 满则换行）。
+            // isFirstChunkOfPara=true → 段首 chunk 的首行用 indentWidth 起；续行 / 后续 chunk = 0 起。
+            fun emitTextChunk(textChunk: String, isFirstChunkOfPara: Boolean) {
+                if (textChunk.isEmpty()) return
+                val (chars, widths) = contentTextMeasure.measureTextSplit(textChunk)
+                if (chars.isEmpty()) return
+
+                if (useZhLayout) {
+                    val layout = ZhLayout(textChunk, contentPaint, visibleWidth, chars, widths, 0)
+                    for (lineIndex in 0 until layout.lineCount) {
+                        // ZhLayout.lineStart/lineEnd 是 UTF-16 char index（基于 text.length），
+                        // 而 chars/widths 是 code-point 切分（surrogate pair 合并 1 元素）。
+                        // 不能直接 chars.subList(lineStart, lineEnd)——会越界（emoji 等代理对场景）。
+                        // 改用 textChunk.substring + 重新 measureTextSplit 拿对齐的 lineChars/lineWidths。
+                        val lineStart = layout.getLineStart(lineIndex)
+                        val lineEnd = layout.getLineEnd(lineIndex)
+                        if (lineEnd <= lineStart) continue
+                        val lineText = textChunk.substring(lineStart, lineEnd)
+                        val (lineChars, lineWidths) = contentTextMeasure.measureTextSplit(lineText)
+                        if (lineChars.isEmpty()) continue
+                        val isFirstLine = isFirstChunkOfPara && lineIndex == 0
+                        val isLastLine = lineIndex == layout.lineCount - 1
+                        val startX = if (isFirstLine) indentWidth else 0f
+                        val availableWidth = visibleWidth - startX
+                        val desiredWidth = lineWidths.sum()
+                        val residualWidth = availableWidth - desiredWidth
+                        // Justify 条件（与旧 addCharsToLineMiddle 同款）：
+                        //   - 非末行
+                        //   - 余宽 > 0（行未满才需要分摊；满 / 溢出不分摊）
+                        //   - 余宽 ≤ availableWidth × 0.25（防止过散行；如最后短句不该 justify）
+                        //   - 行宽 ≥ availableWidth × 0.65（防止极短行被强行拉宽，视觉不自然）
+                        //   - chars.size > 1（单字符无间隙可分）
+                        val shouldJustify = textFullJustify && !isLastLine &&
+                            residualWidth > 0f && residualWidth <= availableWidth * 0.25f &&
+                            desiredWidth >= availableWidth * 0.65f && lineChars.size > 1
+                        val gap = if (shouldJustify) residualWidth / (lineChars.size - 1) else 0f
+                        emitOneLine(lineChars, lineWidths, startX, gap)
+                    }
+                } else {
+                    // Greedy fallback：与 M1.2 原逻辑等价。
+                    val lineChars = ArrayList<String>()
+                    val lineWidths = ArrayList<Float>()
+                    var cursorX = if (isFirstChunkOfPara) indentWidth else 0f
+                    var firstLineEmitted = false
+
+                    fun flushGreedyLine() {
+                        if (lineChars.isEmpty()) return
+                        val startX = if (!firstLineEmitted && isFirstChunkOfPara) indentWidth else 0f
+                        emitOneLine(lineChars, lineWidths, startX, 0f)
+                        lineChars.clear()
+                        lineWidths.clear()
+                        firstLineEmitted = true
+                        cursorX = 0f
+                    }
+                    for (i in chars.indices) {
+                        val w = widths[i]
+                        if (cursorX + w > visibleWidth && lineChars.isNotEmpty()) {
+                            flushGreedyLine()
+                        }
+                        lineChars.add(chars[i])
+                        lineWidths.add(widths[i])
+                        cursorX += w
+                    }
+                    flushGreedyLine()
                 }
             }
 
             // 段内 img 拆分：识别 `<img src="...">` 把段拆为 [text1, img1, text2, ...]
-            // 顺序 emit。img 前后强制换行（img 占整行）。
+            // 顺序 emit。img 占整行，前后 chunk 不共享行（chunk 独立 emit）。
             val imgMatches = imgRegex.findAll(paragraphText).toList()
             if (imgMatches.isEmpty()) {
-                emitTextChunk(paragraphText)
+                emitTextChunk(paragraphText, isFirstChunkOfPara = true)
             } else {
                 var cursor = 0
+                var isFirstChunk = true
                 for (m in imgMatches) {
                     val before = paragraphText.substring(cursor, m.range.first)
-                    if (before.isNotEmpty()) emitTextChunk(before)
-                    flushLine()  // img 前强制 flush（img 占整行）
+                    if (before.isNotEmpty()) {
+                        emitTextChunk(before, isFirstChunkOfPara = isFirstChunk)
+                        isFirstChunk = false
+                    }
                     chapterPositionCounter = emitImage(
                         src = m.groupValues[1],
                         paragraphNum = paragraphCounter,
                         startCp = chapterPositionCounter,
                     )
-                    lineCursorX = 0f  // img 后续 text 从新行起
+                    isFirstChunk = false  // img 后续 chunk 不是段首
                     cursor = m.range.last + 1
                 }
                 if (cursor < paragraphText.length) {
                     val tail = paragraphText.substring(cursor)
-                    if (tail.isNotEmpty()) emitTextChunk(tail)
+                    if (tail.isNotEmpty()) emitTextChunk(tail, isFirstChunkOfPara = isFirstChunk)
                 }
             }
-            flushLine()  // 段末行
 
             // 段末隐式 \n 占 1 cp（与旧 ChapterProvider stringBuilder.append('\n') 严格对齐，
             // 保证跨引擎 DB 高亮 chapterPos 兼容）
