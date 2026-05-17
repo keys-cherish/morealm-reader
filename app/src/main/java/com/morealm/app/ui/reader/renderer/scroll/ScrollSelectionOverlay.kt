@@ -149,8 +149,13 @@ private fun SelectionHandles(
     val handleSizePx = with(density) { 12.dp.toPx() }
     val touchRadiusPx = with(density) { 24.dp.toPx() }
 
-    val startXInChapter = startCol.start
-    val endXInChapter = endCol.end
+    // chapter-local x（column.x 在 0..visibleWidth 内）→ view-x 需要加 layout.paddingLeft
+    // 修复用户反馈"handle dot 与选区背景位置不齐"：ChapterPaneCanvas 用 translate(paddingLeft)
+    // 把 BG / 文字向右挪 paddingLeft 后绘制；handle 之前直接用 chapter-x 当 view-x 渲染
+    // → 偏左 paddingLeft (141 px)。
+    val padL = layout.paddingLeft.toFloat()
+    val startXInView = startCol.start + padL
+    val endXInView = endCol.end + padL
     val startYInChapter = computeLineBottomYInChapterPublic(layout, cpRange.first)
     val endYInChapter = computeLineBottomYInChapterPublic(layout, cpRange.last)
     val offsetY = pixelOffsetProvider()
@@ -160,29 +165,34 @@ private fun SelectionHandles(
             "SelectionHandles cpRange=$cpRange anchorInBox=${selection.anchorInBox} " +
                 "startCol(x=${startCol.start}..${startCol.end} char='${startCol.charData}') " +
                 "endCol(x=${endCol.start}..${endCol.end} char='${endCol.charData}') " +
-                "startYInChapter=$startYInChapter endYInChapter=$endYInChapter pixelOffset=$offsetY",
+                "startXInView=$startXInView endXInView=$endXInView " +
+                "startYInChapter=$startYInChapter endYInChapter=$endYInChapter pixelOffset=$offsetY padL=$padL",
         )
     }
 
     HandleDot(
-        xInView = startXInChapter,
+        xInView = startXInView,
         yInView = startYInChapter - offsetY + handleSizePx / 2f,
         sizePx = handleSizePx,
         touchRadiusPx = touchRadiusPx,
         onDrag = { dragPos ->
+            // dragPos.x 是 view-x（HandleDot 初始位置 = xInView，delta 加在 view 空间），
+            // 转 chapter-x 才能交给 handleHandleDrag 反查 column。
+            val xInChapter = dragPos.x - padL
             val yInChapter = dragPos.y + pixelOffsetProvider()
-            onHandleDrag(ScrollHandleSide.START, dragPos.x, yInChapter, dragPos.y)
+            onHandleDrag(ScrollHandleSide.START, xInChapter, yInChapter, dragPos.y)
         },
         onDragEnd = onDragEnd,
     )
     HandleDot(
-        xInView = endXInChapter,
+        xInView = endXInView,
         yInView = endYInChapter - offsetY + handleSizePx / 2f,
         sizePx = handleSizePx,
         touchRadiusPx = touchRadiusPx,
         onDrag = { dragPos ->
+            val xInChapter = dragPos.x - padL
             val yInChapter = dragPos.y + pixelOffsetProvider()
-            onHandleDrag(ScrollHandleSide.END, dragPos.x, yInChapter, dragPos.y)
+            onHandleDrag(ScrollHandleSide.END, xInChapter, yInChapter, dragPos.y)
         },
         onDragEnd = onDragEnd,
     )
