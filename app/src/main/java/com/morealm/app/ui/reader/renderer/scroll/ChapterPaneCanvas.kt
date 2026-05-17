@@ -57,6 +57,10 @@ fun ChapterPaneCanvas(
     searchHighlightCpRange: IntRange = IntRange.EMPTY,
     /** 搜索高亮 argb */
     searchHighlightArgb: Int = 0x55FFFF00.toInt(),
+    /** 长按 / handle 拖出的选区 cp 范围；EMPTY = 不画 */
+    selectionCpRange: IntRange = IntRange.EMPTY,
+    /** 选区背景 argb（半透明蓝紫色，与 V1 段级选区同色系） */
+    selectionArgb: Int = 0x4D5B6CFE.toInt(),
     /** Viewport y 范围 lambda（相对章顶）。null = 该章完全不在 viewport，整章 skip。 */
     viewportRangeProvider: () -> Pair<Float, Float>? = { null },
     modifier: Modifier = Modifier,
@@ -157,6 +161,16 @@ fun ChapterPaneCanvas(
                 }
             }
 
+            // ─── 层 1.7：选区背景（长按 / handle 拖出的范围，半透明覆盖文字）───
+            // 修复用户反馈"文字选中标记都没有"：handle dot 是有的，但选区背景之前没画。
+            if (!selectionCpRange.isEmpty()) {
+                bgFillPaint.color = selectionArgb
+                drawCpRangeRects(
+                    nc, chapter, selectionCpRange.first, selectionCpRange.last + 1,
+                    viewportTop, viewportBottom, bgFillPaint,
+                )
+            }
+
             // ─── 层 2：文字（按 line 类型选 paint；KIND_TEXT_COLOR cp 命中时替换 paint.color） ───
             var pageOffsetY = 0f
             for (page in chapter.pages) {
@@ -166,7 +180,31 @@ fun ChapterPaneCanvas(
                 // 视口剔除：page 完全在 viewport 之上 / 之下 → 整页 skip
                 if (pageBottom < viewportTop || pageTop > viewportBottom) continue
                 for (line in page.lines) {
-                    if (line.isImage) continue  // M2.5 接入图片绘制
+                    if (line.isImage) {
+                        // ── 图片段（V1 PageContentDrawer.drawImageColumn 等价路径）──
+                        // V2 image line：columns 空，imageSrc 非空，lineHeight = imgHeight
+                        // 算法：等比缩放到 slot 内（slot = visibleWidth × imgHeight），居中。
+                        val src = line.imageSrc ?: continue
+                        val slotW = (chapter.viewWidth - chapter.paddingLeft * 2).toFloat()
+                        val slotH = line.lineBottom - line.lineTop
+                        val bitmap = com.morealm.app.domain.render.ImageCache.get(
+                            src, slotW.toInt().coerceAtLeast(1),
+                        ) ?: continue
+                        val bmpW = bitmap.width.toFloat()
+                        val bmpH = bitmap.height.toFloat()
+                        val scale = minOf(slotW / bmpW, slotH / bmpH)
+                        val drawW = bmpW * scale
+                        val drawH = bmpH * scale
+                        val offsetX = (slotW - drawW) / 2f
+                        val offsetY = pageTop + line.lineTop + (slotH - drawH) / 2f
+                        nc.drawBitmap(
+                            bitmap,
+                            null,
+                            android.graphics.RectF(offsetX, offsetY, offsetX + drawW, offsetY + drawH),
+                            null,
+                        )
+                        continue
+                    }
                     val paint: TextPaint
                     val ascent: Float
                     val defaultColor: Int
