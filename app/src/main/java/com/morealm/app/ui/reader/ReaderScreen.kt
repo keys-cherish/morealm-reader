@@ -693,6 +693,24 @@ fun ReaderScreen(
                 onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
                 // 用户高亮：传整本书所有 highlight，Host 内按章过滤 + 投影
                 chapterHighlightsRaw = viewModel.highlights.collectAsStateWithLifecycle().value,
+                // tap 命中高亮弹菜单：删除 + 分享（与 V1 LazyScrollSection 同源）
+                onDeleteHighlight = { id -> viewModel.highlight.delete(id) },
+                onShareHighlight = { highlight ->
+                    val ok = com.morealm.app.ui.reader.share.HighlightShareCard
+                        .shareAsImage(context, highlight)
+                    if (!ok) {
+                        runCatching {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(
+                                    android.content.Intent.EXTRA_TEXT,
+                                    "${highlight.content}\n\n— 《${highlight.bookTitle}》· ${highlight.chapterTitle}",
+                                )
+                            }
+                            context.startActivity(android.content.Intent.createChooser(intent, "分享高亮"))
+                        }
+                    }
+                },
                 onChapterIndexChange = { newIdx -> viewModel.loadChapter(newIdx) },
                 onTapCenter = {
                     if (toolbarEditing) {

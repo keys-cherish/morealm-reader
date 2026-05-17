@@ -32,6 +32,7 @@ import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.scroll.ScrollLayoutEngine
 import com.morealm.app.domain.render.scroll.extractText
 import com.morealm.app.domain.render.scroll.findColumnAt
+import com.morealm.app.domain.render.scroll.findColumnByPixel
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.SelectionToolbar
 import com.morealm.app.ui.reader.renderer.drawBgBitmap
@@ -122,6 +123,15 @@ fun ScrollCanvasReaderHost(
      * Host 内按 prev/cur/next 章过滤 + 投影为 spec → 透传给 ChapterPaneCanvas 绘制。
      */
     chapterHighlightsRaw: List<com.morealm.app.domain.entity.Highlight> = emptyList(),
+    /**
+     * tap 命中已存高亮后用户选删除时的回调（V1 LazyScrollSection 等价）。
+     * caller 通常转发到 ReaderHighlightController.delete。null 时 tap 高亮不弹菜单。
+     */
+    onDeleteHighlight: ((id: String) -> Unit)? = null,
+    /**
+     * tap 命中已存高亮后用户选分享时的回调，传入整条 Highlight（分享卡片需要 content 等字段）。
+     */
+    onShareHighlight: ((com.morealm.app.domain.entity.Highlight) -> Unit)? = null,
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
     // ── M4-revive 选区菜单 callbacks（直接复用 SelectionToolbar）──
@@ -271,6 +281,13 @@ fun ScrollCanvasReaderHost(
     // 改由 ScrollCanvasRenderer 内 detectTapGestures.onLongPress 触发；handle drag 仍在
     // SelectionOverlay 内部 HandleDot 子 Composable 24dp 触发区内处理，不影响整屏 scroll）。
     var selection by remember { mutableStateOf(ScrollSelectionState.Empty) }
+
+    // ── tap-on-highlight 弹删除/分享菜单（V1 LazyScrollSection L545-575 + L859-885 等价）──
+    // tap 命中已存高亮 cp 范围时不切控制栏，弹 HighlightActionToolbar；再 tap 关闭。
+    var highlightActionTarget by remember(state.currentChapterIndex) {
+        mutableStateOf<com.morealm.app.domain.entity.Highlight?>(null)
+    }
+    var highlightActionAnchor by remember { mutableStateOf(Offset.Zero) }
 
     // ── 高亮 spec 投影（V1 LazyScrollSection 按章过滤 + 渲染等价路径）──
     // 当前章 / 上一章 / 下一章 layout 变化 OR highlightRaw 列表变化时重投影。
@@ -423,9 +440,27 @@ fun ScrollCanvasReaderHost(
                     // 选区 active 时 tap 取消选区，否则 toggle controls
                     if (selection.isActive) {
                         selection = handleCancelSelection()
+                    } else if (highlightActionTarget != null) {
+                        highlightActionTarget = null
                     } else {
                         onTapCenter()
                     }
+                },
+                onTap = { offset ->
+                    // tap-on-highlight 命中：tap 落点的 cp 与某条 highlight 的 cp 范围相交 →
+                    // 弹删除/分享菜单（HighlightActionToolbar）。consumed=true 拦住 onTapCenter。
+                    if (chapterHighlightsRaw.isEmpty()) return@ScrollCanvasRenderer false
+                    val yInChapter = offset.y + state.pixelOffset
+                    val hit = currentLayout.findColumnByPixel(offset.x - currentLayout.paddingLeft, yInChapter)
+                        ?: return@ScrollCanvasRenderer false
+                    val cp = hit.column?.chapterPosition ?: hit.line.firstChapterPos
+                    val highlight = chapterHighlightsRaw.firstOrNull { h ->
+                        h.chapterIndex == currentLayout.chapterIndex &&
+                            cp >= h.startChapterPos && cp < h.endChapterPos
+                    } ?: return@ScrollCanvasRenderer false
+                    highlightActionAnchor = offset
+                    highlightActionTarget = highlight
+                    true
                 },
                 onLongPress = { offset ->
                     // longPress 触发选区命中（view-local y → chapter y）
@@ -511,6 +546,23 @@ fun ScrollCanvasReaderHost(
                         config = selectionMenuConfig,
                     )
                 }
+            }
+
+            // tap-on-highlight 弹删除/分享菜单（V1 LazyScrollSection L859-885 等价）
+            highlightActionTarget?.let { target ->
+                com.morealm.app.ui.reader.renderer.HighlightActionToolbar(
+                    offset = highlightActionAnchor,
+                    colorArgb = target.colorArgb,
+                    onDelete = {
+                        onDeleteHighlight?.invoke(target.id)
+                        highlightActionTarget = null
+                    },
+                    onShare = {
+                        onShareHighlight?.invoke(target)
+                        highlightActionTarget = null
+                    },
+                    onDismiss = { highlightActionTarget = null },
+                )
             }
         }
 
