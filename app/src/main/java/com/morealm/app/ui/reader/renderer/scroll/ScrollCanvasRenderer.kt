@@ -13,6 +13,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
@@ -75,6 +81,32 @@ fun ScrollCanvasRenderer(
         modifier = modifier
             .fillMaxSize()
             .onSizeChanged { viewportHeightPx = it.height }
+            // 羽化（顶/底 5% DstOut 渐隐）—— 复用旧 LazyScrollRenderer 同款方案：
+            // graphicsLayer Offscreen 把内容画到独立 RenderNode（Android 9+ 硬件加速），
+            // drawWithContent 阶段做 DstOut 渐变 mask。
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                val fadeHeight = size.height * 0.05f
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to Color.Black,
+                        1f to Color.Transparent,
+                        startY = 0f,
+                        endY = fadeHeight,
+                    ),
+                    blendMode = BlendMode.DstOut,
+                )
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        1f to Color.Black,
+                        startY = size.height - fadeHeight,
+                        endY = size.height,
+                    ),
+                    blendMode = BlendMode.DstOut,
+                )
+            }
             .pointerInput(Unit) {
                 // detectTapGestures 不消费 down event 直到判定 tap（短按 + 无移动），
                 // 与 .scrollable 共存：tap 触发 onTapCenter；move 透传 scrollable 处理。
