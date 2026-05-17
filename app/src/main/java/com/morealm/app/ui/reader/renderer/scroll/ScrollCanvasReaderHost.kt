@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.scroll.ScrollLayoutEngine
 import kotlinx.coroutines.Dispatchers
@@ -114,6 +115,10 @@ fun ScrollCanvasReaderHost(
     // 异步加载并排版 cur/prev/next 三章
     LaunchedEffect(state.currentChapterIndex, engine) {
         val curIdx = state.currentChapterIndex
+        AppLog.info(
+            "ScrollCanvasV2",
+            "HOST loading 3 chapters: cur=$curIdx (chapterCount=$chapterCount) viewWidth=$viewWidth viewHeight=$viewHeight",
+        )
         // cur 先加载（用户立即可见）
         val curContent = withContext(Dispatchers.IO) { loadChapterContent(curIdx) }
         if (curContent != null) {
