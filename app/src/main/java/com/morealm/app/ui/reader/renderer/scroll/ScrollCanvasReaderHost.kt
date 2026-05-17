@@ -6,10 +6,15 @@ import android.text.TextPaint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -675,6 +680,17 @@ fun ScrollCanvasReaderHost(
                 else -> s
             }
 
+            // 修复用户反馈"顶部被挡"：V2 InfoBar 之前直接贴 Box 顶 / 底，没考虑 status bar /
+            // navigation bar / display cutout（刘海屏 / 居中挖孔）。与 V1 CanvasRenderer 同源：
+            // 给 top InfoBar 加 statusBars + displayCutout 顶部 padding，bottom InfoBar 加
+            // navigationBars + displayCutout 底部 padding。
+            val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+            val cutoutTop = WindowInsets.displayCutout.asPaddingValues().calculateTopPadding()
+            val cutoutBottom = WindowInsets.displayCutout.asPaddingValues().calculateBottomPadding()
+            val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+            val topInsetDp = if (statusBarTop.value >= cutoutTop.value) statusBarTop else cutoutTop
+            val bottomInsetDp = if (navBarBottom.value >= cutoutBottom.value) navBarBottom else cutoutBottom
+
             ReaderInfoBar(
                 slotLeft = if (infoBar.showTimeBattery) mapSlot(infoBar.headerLeft) else "none",
                 slotCenter = if (infoBar.showChapterName) mapSlot(infoBar.headerCenter) else "none",
@@ -692,6 +708,7 @@ fun ScrollCanvasReaderHost(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .fillMaxWidth()
+                    .padding(top = topInsetDp)
                     .height(64.dp)
                     .then(
                         if (infoBar.hasBgImage) Modifier
@@ -722,6 +739,7 @@ fun ScrollCanvasReaderHost(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
+                    .padding(bottom = bottomInsetDp)
                     .height(64.dp)
                     .then(
                         if (infoBar.hasBgImage) Modifier
