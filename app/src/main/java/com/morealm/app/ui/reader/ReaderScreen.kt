@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
@@ -638,11 +639,10 @@ fun ReaderScreen(
             // feature flag scrollCanvasV2 默认 false 走旧 LazyScrollRenderer 路径；
             // 用户在阅读设置打开 V2 toggle 走本分支验证跳章 bug 是否根治。
             // 旧 LazyScrollRenderer 保留至用户测试通过后再删（用户决策 2026-05-17）。
-            // viewWidth/Height 改由 Host 内 BoxWithConstraints 自动取真实容器尺寸：
-            // screenWidthDp 会算上 TopAppBar / BottomBar 之外的 reader 实际可用宽，但
-            // 实际 reader Box 还要扣除 padding，按 screenWidthDp 排版会让 column.end 溢出
-            // 可见区被屏幕截掉（用户反馈"右边字被吃掉"）。
             val density = LocalDensity.current
+            val configuration = LocalConfiguration.current
+            val viewWidthPx = with(density) { configuration.screenWidthDp.dp.toPx().toInt() }
+            val viewHeightPx = with(density) { configuration.screenHeightDp.dp.toPx().toInt() }
             val paddingHPx = with(density) { marginHorizontal.dp.toPx().toInt() }
             val paddingTopPx = with(density) { marginTopVal.dp.toPx().toInt() }
             val paddingBottomPx = with(density) { marginBottomVal.dp.toPx().toInt() }
@@ -662,6 +662,8 @@ fun ReaderScreen(
                         content = content,
                     )
                 },
+                viewWidth = viewWidthPx,
+                viewHeight = viewHeightPx,
                 paddingLeft = paddingHPx,
                 paddingRight = paddingHPx,
                 paddingTop = paddingTopPx,

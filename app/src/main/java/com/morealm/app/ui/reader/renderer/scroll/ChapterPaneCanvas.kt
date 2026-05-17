@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.render.scroll.ScrollChapterLayout
 import com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec
@@ -94,9 +95,23 @@ fun ChapterPaneCanvas(
         }
     }
 
+    // 诊断日志：每章首帧记录 Canvas drawScope 实际尺寸 vs layout viewWidth，
+    // 看是否吻合 —— 若 drawScope.width < chapter.viewWidth → 排版按 view 宽，画
+    // 出来的字超出 canvas 实际边被截 = "右边吃掉字"。
+    val firstDrawLogged = remember(chapter.chapterIndex, chapter.viewWidth) { booleanArrayOf(false) }
+
     Canvas(modifier) {
         drawIntoCanvas { canvas ->
             val nc = canvas.nativeCanvas
+            if (!firstDrawLogged[0]) {
+                firstDrawLogged[0] = true
+                AppLog.info(
+                    "ChapterPaneCanvas",
+                    "DRAW idx=${chapter.chapterIndex} canvasSize=${size.width.toInt()}x${size.height.toInt()} " +
+                        "layoutViewWidth=${chapter.viewWidth} paddingLeft=${chapter.paddingLeft} " +
+                        "overflow=${chapter.viewWidth > size.width.toInt()}",
+                )
+            }
             // paddingLeft 偏移：column.start 是相对 paddingLeft 内侧的 x（0..visibleWidth），
             // translate 让所有 drawText / drawRect 整体右移 paddingLeft，避免内容贴屏幕左缘。
             nc.save()
