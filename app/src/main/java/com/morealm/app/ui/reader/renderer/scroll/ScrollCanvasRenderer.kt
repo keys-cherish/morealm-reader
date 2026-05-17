@@ -1,8 +1,13 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.rememberScrollableState
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
@@ -43,8 +48,21 @@ fun ScrollCanvasRenderer(
     onChapterShift: (delta: Int) -> Unit = {},
     onProgress: (Float) -> Unit = {},
 ) {
+    // ── M2.4 滚动手势接入 ──
+    // rememberScrollableState consume delta：跨章 swap 时 applyScrollDelta 内同帧
+    // 完成 chapter 引用切换 + pixelOffset reset，全程消费 delta 不留尾。
+    // Compose 的 scrollable 自带 fling decay（无需额外做）。
+    // rememberUpdatedState 防止 onChapterShift lambda 闭包陈旧 —— 调用方每次 recompose
+    // 传入的 lambda 可能不同，但 scrollState 是 remember 的，闭包内必须读 updated 引用。
+    val onChapterShiftUpdated by rememberUpdatedState(onChapterShift)
+    val scrollState = rememberScrollableState { delta ->
+        applyScrollDelta(state, delta, onChapterShiftUpdated)
+    }
+
     Layout(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .scrollable(state = scrollState, orientation = Orientation.Vertical),
         content = {
             // 三块子节点固定顺序 prev/cur/next；null 章节 emit 空 Box 占位（保持
             // measurables.size == 3，简化 measure 逻辑）。
