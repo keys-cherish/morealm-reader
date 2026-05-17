@@ -53,6 +53,32 @@ fun ScrollChapterLayout.findColumnAt(chapterPosition: Int): ScrollHitResult? {
  * - x >= line.columns.last().end → 吸附 last column
  * - x 落在某 column.start..end → 命中该 column
  */
+/**
+ * 提取 cp 范围内的连续文本（按 column 顺序拼接 charData）。
+ *
+ * 用于：选区菜单复制 / 翻译 / 高亮存库 content 字段等。
+ * 复杂度 O(N + selection_size)：page 级 + line 级用 firstChapterPos/lastChapterPos 剪枝，
+ * line.firstChapterPos > cpRange.last 时整章遍历早退。
+ *
+ * @param cpRange 选区 chapter position 范围（含起含止）
+ * @return 拼接文本；cpRange 内全是空段 / 段末 \n / 图片占位则返空串
+ */
+fun ScrollChapterLayout.extractText(cpRange: IntRange): String {
+    val sb = StringBuilder()
+    outer@ for (page in pages) {
+        for (line in page.lines) {
+            if (line.lastChapterPos < cpRange.first) continue
+            if (line.firstChapterPos > cpRange.last) break@outer
+            for (col in line.columns) {
+                if (col.chapterPosition < cpRange.first) continue
+                if (col.chapterPosition > cpRange.last) break@outer
+                sb.append(col.charData)
+            }
+        }
+    }
+    return sb.toString()
+}
+
 fun ScrollChapterLayout.findColumnByPixel(x: Float, yWithinChapter: Float): ScrollHitResult? {
     if (yWithinChapter < 0f || yWithinChapter > totalHeight) return null
 
