@@ -677,6 +677,20 @@ fun ReaderScreen(
                 isNight = isNight,
                 letterSpacing = effectiveReaderStyle?.letterSpacing ?: 0f,
                 textBold = effectiveReaderStyle?.textBold ?: 0,
+                bgImageUri = readerBgImage,
+                bgColorArgb = readerBg.toArgb(),
+                // TTS auto-follow（与 V1 LazyScrollRenderer 等价路径）：
+                // 假定 TTS 在用户当前章 — TtsPlaybackState 不存 chapterIndex，用 currentIndex
+                // 作为启发：ttsChapterPosition >= 0 && Host 内 layout.chapterIndex ==
+                // ttsChapterIndex 才会滚动。
+                ttsChapterIndex = currentIndex,
+                ttsChapterPosition = viewModel.tts.ttsChapterPosition
+                    .collectAsStateWithLifecycle(initialValue = -1).value,
+                // 进度上报 live + persist（V2 沿 V1 同款 ProgressController 路径）：
+                // updateScrollProgress 内部已做去重 + 默认持久化（快照收集器），
+                // 故 live 和 persist 都打到这里即可（持久化按 controller 内 snapshot 节流）。
+                onChapterProgressLive = { _, prog -> viewModel.updateScrollProgress(prog) },
+                onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
                 onChapterIndexChange = { newIdx -> viewModel.loadChapter(newIdx) },
                 onTapCenter = {
                     if (toolbarEditing) {

@@ -60,6 +60,12 @@ fun ScrollCanvasRenderer(
     contentPaint: android.text.TextPaint,
     titlePaint: android.text.TextPaint,
     chapterNumPaint: android.text.TextPaint,
+    /** 跳转后呼吸高亮（命中 currentChapter 时才画）。 */
+    revealHighlight: com.morealm.app.ui.reader.renderer.RevealHighlight? = null,
+    /** 搜索高亮命中章 idx；与 currentChapter 不一致时不画 */
+    searchHighlightChapterIndex: Int = -1,
+    searchHighlightCpRange: IntRange = IntRange.EMPTY,
+    searchHighlightArgb: Int = 0x55FFFF00.toInt(),
     modifier: Modifier = Modifier,
     onChapterShift: (delta: Int) -> Unit = {},
     onProgress: (Float) -> Unit = {},
@@ -149,11 +155,19 @@ fun ScrollCanvasRenderer(
                 Box(Modifier)
             }
             if (cur != null) {
+                // reveal / search 只在命中当前章时透传给中间块（prev/next 块从来不画这俩）
+                val revealForCur = revealHighlight?.takeIf { it.chapterIndex == cur.chapterIndex }
+                val searchRangeForCur = if (searchHighlightChapterIndex == cur.chapterIndex) {
+                    searchHighlightCpRange
+                } else IntRange.EMPTY
                 ChapterPaneCanvas(
                     chapter = cur,
                     contentPaint = contentPaint,
                     titlePaint = titlePaint,
                     chapterNumPaint = chapterNumPaint,
+                    revealHighlight = revealForCur,
+                    searchHighlightCpRange = searchRangeForCur,
+                    searchHighlightArgb = searchHighlightArgb,
                     viewportRangeProvider = {
                         val offset = state.pixelOffset
                         offset to (offset + viewportHeightPx)

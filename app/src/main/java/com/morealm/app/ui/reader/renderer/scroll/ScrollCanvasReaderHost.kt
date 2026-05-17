@@ -3,6 +3,7 @@ package com.morealm.app.ui.reader.renderer.scroll
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.TextPaint
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,13 +12,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -29,9 +34,15 @@ import com.morealm.app.domain.render.scroll.extractText
 import com.morealm.app.domain.render.scroll.findColumnAt
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.SelectionToolbar
+import com.morealm.app.ui.reader.renderer.drawBgBitmap
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -52,6 +63,7 @@ import java.util.Locale
  *   - 回调：onChapterIndexChange / onTapCenter / onSelectionAction
  *   - InfoBar 配置：[ScrollCanvasInfoBarConfig]（null 时不画状态栏，纯净内容模式）
  */
+@OptIn(FlowPreview::class)
 @Composable
 fun ScrollCanvasReaderHost(
     currentChapterIndex: Int,
@@ -81,6 +93,30 @@ fun ScrollCanvasReaderHost(
     letterSpacing: Float = 0f,
     /** 字重：0=normal / 1=bold / 2=light（ReaderStyle.textBold）。 */
     textBold: Int = 0,
+    /** 阅读区背景图 uri；空串 = 纯色背景。来自 ReaderScreen 的 readerBgImage。 */
+    bgImageUri: String = "",
+    /** 阅读区纯色背景（android argb）—— 无背景图 / 背景图加载失败时使用。 */
+    bgColorArgb: Int = android.graphics.Color.WHITE,
+    // ── TTS 自动跟随 ──
+    /** TTS 朗读当前段所在的章 idx；< 0 = 未朗读，本组件 noop。 */
+    ttsChapterIndex: Int = -1,
+    /** TTS 朗读当前段在章内的 chapterPosition；< 0 = 未朗读。 */
+    ttsChapterPosition: Int = -1,
+    // ── 搜索高亮 ──
+    /** 搜索命中段在哪一章。-1 = 无搜索高亮。 */
+    searchHighlightChapterIndex: Int = -1,
+    /** 搜索命中段在章内的 [startCp, endCp) 范围 */
+    searchHighlightCpRange: IntRange = IntRange.EMPTY,
+    /** 搜索高亮 argb 颜色 */
+    searchHighlightArgb: Int = 0x55FFFF00.toInt(),
+    // ── RevealHighlight 跳转后呼吸高亮 ──
+    /** 跳转目标段呼吸高亮；null 时不画。 */
+    revealHighlight: com.morealm.app.ui.reader.renderer.RevealHighlight? = null,
+    // ── 进度上报 ──
+    /** 进度 live 回调（每章 0-100 整数）—— sample 150ms，fling 期间持续上报。 */
+    onChapterProgressLive: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
+    /** 进度 persist 回调 —— debounce 800ms，停手才上报；caller 在此写 DB。 */
+    onChapterProgressPersist: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
     // ── M4-revive 选区菜单 callbacks（直接复用 SelectionToolbar）──
@@ -223,6 +259,90 @@ fun ScrollCanvasReaderHost(
 
     // ── 电池 / 时间维护（与 CanvasRenderer line 380-389 同款）──
     val context = LocalContext.current
+
+    // ── 背景图加载（V1 CanvasRenderer line 1525-1532 同款逻辑）──
+    // BgImageManager LRU 缓存（最多 3 张：day/night/blur），同 uri 同尺寸命中。
+    val bgEntry = remember(bgImageUri, viewWidth, viewHeight) {
+        if (bgImageUri.isNotEmpty() && viewWidth > 0 && viewHeight > 0) {
+            com.morealm.app.domain.render.BgImageManager.getBgBitmap(
+                context, bgImageUri, viewWidth, viewHeight,
+            )
+        } else null
+    }
+    val bgBitmap = bgEntry?.bitmap
+
+    // ── TTS 段自动跟随（V1 LazyScrollRenderer line 348-382 同款）──
+    // tts 推进到下一段 → 计算目标 cp 在 currentChapter 的 y 坐标 → 用
+    // scrollableState.animateScrollBy 平滑滚到视口中心。目标段已在视口 / 不在当前章
+    // 时不滚（不打扰用户主动操作）。
+    // 这里用 LaunchedEffect 监听 ttsChapterIndex / ttsChapterPosition 变化即可，
+    // scrollableState 由 ScrollCanvasRenderer 内部持有，无法直接动它 —— 改写 pixelOffset
+    // 即可达到同等效果（pixelOffset 是 mutableFloatStateOf，写入立即触发 placement-only
+    // 重组，下一帧视口就更新）。
+    val ttsTargetY by remember(state.currentChapter, ttsChapterIndex, ttsChapterPosition) {
+        derivedStateOf {
+            val layout = state.currentChapter ?: return@derivedStateOf null
+            if (ttsChapterIndex < 0 || ttsChapterIndex != layout.chapterIndex) return@derivedStateOf null
+            if (ttsChapterPosition < 0) return@derivedStateOf null
+            val hit = layout.findColumnAt(ttsChapterPosition) ?: return@derivedStateOf null
+            // 累加 hit.page 之前所有 page.height + 当前 page 内 line.lineTop
+            var y = 0f
+            for (i in 0 until hit.page.pageIndex) {
+                y += layout.pages[i].height
+            }
+            y += hit.line.lineTop
+            y
+        }
+    }
+    LaunchedEffect(ttsTargetY) {
+        val targetY = ttsTargetY ?: return@LaunchedEffect
+        val viewportH = viewHeight
+        if (viewportH <= 0) return@LaunchedEffect
+        // 当前视口范围 = [pixelOffset, pixelOffset + viewportH]
+        // 目标段已在视口内 → 不滚（不打扰用户）
+        val curOffset = state.pixelOffset
+        if (targetY in curOffset..(curOffset + viewportH - 200f)) return@LaunchedEffect
+        // 否则把目标段滚到视口上 1/3 处（与 V1 LazyScrollRenderer anchorOffset / 2 类似，
+        // V2 用上 1/3 让朗读段下方还有"接下来要读的"上下文）
+        val desiredOffset = (targetY - viewportH / 3f).coerceAtLeast(0f)
+        state.pixelOffset = desiredOffset
+        AppLog.debug(
+            "ScrollCanvasV2",
+            "TTS follow: targetY=$targetY → pixelOffset $curOffset → $desiredOffset (viewportH=$viewportH)",
+        )
+    }
+
+    // ── 进度上报：live (sample 150ms) + persist (debounce 800ms) ──
+    // V1 LazyScrollRenderer line 501-550 同款思路：UI 跟随用 live、DB 写入用 persist。
+    // 进度计算 = pixelOffset / (totalHeight - viewportH) 比 / totalHeight 准确（避免章末
+    // 进度永远停在 90% 多）。
+    LaunchedEffect(state.currentChapter, viewHeight) {
+        val layout = state.currentChapter ?: return@LaunchedEffect
+        if (layout.totalHeight <= 0f) return@LaunchedEffect
+        snapshotFlow { state.pixelOffset }
+            .sample(150L)
+            .map { offset ->
+                val scrollableRange = (layout.totalHeight - viewHeight).coerceAtLeast(1f)
+                val progress = (offset / scrollableRange * 100f).toInt().coerceIn(0, 100)
+                layout.chapterIndex to progress
+            }
+            .distinctUntilChanged()
+            .collect { (chIdx, prog) -> onChapterProgressLive(chIdx, prog) }
+    }
+    LaunchedEffect(state.currentChapter, viewHeight) {
+        val layout = state.currentChapter ?: return@LaunchedEffect
+        if (layout.totalHeight <= 0f) return@LaunchedEffect
+        snapshotFlow { state.pixelOffset }
+            .debounce(800L)
+            .map { offset ->
+                val scrollableRange = (layout.totalHeight - viewHeight).coerceAtLeast(1f)
+                val progress = (offset / scrollableRange * 100f).toInt().coerceIn(0, 100)
+                layout.chapterIndex to progress
+            }
+            .distinctUntilChanged()
+            .collect { (chIdx, prog) -> onChapterProgressPersist(chIdx, prog) }
+    }
+
     val batteryStatus by rememberBatteryStatus(context)
     var currentTime by remember { mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())) }
     LaunchedEffect(Unit) {
@@ -232,7 +352,20 @@ fun ScrollCanvasReaderHost(
         }
     }
 
-    Box(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(bgColorArgb))) {
+        // 1. 背景图层（固定不滚动，与 LazyScrollRenderer line 742-751 同款）：
+        //    在 Box 内但在 ScrollCanvasRenderer 之前先画 → z-order 在文字下方。
+        //    bgBitmap 已经按 viewWidth × viewHeight 缓存，center-crop 填满。
+        bgBitmap?.let { bmp ->
+            Canvas(Modifier.fillMaxSize()) {
+                if (!bmp.isRecycled) {
+                    drawIntoCanvas { compose ->
+                        drawBgBitmap(compose.nativeCanvas, bmp, size.width, size.height)
+                    }
+                }
+            }
+        }
+
         val currentLayout = state.currentChapter
         if (currentLayout != null) {
             ScrollCanvasRenderer(
@@ -240,6 +373,10 @@ fun ScrollCanvasReaderHost(
                 contentPaint = contentPaint,
                 titlePaint = titlePaint,
                 chapterNumPaint = chapterNumPaint,
+                revealHighlight = revealHighlight,
+                searchHighlightChapterIndex = searchHighlightChapterIndex,
+                searchHighlightCpRange = searchHighlightCpRange,
+                searchHighlightArgb = searchHighlightArgb,
                 onChapterShift = { _ ->
                     onChapterIndexChange(state.currentChapterIndex)
                 },
