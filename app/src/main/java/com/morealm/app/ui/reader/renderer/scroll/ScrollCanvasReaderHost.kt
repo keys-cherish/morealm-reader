@@ -112,49 +112,51 @@ fun ScrollCanvasReaderHost(
         }
     }
 
-    // 异步加载并排版 cur/prev/next 三章
+    // 异步加载并排版 cur/prev/next 三章；**复用已 ready 章节**避免 swap 后重复网络请求。
+    //
+    // 复用判定：state.currentChapter?.chapterIndex == curIdx 表示该位置已是正确章 → 跳过 load。
+    // 例：swap to next 后 cur swap = old next（已 layout），仅 next 是 null 需 load；prev = old cur 也已 ready。
     LaunchedEffect(state.currentChapterIndex, engine) {
         val curIdx = state.currentChapterIndex
+        val needLoadCur = state.currentChapter?.chapterIndex != curIdx
+        val needLoadPrev = curIdx > 0 && state.prevChapter?.chapterIndex != curIdx - 1
+        val needLoadNext = curIdx < chapterCount - 1 && state.nextChapter?.chapterIndex != curIdx + 1
         AppLog.info(
             "ScrollCanvasV2",
-            "HOST loading 3 chapters: cur=$curIdx (chapterCount=$chapterCount) viewWidth=$viewWidth viewHeight=$viewHeight",
+            "HOST sync cur=$curIdx loadCur=$needLoadCur loadPrev=$needLoadPrev loadNext=$needLoadNext " +
+                "(chapterCount=$chapterCount viewWidth=$viewWidth viewHeight=$viewHeight)",
         )
-        // cur 先加载（用户立即可见）
-        val curContent = withContext(Dispatchers.IO) { loadChapterContent(curIdx) }
-        if (curContent != null) {
-            AppLog.info(
-                "ScrollCanvasV2",
-                "cur content loaded idx=$curIdx title=${curContent.title} contentLen=${curContent.content.length}",
-            )
-            val curLayout = withContext(Dispatchers.Default) {
-                engine.layoutChapter(curContent.chapterIndex, curContent.title, curContent.content)
-            }
-            AppLog.info(
-                "ScrollCanvasV2",
-                "cur layout READY pages=${curLayout.pages.size} totalHeight=${curLayout.totalHeight} totalCharCount=${curLayout.totalCharCount}",
-            )
-            state.currentChapter = curLayout
-        } else {
-            AppLog.warn("ScrollCanvasV2", "cur content NULL idx=$curIdx — 页面将无内容可滑")
-        }
-        // prev / next 并行后台加载
-        if (curIdx > 0) {
-            val prevContent = withContext(Dispatchers.IO) { loadChapterContent(curIdx - 1) }
-            if (prevContent != null) {
-                val prevLayout = withContext(Dispatchers.Default) {
-                    engine.layoutChapter(prevContent.chapterIndex, prevContent.title, prevContent.content)
+
+        suspend fun loadAndLayout(idx: Int): com.morealm.app.domain.render.scroll.ScrollChapterLayout? {
+            return try {
+                val content = withContext(Dispatchers.IO) { loadChapterContent(idx) } ?: return null
+                AppLog.info("ScrollCanvasV2", "  loaded idx=$idx contentLen=${content.content.length}")
+                withContext(Dispatchers.Default) {
+                    engine.layoutChapter(content.chapterIndex, content.title, content.content)
                 }
-                if (state.currentChapterIndex == curIdx) state.prevChapter = prevLayout
+            } catch (e: Throwable) {
+                AppLog.warn("ScrollCanvasV2", "loadAndLayout FAILED idx=$idx: ${e.message}", e)
+                null
             }
         }
-        if (curIdx < chapterCount - 1) {
-            val nextContent = withContext(Dispatchers.IO) { loadChapterContent(curIdx + 1) }
-            if (nextContent != null) {
-                val nextLayout = withContext(Dispatchers.Default) {
-                    engine.layoutChapter(nextContent.chapterIndex, nextContent.title, nextContent.content)
-                }
-                if (state.currentChapterIndex == curIdx) state.nextChapter = nextLayout
+
+        if (needLoadCur) {
+            val curLayout = loadAndLayout(curIdx)
+            if (curLayout != null) {
+                state.currentChapter = curLayout
+                AppLog.info("ScrollCanvasV2", "  cur layout READY pages=${curLayout.pages.size} totalH=${curLayout.totalHeight}")
+            } else {
+                state.currentChapter = null
+                AppLog.warn("ScrollCanvasV2", "cur NULL idx=$curIdx — 无内容可滑")
             }
+        }
+        if (needLoadPrev) {
+            val prevLayout = loadAndLayout(curIdx - 1)
+            if (state.currentChapterIndex == curIdx) state.prevChapter = prevLayout
+        }
+        if (needLoadNext) {
+            val nextLayout = loadAndLayout(curIdx + 1)
+            if (state.currentChapterIndex == curIdx) state.nextChapter = nextLayout
         }
     }
 
