@@ -122,10 +122,20 @@ fun ScrollCanvasReaderHost(
         // cur 先加载（用户立即可见）
         val curContent = withContext(Dispatchers.IO) { loadChapterContent(curIdx) }
         if (curContent != null) {
+            AppLog.info(
+                "ScrollCanvasV2",
+                "cur content loaded idx=$curIdx title=${curContent.title} contentLen=${curContent.content.length}",
+            )
             val curLayout = withContext(Dispatchers.Default) {
                 engine.layoutChapter(curContent.chapterIndex, curContent.title, curContent.content)
             }
+            AppLog.info(
+                "ScrollCanvasV2",
+                "cur layout READY pages=${curLayout.pages.size} totalHeight=${curLayout.totalHeight} totalCharCount=${curLayout.totalCharCount}",
+            )
             state.currentChapter = curLayout
+        } else {
+            AppLog.warn("ScrollCanvasV2", "cur content NULL idx=$curIdx — 页面将无内容可滑")
         }
         // prev / next 并行后台加载
         if (curIdx > 0) {
@@ -148,7 +158,11 @@ fun ScrollCanvasReaderHost(
         }
     }
 
-    // 选区状态（Host 持，UI 层 SelectionOverlay 操作）
+    // 选区状态预留（M6.0 临时禁用：SelectionOverlay 的 detectTapGestures 会消费
+    // down event 导致下层 scrollable 拿不到 → 用户「无法滑动」。
+    // M6.1 待修：用 awaitEachGesture + awaitFirstDown(pass = Initial, requireUnconsumed = false)
+    // 精细控制 pass，不消费 down，让滚动 + 长按选词共存）。
+    @Suppress("UNUSED_VARIABLE")
     var selection by remember { mutableStateOf(ScrollSelectionState.Empty) }
 
     Box(modifier.fillMaxSize()) {
@@ -161,24 +175,9 @@ fun ScrollCanvasReaderHost(
                     onChapterIndexChange(state.currentChapterIndex)
                 },
             )
-            ScrollSelectionOverlay(
-                selection = selection,
-                onSelectionChange = { selection = it },
-                layout = currentLayout,
-                pixelOffsetProvider = { state.pixelOffset },
-                // 自动滚动暂不联动选区（M6.x 完善）
-                scrollableState = null,
-                viewportHeightProvider = { viewHeight },
-            )
-            ScrollSelectionMenu(
-                selection = selection,
-                layout = currentLayout,
-                pixelOffsetProvider = { state.pixelOffset },
-                onAction = { action ->
-                    onSelectionAction(action, selection)
-                    selection = ScrollSelectionState.Empty
-                },
-            )
+            // M6.0 暂禁 SelectionOverlay / SelectionMenu —— pointerInput 拦截
+            // down event 导致滚动失效。先确保用户能滚 + 验证跳章 bug 根治。
+            // M6.1 用 awaitEachGesture 精细控制 pass 后重新挂 overlay。
         }
     }
 }
