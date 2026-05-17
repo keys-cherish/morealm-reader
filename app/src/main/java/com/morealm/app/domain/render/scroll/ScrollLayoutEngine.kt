@@ -566,6 +566,8 @@ class ScrollLayoutEngine(
             totalHeight = totalHeight,
             viewWidth = viewWidth,
             paddingLeft = paddingLeft,
+            paddingTop = paddingTop,
+            paddingBottom = paddingBottom,
             styleSignature = computeStyleSignature(),
             totalCharCount = chapterPositionCounter,
         )

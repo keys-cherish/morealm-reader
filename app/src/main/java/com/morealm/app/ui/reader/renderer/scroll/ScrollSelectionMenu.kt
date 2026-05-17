@@ -1,12 +1,14 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -70,6 +72,7 @@ fun ScrollSelectionMenu(
     val endLineBottomYInChapter = computeLineBottomYInChapterPublic(layout, cpRange.last)
     val menuYInView = (endLineBottomYInChapter - pixelOffsetProvider() + 16f).toInt()
 
+    val scrollState = rememberScrollState()
     Box(
         modifier.offset { IntOffset(x = 16, y = menuYInView) },
     ) {
@@ -80,6 +83,7 @@ fun ScrollSelectionMenu(
                     color = MaterialTheme.colorScheme.surface,
                     shape = RoundedCornerShape(8.dp),
                 )
+                .horizontalScroll(scrollState)  // 屏宽不够时横向滑（8 项中文 ≈ 屏宽 408dp 临界）
                 .padding(horizontal = 4.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(0.dp),
         ) {

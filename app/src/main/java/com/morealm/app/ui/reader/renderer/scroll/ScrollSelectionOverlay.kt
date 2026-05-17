@@ -87,27 +87,13 @@ fun ScrollSelectionOverlay(
         }
     }
 
-    Box(
-        modifier
-            .fillMaxSize()
-            .pointerInput(layout) {
-                detectTapGestures(
-                    onLongPress = { offset ->
-                        val yInChapter = offset.y + pixelOffsetUpdated()
-                        val sel = handleLongPress(
-                            layout = layout,
-                            chapterIndex = layout.chapterIndex,
-                            x = offset.x,
-                            yInChapter = yInChapter,
-                        )
-                        if (sel.isActive) onSelectionChangeUpdated(sel)
-                    },
-                    onTap = {
-                        if (selection.isActive) onSelectionChangeUpdated(handleCancelSelection())
-                    },
-                )
-            },
-    ) {
+    // 注意：本 Overlay Box 不再挂 fullscreen pointerInput（M4-revive 修拦截 down 问题）。
+    // 长按选词由 ScrollCanvasRenderer 内部的 detectTapGestures(onLongPress) 触发，
+    // 由 Host 转发到本 Overlay 的 onSelectionChange。
+    // 取消选区由 ScrollCanvasRenderer 的 onTap 间接触发（Host 内逻辑：tap 时若选区 active 则取消 + 不切 controls）。
+    // 本 Overlay 仅负责：画 handle + handle drag detection（handle 子 Composable 自己有 pointerInput
+    // 仅在 24dp 触发区内消费事件，不影响整屏 scroll）。
+    Box(modifier.fillMaxSize()) {
         if (selection.isActive && selection.chapterIndex == layout.chapterIndex) {
             SelectionHandles(
                 selection = selection,

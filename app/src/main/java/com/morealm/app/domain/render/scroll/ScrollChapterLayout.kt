@@ -49,6 +49,15 @@ data class ScrollChapterLayout(
      * 默认 0 兼容老调用方（已存在的 mock layout 不传也能 compile + 渲染贴左缘只是视觉问题）。
      */
     val paddingLeft: Int = 0,
+    /**
+     * 排版时的 paddingTop（像素）—— 章首留白。三块面板拼接时 prev.paddingBottom 与
+     * cur.paddingTop 重叠，避免双倍 padding 视觉巨大空白。
+     */
+    val paddingTop: Int = 0,
+    /**
+     * 排版时的 paddingBottom（像素）—— 章末留白。三块面板拼接时与下章 paddingTop 重叠。
+     */
+    val paddingBottom: Int = 0,
 ) {
     /** 章是否为可见内容为空（所有 page.lines 都为空）。空章节渲染兜底"加载中"/"内容为空"占位。 */
     val isEmpty: Boolean

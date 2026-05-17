@@ -2442,7 +2442,7 @@ fun CanvasRenderer(
  * "progress", "page_progress", "book_name", "time_battery", "battery_time", "time_battery_pct"
  */
 @Composable
-private fun ReaderInfoBar(
+internal fun ReaderInfoBar(
     slotLeft: String,
     slotCenter: String,
     slotRight: String,
@@ -2637,7 +2637,7 @@ private fun PageReaderInfoOverlay(
 }
 
 @Composable
-private fun InfoSlotContent(
+internal fun InfoSlotContent(
     slot: String,
     chapterTitle: String,
     pageIndex: Int,
@@ -2717,7 +2717,7 @@ private fun InfoSlotContent(
  * 比例参考材料 1.5 充电图标，按 bodyW × bodyH 的 60% 居中放置。
  */
 @Composable
-private fun BatteryIcon(
+internal fun BatteryIcon(
     level: Int,
     color: Color,
     charging: Boolean = false,
@@ -2834,14 +2834,14 @@ private fun BatteryIcon(
  *
  * 在 [BatteryIcon] 上画的小闪电就由这个 charging 决定显示。
  */
-private data class BatteryStatus(val level: Int, val charging: Boolean)
+internal data class BatteryStatus(val level: Int, val charging: Boolean)
 
 /**
  * Observes battery level + charging state via a sticky broadcast receiver.
  * Returns a [MutableState] that updates whenever the system reports a new level.
  */
 @Composable
-private fun rememberBatteryStatus(context: Context): MutableState<BatteryStatus> {
+internal fun rememberBatteryStatus(context: Context): MutableState<BatteryStatus> {
     val state = remember { mutableStateOf(BatteryStatus(level = 100, charging = false)) }
     DisposableEffect(context) {
         fun parse(intent: Intent): BatteryStatus? {

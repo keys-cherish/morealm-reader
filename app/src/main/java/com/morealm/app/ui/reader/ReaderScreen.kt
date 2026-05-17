@@ -40,7 +40,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
@@ -60,6 +59,7 @@ import com.morealm.app.ui.theme.toComposeColor
 import com.morealm.app.presentation.reader.ReaderViewModel
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.presentation.reader.PageTurnMode
+import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderHost
 import com.morealm.app.ui.reader.renderer.ReaderPageDirection
 import com.morealm.app.ui.reader.page.animation.toPageAnimType
@@ -638,10 +638,11 @@ fun ReaderScreen(
             // feature flag scrollCanvasV2 默认 false 走旧 LazyScrollRenderer 路径；
             // 用户在阅读设置打开 V2 toggle 走本分支验证跳章 bug 是否根治。
             // 旧 LazyScrollRenderer 保留至用户测试通过后再删（用户决策 2026-05-17）。
+            // viewWidth/Height 改由 Host 内 BoxWithConstraints 自动取真实容器尺寸：
+            // screenWidthDp 会算上 TopAppBar / BottomBar 之外的 reader 实际可用宽，但
+            // 实际 reader Box 还要扣除 padding，按 screenWidthDp 排版会让 column.end 溢出
+            // 可见区被屏幕截掉（用户反馈"右边字被吃掉"）。
             val density = LocalDensity.current
-            val configuration = LocalConfiguration.current
-            val viewWidthPx = with(density) { configuration.screenWidthDp.dp.toPx().toInt() }
-            val viewHeightPx = with(density) { configuration.screenHeightDp.dp.toPx().toInt() }
             val paddingHPx = with(density) { marginHorizontal.dp.toPx().toInt() }
             val paddingTopPx = with(density) { marginTopVal.dp.toPx().toInt() }
             val paddingBottomPx = with(density) { marginBottomVal.dp.toPx().toInt() }
@@ -661,8 +662,6 @@ fun ReaderScreen(
                         content = content,
                     )
                 },
-                viewWidth = viewWidthPx,
-                viewHeight = viewHeightPx,
                 paddingLeft = paddingHPx,
                 paddingRight = paddingHPx,
                 paddingTop = paddingTopPx,
@@ -676,6 +675,64 @@ fun ReaderScreen(
                         viewModel.toggleControls()
                     }
                 },
+                onCopyText = { text -> viewModel.copyTextToClipboard(text) },
+                onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
+                onTranslateText = { text -> openTranslate(text) },
+                onLookupWord = { text -> openWebSearch(text) },
+                // 分享留 M6.x 单独接入 share dialog；当前 no-op
+                onAddHighlight = { start, end, content, argb ->
+                    viewModel.highlight.add(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                    )
+                },
+                onAddTextColor = { start, end, content, argb ->
+                    viewModel.highlight.add(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                        kind = com.morealm.app.domain.entity.Highlight.KIND_TEXT_COLOR,
+                    )
+                },
+                onAddUnderline = { start, end, content, argb, style ->
+                    viewModel.highlight.add(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                        kind = com.morealm.app.domain.entity.Highlight.KIND_UNDERLINE,
+                        underlineStyle = style,
+                    )
+                },
+                onEraseHighlight = { start, end ->
+                    viewModel.highlight.eraseInRange(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                    )
+                },
+                selectionMenuConfig = selectionMenuConfig,
+                infoBar = ScrollCanvasInfoBarConfig(
+                    chaptersSize = chapters.size,
+                    textColor = readerFg,
+                    backgroundColor = readerBg,
+                    hasBgImage = readerBgImage.isNotBlank(),
+                    paddingHorizontal = marginHorizontal,
+                    showChapterName = showChapterNameSetting,
+                    showTimeBattery = showTimeBatterySetting,
+                    headerLeft = hdrLeft,
+                    headerCenter = hdrCenter,
+                    headerRight = hdrRight,
+                    footerLeft = ftrLeft,
+                    footerCenter = ftrCenter,
+                    footerRight = ftrRight,
+                ),
             )
         } else if (hasReaderTarget) {
             // 把 ttsChapterPosition 的 collect 收敛进这个 leaf composable —— 段切

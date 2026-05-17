@@ -60,6 +60,8 @@ fun ScrollCanvasRenderer(
     onChapterShift: (delta: Int) -> Unit = {},
     onProgress: (Float) -> Unit = {},
     onTapCenter: () -> Unit = {},
+    /** 长按 (xInView, yInView) 触发回调 —— Host 内做选区命中。 */
+    onLongPress: (androidx.compose.ui.geometry.Offset) -> Unit = {},
 ) {
     // ── M2.4 滚动手势接入 ──
     // rememberScrollableState consume delta：跨章 swap 时 applyScrollDelta 内同帧
@@ -77,6 +79,7 @@ fun ScrollCanvasRenderer(
     var viewportHeightPx by remember { mutableIntStateOf(0) }
 
     val onTapCenterUpdated by rememberUpdatedState(onTapCenter)
+    val onLongPressUpdated by rememberUpdatedState(onLongPress)
     Layout(
         modifier = modifier
             .fillMaxSize()
@@ -108,9 +111,13 @@ fun ScrollCanvasRenderer(
                 )
             }
             .pointerInput(Unit) {
-                // detectTapGestures 不消费 down event 直到判定 tap（短按 + 无移动），
-                // 与 .scrollable 共存：tap 触发 onTapCenter；move 透传 scrollable 处理。
-                detectTapGestures(onTap = { onTapCenterUpdated() })
+                // detectTapGestures 不消费 down event 直到判定 tap / longPress，
+                // 与 .scrollable 共存：tap 触发 onTapCenter；longPress 触发 onLongPress；
+                // move 触发 scrollable 处理 fling。
+                detectTapGestures(
+                    onTap = { onTapCenterUpdated() },
+                    onLongPress = { offset -> onLongPressUpdated(offset) },
+                )
             }
             .scrollable(state = scrollState, orientation = Orientation.Vertical),
         content = {
@@ -183,15 +190,16 @@ fun ScrollCanvasRenderer(
 
         layout(viewWidth, viewHeight) {
             // ─── 关键：placement-only state read ───
-            // 在 layout {} 闭包内读 state.pixelOffset，Compose deferred-read 机制保证：
-            //   - pixelOffset 变化 → 仅触发本 placement block 重执行
-            //   - 不触发外层 Recomposition / Measure（避免 ChapterPaneCanvas 整章重绘）
-            // 这是滚动 120fps 丝滑的核心；测量 / 重组开销与 pixelOffset 解耦。
             val offset = state.pixelOffset.toInt()
-            // 三块摆放：cur 顶在 -offset；prev 紧贴 cur 上方；next 紧贴 cur 下方
+            // 三块拼接时章间 padding 重叠（避免 prev.paddingBottom + cur.paddingTop 双倍空白）：
+            //   - prev 摆放位置 += prev.paddingBottom：让 prev 末 padding 重叠到 cur 章顶之上（不可见）
+            //   - next 摆放位置 -= cur.paddingBottom：让 cur 末 padding 重叠到 next 章首 padding 内
+            //     结果：相邻章衔接处只显示一次 padding（cur 的 padding 那一次）。
+            val prevPadBot = state.prevChapter?.paddingBottom ?: 0
+            val curPadBot = state.currentChapter?.paddingBottom ?: 0
             curPlaceable.placeRelative(0, -offset)
-            prevPlaceable.placeRelative(0, -offset - prevH)
-            nextPlaceable.placeRelative(0, -offset + curH)
+            prevPlaceable.placeRelative(0, -offset - prevH + prevPadBot)
+            nextPlaceable.placeRelative(0, -offset + curH - curPadBot)
         }
     }
 }
