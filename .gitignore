@@ -31,4 +31,5 @@ local.properties
 .agents/
 .continue/
 .junie/
+.golutra/
 skills-lock.json

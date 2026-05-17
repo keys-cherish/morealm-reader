@@ -48,7 +48,7 @@ import com.morealm.app.ui.reader.renderer.hitTestPageRough
  * # 与其他文件的关系
  *
  * - `SimulationReadView.kt` (599 行)  — Android View 端的贝塞尔曲面 + 阴影 + 翻页动画
- * - `SimulationDrawHelper.kt` (519 行) — 仿真曲面计算 / 像素采样辅助
+ * - `SimulationPageDrawer.kt` (519 行) — 仿真曲面计算 / 像素采样辅助
  * - `PageAnimationPagers.kt` 的 `AnimatedSimulationPager` — Compose AndroidView wrapper
  *   把上面的 `SimulationParams` 转给 SimulationReadView
  * - **本文件** — Compose 侧组装 `SimulationParams` 的 remember 块

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 // 的整体审美一致。下面这一组是设置页用到的全部图标，用 alphabetical 排序方便维护。
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Animation
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.FormatAlignCenter
@@ -68,15 +69,16 @@ fun ReadingSettingsScreen(
     val readingDirection by viewModel.readingDirection.collectAsStateWithLifecycle()
     val tapLeftAction by viewModel.tapLeftAction.collectAsStateWithLifecycle()
     val volumeKeyPage by viewModel.volumeKeyPage.collectAsStateWithLifecycle()
+    val scrollCanvasV2 by viewModel.scrollCanvasV2.collectAsStateWithLifecycle()
     val volumeKeyReverse by viewModel.volumeKeyReverse.collectAsStateWithLifecycle()
     val headsetButtonPage by viewModel.headsetButtonPage.collectAsStateWithLifecycle()
     val volumeKeyLongPress by viewModel.volumeKeyLongPress.collectAsStateWithLifecycle()
     val resumeLastRead by viewModel.resumeLastRead.collectAsStateWithLifecycle()
     val longPressUnderline by viewModel.longPressUnderline.collectAsStateWithLifecycle()
     val screenTimeout by viewModel.screenTimeout.collectAsStateWithLifecycle()
-    val showStatusBar by viewModel.showStatusBar.collectAsStateWithLifecycle()
-    val showChapterName by viewModel.showChapterName.collectAsStateWithLifecycle()
-    val showTimeBattery by viewModel.showTimeBattery.collectAsStateWithLifecycle()
+    val showStatusBar by viewModel.isStatusBarVisible.collectAsStateWithLifecycle()
+    val showChapterName by viewModel.isChapterNameVisible.collectAsStateWithLifecycle()
+    val showTimeBattery by viewModel.isTimeBatteryVisible.collectAsStateWithLifecycle()
     val titleAlign by viewModel.titleAlign.collectAsStateWithLifecycle()
     val customTxtChapterRegex by viewModel.customTxtChapterRegex.collectAsStateWithLifecycle()
 
@@ -86,6 +88,7 @@ fun ReadingSettingsScreen(
     var showTimeoutDialog by remember { mutableStateOf(false) }
     var showLongPressDialog by remember { mutableStateOf(false) }
     var showSelectionMenuDialog by remember { mutableStateOf(false) }
+    var showReadingDirectionDialog by remember { mutableStateOf(false) }
     // 章节标题对齐方式选择弹窗（左/中/右）。
     var showTitleAlignDialog by remember { mutableStateOf(false) }
 
@@ -160,6 +163,18 @@ fun ReadingSettingsScreen(
                 )
             }
 
+            // ── 实验性功能（用户主动启用，可随时关闭回退旧实现）──
+            SectionHeader("实验性功能")
+            SettingsCard {
+                SettingsToggleRow(
+                    icon = Icons.Outlined.Build,
+                    title = "滚动模式 Canvas V2",
+                    subtitle = "全新滚动引擎（架构层面消除跳章），开启后立即生效。出问题关闭即回退旧引擎。",
+                    checked = scrollCanvasV2,
+                    onCheckedChange = { viewModel.setScrollCanvasV2(it) },
+                )
+            }
+
             // ── 启动偏好 ──
             SectionHeader("启动偏好")
             SettingsCard {
@@ -200,17 +215,18 @@ fun ReadingSettingsScreen(
             // ── 阅读界面 ──
             SectionHeader("阅读界面")
             SettingsCard {
-                // Phase 2 已落地：开关后阅读器整体切换到独立的 VerticalReaderView，
-                // 列从右到左、字从上到下；不影响横排的 6 个翻页动画路径。
-                // Phase 2 限制：暂不支持选区 / 高亮 / TTS aloud / 仿真翻页 / 滚动模式。
-                SettingsToggleRow(
+                // 竖排版 3 态：横排（默认）/ 竖排右起（章标在右、正文在左，日式古典）/
+                // 竖排左起（章标在左、正文在右）。3 选项用 SettingsClickRow + Dialog
+                // 而不是 Switch，因为状态空间从 2 → 3。
+                SettingsClickRow(
                     icon = Icons.Outlined.ViewColumn,
                     title = "竖排版",
-                    subtitle = "日文 / 古典中文",
-                    checked = readingDirection == "vertical_rl",
-                    onCheckedChange = {
-                        viewModel.setReadingDirection(if (it) "vertical_rl" else "horizontal")
+                    value = when (readingDirection) {
+                        "vertical_rl" -> "竖排（章标在右）"
+                        "vertical_lr" -> "竖排（章标在左）"
+                        else -> "横排"
                     },
+                    onClick = { showReadingDirectionDialog = true },
                 )
                 SettingsClickRow(
                     icon = Icons.Outlined.ScreenLockPortrait,
@@ -408,6 +424,13 @@ fun ReadingSettingsScreen(
             current = screenTimeout,
             onSelect = { viewModel.setScreenTimeout(it); showTimeoutDialog = false },
             onDismiss = { showTimeoutDialog = false },
+        )
+    }
+    if (showReadingDirectionDialog) {
+        ReadingDirectionDialog(
+            current = readingDirection,
+            onSelect = { viewModel.setReadingDirection(it); showReadingDirectionDialog = false },
+            onDismiss = { showReadingDirectionDialog = false },
         )
     }
     if (showLongPressDialog) {
@@ -683,6 +706,46 @@ private fun TapLeftDialog(current: String, onSelect: (String) -> Unit, onDismiss
         "prev" to "翻到上一页",
     )
     BottomSheetPicker("轻按页面左侧", options, current, onSelect, onDismiss)
+}
+
+@Composable
+private fun ReadingDirectionDialog(
+    current: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val options = listOf(
+        "horizontal" to "横排",
+        "vertical_rl" to "竖排（章标在右、正文在左）",
+        "vertical_lr" to "竖排（章标在左、正文在右）",
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("竖排版") },
+        text = {
+            Column {
+                options.forEach { (value, label) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(value) }
+                            .padding(vertical = 14.dp),
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (current == value) LocalMoRealmColors.current.accent
+                                    else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    if (value != options.last().first) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+    )
 }
 
 @Composable

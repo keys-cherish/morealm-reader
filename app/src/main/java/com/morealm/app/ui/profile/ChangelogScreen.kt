@@ -193,10 +193,46 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.4",
+        date = "2026-05-17",
+        title = "滚动阅读新引擎（实验性）+ Kindle 完整支持 + 大文件夹导入加速",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            ChangelogItem(ChangeType.NEW, "滚动阅读模式新引擎（默认启用）—— 固定 prev/cur/next 三章常驻 + 像素级滚动，从根上消除老滚动引擎的跨章跳章 bug（向上翻页连续跳几章 / 章序错乱）。功能与老引擎对齐：长按选词 + handle 拖动 / 8 项选区菜单 / 高亮 + 字色 + 下划线 / 字号 + 行距 + 段距 + 字体 + 字重实时生效 / 顶底状态栏 / 背景图 / TTS 段跟随 / 续读 + 书签跳转 / 章顶三角标记 / tap 已存高亮弹删除分享菜单。如遇到滚动模式有问题可在 设置 → 阅读 → 实验性功能 关掉退回老引擎"),
+            ChangelogItem(ChangeType.IMPROVE, "关于 Edge TTS（微软语音）—— Edge TTS 走微软官方接口，可能因网络环境 / 微软侧风控波动 / 频率限制等原因偶尔不可用。遇到 TTS 报错或无声音：稍候重试 / 换网络（4G ↔ WiFi）/ 或在阅读器 TTS 面板切到系统 TTS 引擎"),
+            ChangelogItem(ChangeType.NEW, "azw3 / Kindle 电子书完整支持 —— 个别现代 azw3 现在能正常打开，章节目录、正文、封面都对了"),
+            ChangelogItem(ChangeType.NEW, "竖排版多了「章标在左」选项 —— 设置 → 阅读 → 竖排版，可在「横排」「竖排（章标在右）」「竖排（章标在左）」三种间切换"),
+            ChangelogItem(ChangeType.NEW, "空章节给清晰提示 —— 遇到分隔页、版权页等没有正文的章节，显示「本章暂无内容」，不再大片空白"),
+            ChangelogItem(ChangeType.NEW, "打开坏文件直接给错误页 —— 0 字节占位文件 / DRM 加密的 Kindle 书会显示「文件损坏 / 不支持加密」，不再让 app 崩"),
+            ChangelogItem(ChangeType.NEW, "导入时拦坏文件 —— .epub 后缀但内容是 0 字节 / 不是 ZIP 的文件在入库前被拒绝，避免书架占位卡死"),
+            ChangelogItem(ChangeType.IMPROVE, "大文件夹导入显著加速 —— 上千本书的导入从「数分钟」缩到「半分钟以内」，先秒进书架占位，后台慢慢补封面 / 元数据"),
+            ChangelogItem(ChangeType.IMPROVE, "漫画 / 小说自动识别更准 —— 带几张插图的个别轻小说不再被误判为漫画"),
+            ChangelogItem(ChangeType.IMPROVE, "快速连点同一本书不再叠开多个 —— 连点 5 次只进一次阅读器，按一次返回就回主页"),
+            ChangelogItem(ChangeType.FIX, "跨章节后音量键 / 顶栏按钮翻页失灵 —— 章节切换后短时间内按音量键、按顶栏「上一页 / 下一页」按钮没反应，必须等几秒或退出重进。现在跨章瞬间就能按"),
+            ChangelogItem(ChangeType.FIX, "仿真翻页（贝塞尔卷边）模式音量键能用了 —— 之前在仿真翻页下按音量键完全没反应（只能手指点屏幕翻），现在音量键也能触发卷边翻页动画"),
+            ChangelogItem(ChangeType.FIX, "仿真翻页狂按不再错位 —— 之前在仿真翻页下快速连按音量键，动画期间多按的几次会偷偷改了内部页码导致下一次按键「按了没反应」，现在动画期间多按的指令直接忽略，等动画结束再按就正常"),
+            ChangelogItem(ChangeType.FIX, "EPUB 封面经常取错 —— 个别精品书之前拿到版权页扫描 / 制作水印页当封面，现在按 EPUB3 标准识别真封面"),
+            ChangelogItem(ChangeType.FIX, "滑动卡顿 + 莫名崩溃 —— 内存吃紧时主动收缩图片缓存，配合更大的内存配额，漫画 / 大文件 EPUB 翻页明显流畅"),
+            ChangelogItem(ChangeType.FIX, "关于页面格式描述清理"),
+        ),
+    ),
+    ChangelogEntry(
+        version = "v1.3.1",
+        date = "2026-05-14",
+        title = "EPUB 精品书籍兼容性 + 群里反馈痛点修复",
+        items = listOf(
+            ChangelogItem(ChangeType.FIX, "EPUB 翻页黑屏修复（部分多级目录精品书籍）：跨章到「制作说明 / 内容介绍 / 人物志」等空内容占位章时，之前 ReaderScreen 用「内容非空」作为渲染门槛 → 整个阅读区跳过组合 → 黑屏 + 点击没反应。改用「ChapterController 已 publish 过有效章节」作门槛，空章走 ReflowEngine placeholder 一页占位，可继续翻"),
+            ChangelogItem(ChangeType.FIX, "EPUB 段落空行假阳性：normalizeParagraph trim 改用 isWhitespace + isSpaceChar 覆盖 NBSP / FIGURE SPACE 等 Unicode Zs 空白，避免 <p>&#160;</p> 假空段被当有效段落渲染成大段空行"),
+            ChangelogItem(ChangeType.FIX, "大型精品 EPUB 解析（部分 69MB / 几十张高清插图量级）：多级目录的父子层级保留，「人物志」类章节下的子节点按缩进显示；高清大图自动压缩入缓存，避免几十张同时解码引发的卡顿；单张坏图不再把整章拖崩"),
+            ChangelogItem(ChangeType.FIX, "PDF 自带 outline 识别为目录：之前一律按「每 N 页一节」切，多级精品 PDF 失去章节结构。现在优先 DFS 解析 outline tree + 层级缩进展示；outline 缺失才退回按页切"),
+            ChangelogItem(ChangeType.FIX, "阅读器亮度设置丢失：手动调亮度后退出重进会变回「跟随系统」 —— 之前 setReaderBrightness 只改内存 StateFlow 没持久化。新加 DataStore key + ViewModel init 从 prefs 注入历史值"),
+            ChangelogItem(ChangeType.FIX, "「楷体和仿宋显示效果一样」：完整中文 ttf 未打包，之前两者都 fallback 到 Typeface.SERIF。改成楷体走 SERIF italic（流畅倾斜近似楷书）、仿宋保 SERIF normal，肉眼可见差异；阅读器字体面板加 fallback 提示，引导到「字体管理」导入真 ttf"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.3",
         date = "2026-05-13",
         title = "阅读体验 + 书源稳定性修复",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             ChangelogItem(ChangeType.NEW, "阅读器底部工具栏可自定义：长按进入编辑模式，拖动改位置，加号添加 / 减号隐藏"),
             ChangelogItem(ChangeType.NEW, "主题编辑器加「首页背景图」字段，每个自定义主题可以绑一张"),

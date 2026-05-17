@@ -22,6 +22,15 @@ class AppPreferences @Inject constructor(
         val READER_FONT_SIZE = floatPreferencesKey("reader_font_size")
         val READER_LINE_HEIGHT = floatPreferencesKey("reader_line_height")
         val READER_MARGIN = intPreferencesKey("reader_margin")
+        /**
+         * 阅读器亮度：[0.01f, 1f] = 手动指定亮度（绕开系统亮度，由
+         * WindowManager.LayoutParams.screenBrightness 应用到当前 Window）；
+         * -1f = 跟随系统（BRIGHTNESS_OVERRIDE_NONE）。默认 -1f。
+         *
+         * 这条 key 之前没有持久化，导致用户手动调亮度后退出阅读器，ViewModel 销毁
+         * StateFlow 重置回 -1f，重进永远是跟随系统的样子——这是个明显的"设置丢失" bug。
+         */
+        val READER_BRIGHTNESS = floatPreferencesKey("reader_brightness")
         val READER_FONT_FAMILY = stringPreferencesKey("reader_font_family")
         val READER_TITLE_FONT_FAMILY = stringPreferencesKey("reader_title_font_family")
         val READER_TITLE_FONT_WEIGHT = intPreferencesKey("reader_title_font_weight")
@@ -143,6 +152,11 @@ class AppPreferences @Inject constructor(
         val TAP_LEFT_ACTION = stringPreferencesKey("tap_left_action") // next/prev
         val VOLUME_KEY_PAGE = booleanPreferencesKey("volume_key_page")
         val VOLUME_KEY_REVERSE = booleanPreferencesKey("volume_key_reverse")
+        /**
+         * 实验性：SCROLL 模式启用 Canvas V2 引擎（独立排版 + 三块面板 + pixelOffset
+         * 架构层面消除跳章 bug）。默认 false 走旧 LazyScrollRenderer 路径。
+         */
+        val SCROLL_CANVAS_V2 = booleanPreferencesKey("scroll_canvas_v2")
         val HEADSET_BUTTON_PAGE = booleanPreferencesKey("headset_button_page")
         val VOLUME_KEY_LONG_PRESS = stringPreferencesKey("volume_key_long_press") // off|page|chapter
         val RESUME_LAST_READ = booleanPreferencesKey("resume_last_read")
@@ -338,6 +352,9 @@ class AppPreferences @Inject constructor(
     val readerMargin: Flow<Int> = context.dataStore.data
         .map { it[Keys.READER_MARGIN] ?: 24 }
 
+    val readerBrightness: Flow<Float> = context.dataStore.data
+        .map { it[Keys.READER_BRIGHTNESS] ?: -1f }
+
     val readerFontFamily: Flow<String> = context.dataStore.data
         .map { it[Keys.READER_FONT_FAMILY] ?: "noto_serif_sc" }
 
@@ -464,6 +481,10 @@ class AppPreferences @Inject constructor(
     val volumeKeyPage: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.VOLUME_KEY_PAGE] ?: true }
 
+    /** SCROLL 模式启用 Canvas V2 引擎。v1.4 起默认 true（替换老滚动引擎，根治跨章跳章 bug）。 */
+    val scrollCanvasV2: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.SCROLL_CANVAS_V2] ?: true }
+
     /**
      * 音量键方向反转。默认 false：音量下=下一页、音量上=上一页（与系统/Legado 一致）。
      * 部分用户偏好"音量上=下一页"，开启该项即翻转。仅影响音量键，不影响 MEDIA_*。
@@ -517,13 +538,13 @@ class AppPreferences @Inject constructor(
     val screenTimeout: Flow<Int> = context.dataStore.data
         .map { it[Keys.SCREEN_TIMEOUT] ?: -1 }
 
-    val showStatusBar: Flow<Boolean> = context.dataStore.data
+    val isStatusBarVisible: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.SHOW_STATUS_BAR] ?: false }
 
-    val showChapterName: Flow<Boolean> = context.dataStore.data
+    val isChapterNameVisible: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.SHOW_CHAPTER_NAME] ?: true }
 
-    val showTimeBattery: Flow<Boolean> = context.dataStore.data
+    val isTimeBatteryVisible: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.SHOW_TIME_BATTERY] ?: true }
 
     /**
@@ -683,6 +704,7 @@ class AppPreferences @Inject constructor(
     suspend fun setReaderFontSize(size: Float) = update(Keys.READER_FONT_SIZE, size)
     suspend fun setReaderLineHeight(height: Float) = update(Keys.READER_LINE_HEIGHT, height)
     suspend fun setReaderMargin(margin: Int) = update(Keys.READER_MARGIN, margin)
+    suspend fun setReaderBrightness(value: Float) = update(Keys.READER_BRIGHTNESS, value)
     suspend fun setReaderFontFamily(family: String) = update(Keys.READER_FONT_FAMILY, family)
     suspend fun setReaderTitleFontFamily(family: String) = update(Keys.READER_TITLE_FONT_FAMILY, family)
     suspend fun setReaderTitleFontWeight(weight: Int) = update(Keys.READER_TITLE_FONT_WEIGHT, weight)
@@ -817,6 +839,9 @@ class AppPreferences @Inject constructor(
         }
     }
     suspend fun setVolumeKeyPage(enabled: Boolean) = update(Keys.VOLUME_KEY_PAGE, enabled)
+
+    /** 实验性：SCROLL 模式启用 Canvas V2 引擎。 */
+    suspend fun setScrollCanvasV2(enabled: Boolean) = update(Keys.SCROLL_CANVAS_V2, enabled)
     suspend fun setVolumeKeyReverse(enabled: Boolean) = update(Keys.VOLUME_KEY_REVERSE, enabled)
     suspend fun setHeadsetButtonPage(enabled: Boolean) = update(Keys.HEADSET_BUTTON_PAGE, enabled)
     suspend fun setVolumeKeyLongPress(mode: String) = update(Keys.VOLUME_KEY_LONG_PRESS, mode)

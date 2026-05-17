@@ -74,6 +74,7 @@ import com.morealm.app.domain.entity.*
         Cookie::class,
         SearchBookCache::class,
         SearchKeyword::class,
+        ReadRecord::class,
     ],
     version = AppDatabase.SCHEMA_VERSION,
     exportSchema = true,
@@ -83,8 +84,8 @@ import com.morealm.app.domain.entity.*
         // Migration 而非 AutoMigration——AutoMigration spec 只能 @DeleteColumn drop 列，
         // 没法附带业务 UPDATE 5 个 builtin row。
         //
-        // 例（占位示例，实际加字段时取消注释）：
-        // AutoMigration(from = 29, to = 30),
+        // v32→v33: 加表 read_records (P1 阅读记录功能)。Room 自动 CREATE TABLE。
+        AutoMigration(from = 32, to = 33),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -107,6 +108,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun cookieDao(): CookieDao
     abstract fun searchBookCacheDao(): SearchBookCacheDao
     abstract fun searchKeywordDao(): SearchKeywordDao
+    abstract fun readRecordDao(): ReadRecordDao
 
     companion object {
         /**
@@ -114,6 +116,6 @@ abstract class AppDatabase : RoomDatabase() {
          * 注解直接引用，外部模块（[com.morealm.app.di.APP_DB_SCHEMA_VERSION]）也
          * 通过 const val 编译期同步。
          */
-        const val SCHEMA_VERSION = 32
+        const val SCHEMA_VERSION = 33
     }
 }

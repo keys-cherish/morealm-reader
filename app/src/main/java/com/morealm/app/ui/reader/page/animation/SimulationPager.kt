@@ -113,6 +113,13 @@ internal fun SimulationPager(
     params: SimulationParams,
     currentDisplayPage: Int,
     modifier: Modifier = Modifier,
+    /**
+     * 暴露给外部的 SimulationReadView 引用 holder — caller 持有这个 MutableState 后可以
+     * 在 SIMULATION 模式下把音量键 / TtsPanel / 顶栏按钮翻页指令转给本 View 跑贝塞尔翻页
+     * 动画（否则 SimulationView 只响应触摸，音量键路径无翻页反馈）。
+     * factory 创建 view 时写入；onRelease 时清空。
+     */
+    simulationViewRef: androidx.compose.runtime.MutableState<com.morealm.app.ui.reader.renderer.SimulationReadView?>? = null,
     @Suppress("UNUSED_PARAMETER") pageContent: @Composable (Int) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -203,9 +210,13 @@ internal fun SimulationPager(
             SimulationReadView(context).apply {
                 setBackgroundColor(params.bgColor)
                 bgMeanColor = params.bgMeanColor
+                simulationViewRef?.value = this
             }
         },
         update = { view ->
+            // 暴露给外部（CanvasRenderer SIMULATION 音量键转发用）。factory 已经写过一次，
+            // update 每帧保底刷新——view 实例自身不会变，写同 ref 无副作用。
+            simulationViewRef?.value = view
             // 主题 / 字号 / 字体 / 背景图变化时主动 unpin —— 见 themeToken 注释。
             if (lastThemeTokenRef.value !== themeToken) {
                 view.unpinIdleBitmap()

@@ -41,7 +41,7 @@ private const val BEZIER_EPSILON = 0.1f
  * 2. setTouchPoint() / setCorner() 设置触摸点和角落
  * 3. onDraw() 绘制到 Canvas
  */
-class SimulationDrawHelper {
+class SimulationPageDrawer {
 
     var viewWidth: Int = 0
         private set

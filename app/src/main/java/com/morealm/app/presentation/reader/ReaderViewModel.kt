@@ -57,6 +57,19 @@ data class RenderedReaderChapter(
     val initialProgress: Int = 0,
     val initialChapterPosition: Int = 0,
     /**
+     * 手势 PREV 跨章语义：true = 跳上一章末页（连续阅读体感）；false = 跳章头。
+     *
+     * 按 MoRealm 阅读器导航语义铁则（MEMORY.md 「阅读器导航语义」段）：
+     *  - 按钮 PREV / NEXT（顶栏 / TtsPanel / 目录跳转）→ 章头（startFromLastPage=false）
+     *  - 手势 PREV（仿真翻页向右滑、滑动 / 覆盖手势、竖排手势）→ 上一章末页（startFromLastPage=true）
+     *  - 手势 NEXT → 下一章章头（同按钮，仍 false）
+     *
+     * `commitChapterShiftPrev(toLastPage = true)` 设此字段为 true；按钮路径默认 false。
+     * ReaderScreen 把它透传给 CanvasRenderer.startFromLastPage 参数；CanvasRenderer
+     * 内 line 988 / 1110 / 1309 据此把 initialPage 算成 pageCount - 1。
+     */
+    val startFromLastPage: Boolean = false,
+    /**
      * 每次 loadChapter 赋一个新值（System.nanoTime()），让 CanvasRenderer 的
      * restoreProgress LaunchedEffect 仅在"真正发起了新的恢复请求"时触发。
      *
@@ -229,6 +242,11 @@ class ReaderViewModel @Inject constructor(
                 chapter.reloadCurrentChapter()
             }
         }
+        // 亮度持久化 collect 放在 _readerBrightness 字段声明附近的另一个 init 块里
+        // （见本文件下方）—— 不能在这个 init 块启动，因为 Kotlin 按声明顺序初始化，
+        // _readerBrightness 字段在本 init 块之后才声明，viewModelScope.launch 用
+        // Main.immediate 立即同步执行 collect lambda，访问到尚未初始化的 _readerBrightness
+        // 会抛 NPE（崩溃栈：ReaderViewModel.<init>:234, 2026-05-14 22:46:56）。
     }
 
     // ── Forwarded StateFlows (for backward compatibility with ReaderScreen) ──
@@ -267,21 +285,21 @@ class ReaderViewModel @Inject constructor(
         chapter.loginPrompt
 
     // ── UI-only state (stays in ViewModel) ──
-    private val _showControls = MutableStateFlow(false)
-    val showControls: StateFlow<Boolean> = _showControls.asStateFlow()
+    private val _isControlsVisible = MutableStateFlow(false)
+    val isControlsVisible: StateFlow<Boolean> = _isControlsVisible.asStateFlow()
 
-    private val _showTtsPanel = MutableStateFlow(false)
-    val showTtsPanel: StateFlow<Boolean> = _showTtsPanel.asStateFlow()
+    private val _isTtsPanelVisible = MutableStateFlow(false)
+    val isTtsPanelVisible: StateFlow<Boolean> = _isTtsPanelVisible.asStateFlow()
 
-    private val _showSettingsPanel = MutableStateFlow(false)
-    val showSettingsPanel: StateFlow<Boolean> = _showSettingsPanel.asStateFlow()
+    private val _isSettingsPanelVisible = MutableStateFlow(false)
+    val isSettingsPanelVisible: StateFlow<Boolean> = _isSettingsPanelVisible.asStateFlow()
 
     /** EffectiveReplacesDialog (#5) 显示状态。toggle by Reader 顶栏按钮。 */
-    private val _showEffectiveReplacesDialog = MutableStateFlow(false)
-    val showEffectiveReplacesDialog: StateFlow<Boolean> = _showEffectiveReplacesDialog.asStateFlow()
+    private val _isEffectiveReplacesDialogVisible = MutableStateFlow(false)
+    val isEffectiveReplacesDialogVisible: StateFlow<Boolean> = _isEffectiveReplacesDialogVisible.asStateFlow()
 
-    fun showEffectiveReplacesDialog() { _showEffectiveReplacesDialog.value = true }
-    fun hideEffectiveReplacesDialog() { _showEffectiveReplacesDialog.value = false }
+    fun showEffectiveReplacesDialog() { _isEffectiveReplacesDialogVisible.value = true }
+    fun hideEffectiveReplacesDialog() { _isEffectiveReplacesDialogVisible.value = false }
 
     /**
      * EffectiveReplacesDialog 内禁用某条规则 — 写库 + 刷新缓存（不立即重渲染，等 dialog 关闭统一来）。
@@ -332,8 +350,21 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
+    // 亮度初值 -1f = 跟随系统；下面的 init 块从 AppPreferences 注入持久化值
+    // （DataStore Flow 首次 emit 在 collect 启动后异步到达，可能短暂闪一下跟随系统，
+    // 但等异步首值过来后立刻补到用户上次的设定值）。
     private val _readerBrightness = MutableStateFlow(-1f)
     val readerBrightness: StateFlow<Float> = _readerBrightness.asStateFlow()
+
+    // 必须在 _readerBrightness 声明之后启动 collect —— Kotlin 按声明顺序初始化，
+    // 上面那个大 init 块（class 顶部）执行时本字段还是 null，那时启动 collect 会因
+    // Main.immediate 同步触发 lambda 而访问到 null 字段 → NPE 闪退（2026-05-14 复现）。
+    // 放在字段后的独立 init 块保证字段已就位。
+    init {
+        viewModelScope.launch {
+            prefs.readerBrightness.collect { _readerBrightness.value = it }
+        }
+    }
 
     private val _autoPageInterval = MutableStateFlow(0)
     val autoPageInterval: StateFlow<Int> = _autoPageInterval.asStateFlow()
@@ -403,7 +434,7 @@ class ReaderViewModel @Inject constructor(
         )
     }
 
-    fun ttsStop() { tts.ttsStop(); _showTtsPanel.value = false }
+    fun ttsStop() { tts.ttsStop(); _isTtsPanelVisible.value = false }
 
     fun setChineseConvertMode(mode: Int) {
         // [DIAGNOSTIC 2026-05-10] 临时排查繁简反复切换后仍是繁体的问题，复现后删除。
@@ -493,7 +524,12 @@ class ReaderViewModel @Inject constructor(
         const val ANCHOR_RETENTION_MS = 2_000L
     }
 
-    fun setReaderBrightness(value: Float) { _readerBrightness.value = value }
+    fun setReaderBrightness(value: Float) {
+        // 内存先落，让 slider 拖动无延迟；DataStore 写入异步跟上
+        // （update 函数内部已经线程安全，DataStore 自带 coalesce 写盘）。
+        _readerBrightness.value = value
+        viewModelScope.launch { prefs.setReaderBrightness(value) }
+    }
 
     // ── Forwarded functions (thin delegations) ──
 
@@ -508,7 +544,12 @@ class ReaderViewModel @Inject constructor(
     suspend fun saveProgressNowAndWait() = progress.saveProgressNowAndWait()
 
     fun nextChapter() = navigation.nextChapter()
-    fun prevChapter() = navigation.prevChapter()
+
+    /**
+     * 跨章 PREV（仿 Legado ReadBook.moveToPrevChapter）。
+     * @param toLast true（默认）= 跳上一章末页（手势）；false = 跳章头（按钮）。
+     */
+    fun prevChapter(toLast: Boolean = true) = navigation.prevChapter(toLast)
 
     /**
      * Phase 2 MD3 同步腾挪入口 — 由 ReaderScreen 在 onChapterCommit 调用。
@@ -528,12 +569,15 @@ class ReaderViewModel @Inject constructor(
         return ok
     }
 
-    /** 同 [commitChapterShiftNext] 但走 PREV 路径。 */
-    fun commitChapterShiftPrev(): Boolean {
-        val ok = chapter.commitChapterShiftPrev()
+    /**
+     * 同 [commitChapterShiftNext] 但走 PREV 路径（仿 Legado ReadBook.moveToPrevChapter）。
+     * @param toLast true（默认）= 跳上一章末页（手势）；false = 跳章头（按钮）。
+     */
+    fun commitChapterShiftPrev(toLast: Boolean = true): Boolean {
+        val ok = chapter.commitChapterShiftPrev(toLast)
         if (!ok) {
-            AppLog.debug("ReadBook", "commitChapterShiftPrev fallback to async prevChapter()")
-            navigation.prevChapter()
+            AppLog.debug("ReadBook", "commitChapterShiftPrev fallback to async prevChapter(toLast=$toLast)")
+            navigation.prevChapter(toLast)
         }
         return ok
     }
@@ -570,12 +614,12 @@ class ReaderViewModel @Inject constructor(
     fun exportAsTxt(outputUri: Uri) = contentEdit.exportAsTxt(outputUri)
 
     // ── UI toggles ──
-    fun toggleControls() { _showControls.value = !_showControls.value }
-    fun hideControls() { _showControls.value = false }
-    fun toggleTtsPanel() { _showTtsPanel.value = !_showTtsPanel.value }
-    fun hideTtsPanel() { _showTtsPanel.value = false }
-    fun toggleSettingsPanel() { _showSettingsPanel.value = !_showSettingsPanel.value }
-    fun hideSettingsPanel() { _showSettingsPanel.value = false }
+    fun toggleControls() { _isControlsVisible.value = !_isControlsVisible.value }
+    fun hideControls() { _isControlsVisible.value = false }
+    fun toggleTtsPanel() { _isTtsPanelVisible.value = !_isTtsPanelVisible.value }
+    fun hideTtsPanel() { _isTtsPanelVisible.value = false }
+    fun toggleSettingsPanel() { _isSettingsPanelVisible.value = !_isSettingsPanelVisible.value }
+    fun hideSettingsPanel() { _isSettingsPanelVisible.value = false }
     fun setAutoPageInterval(seconds: Int) { _autoPageInterval.value = seconds }
     fun stopAutoPage() { _autoPageInterval.value = 0 }
     fun onTextSelected(text: String) { _selectedText.value = text }
@@ -611,7 +655,7 @@ class ReaderViewModel @Inject constructor(
             chapterIndex = chapter.currentChapterIndex.value,
             onChapterFinished = { _readAloudPageTurn.tryEmit(1) },
         )
-        _showTtsPanel.value = true
+        _isTtsPanelVisible.value = true
     }
 
     fun updateReadAloudParagraphPositions(positions: List<Int>) {
@@ -729,8 +773,8 @@ class ReaderViewModel @Inject constructor(
         // blank screen and assumes the app is broken.
         viewModelScope.launch {
             chapter.chapterContent.collect { text ->
-                if (isEmptyContentPlaceholder(text) && !_showControls.value) {
-                    _showControls.value = true
+                if (isEmptyContentPlaceholder(text) && !_isControlsVisible.value) {
+                    _isControlsVisible.value = true
                 }
                 // If TTS triggered the chapter switch, hand the new content to the host
                 // so playback continues from paragraph 0.

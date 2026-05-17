@@ -59,7 +59,16 @@ fun BookSourceManageScreen(
 ) {
     val moColors = LocalMoRealmColors.current
     val context = LocalContext.current
-    val sources by viewModel.sources.collectAsStateWithLifecycle()
+    // 用 SourcesSnapshot wrapper（reference-equality）绕开 StateFlow / Compose State 内置
+    // 的 structural equality dedup —— combine 输出 list 内容相同时会被 dedup 导致 UI 不重组。
+    // 修用户反馈"toggle 不实时生效"：之前 `val sources = state.value.items` 一次性 unwrap
+    // 让 List 跟 SourcesSnapshot State 解耦 — recompose 后 sources 是 new List ref 但
+    // LazyColumn items() 内部按 key dedup item slot 时基于 list 元素结构相等。
+    // 用 derivedStateOf 让 sources 是 State<List>，Compose snapshot 自动 track .value 读取。
+    val sourcesSnapshotState = viewModel.sources.collectAsStateWithLifecycle()
+    val sources by remember(sourcesSnapshotState) {
+        androidx.compose.runtime.derivedStateOf { sourcesSnapshotState.value.items }
+    }
     val isImporting by viewModel.isImporting.collectAsStateWithLifecycle()
     val importProgress by viewModel.importProgress.collectAsStateWithLifecycle()
     val importResult by viewModel.importResult.collectAsStateWithLifecycle()
@@ -160,6 +169,14 @@ fun BookSourceManageScreen(
         importResult?.let {
             Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
             viewModel.clearImportResult()
+        }
+    }
+
+    // Toggle 失败回滚提示 —— atomic UPDATE 异常 / rows=0 时 ViewModel rollback overlay 并
+    // emit 错误描述。SharedFlow extraBufferCapacity=2 保证 UI 不丢消息。
+    LaunchedEffect(Unit) {
+        viewModel.toggleError.collect { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -562,11 +579,12 @@ fun BookSourceManageScreen(
                             val isLoggedIn = loginStatusMap[source.bookSourceUrl] == true
                             SourceItem(
                                 source = source,
+                                enabled = source.enabled,
                                 checkResult = checkResult,
                                 isLoggedIn = isLoggedIn,
                                 selected = source.bookSourceUrl in selectedUrls,
                                 selectionMode = selectionMode,
-                                onToggle = { viewModel.toggleSource(source) },
+                                onToggle = { viewModel.toggleSource(source.bookSourceUrl) },
                                 onEdit = { editingSource = source },
                                 onDelete = { viewModel.deleteSource(source) },
                                 onLogin = { loginViewModel.showLoginDialog(source) },
@@ -610,11 +628,12 @@ fun BookSourceManageScreen(
                                     val isLoggedIn = loginStatusMap[source.bookSourceUrl] == true
                                     SourceItem(
                                         source = source,
+                                        enabled = source.enabled,
                                         checkResult = checkResult,
                                         isLoggedIn = isLoggedIn,
                                         selected = source.bookSourceUrl in selectedUrls,
                                         selectionMode = selectionMode,
-                                        onToggle = { viewModel.toggleSource(source) },
+                                        onToggle = { viewModel.toggleSource(source.bookSourceUrl) },
                                         onEdit = { editingSource = source },
                                         onDelete = { viewModel.deleteSource(source) },
                                         onLogin = { loginViewModel.showLoginDialog(source) },
@@ -752,7 +771,7 @@ fun BookSourceManageScreen(
     )
 
     // ── #2 CheckSource 完成弹窗 ──
-    val showInvalidDialog by viewModel.showInvalidResultsDialog.collectAsStateWithLifecycle()
+    val showInvalidDialog by viewModel.isInvalidResultsDialogVisible.collectAsStateWithLifecycle()
     if (showInvalidDialog) {
         val invalidResults by viewModel.invalidCheckResults.collectAsStateWithLifecycle()
         CheckResultsDialog(
@@ -802,6 +821,22 @@ fun BookSourceManageScreen(
 @Composable
 private fun SourceItem(
     source: BookSource,
+    /**
+     * 单独提取的 enabled boolean 参数 —— 修用户反馈"toggle 不实时生效"。
+     *
+     * 根因（log 21:31:50 实锤）：source: BookSource 是 data class with 几十个字段，
+     * Compose strong skipping 把 SourceItem 看作 stable function。后续 source 参数变化
+     * 时（仅 enabled 字段从 true→false），Compose 比较 source.equals(prevSource)，
+     * data class equals 比较所有字段后返 false，本应 recompose。
+     *
+     * 但日志显示 SourceItem render log 只触发 1 次，后续 toggle 多次都没再触发 ——
+     * Compose 实际跳过了 SourceItem。可能与 LazyColumn item slot 复用 + Compose
+     * skipping policy 内部对"嵌套 data class 字段"的稳定性判断有关。
+     *
+     * 修：把 source.enabled 单独提取为 Boolean 参数（primitive stable），Compose 100%
+     * 识别参数变化触发重组。SourceItem 内 Switch.checked 用此参数而非 source.enabled。
+     */
+    enabled: Boolean,
     checkResult: CheckSource.CheckResult? = null,
     isLoggedIn: Boolean = false,
     selected: Boolean = false,
@@ -817,6 +852,16 @@ private fun SourceItem(
     var showMenu by remember { mutableStateOf(false) }
     // 进入多选态时立即关闭已经打开的菜单，避免"点菜单弹出后紧跟长按进多选"残留
     LaunchedEffect(selectionMode) { if (selectionMode) showMenu = false }
+    // source.enabled 已经是 ViewModel 层 combine(rawSources, _toggleOverlay) 派生的
+    // **原子合并**值——overlay 写入和真值更新在同一 emission 内一起到达 UI，无需 UI 端
+    // 再做 enabledOverride fallback（之前的 UI fallback 因 onEach 改 overlay 与 stateIn
+    // emit 跨 transaction 引发 Compose snapshot race，日志 191200 实锤）。
+    LaunchedEffect(source.enabled) {
+        com.morealm.app.core.log.AppLog.info(
+            "SourceToggleDiag",
+            "SourceItem render url=${source.bookSourceUrl} enabled=${source.enabled}",
+        )
+    }
     val enabledColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val disabledColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
     val bgColorAnim = animateColorAsState(
@@ -903,7 +948,7 @@ private fun SourceItem(
                 }
             }
             Switch(
-                checked = source.enabled,
+                checked = enabled,
                 onCheckedChange = if (selectionMode) null else { { onToggle() } },
                 enabled = !selectionMode,
                 colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),

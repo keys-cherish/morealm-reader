@@ -144,7 +144,7 @@ fun AboutScreen(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Text(
-                "墨境是一款注重阅读体验的 Android 阅读器，支持 TXT、EPUB、PDF、MOBI 等多种格式。" +
+                "墨境是一款注重阅读体验的 Android 阅读器，支持 TXT、EPUB、PDF 等多种格式。" +
                     "内置多套精心调校的主题配色，兼容 Legado 书源与主题格式，支持 WebDAV 云端同步。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
@@ -164,7 +164,7 @@ fun AboutScreen(
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("特性", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(12.dp))
-                FeatureRow(Icons.AutoMirrored.Filled.MenuBook, "多格式支持", "TXT / EPUB / PDF / MOBI")
+                FeatureRow(Icons.AutoMirrored.Filled.MenuBook, "多格式支持", "TXT / EPUB / PDF")
                 FeatureRow(Icons.Default.Palette, "主题系统", "6 套内置主题 + Legado 主题导入")
                 FeatureRow(Icons.Default.Cloud, "WebDAV 同步", "进度 / 书架 / 书源 / 主题")
                 FeatureRow(Icons.Default.RecordVoiceOver, "TTS 朗读", "系统 TTS + 书内控制面板")

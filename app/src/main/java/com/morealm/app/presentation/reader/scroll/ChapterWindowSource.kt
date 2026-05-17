@@ -96,7 +96,10 @@ class ChapterWindowSource(
     private val chapterCountProvider: () -> Int,
     private val omitChapterTitleProvider: () -> Boolean,
     private val onCenterChapterChanged: (chapterIdx: Int) -> Unit,
-    private val maxChaptersInWindow: Int = 5,
+    // 5 → 7：B2 加预取深度防 fling 跳多章（用户 fling 物理可穿过 2-3 章；窗口 7 章
+    // 提供 ~3 章 buffer，让 fling 永远在已加载段内，不触发反复 prepend/append）。
+    // 内存代价：每章典型 100-500 段，加 2 章 ~ +40% 段，绝对值 ~100KB 级，可接受。
+    private val maxChaptersInWindow: Int = 7,
     private val placeholderHeight: Float = 600f,
 ) {
     /**
@@ -252,23 +255,51 @@ class ChapterWindowSource(
      *   - 不切换 cur 章节真值（cur 由 viewport center 派生 + debounce 决定，见 [updateViewportCenter]）
      *   - 重复请求自动去重（inFlightChapters）
      */
+    // ── Single-flight job guards for append / prepend ──────────────────────
+    //
+    // 根治"快速 fling 跳多章"bug：
+    // - 旧实现 appendNext()/prependPrev() 立即 scope.launch，inFlightChapters 锁只保护
+    //   "同 chapterIdx 重复请求"，不保护"快速连续不同 chapterIdx 请求"
+    // - 场景：用户在 ch24 顶 fling 回顶 → onNearTop → prependPrev(target=23) →
+    //   scope.launch（fetch 几百 ms）→ 用户继续 fling，first 仍 < threshold →
+    //   onNearTop 又 emit → prependPrev：此刻 inFlightChapters 含 23 但 loadedChapters
+    //   还没 update（fetch 没完成）→ first=24-1=23 实际还会 skip。但 ch23 fetch 完成
+    //   插入 paragraphs 后用户再 fling，loadedChapters=[23,24] → target=22 → 又起一轮
+    // - 关键：用户 fling 完整路径上 prependPrev 被调用 N 次（N=跳了 N 章）
+    //
+    // 用 single-flight Job guard：上一个 prependPrev job 没结束，所有后续调用直接
+    // 丢弃；用户必须等当前 prepend fetch+layout+insert 完成才能再触发下一章。
+    // appendNext 对称处理。
+    @Volatile private var prependPrevJob: Job? = null
+    @Volatile private var appendNextJob: Job? = null
+
     fun appendNext() {
+        val existing = appendNextJob
+        if (existing != null && existing.isActive) {
+            AppLog.debug("ChapterWindow", "appendNext skipped: previous job still active")
+            return
+        }
         AppLog.debug(
             "ChapterWindow",
             "appendNext requested: window=${loadedChapters.toList()} paras=${paragraphs.size} " +
                 "center=$centerChapterIdx inFlight=$inFlightChapters",
         )
-        scope.launch { tryAppendNext() }
+        appendNextJob = scope.launch { tryAppendNext() }
     }
 
     /** 静默 prepend 上一章 —— LazyScrollRenderer onNearTop 触发。 */
     fun prependPrev() {
+        val existing = prependPrevJob
+        if (existing != null && existing.isActive) {
+            AppLog.debug("ChapterWindow", "prependPrev skipped: previous job still active")
+            return
+        }
         AppLog.debug(
             "ChapterWindow",
             "prependPrev requested: window=${loadedChapters.toList()} paras=${paragraphs.size} " +
                 "center=$centerChapterIdx inFlight=$inFlightChapters",
         )
-        scope.launch { tryPrependPrev() }
+        prependPrevJob = scope.launch { tryPrependPrev() }
     }
 
     /**
@@ -280,9 +311,10 @@ class ChapterWindowSource(
         if (centerChapterIdx == chapterIdx) return
         val oldCenter = centerChapterIdx
         centerChapterIdx = chapterIdx
-        AppLog.debug(
-            "ChapterWindow",
-            "viewport center changed: $oldCenter -> $chapterIdx window=${loadedChapters.toList()} paras=${paragraphs.size}",
+        AppLog.info(
+            "ScrollJumpDiag",
+            "viewport center CHANGED $oldCenter→$chapterIdx window=${loadedChapters.toList()}" +
+                " paras=${paragraphs.size} inFlight=$inFlightChapters",
         )
         onCenterChapterChanged(chapterIdx)
         scope.launch { trimDistantChapters() }
@@ -581,10 +613,11 @@ class ChapterWindowSource(
                 loadedChapters.clear()
                 loadedChapters.addAll(merged)
             }
-            AppLog.debug(
-                "ChapterWindow",
-                "inserted chapter $chapterIdx (${newParas.size} paras, gen=$gen) at paraIdx=$insertParaIdx isAppend=$isAppend; " +
-                    "beforeWindow=$beforeWindow beforeParas=$beforeParas window=${loadedChapters.toList()} totalParas=${paragraphs.size}",
+            AppLog.info(
+                "ScrollJumpDiag",
+                "inserted ch=$chapterIdx (${newParas.size} paras) at paraIdx=$insertParaIdx isAppend=$isAppend" +
+                    " beforeParas=$beforeParas afterParas=${paragraphs.size} delta=${paragraphs.size - beforeParas}" +
+                    " window=${loadedChapters.toList()} center=$centerChapterIdx",
             )
         }
     }

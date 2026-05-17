@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import androidx.paging.PagingSource
 import com.morealm.app.domain.entity.*
@@ -75,6 +76,16 @@ interface BookDao {
 
     @Update
     suspend fun update(book: Book)
+
+    /**
+     * 批量 update：@Transaction 让 forEach 内的多次 update 在单 SQLite 事务内执行，
+     * 1000 本书入库速度从 5-10s 降到 < 500ms（避免每行各开一次事务）。
+     * 调用方应自行 chunk 控制单次 size（≤ 100 为佳，避免长事务影响读路径）。
+     */
+    @Transaction
+    suspend fun updateAll(books: List<Book>) {
+        books.forEach { update(it) }
+    }
 
     /**
      * Atomic field-level update used by ShelfRefreshController so a Toc-refresh
@@ -188,6 +199,17 @@ interface BookSourceDao {
 
     @Query("SELECT * FROM book_sources WHERE bookSourceUrl = :url")
     suspend fun getByUrl(url: String): BookSource?
+
+    /**
+     * 原子翻转 enabled 字段。修复 toggleSource race：用户连点同一开关时，read-modify-write
+     * 路径有多个 viewModelScope.launch 并发抢 IO，DAO.getByUrl 都读到 stale 值 → 多次写
+     * 同样的 new enabled → Room 看 list 没变不 emit → UI 永远停在初始视觉态。
+     *
+     * 用单条 SQL `enabled = 1 - enabled` 原子翻转：read 与 write 在同一 statement 内，
+     * 并发 N 次 = 真翻转 N 次。Room 的 invalidation tracker 即时触发 Flow 重发新 list。
+     */
+    @Query("UPDATE book_sources SET enabled = 1 - enabled WHERE bookSourceUrl = :url")
+    suspend fun toggleEnabled(url: String): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(source: BookSource)
@@ -373,6 +395,56 @@ interface ThemeDao {
 
     @Query("SELECT * FROM themes")
     suspend fun getAllSync(): List<ThemeEntity>
+}
+
+/**
+ * 阅读记录 DAO —— 每日每本书的阅读时长持久层（粒度 = 进入阅读器~退出整段）。
+ *
+ * P1 数据层入口。配套：
+ * - entity [com.morealm.app.domain.entity.ReadRecord]
+ * - UI 入口（P3）：「我的 → 阅读记录」页面按 date 降序分组
+ * - 写入（P2）：ReaderViewModel.onCleared / lifecycle ON_PAUSE upsert
+ * - Legado 导入（P4）：LegadoImporter 备份 zip readRecord 表 → bookName fuzzy match
+ *
+ * 与 [ReadStatsDao] 关系：ReadStats 是天级汇总（不分书），本 DAO 是天 × 书 二维。两者并存
+ * 互不冲突：ReadStats 给顶栏"今日阅读 X 小时"，本 DAO 给阅读记录页面。
+ */
+@Dao
+interface ReadRecordDao {
+    /** 全部记录，按 date DESC + 同日 lastReadAt DESC。UI 收到后 groupBy date 分组 */
+    @Query("SELECT * FROM read_records ORDER BY date DESC, lastReadAt DESC")
+    fun all(): Flow<List<ReadRecord>>
+
+    /** 某天全部记录（"某日详情"页用） */
+    @Query("SELECT * FROM read_records WHERE date = :date ORDER BY lastReadAt DESC")
+    suspend fun getByDate(date: String): List<ReadRecord>
+
+    /** 某书全部阅读历史（书详情页"阅读历史" tab 用） */
+    @Query("SELECT * FROM read_records WHERE bookId = :bookId ORDER BY date DESC")
+    fun getByBook(bookId: String): Flow<List<ReadRecord>>
+
+    /**
+     * 拿单条 readTime（写入路径累加用）：进入阅读器时拿当日已有 readTime，
+     * 退出时 save(readRecord.copy(readTime = oldReadTime + sessionMs, lastReadAt = now))
+     */
+    @Query("SELECT readTime FROM read_records WHERE date = :date AND bookId = :bookId")
+    suspend fun getReadTime(date: String, bookId: String): Long?
+
+    /** upsert 单条（write path 调用） */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun save(record: ReadRecord)
+
+    /** Legado 批量导入 */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveAll(records: List<ReadRecord>)
+
+    /** 删某天（用户清理） */
+    @Query("DELETE FROM read_records WHERE date = :date")
+    suspend fun deleteByDate(date: String)
+
+    /** 全清（设置 → 清理阅读记录） */
+    @Query("DELETE FROM read_records")
+    suspend fun deleteAll()
 }
 
 @Dao

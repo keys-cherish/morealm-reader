@@ -6,6 +6,7 @@ import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import com.morealm.app.domain.entity.BookChapter
+import com.morealm.app.domain.parser.pdf.PdfOutlineParser
 import com.morealm.app.core.log.AppLog
 import java.io.File
 import java.io.FileOutputStream
@@ -28,6 +29,52 @@ object PdfParser {
     fun parseChapters(context: Context, uri: Uri): List<BookChapter> {
         val bookId = uri.toString()
         val pageCount = withPdfRenderer(context, uri) { it.pageCount } ?: return emptyList()
+
+        // 优先尝试解析 PDF 自带 outline。
+        // 注意：这里另开一个短生命周期的 pfd —— withPdfRenderer 缓存的 PdfRenderer 占着原 pfd 不能 seek。
+        val outline: List<PdfOutlineParser.OutlineEntry>? = try {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                PdfOutlineParser.openOrNull(pfd)?.use { it.parse() }
+            }
+        } catch (t: Throwable) {
+            AppLog.warn("PdfParser", "outline open failed: ${t.message}")
+            null
+        }
+
+        if (!outline.isNullOrEmpty()) {
+            return buildChaptersFromOutline(bookId, outline, pageCount)
+        }
+        return splitByPages(bookId, pageCount)
+    }
+
+    private fun buildChaptersFromOutline(
+        bookId: String,
+        outline: List<PdfOutlineParser.OutlineEntry>,
+        pageCount: Int,
+    ): List<BookChapter> {
+        // outline 已是文档顺序（DFS pre-order），但 pageIndex 可能不严格升序——
+        // 排个序保证 startPosition ≤ endPosition；同 pageIndex 保留原顺序。
+        val sorted = outline.withIndex()
+            .sortedWith(compareBy({ it.value.pageIndex }, { it.index }))
+            .map { it.value }
+        return sorted.mapIndexed { i, e ->
+            val end = sorted.getOrNull(i + 1)?.pageIndex?.toLong() ?: pageCount.toLong()
+            // start 必须 < end，否则 readChapter for-loop 跑空。多个 entry 指向同一页时退化为单页章节。
+            val safeEnd = if (end <= e.pageIndex) (e.pageIndex + 1).toLong().coerceAtMost(pageCount.toLong()) else end
+            val indent = "  ".repeat(e.level.coerceAtMost(6))
+            BookChapter(
+                id = "${bookId}_$i",
+                bookId = bookId,
+                index = i,
+                title = (indent + e.title).ifBlank { "第 ${e.pageIndex + 1} 页" },
+                startPosition = e.pageIndex.toLong().coerceIn(0L, (pageCount - 1).toLong()),
+                endPosition = safeEnd.coerceIn(1L, pageCount.toLong()),
+                url = "pdf",
+            )
+        }
+    }
+
+    private fun splitByPages(bookId: String, pageCount: Int): List<BookChapter> {
         val chapters = mutableListOf<BookChapter>()
         var chapterIdx = 0
         var page = 0

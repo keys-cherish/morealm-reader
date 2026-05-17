@@ -22,7 +22,7 @@ import kotlin.math.hypot
  */
 class SimulationReadView(context: Context) : android.view.View(context) {
 
-    private val drawHelper = SimulationDrawHelper()
+    private val drawHelper = SimulationPageDrawer()
     private val scroller = Scroller(context, LinearInterpolator())
 
     // ── Page bitmaps ──
@@ -36,7 +36,10 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     private var touchX = 0f
     private var touchY = 0f
     private var isMoved = false
-    private var isRunning = false
+    // 暴露给 SimulationPager — 外部 LaunchedEffect 在派发音量键 / TtsPanel 翻页前判断
+    // 是否还在动画中，避免覆盖正在跑的翻页。
+    internal var isRunning = false
+        private set
     private var isStarted = false
     private var isCancel = false
     private var isNext = true
@@ -400,7 +403,12 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     }
 
     // ── Key/tap page turn (Legado PageDelegate.keyTurnPage) ──
-    private fun keyTurnPage(isNext: Boolean) {
+    //
+    // **visibility=internal** 让同 package 的 SimulationPager 能把外部 LaunchedEffect
+    // 派发的方向（音量键 / TtsPanel / 顶栏上下章按钮，在 SIMULATION 模式下）转给本 View
+    // 跑贝塞尔翻页动画。否则外部只能改 PagerState.currentPage，本 View 收不到信号，
+    // 音量键在 SIMULATION 完全无翻页动画反馈（cache stale 修复后的残留 UX bug）。
+    internal fun keyTurnPage(isNext: Boolean) {
         if (isRunning) return
         this.isNext = isNext
         directionSet = true

@@ -62,17 +62,24 @@ class ReaderNavigationController(
         }
     }
 
-    fun prevChapter() {
+    /**
+     * 跨章 PREV（仿 Legado [外部开源阅读器实现]）。
+     *
+     * @param toLast `true`（**默认**）= 跳上一章**末页**（手势 PREV 连续阅读，常见场景）；
+     *               `false` = 跳上一章**章头**（按钮 PREV，显式覆盖默认）。
+     * 详见 MEMORY.md「阅读器导航语义」段。
+     */
+    fun prevChapter(toLast: Boolean = true) {
         val prevIdx = chapter.currentChapterIndex.value - 1
-        AppLog.debug("Nav", "prevChapter | from=${chapter.currentChapterIndex.value} | to=$prevIdx")
+        AppLog.debug("Nav", "prevChapter | from=${chapter.currentChapterIndex.value} | to=$prevIdx | toLast=$toLast")
         if (prevIdx >= 0) {
             _navigateDirection.value = -1
-            // 同 [nextChapter] 的 Phase 2 一致性修复路径
-            if (chapter.commitChapterShiftPrev()) {
+            if (chapter.commitChapterShiftPrev(toLast)) {
                 AppLog.debug("Nav", "prevChapter via sync moveToPrevChapter")
                 return
             }
-            chapter.loadChapter(prevIdx, restoreProgress = 100)
+            // fallback async loadChapter — 末页 restoreProgress=100，章头=0
+            chapter.loadChapter(prevIdx, restoreProgress = if (toLast) 100 else 0)
         }
     }
 

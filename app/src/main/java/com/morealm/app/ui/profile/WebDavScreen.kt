@@ -41,8 +41,8 @@ fun WebDavScreen(
     // emitted "备份中..." / "备份成功" / "备份失败：…" but the screen never
     // collected the flow, leaving the user with no feedback after a click.
     val webDavStatus by viewModel.webDavStatus.collectAsStateWithLifecycle()
-    val showRestoreConfirmation by viewModel.showRestoreConfirmation.collectAsStateWithLifecycle()
-    val showBackupPicker by viewModel.showBackupPicker.collectAsStateWithLifecycle()
+    val showRestoreConfirmation by viewModel.isRestoreConfirmationVisible.collectAsStateWithLifecycle()
+    val showBackupPicker by viewModel.isBackupPickerVisible.collectAsStateWithLifecycle()
     val backupList by viewModel.backupList.collectAsStateWithLifecycle()
     val backupListLoading by viewModel.backupListLoading.collectAsStateWithLifecycle()
     // P1-D settings: collected directly from VM so user toggles propagate

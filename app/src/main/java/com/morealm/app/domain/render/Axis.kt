@@ -198,6 +198,12 @@ interface AxisMapper {
                 paddingRight = paddingRight,
                 paddingTop = paddingTop,
             )
+            ReadingDirection.VERTICAL_LR -> VerticalLrAxisMapper(
+                viewportWidth = viewportWidth,
+                viewportHeight = viewportHeight,
+                paddingLeft = paddingLeft,
+                paddingTop = paddingTop,
+            )
         }
     }
 }
@@ -262,4 +268,31 @@ class VerticalRlAxisMapper(
             bottom = paddingTop + rect.inlineEnd,
         )
     }
+}
+
+/**
+ * 竖排左起 (VERTICAL_LR) 映射：
+ *   - inline-axis = Y（屏幕 Y = paddingTop + inline）  — 字符在列内从上到下
+ *   - block-axis  = X 正向（屏幕 X = paddingLeft + block）  — 列从左到右
+ *
+ * 与 VERTICAL_RL 的唯一差别：block-axis 在屏幕 X 上**不反向**——第 0 列贴左边界。
+ * 章节标题（chapterPosition 最小、最先排版）出现在屏幕**左侧**，正文向右铺开。
+ */
+class VerticalLrAxisMapper(
+    override val viewportWidth: Float,
+    override val viewportHeight: Float,
+    private val paddingLeft: Float,
+    private val paddingTop: Float,
+) : AxisMapper {
+    override val direction = ReadingDirection.VERTICAL_LR
+
+    override fun toScreenPoint(inline: InlineOffset, block: BlockOffset): Pair<Float, Float> =
+        (paddingLeft + block) to (paddingTop + inline)
+
+    override fun toScreenRect(rect: LogicalRect): ScreenRect = ScreenRect(
+        left = paddingLeft + rect.blockStart,
+        right = paddingLeft + rect.blockEnd,
+        top = paddingTop + rect.inlineStart,
+        bottom = paddingTop + rect.inlineEnd,
+    )
 }

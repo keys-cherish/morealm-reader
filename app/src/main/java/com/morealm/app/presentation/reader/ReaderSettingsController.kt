@@ -45,6 +45,10 @@ class ReaderSettingsController(
     val volumeKeyPage: StateFlow<Boolean> = prefs.volumeKeyPage
         .stateIn(scope, SharingStarted.Eagerly, true)
 
+    /** 实验性：SCROLL 模式启用 Canvas V2 引擎。默认 false 走旧 LazyScrollRenderer。 */
+    val scrollCanvasV2: StateFlow<Boolean> = prefs.scrollCanvasV2
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
     val volumeKeyReverse: StateFlow<Boolean> = prefs.volumeKeyReverse
         .stateIn(scope, SharingStarted.Eagerly, false)
 
@@ -57,13 +61,13 @@ class ReaderSettingsController(
     val screenTimeout: StateFlow<Int> = prefs.screenTimeout
         .stateIn(scope, SharingStarted.Eagerly, -1)
 
-    val showChapterName: StateFlow<Boolean> = prefs.showChapterName
+    val isChapterNameVisible: StateFlow<Boolean> = prefs.isChapterNameVisible
         .stateIn(scope, SharingStarted.Eagerly, true)
 
-    val showTimeBattery: StateFlow<Boolean> = prefs.showTimeBattery
+    val isTimeBatteryVisible: StateFlow<Boolean> = prefs.isTimeBatteryVisible
         .stateIn(scope, SharingStarted.Eagerly, true)
 
-    val showStatusBar: StateFlow<Boolean> = prefs.showStatusBar
+    val isStatusBarVisible: StateFlow<Boolean> = prefs.isStatusBarVisible
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     val tapLeftAction: StateFlow<String> = prefs.tapLeftAction
