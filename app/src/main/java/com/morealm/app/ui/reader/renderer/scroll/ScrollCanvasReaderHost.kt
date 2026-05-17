@@ -496,6 +496,14 @@ fun ScrollCanvasReaderHost(
                     // anchorInBox 等价）。这样 popup / 箭头始终指向用户最初按下位置，
                     // 不会随 handle drag 而飘到选区末。
                     val selText = currentLayout.extractText(cpRange)
+                    androidx.compose.runtime.LaunchedEffect(cpRange) {
+                        AppLog.info(
+                            "ScrollSelection",
+                            "SelectionToolbar render anchorInBox=${selection.anchorInBox} " +
+                                "cpRange=$cpRange selText='${selText.take(20)}' " +
+                                "endCol=${endHit.column?.let { "x=${it.start}..${it.end} char='${it.charData}'" }}",
+                        )
+                    }
                     SelectionToolbar(
                         offset = selection.anchorInBox,
                         onCopy = {

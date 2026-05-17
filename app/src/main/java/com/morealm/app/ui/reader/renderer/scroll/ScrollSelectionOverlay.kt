@@ -154,6 +154,15 @@ private fun SelectionHandles(
     val startYInChapter = computeLineBottomYInChapterPublic(layout, cpRange.first)
     val endYInChapter = computeLineBottomYInChapterPublic(layout, cpRange.last)
     val offsetY = pixelOffsetProvider()
+    androidx.compose.runtime.LaunchedEffect(cpRange) {
+        com.morealm.app.core.log.AppLog.info(
+            "ScrollSelection",
+            "SelectionHandles cpRange=$cpRange anchorInBox=${selection.anchorInBox} " +
+                "startCol(x=${startCol.start}..${startCol.end} char='${startCol.charData}') " +
+                "endCol(x=${endCol.start}..${endCol.end} char='${endCol.charData}') " +
+                "startYInChapter=$startYInChapter endYInChapter=$endYInChapter pixelOffset=$offsetY",
+        )
+    }
 
     HandleDot(
         xInView = startXInChapter,

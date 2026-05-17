@@ -42,9 +42,28 @@ fun handleLongPress(
      */
     anchorInBox: androidx.compose.ui.geometry.Offset = androidx.compose.ui.geometry.Offset.Zero,
 ): ScrollSelectionState {
-    if (chapterIndex != layout.chapterIndex) return ScrollSelectionState.Empty
-    val hit = layout.findColumnByPixel(x, yInChapter) ?: return ScrollSelectionState.Empty
+    if (chapterIndex != layout.chapterIndex) {
+        com.morealm.app.core.log.AppLog.warn(
+            "ScrollSelection",
+            "handleLongPress mismatched chapter: chapterIdx=$chapterIndex layout.idx=${layout.chapterIndex}",
+        )
+        return ScrollSelectionState.Empty
+    }
+    val hit = layout.findColumnByPixel(x, yInChapter)
+    if (hit == null) {
+        com.morealm.app.core.log.AppLog.warn(
+            "ScrollSelection",
+            "handleLongPress findColumnByPixel MISS x=$x yInChapter=$yInChapter chapterIdx=$chapterIndex",
+        )
+        return ScrollSelectionState.Empty
+    }
     val cp = hit.column?.chapterPosition ?: hit.line.firstChapterPos
+    com.morealm.app.core.log.AppLog.info(
+        "ScrollSelection",
+        "handleLongPress HIT input x=$x yInChapter=$yInChapter anchorInBox=$anchorInBox " +
+            "→ cp=$cp hit.column=${hit.column?.let { "start=${it.start} end=${it.end} char='${it.charData}'" }} " +
+            "hit.line.lineTop=${hit.line.lineTop} hit.line.lineBottom=${hit.line.lineBottom}",
+    )
     return ScrollSelectionState(
         chapterIndex = chapterIndex,
         startCp = cp,
