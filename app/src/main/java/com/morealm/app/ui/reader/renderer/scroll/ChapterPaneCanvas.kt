@@ -14,6 +14,7 @@ import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.render.scroll.ScrollChapterLayout
 import com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec
+import com.morealm.app.domain.render.scroll.findColumnAt
 
 /**
  * 单章 Canvas 子树 —— [ScrollCanvasRenderer] 三块面板的子组件。
@@ -61,6 +62,10 @@ fun ChapterPaneCanvas(
     selectionCpRange: IntRange = IntRange.EMPTY,
     /** 选区背景 argb（半透明蓝紫色，与 V1 段级选区同色系） */
     selectionArgb: Int = 0x4D5B6CFE.toInt(),
+    /** 书签所在 cp 列表，每个 cp 在对应行左上角画橙色三角标记 */
+    bookmarkCps: List<Int> = emptyList(),
+    /** 书签三角颜色（默认 Material error 红橙色，与 V1 hasBookmark 一致） */
+    bookmarkArgb: Int = 0xFFD32F2F.toInt(),
     /** Viewport y 范围 lambda（相对章顶）。null = 该章完全不在 viewport，整章 skip。 */
     viewportRangeProvider: () -> Pair<Float, Float>? = { null },
     modifier: Modifier = Modifier,
@@ -260,8 +265,54 @@ fun ChapterPaneCanvas(
                 }
             }
 
+            // ─── 层 4：书签三角（V1 PageContentDrawer.hasBookmark 等价）───
+            if (bookmarkCps.isNotEmpty()) {
+                drawBookmarkTriangles(
+                    nc, chapter, bookmarkCps, bookmarkArgb,
+                    contentPaint.textSize * 0.5f,
+                    viewportTop, viewportBottom, bgFillPaint,
+                )
+            }
+
             nc.restore()  // 平衡前面 nc.save() + translate(paddingLeft)
         }
+    }
+}
+
+/**
+ * 在每个书签 cp 对应行的左上角画三角标记（V1 PageContentDrawer.hasBookmark 等价）。
+ * 用 findColumnAt 一次定位到 hit.page+line，避免嵌套 for 循环。
+ * 复杂度：O(bookmarks × pages) — pages 数远小于 lines。
+ */
+private fun drawBookmarkTriangles(
+    canvas: android.graphics.Canvas,
+    chapter: ScrollChapterLayout,
+    bookmarkCps: List<Int>,
+    argb: Int,
+    triSize: Float,
+    viewportTop: Float,
+    viewportBottom: Float,
+    paint: Paint,
+) {
+    // 预算 pageOffsetY[pageIndex] = sum(pages[0..pageIndex-1].height)
+    val pageOffsets = FloatArray(chapter.pages.size)
+    var acc = 0f
+    for (i in chapter.pages.indices) {
+        pageOffsets[i] = acc
+        acc += chapter.pages[i].height
+    }
+    paint.color = argb
+    val path = Path()
+    for (bmCp in bookmarkCps) {
+        val hit = chapter.findColumnAt(bmCp) ?: continue
+        val rectTop = pageOffsets[hit.page.pageIndex] + hit.line.lineTop
+        if (rectTop < viewportTop || rectTop > viewportBottom) continue
+        path.reset()
+        path.moveTo(-triSize, rectTop)
+        path.lineTo(0f, rectTop)
+        path.lineTo(-triSize, rectTop + triSize)
+        path.close()
+        canvas.drawPath(path, paint)
     }
 }
 

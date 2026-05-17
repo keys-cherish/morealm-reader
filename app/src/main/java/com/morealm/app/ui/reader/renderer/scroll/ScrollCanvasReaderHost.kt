@@ -142,6 +142,26 @@ fun ScrollCanvasReaderHost(
      * tap 命中已存高亮后用户选分享时的回调，传入整条 Highlight（分享卡片需要 content 等字段）。
      */
     onShareHighlight: ((com.morealm.app.domain.entity.Highlight) -> Unit)? = null,
+    /**
+     * 全书所有书签 —— Host 内按 prev/cur/next 章过滤，在书签对应行画橙色三角标记。
+     * 与 V1 PageContentDrawer.hasBookmark 三角等价。
+     */
+    bookmarks: List<com.morealm.app.domain.entity.Bookmark> = emptyList(),
+    /**
+     * 跳书签 / 续读 / 搜索定位的目标章内 chapterPosition（cp）。
+     * 与 [restoreToken] 配套：token 变 + currentChapter 就绪后，Host 滚到该 cp。
+     * 0 表示章首；用户不主动指定的场景应传 0（默认）。
+     */
+    initialChapterPosition: Int = 0,
+    /**
+     * 跳转幂等 key（每次跳转 caller 用 System.nanoTime() 换新值）；0L 表示无跳转。
+     * Host 监听此值变化触发 imperative scroll；不变则正常滚动状态不被打扰。
+     */
+    restoreToken: Long = 0L,
+    /**
+     * 跳转完成回调（caller 用来清 jumpToken / 标记 navigateDirection 已消费等状态）。
+     */
+    onProgressRestored: () -> Unit = {},
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
     // ── M4-revive 选区菜单 callbacks（直接复用 SelectionToolbar）──
@@ -235,6 +255,42 @@ fun ScrollCanvasReaderHost(
         }
     }
 
+    // ── 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer.LaunchedEffect(jumpToken) 等价）──
+    // 两阶段契约：caller 保证 restoreToken != 0L 时 currentChapter 已是目标章。
+    // Host 监听 restoreToken + state.currentChapter 双 key：token 变 + cur layout ready 即滚。
+    LaunchedEffect(restoreToken, state.currentChapter) {
+        if (restoreToken == 0L) return@LaunchedEffect
+        val layout = state.currentChapter ?: return@LaunchedEffect
+        if (layout.chapterIndex != state.currentChapterIndex) return@LaunchedEffect
+
+        // 计算目标 cp 在章节内的 y 坐标 = pageOffset 累加 + line.lineTop
+        val targetY = if (initialChapterPosition <= 0) {
+            0f
+        } else {
+            val hit = layout.findColumnAt(initialChapterPosition)
+            if (hit != null) {
+                var y = 0f
+                for (i in 0 until hit.page.pageIndex) y += layout.pages[i].height
+                y += hit.line.lineTop
+                y
+            } else {
+                0f
+            }
+        }
+
+        // 把目标段滚到视口上 1/3（与 V1 LazyScroll JUMP anchorOffset 同款思路），
+        // 让用户看到目标的同时保留下文。
+        val viewportH = viewHeight.coerceAtLeast(1)
+        val desiredOffset = (targetY - viewportH / 3f).coerceAtLeast(0f)
+        state.pixelOffset = desiredOffset
+        AppLog.info(
+            "ScrollCanvasV2",
+            "JUMP restoreToken=$restoreToken cp=$initialChapterPosition → targetY=$targetY " +
+                "pixelOffset=$desiredOffset (viewportH=$viewportH layoutH=${layout.totalHeight})",
+        )
+        onProgressRestored()
+    }
+
     // engine 引用变化（fontSize / typeface / padding / 任一影响排版的参数变）→
     // 现有所有 layout 失效（用旧 paint 排的，行宽/行高都错），必须强制重排所有 3 章。
     // 用 styleSignature 对比：layout 的 signature 与当前 engine 的 signature 不一致 = 失效。
@@ -318,6 +374,20 @@ fun ScrollCanvasReaderHost(
         state.nextChapter?.let {
             com.morealm.app.domain.render.scroll.ScrollHighlightProjector.project(it, chapterHighlightsRaw)
         } ?: emptyList()
+    }
+
+    // 书签 cp 列表（按章过滤）—— 渲染层据此画三角标记
+    val prevBookmarkCps = remember(state.prevChapter, bookmarks) {
+        val ch = state.prevChapter?.chapterIndex ?: return@remember emptyList<Int>()
+        bookmarks.filter { it.chapterIndex == ch }.map { it.chapterPos }
+    }
+    val curBookmarkCps = remember(state.currentChapter, bookmarks) {
+        val ch = state.currentChapter?.chapterIndex ?: return@remember emptyList<Int>()
+        bookmarks.filter { it.chapterIndex == ch }.map { it.chapterPos }
+    }
+    val nextBookmarkCps = remember(state.nextChapter, bookmarks) {
+        val ch = state.nextChapter?.chapterIndex ?: return@remember emptyList<Int>()
+        bookmarks.filter { it.chapterIndex == ch }.map { it.chapterPos }
     }
 
     // ── 电池 / 时间维护（与 CanvasRenderer line 380-389 同款）──
@@ -445,6 +515,9 @@ fun ScrollCanvasReaderHost(
                 prevHighlightSpecs = prevHighlightSpecs,
                 curHighlightSpecs = curHighlightSpecs,
                 nextHighlightSpecs = nextHighlightSpecs,
+                prevBookmarkCps = prevBookmarkCps,
+                curBookmarkCps = curBookmarkCps,
+                nextBookmarkCps = nextBookmarkCps,
                 onChapterShift = { _ ->
                     onChapterIndexChange(state.currentChapterIndex)
                 },

@@ -146,35 +146,17 @@ class ScrollLayoutEngine(
         // 书源书籍 / EPUB 常常把章名重复写在正文开头，与自画 title 块同框 → 用户看到两次。
         // 算法 1：stripDuplicateTitleSegments —— N=3..1 尝试，前 N 段拼接 normalized == title → drop。
         // 算法 2：isSameChapterTitle —— 第 1 段单独 normalized == title → contentProvidesChapterTitle=true，跳过自画块。
+        // 重复标题去重 —— 保留自画 title 块（大字），剥掉 content 里重复的 title 文本。
+        // 3 种场景：
+        //   A. 第 1 段 normalized 完整等于 title → drop 该段
+        //   B. 前 N 段 normalized 拼起来 == title → drop 那 N 段
+        //   C. 第 1 段以 title 开头（含装饰字符）→ 段内剥掉 title prefix，保留剩余正文
+        //      例（用户截图 V2-WEB）：title="第61章 大明群星闪耀！（求票票）"
+        //      content[0]="第61章大明群星闪耀！（求票票~）思虑已定..."
+        //      title 字符按顺序在段首出现，"~" 是装饰 → 剥掉 "第61章...票票）" 留 "思虑已定..."
         val normalizedTitle = normalizeTitleForCompare(title)
-        // 找出非空段以便 stripDuplicateTitleSegments 拼接判定（空段不影响标题去重）
-        val nonEmptyParagraphs = rawParagraphs.filter { it.isNotBlank() }
-        var stripCount = 0
-        if (normalizedTitle.isNotEmpty() && nonEmptyParagraphs.isNotEmpty()) {
-            val maxN = minOf(3, nonEmptyParagraphs.size)
-            for (n in maxN downTo 1) {
-                val joined = nonEmptyParagraphs.take(n)
-                    .joinToString("") { normalizeTitleForCompare(it) }
-                if (joined == normalizedTitle) {
-                    stripCount = n
-                    break
-                }
-            }
-        }
-        // 若前 N 段 normalized 拼接等于 title → 从 rawParagraphs 头部跳过对应非空段
-        val paragraphs = if (stripCount == 0) {
-            rawParagraphs
-        } else {
-            var skipped = 0
-            rawParagraphs.dropWhile {
-                if (skipped >= stripCount) false
-                else {
-                    if (it.isNotBlank()) skipped++
-                    skipped <= stripCount
-                }
-            }
-        }
-        val contentProvidesChapterTitle = stripCount >= 1  // 已去掉重复 title 段 → 不再画自画 title 块
+        val paragraphs = stripTitleFromParagraphs(rawParagraphs, normalizedTitle)
+        val contentProvidesChapterTitle = false  // 保留自画 title 块；正文 title 已被 strip 掉
 
         val pages = mutableListOf<ScrollPage>()
         var currentPageLines = mutableListOf<ScrollLine>()
@@ -762,6 +744,94 @@ class ScrollLayoutEngine(
         .replace("　", "")
         .replace(Regex("\\s+"), "")
         .trim()
+
+    /**
+     * 剥掉 rawParagraphs 中重复 title 的部分。3 种场景：
+     *   A. 第 1 段 normalized 整段 == title → drop 该段
+     *   B. 前 N 段（N=2..3）拼起来 == title → drop 那 N 段
+     *   C. 第 1 段以 title 开头（含装饰字符）→ 段内剥掉 title prefix
+     *
+     * 返回的列表已剥除 title 段 / prefix，可能为空（章节只有 title 无正文场景）。
+     */
+    private fun stripTitleFromParagraphs(
+        rawParagraphs: List<String>,
+        normalizedTitle: String,
+    ): List<String> {
+        if (normalizedTitle.isEmpty() || rawParagraphs.isEmpty()) return rawParagraphs
+
+        // 跳过段首空段，找到第一个非空段位置
+        val firstNonEmptyIdx = rawParagraphs.indexOfFirst { it.isNotBlank() }
+        if (firstNonEmptyIdx < 0) return rawParagraphs
+
+        // 场景 B：前 N 段非空段拼接 == title → drop 那 N 段
+        val nonEmpty = rawParagraphs.drop(firstNonEmptyIdx).filter { it.isNotBlank() }
+        val maxN = minOf(3, nonEmpty.size)
+        for (n in maxN downTo 1) {
+            val joined = nonEmpty.take(n).joinToString("") { normalizeTitleForCompare(it) }
+            if (joined == normalizedTitle) {
+                // drop 前 firstNonEmptyIdx 个段（前导空段）+ n 个非空段
+                return dropFirstNNonEmpty(rawParagraphs, firstNonEmptyIdx, n)
+            }
+        }
+
+        // 场景 C：段内 prefix 剥除（subsequence match）
+        val firstPara = rawParagraphs[firstNonEmptyIdx]
+        val titleEndIdx = findTitlePrefixEnd(firstPara, normalizedTitle)
+        if (titleEndIdx > 0) {
+            val rest = firstPara.substring(titleEndIdx).trimStart { it == '　' || it.isWhitespace() }
+            // 若整段被 title 吃光（rest 空）→ drop 整段
+            val result = rawParagraphs.toMutableList()
+            if (rest.isEmpty()) {
+                result.removeAt(firstNonEmptyIdx)
+            } else {
+                result[firstNonEmptyIdx] = rest
+            }
+            return result
+        }
+        return rawParagraphs
+    }
+
+    /** drop 前 firstNonEmptyIdx 个段 + 接下来 n 个非空段（保留期间空段）。 */
+    private fun dropFirstNNonEmpty(list: List<String>, startIdx: Int, n: Int): List<String> {
+        val result = mutableListOf<String>()
+        var skipped = 0
+        for ((i, p) in list.withIndex()) {
+            if (i < startIdx) continue
+            if (skipped < n) {
+                if (p.isNotBlank()) skipped++
+                continue
+            }
+            result.add(p)
+        }
+        return result
+    }
+
+    /**
+     * 子序列匹配：normalizedTitle 的字符是否按顺序出现在 firstPara 段首（允许装饰字符插入）。
+     * 命中返回 title 末字符在 firstPara 中的 index + 1（用于 substring strip）。
+     * 不匹配返 -1。
+     *
+     * 限制：title 字符必须在 firstPara 的前 N 字符内完成匹配（N = title.length × 2 + 5），
+     * 防止 title 字符碰巧零散出现在正文中导致误剥。
+     */
+    private fun findTitlePrefixEnd(firstPara: String, normalizedTitle: String): Int {
+        if (normalizedTitle.isEmpty()) return -1
+        val maxScan = normalizedTitle.length * 2 + 5
+        var titleIdx = 0
+        for (i in firstPara.indices) {
+            if (i >= maxScan) return -1  // 超出搜索范围视为不匹配
+            val ch = firstPara[i]
+            if (ch == '　' || ch.isWhitespace()) continue  // 跳过空白（normalized 一致）
+            if (titleIdx < normalizedTitle.length && ch == normalizedTitle[titleIdx]) {
+                titleIdx++
+                if (titleIdx == normalizedTitle.length) {
+                    return i + 1  // 全部 title 字符匹配到末尾
+                }
+            }
+            // 不匹配则忽略（视为装饰字符），继续找下一个 title 字符
+        }
+        return -1
+    }
 
     /**
      * 拆分章节标题为 (chapter-num, title) 两部分。
