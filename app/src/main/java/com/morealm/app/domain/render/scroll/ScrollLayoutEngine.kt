@@ -565,6 +565,7 @@ class ScrollLayoutEngine(
             pages = pages,
             totalHeight = totalHeight,
             viewWidth = viewWidth,
+            paddingLeft = paddingLeft,
             styleSignature = computeStyleSignature(),
             totalCharCount = chapterPositionCounter,
         )

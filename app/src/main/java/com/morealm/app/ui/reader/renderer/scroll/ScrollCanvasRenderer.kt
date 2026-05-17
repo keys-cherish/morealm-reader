@@ -1,6 +1,7 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberScrollableState
 import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Box
@@ -12,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
@@ -51,6 +53,7 @@ fun ScrollCanvasRenderer(
     modifier: Modifier = Modifier,
     onChapterShift: (delta: Int) -> Unit = {},
     onProgress: (Float) -> Unit = {},
+    onTapCenter: () -> Unit = {},
 ) {
     // ── M2.4 滚动手势接入 ──
     // rememberScrollableState consume delta：跨章 swap 时 applyScrollDelta 内同帧
@@ -67,10 +70,16 @@ fun ScrollCanvasRenderer(
     // ChapterPaneCanvas 视口剔除 lambda 用这个值算 viewport 在各块内的可见范围。
     var viewportHeightPx by remember { mutableIntStateOf(0) }
 
+    val onTapCenterUpdated by rememberUpdatedState(onTapCenter)
     Layout(
         modifier = modifier
             .fillMaxSize()
             .onSizeChanged { viewportHeightPx = it.height }
+            .pointerInput(Unit) {
+                // detectTapGestures 不消费 down event 直到判定 tap（短按 + 无移动），
+                // 与 .scrollable 共存：tap 触发 onTapCenter；move 透传 scrollable 处理。
+                detectTapGestures(onTap = { onTapCenterUpdated() })
+            }
             .scrollable(state = scrollState, orientation = Orientation.Vertical),
         content = {
             // 三块子节点固定顺序 prev/cur/next；null 章节 emit 空 Box 占位。

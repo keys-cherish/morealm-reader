@@ -651,8 +651,10 @@ fun ReaderScreen(
                 chapterCount = chapters.size,
                 loadChapterContent = loadFn@{ idx ->
                     val chap = chapters.getOrNull(idx) ?: return@loadFn null
-                    val bk = book ?: return@loadFn null
-                    val content = viewModel.chapter.loadWebChapterContent(bk, chap, idx)
+                    // 用 fetchAndPrepareChapter 统一入口：内部自动 isWebBook 分流
+                    // web/local + applyReplaceRules + ChineseConverter，与旧引擎完全等价。
+                    // 修复用户反馈：V2 直接调 loadWebChapterContent 让本地 EPUB 拿不到内容。
+                    val content = viewModel.chapter.fetchAndPrepareChapter(idx) ?: return@loadFn null
                     ScrollChapterContent(
                         chapterIndex = idx,
                         title = chap.title,
@@ -667,6 +669,13 @@ fun ReaderScreen(
                 paddingBottom = paddingBottomPx,
                 fontSize = fontSizePx,
                 onChapterIndexChange = { newIdx -> viewModel.loadChapter(newIdx) },
+                onTapCenter = {
+                    if (toolbarEditing) {
+                        toolBarViewModel.exitEditMode()
+                    } else {
+                        viewModel.toggleControls()
+                    }
+                },
             )
         } else if (hasReaderTarget) {
             // 把 ttsChapterPosition 的 collect 收敛进这个 leaf composable —— 段切
