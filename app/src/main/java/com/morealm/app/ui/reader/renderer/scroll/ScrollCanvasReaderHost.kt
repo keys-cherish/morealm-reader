@@ -213,6 +213,16 @@ fun ScrollCanvasReaderHost(
         }
     }
 
+    // engine 引用变化（fontSize / typeface / padding / 任一影响排版的参数变）→
+    // 现有所有 layout 失效（用旧 paint 排的，行宽/行高都错），必须强制重排所有 3 章。
+    // 用 styleSignature 对比：layout 的 signature 与当前 engine 的 signature 不一致 = 失效。
+    LaunchedEffect(engine) {
+        val sig = engine.computeStyleSignature()
+        if (state.currentChapter?.styleSignature != sig) state.currentChapter = null
+        if (state.prevChapter?.styleSignature != sig) state.prevChapter = null
+        if (state.nextChapter?.styleSignature != sig) state.nextChapter = null
+    }
+
     LaunchedEffect(state.currentChapterIndex, engine) {
         val curIdx = state.currentChapterIndex
         val needLoadCur = state.currentChapter?.chapterIndex != curIdx
