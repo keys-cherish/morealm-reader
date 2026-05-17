@@ -109,6 +109,26 @@ fun ScrollCanvasReaderHost(
      * 默认 8 与旧硬编码一致。
      */
     paragraphSpacing: Int = 8,
+    /**
+     * 段首缩进字符（ReaderStyle.paragraphIndent）。注意：ContentProcessor 已给每段加
+     * "　　"；本字段一般传 ""，仅当 reader style 用特殊缩进（如"文章"preset 用 4 空格）
+     * 时由 caller 自己 strip ContentProcessor 加的 "　　" 后传新 indent。默认 ""。
+     */
+    paragraphIndent: String = "",
+    /**
+     * 章首块 title 显示模式（ReaderStyle.titleMode）：
+     *   0 = 左对齐 / 1 = 居中 / 2 = 隐藏（不画自画 title 块）。
+     */
+    titleMode: Int = 0,
+    /**
+     * 章首块 title 文字对齐（ReaderStyle.titleAlign）：0=left / 1=center / 2=right。
+     */
+    titleAlign: Int = 0,
+    /**
+     * 正文是否两端对齐（ReaderStyle.textAlign == "justify"）。
+     * 默认 true 启用末行外的整段两端对齐 + 字符间隙均摊。
+     */
+    textFullJustify: Boolean = true,
     /** 阅读区背景图 uri；空串 = 纯色背景。来自 ReaderScreen 的 readerBgImage。 */
     bgImageUri: String = "",
     /** 阅读区纯色背景（android argb）—— 无背景图 / 背景图加载失败时使用。 */
@@ -253,7 +273,11 @@ fun ScrollCanvasReaderHost(
     val effectivePadTop = if (infoBar != null) paddingTop + topInsetPx + infoBarHeightPx else paddingTop + topInsetPx
     val effectivePadBottom = if (infoBar != null) paddingBottom + bottomInsetPx + infoBarHeightPx else paddingBottom + bottomInsetPx
 
-    val engine = remember(viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom, contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing) {
+    val engine = remember(
+        viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
+        contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing,
+        paragraphIndent, titleMode, titleAlign, textFullJustify,
+    ) {
         ScrollLayoutEngine(
             viewWidth = viewWidth,
             viewHeight = viewHeight,
@@ -266,6 +290,10 @@ fun ScrollCanvasReaderHost(
             chapterNumPaint = chapterNumPaint,
             lineSpacingExtra = lineSpacingExtra,
             paragraphSpacing = paragraphSpacing,
+            paragraphIndent = paragraphIndent,
+            titleMode = titleMode,
+            titleAlign = titleAlign,
+            textFullJustify = textFullJustify,
         )
     }
 

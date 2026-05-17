@@ -679,6 +679,10 @@ fun ReaderScreen(
                 textBold = effectiveReaderStyle?.textBold ?: 0,
                 lineSpacingExtra = readerLineHeight,
                 paragraphSpacing = effectiveReaderStyle?.paragraphSpacing ?: 8,
+                // 段首缩进默认 ""（ContentProcessor 已加 "　　"）；非默认 indent 由 caller 自己处理
+                titleMode = effectiveReaderStyle?.titleMode ?: 0,
+                titleAlign = effectiveReaderStyle?.titleMode?.takeIf { it != 0 } ?: 0,  // titleMode 1=center → titleAlign 1
+                textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
                 // 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer jumpToken/jumpChapterPosition 等价）：
                 // renderedChapter.restoreToken 由 ReaderChapterController.loadChapter 每次 nanoTime 换新值。
                 initialChapterPosition = renderedChapter.initialChapterPosition,
