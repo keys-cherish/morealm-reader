@@ -423,10 +423,77 @@ class ScrollLayoutEngineTest {
 
     // ── M1.3-M1.5 待实现 stub ────────────────────────────────────
 
+    // ── M1.3 ZhLayout + textFullJustify ─────────────────────────
+
     @Test
-    @Ignore("M1.3 待实现：ZhLayout 接入")
-    fun `中文段排版 column 坐标连续不重叠 ZhLayout 压缩生效`() {
-        TODO()
+    fun `ZhLayout 中文段 column 数等于原文字符数 cp 严格连续`() {
+        val eng = engine()
+        val layout = eng.layoutChapter(0, "T", "你好世界", omitChapterTitleBlock = true)
+        val allCols = layout.pages.flatMap { it.lines }.flatMap { it.columns }
+        assertEquals("4 个 CJK 字符 → 4 columns", 4, allCols.size)
+        for (i in 0 until 4) {
+            assertEquals("cp 严格 1:1 累加", i, allCols[i].chapterPosition)
+        }
+        // 字符 charData 应保持顺序：你 好 世 界
+        assertEquals("你", allCols[0].charData)
+        assertEquals("好", allCols[1].charData)
+        assertEquals("世", allCols[2].charData)
+        assertEquals("界", allCols[3].charData)
+        // totalCharCount = 4 字符 + 段末 \n = 5
+        assertEquals(5, layout.totalCharCount)
+    }
+
+    @Test
+    fun `useZhLayout false 走简单贪心 fallback 段 cp 结构仍合法`() {
+        val eng = ScrollLayoutEngine(
+            viewWidth = 1080, viewHeight = 2200,
+            paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+            titlePaint = titlePaint, contentPaint = contentPaint,
+            useZhLayout = false,
+        )
+        val layout = eng.layoutChapter(0, "T", "ABCDE", omitChapterTitleBlock = true)
+        val allCols = layout.pages.flatMap { it.lines }.flatMap { it.columns }
+        assertEquals(5, allCols.size)
+        for (i in 0 until 5) {
+            assertEquals(i, allCols[i].chapterPosition)
+            assertEquals("ABCDE"[i].toString(), allCols[i].charData)
+        }
+        assertEquals(6, layout.totalCharCount)
+    }
+
+    @Test
+    fun `textFullJustify 长 CJK 段排版无异常 整段 cp 完整累加`() {
+        // Robolectric fake paint 下 char width=0 → justify gap 计算分支走不到（条件不满足）；
+        // 但能验证：useZhLayout=true + textFullJustify=true 时整段排版不抛异常 + cp 完整。
+        // 精确 gap 像素验证由真机灰盒（M6 阶段）覆盖。
+        val eng = engine()
+        val content = "中文段落示例。".repeat(50)  // 350 字
+        val layout = eng.layoutChapter(0, "T", content, omitChapterTitleBlock = true)
+        val allCols = layout.pages.flatMap { it.lines }.flatMap { it.columns }
+        assertEquals("350 字符 → 350 columns", content.length, allCols.size)
+        // 任意相邻 column cp 差 1（连续累加无跳号）
+        for (i in 0 until allCols.size - 1) {
+            assertEquals("cp 连续累加 #$i", allCols[i].chapterPosition + 1, allCols[i + 1].chapterPosition)
+        }
+    }
+
+    @Test
+    fun `ZhLayout 与简单贪心 fallback 输出 cp 累计一致`() {
+        // 同输入 + useZhLayout true/false 应得到相同 cp 累计（行打断点可能不同，但 cp 总数应同）。
+        val content = "你好世界abcdef"
+        val engZh = engine()
+        val engGreedy = ScrollLayoutEngine(
+            viewWidth = 1080, viewHeight = 2200,
+            paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+            titlePaint = titlePaint, contentPaint = contentPaint,
+            useZhLayout = false,
+        )
+        val lZh = engZh.layoutChapter(0, "T", content, omitChapterTitleBlock = true)
+        val lGreedy = engGreedy.layoutChapter(0, "T", content, omitChapterTitleBlock = true)
+        assertEquals("两路径 totalCharCount 应一致", lZh.totalCharCount, lGreedy.totalCharCount)
+        val colsZh = lZh.pages.flatMap { it.lines }.flatMap { it.columns }
+        val colsGreedy = lGreedy.pages.flatMap { it.lines }.flatMap { it.columns }
+        assertEquals("column 数一致", colsZh.size, colsGreedy.size)
     }
 
     // ── M1.4 章首样式块 ──────────────────────────────────────────
@@ -580,5 +647,384 @@ class ScrollLayoutEngineTest {
         val layout = eng.layoutChapter(0, "T", content, omitChapterTitleBlock = true)
         val img = layout.pages[0].lines[0]
         assertEquals("限到 visibleHeight=2080", 2080f, img.height, 0.01f)
+    }
+
+    // ── M1.9 边界与组合场景扩展（覆盖跨页 / 章节号正则 / emoji / 段类型混合 /
+    //         styleSignature 字段敏感 / findColumnAt&Pixel 边界）─────────────
+
+    // ── 章节号正则各种形式 ─────────────────────────────────────
+
+    @Test
+    fun `章节号正则 Chapter N 英文标题拆分`() {
+        val eng = engine()
+        val layout = eng.layoutChapter(0, "Chapter 5 Hello World", "正文")
+        val titleLines = layout.pages.flatMap { it.lines }.filter { it.isTitle }
+        val numLine = titleLines.firstOrNull { it.isChapterNum }
+        val mainLine = titleLines.firstOrNull { !it.isChapterNum }
+        assertNotNull("应识别出英文 Chapter 5", numLine)
+        assertEquals("Chapter 5", numLine!!.text)
+        assertNotNull(mainLine)
+        assertEquals("Hello World", mainLine!!.text)
+    }
+
+    @Test
+    fun `章节号正则 序章 楔子 番外 终章 尾声 各种特殊章型识别`() {
+        val eng = engine()
+        listOf(
+            "序章 缘起",
+            "楔子 起源",
+            "番外 后日谈",
+            "终章 落幕",
+            "尾声 余音",
+        ).forEach { title ->
+            val layout = eng.layoutChapter(0, title, "正文")
+            val titleLines = layout.pages.flatMap { it.lines }.filter { it.isTitle }
+            val numLine = titleLines.firstOrNull { it.isChapterNum }
+            assertNotNull("应识别 $title 的章号部分", numLine)
+        }
+    }
+
+    @Test
+    fun `章节号正则 1点空格 数字编号识别`() {
+        val eng = engine()
+        val layout = eng.layoutChapter(0, "1. 第一节", "正文")
+        val titleLines = layout.pages.flatMap { it.lines }.filter { it.isTitle }
+        val numLine = titleLines.firstOrNull { it.isChapterNum }
+        assertNotNull("应识别数字编号", numLine)
+    }
+
+    @Test
+    fun `章节号正则 纯标题无章号 整串当 title`() {
+        val eng = engine()
+        val layout = eng.layoutChapter(0, "山边小村", "正文")
+        val titleLines = layout.pages.flatMap { it.lines }.filter { it.isTitle }
+        assertEquals("无章号 → 1 个 title 行", 1, titleLines.size)
+        assertFalse("无 isChapterNum 行", titleLines[0].isChapterNum)
+        assertEquals("山边小村", titleLines[0].text)
+    }
+
+    @Test
+    fun `章节号正则 第一章 无 rest 不算章号`() {
+        val eng = engine()
+        // splitChapterNumAndTitle("第一章") → rest 为空 → null to "第一章"（整串当 title）
+        val layout = eng.layoutChapter(0, "第一章", "正文")
+        val titleLines = layout.pages.flatMap { it.lines }.filter { it.isTitle }
+        assertTrue("无 isChapterNum 行（无 rest 时整串当 title）",
+            titleLines.none { it.isChapterNum })
+    }
+
+    // ── 跨页 / 分页边界 ────────────────────────────────────────
+
+    @Test
+    fun `长文章 viewHeight 不足以容纳 触发分页`() {
+        val eng = engine()
+        // 段重复多次让累积行高超 viewHeight；
+        // Robolectric textHeight=0 行高=0，无法真分页—此 case 仅验证 pages 列表合法
+        val longContent = "段落。\n".repeat(500)
+        val layout = eng.layoutChapter(0, "T", longContent, omitChapterTitleBlock = true)
+        assertTrue("pages 应至少 1 页", layout.pages.isNotEmpty())
+        // 所有 page chapterIndex 一致
+        assertTrue("所有 page chapterIndex 应一致",
+            layout.pages.all { it.chapterIndex == 0 })
+        // pageIndex 严格递增
+        layout.pages.forEachIndexed { i, p ->
+            assertEquals("pageIndex 严格递增", i, p.pageIndex)
+        }
+    }
+
+    @Test
+    fun `多段字符 column cp 单调递增 字符内容顺序与原文一致`() {
+        val eng = engine()
+        val layout = eng.layoutChapter(0, "T", "AB\nCD\nEF", omitChapterTitleBlock = true)
+        val allCols = layout.pages.flatMap { it.lines }.flatMap { it.columns }
+        assertEquals("6 字符 → 6 columns", 6, allCols.size)
+        // 字符顺序与原文一致（不含 \n）
+        val charsConcat = allCols.joinToString("") { it.charData }
+        assertEquals("ABCDEF", charsConcat)
+        // cp 单调递增（跨段会跳 \n cp 故差 > 1）
+        for (i in 0 until allCols.size - 1) {
+            assertTrue("cp 单调递增", allCols[i].chapterPosition < allCols[i + 1].chapterPosition)
+        }
+    }
+
+    // ── emoji / 极端字符 ───────────────────────────────────────
+
+    @Test
+    fun `emoji 段 surrogate pair 作为单 column charData 含完整代理对`() {
+        val eng = engine()
+        // U+1F600 = surrogate pair (D83D DE00)
+        val emoji = "😀"
+        val layout = eng.layoutChapter(0, "T", emoji, omitChapterTitleBlock = true)
+        val allCols = layout.pages.flatMap { it.lines }.flatMap { it.columns }
+        assertEquals("emoji 1 个 code point → 1 column", 1, allCols.size)
+        assertEquals("charData 应完整保留 surrogate pair", emoji, allCols[0].charData)
+        assertEquals(2, allCols[0].charData.length)  // surrogate pair = 2 Java char
+    }
+
+    @Test
+    fun `单字符宽度超 visibleWidth 强行单字符成行 不死循环`() {
+        // 极端 fake：visibleWidth 设为 1（让每字符都超宽）
+        val eng = ScrollLayoutEngine(
+            viewWidth = 81, viewHeight = 2200,  // visibleWidth = 81 - 40 - 40 = 1
+            paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+            titlePaint = titlePaint, contentPaint = contentPaint,
+            useZhLayout = false,  // 走简单贪心 fallback 更可控
+        )
+        val layout = eng.layoutChapter(0, "T", "ABC", omitChapterTitleBlock = true)
+        val allCols = layout.pages.flatMap { it.lines }.flatMap { it.columns }
+        assertEquals("3 字符不死循环", 3, allCols.size)
+    }
+
+    // ── 段类型混合 ────────────────────────────────────────────
+
+    @Test
+    fun `章首 加 多段 加 空段 加 图片 cp 全段严格累加`() {
+        val eng = engine()
+        val content = """文段一。
+
+<img src="img1"/>
+
+文段三。"""
+        val layout = eng.layoutChapter(0, "第一章 测试", content)
+        val allLines = layout.pages.flatMap { it.lines }
+        val allCols = allLines.flatMap { it.columns }
+        // 各类 line 都应存在
+        assertTrue("含 title line", allLines.any { it.isTitle })
+        assertTrue("含 image line", allLines.any { it.isImage })
+        assertTrue("含 空段 line（无 column 无 image）",
+            allLines.any { it.columns.isEmpty() && !it.isImage })
+        assertTrue("含正文 line", allLines.any { !it.isTitle && !it.isImage && it.columns.isNotEmpty() })
+        // 字符 column cp 单调递增（跨段 / 跨图时差 > 1，含段末 \n / 图片占位 cp）
+        for (i in 0 until allCols.size - 1) {
+            assertTrue("混合段字符 column cp 单调递增（跨段含 \\n 跳号）",
+                allCols[i].chapterPosition < allCols[i + 1].chapterPosition)
+        }
+    }
+
+    @Test
+    fun `章首块加空 content 章首完整 totalCharCount 等于章首 cp 占用`() {
+        val eng = engine()
+        // 章首 "第一章 山" → "第一章" 3字 + \n 1 + "山" 1字 + \n 1 = 6 cp
+        // content "" → 空段 1 cp
+        val layout = eng.layoutChapter(0, "第一章 山", "")
+        assertEquals("章首 6 + content 空段 1 = 7", 7, layout.totalCharCount)
+        assertFalse("有 title line, isEmpty 应为 false", layout.isEmpty)
+    }
+
+    @Test
+    fun `多张图片同段 cp 顺序累加 每图占 1 cp`() {
+        val eng = engine()
+        val content = """A<img src="i1"/>B<img src="i2"/>C"""
+        val layout = eng.layoutChapter(0, "T", content, omitChapterTitleBlock = true)
+        val allLines = layout.pages.flatMap { it.lines }
+        // text A + img1 + text B + img2 + text C = 5 行
+        assertEquals(5, allLines.size)
+        assertEquals(0, allLines[0].firstChapterPos)  // A
+        assertTrue(allLines[1].isImage); assertEquals(1, allLines[1].firstChapterPos)  // img1
+        assertEquals(2, allLines[2].firstChapterPos)  // B
+        assertTrue(allLines[3].isImage); assertEquals(3, allLines[3].firstChapterPos)  // img2
+        assertEquals(4, allLines[4].firstChapterPos)  // C
+    }
+
+    // ── findColumnAt 边界扩充 ──────────────────────────────────
+
+    @Test
+    fun `findColumnAt cp 落在章首块字符 命中 isTitle line`() {
+        val eng = engine()
+        // 章首块 "第一章" 3字 cp 0/1/2，段末\n=3；"山边小村" 4字 cp 4/5/6/7，段末\n=8
+        val layout = eng.layoutChapter(0, "第一章 山边小村", "正文。")
+        val hit0 = eng.findColumnAt(layout, 0)
+        assertNotNull(hit0)
+        assertTrue("cp=0 命中 isTitle line", hit0!!.line.isTitle)
+        assertTrue("cp=0 命中 chapter-num line", hit0.line.isChapterNum)
+        assertEquals("第", hit0.column!!.charData)
+
+        val hit4 = eng.findColumnAt(layout, 4)
+        assertNotNull(hit4)
+        assertTrue("cp=4 命中 isTitle line", hit4!!.line.isTitle)
+        assertFalse("cp=4 非 isChapterNum（在 title 主行）", hit4.line.isChapterNum)
+        assertEquals("山", hit4.column!!.charData)
+    }
+
+    @Test
+    fun `findColumnAt cp 落在图片占位 命中 isImage line column 为 null`() {
+        val eng = engine()
+        // "A<img src=\"img1\"/>B" → A cp=0, img cp=1, B cp=2
+        val layout = eng.layoutChapter(0, "T", """A<img src="img1"/>B""",
+            omitChapterTitleBlock = true)
+        val hit = eng.findColumnAt(layout, 1)
+        assertNotNull(hit)
+        assertTrue("命中 isImage line", hit!!.line.isImage)
+        assertEquals("img1", hit.line.imageSrc)
+        assertNull("图片段命中 column 为 null", hit.column)
+    }
+
+    @Test
+    fun `findColumnAt 每个段末换行 cp 均返 null`() {
+        val eng = engine()
+        // 段一 "AB" cp 0/1，段末\n=2；段二 "CD" cp 3/4，段末\n=5
+        val layout = eng.layoutChapter(0, "T", "AB\nCD", omitChapterTitleBlock = true)
+        assertNull("段一段末 \\n cp=2 返 null", eng.findColumnAt(layout, 2))
+        assertNull("段二段末 \\n cp=5 返 null", eng.findColumnAt(layout, 5))
+    }
+
+    // ── findColumnByPixel padding 区 ───────────────────────────
+
+    @Test
+    fun `findColumnByPixel y 落在页头 padding 区 mocked 吸附首行`() {
+        // mocked layout：page 内首行 lineTop=60，y=20 落在 paddingTop 上方
+        val eng = engine()
+        val col = ScrollColumn(charData = "A", start = 100f, end = 130f, chapterPosition = 0)
+        val line = ScrollLine(
+            columns = listOf(col),
+            lineTop = 60f, lineBottom = 100f,
+            paragraphNum = 1, isTitle = false, text = "A",
+            firstChapterPos = 0, lastChapterPos = 0,
+        )
+        val page = ScrollPage(0, listOf(line), 200f, 0)
+        val layout = ScrollChapterLayout(0, "T", listOf(page), 200f, 1080,
+            "mock", 1)
+        // y=20 落在 page padding 区（< lineTop=60）→ 吸附到首行
+        val hit = eng.findColumnByPixel(layout, 100f, 20f)
+        assertNotNull(hit)
+        assertEquals(line, hit!!.line)
+    }
+
+    @Test
+    fun `findColumnByPixel y 落在页脚 padding 区 mocked 吸附末行`() {
+        val eng = engine()
+        val col = ScrollColumn(charData = "A", start = 100f, end = 130f, chapterPosition = 0)
+        val line = ScrollLine(
+            columns = listOf(col),
+            lineTop = 60f, lineBottom = 100f,
+            paragraphNum = 1, isTitle = false, text = "A",
+            firstChapterPos = 0, lastChapterPos = 0,
+        )
+        val page = ScrollPage(0, listOf(line), 200f, 0)
+        val layout = ScrollChapterLayout(0, "T", listOf(page), 200f, 1080,
+            "mock", 1)
+        // y=180 落在页脚 padding（> lineBottom=100, < page.height=200）→ 吸附到末行
+        val hit = eng.findColumnByPixel(layout, 100f, 180f)
+        assertNotNull(hit)
+        assertEquals(line, hit!!.line)
+    }
+
+    @Test
+    fun `findColumnByPixel 跨页 y 命中正确 page`() {
+        val eng = engine()
+        val l1 = ScrollLine(
+            columns = listOf(ScrollColumn("A", 0f, 30f, 0)),
+            lineTop = 60f, lineBottom = 100f,
+            paragraphNum = 1, isTitle = false, text = "A",
+            firstChapterPos = 0, lastChapterPos = 0,
+        )
+        val l2 = ScrollLine(
+            columns = listOf(ScrollColumn("B", 0f, 30f, 1)),
+            lineTop = 60f, lineBottom = 100f,
+            paragraphNum = 2, isTitle = false, text = "B",
+            firstChapterPos = 1, lastChapterPos = 1,
+        )
+        val p1 = ScrollPage(0, listOf(l1), 200f, 0)
+        val p2 = ScrollPage(1, listOf(l2), 200f, 0)
+        val layout = ScrollChapterLayout(0, "T", listOf(p1, p2), 400f, 1080,
+            "mock", 2)
+        // y=80 落在第 1 页（0..200）→ l1
+        assertEquals(l1, eng.findColumnByPixel(layout, 0f, 80f)!!.line)
+        // y=280 落在第 2 页（200..400 区段内 y-200=80 → l2）→ l2
+        assertEquals(l2, eng.findColumnByPixel(layout, 0f, 280f)!!.line)
+    }
+
+    // ── styleSignature 字段敏感性扩充 ─────────────────────────
+
+    @Test
+    fun `styleSignature 每个排版相关字段单独变化都改 signature`() {
+        val base = engine()
+        val baseSig = base.computeStyleSignature()
+
+        val cases: List<Pair<String, ScrollLayoutEngine>> = listOf(
+            "paddingLeft" to ScrollLayoutEngine(
+                viewWidth = 1080, viewHeight = 2200,
+                paddingLeft = 80, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+                titlePaint = titlePaint, contentPaint = contentPaint,
+            ),
+            "paddingTop" to ScrollLayoutEngine(
+                viewWidth = 1080, viewHeight = 2200,
+                paddingLeft = 40, paddingRight = 40, paddingTop = 120, paddingBottom = 60,
+                titlePaint = titlePaint, contentPaint = contentPaint,
+            ),
+            "lineSpacingExtra" to ScrollLayoutEngine(
+                viewWidth = 1080, viewHeight = 2200,
+                paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+                titlePaint = titlePaint, contentPaint = contentPaint,
+                lineSpacingExtra = 2.0f,
+            ),
+            "paragraphSpacing" to ScrollLayoutEngine(
+                viewWidth = 1080, viewHeight = 2200,
+                paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+                titlePaint = titlePaint, contentPaint = contentPaint,
+                paragraphSpacing = 20,
+            ),
+            "useZhLayout" to ScrollLayoutEngine(
+                viewWidth = 1080, viewHeight = 2200,
+                paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+                titlePaint = titlePaint, contentPaint = contentPaint,
+                useZhLayout = false,
+            ),
+            "textFullJustify" to ScrollLayoutEngine(
+                viewWidth = 1080, viewHeight = 2200,
+                paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+                titlePaint = titlePaint, contentPaint = contentPaint,
+                textFullJustify = false,
+            ),
+            "titleMode" to ScrollLayoutEngine(
+                viewWidth = 1080, viewHeight = 2200,
+                paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleMode = 1,
+            ),
+            "titleAlign" to ScrollLayoutEngine(
+                viewWidth = 1080, viewHeight = 2200,
+                paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleAlign = 2,
+            ),
+            "paragraphIndent" to ScrollLayoutEngine(
+                viewWidth = 1080, viewHeight = 2200,
+                paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
+                titlePaint = titlePaint, contentPaint = contentPaint,
+                paragraphIndent = "\t",
+            ),
+        )
+        cases.forEach { (field, eng) ->
+            assertNotEquals("$field 变化必须改 signature",
+                baseSig, eng.computeStyleSignature())
+        }
+    }
+
+    // ── totalCharCount / isEmpty 派生 ──────────────────────────
+
+    @Test
+    fun `多段 totalCharCount 等于 各段字符数 加 各段末换行 累加`() {
+        val eng = engine()
+        // 段 "AB"(2) + \n(1) + "CD"(2) + \n(1) = 6
+        val layout = eng.layoutChapter(0, "T", "AB\nCD", omitChapterTitleBlock = true)
+        assertEquals(6, layout.totalCharCount)
+    }
+
+    @Test
+    fun `含图片段 totalCharCount 等于 字符 加 图片 1cp 加 段末换行 1cp`() {
+        val eng = engine()
+        // "A<img/>B" 1 段含 3 元素：A 1cp + img 1cp + B 1cp + 段末 \n 1cp = 4cp
+        val layout = eng.layoutChapter(0, "T", """A<img src="x"/>B""",
+            omitChapterTitleBlock = true)
+        assertEquals(4, layout.totalCharCount)
+    }
+
+    @Test
+    fun `isEmpty 派生 含空段 也算 isEmpty 为 false`() {
+        val eng = engine()
+        val layout = eng.layoutChapter(0, "", "", omitChapterTitleBlock = true)
+        // 空内容 → 1 空段 line → isEmpty=false（line 存在）
+        assertFalse(layout.isEmpty)
     }
 }
