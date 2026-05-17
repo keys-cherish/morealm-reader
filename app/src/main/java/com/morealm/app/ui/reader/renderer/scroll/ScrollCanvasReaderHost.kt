@@ -463,13 +463,18 @@ fun ScrollCanvasReaderHost(
                     true
                 },
                 onLongPress = { offset ->
-                    // longPress 触发选区命中（view-local y → chapter y）
-                    // anchorInBox = 长按 tap 点（view-local），给 SelectionToolbar 当 anchor。
+                    // longPress 触发选区命中。坐标转换：
+                    //   - offset 是 view-local（detectTapGestures 提供）
+                    //   - engine column.x 是 chapter-local（[0..visibleWidth]，不含 paddingLeft）
+                    //   - 故 x = view-x - paddingLeft；y = view-y + pixelOffset
+                    // anchorInBox 仍传 view-local 给 SelectionToolbar 当 Popup anchor（PopupPositionProvider
+                    // 内部用 anchorBounds.topLeft + anchorRect 转 window 坐标，应给 view-local）。
+                    val xInChapter = offset.x - currentLayout.paddingLeft
                     val yInChapter = offset.y + state.pixelOffset
                     val sel = handleLongPress(
                         layout = currentLayout,
                         chapterIndex = currentLayout.chapterIndex,
-                        x = offset.x,
+                        x = xInChapter,
                         yInChapter = yInChapter,
                         anchorInBox = offset,
                     )
