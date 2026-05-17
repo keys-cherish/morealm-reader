@@ -48,6 +48,15 @@ fun ChapterPaneCanvas(
     titlePaint: TextPaint,
     chapterNumPaint: TextPaint,
     highlightSpecs: List<ScrollHighlightDrawSpec> = emptyList(),
+    /**
+     * 跳转后呼吸高亮（V1 RevealHighlight 等价）。命中本章时按 cp 范围画半透明 rect 覆盖
+     * 文字（在 highlightSpecs 之上、文字之下），alpha 由 caller 持有的 Animatable 驱动。
+     */
+    revealHighlight: com.morealm.app.ui.reader.renderer.RevealHighlight? = null,
+    /** 搜索高亮 cp 范围；EMPTY = 不画 */
+    searchHighlightCpRange: IntRange = IntRange.EMPTY,
+    /** 搜索高亮 argb */
+    searchHighlightArgb: Int = 0x55FFFF00.toInt(),
     /** Viewport y 范围 lambda（相对章顶）。null = 该章完全不在 viewport，整章 skip。 */
     viewportRangeProvider: () -> Pair<Float, Float>? = { null },
     modifier: Modifier = Modifier,
@@ -123,6 +132,28 @@ fun ChapterPaneCanvas(
                 for (rect in spec.rects) {
                     if (rect.bottom < viewportTop || rect.top > viewportBottom) continue
                     nc.drawRect(rect.left, rect.top, rect.right, rect.bottom, bgFillPaint)
+                }
+            }
+
+            // ─── 层 1.5：搜索高亮（与背景同层但偏前；alpha 通常较高让用户一眼看到命中）───
+            if (!searchHighlightCpRange.isEmpty()) {
+                bgFillPaint.color = searchHighlightArgb
+                drawCpRangeRects(
+                    nc, chapter, searchHighlightCpRange.first, searchHighlightCpRange.last + 1,
+                    viewportTop, viewportBottom, bgFillPaint,
+                )
+            }
+
+            // ─── 层 1.6：RevealHighlight 跳转后呼吸高亮（alpha Animatable 衰减）───
+            // 与搜索同款 rect 算法，但 argb 用 reveal.currentArgb()（含 alpha 缩放）。
+            revealHighlight?.let { rev ->
+                val argb = rev.currentArgb()
+                if ((argb ushr 24) > 0) {
+                    bgFillPaint.color = argb
+                    drawCpRangeRects(
+                        nc, chapter, rev.startChapterPos, rev.endChapterPos,
+                        viewportTop, viewportBottom, bgFillPaint,
+                    )
                 }
             }
 
@@ -240,4 +271,59 @@ private fun drawWavyUnderline(
         phaseUp = !phaseUp
     }
     canvas.drawPath(path, paint)
+}
+
+/**
+ * 把 [startCp, endCp) 范围的字符按行画成 rect，已视口剔除。用于搜索高亮 /
+ * RevealHighlight 等"按 cp 范围实时算 rect"场景（与 ScrollHighlightDrawSpec.rects
+ * 预算缓存的场景不同 —— 那些是稳定状态，这些是动态状态没必要每帧重算 spec）。
+ *
+ * 算法（与 ScrollHighlightProjector 等价）：
+ *   1. 遍历 chapter.pages 累加 pageOffsetY
+ *   2. 每页内遍历 line；按 line.firstChapterPos / lastChapterPos 与 [startCp, endCp)
+ *      求交，命中行扫 columns 找 [leftX, rightX]，画 rect(leftX, pageTop+lineTop,
+ *      rightX, pageTop+lineBottom)
+ *   3. 视口剔除：page 或 line 完全在 viewport 之外 → skip
+ */
+private fun drawCpRangeRects(
+    canvas: android.graphics.Canvas,
+    chapter: ScrollChapterLayout,
+    startCp: Int,
+    endCp: Int,  // exclusive
+    viewportTop: Float,
+    viewportBottom: Float,
+    paint: Paint,
+) {
+    if (endCp <= startCp) return
+    var pageOffsetY = 0f
+    for (page in chapter.pages) {
+        val pageTop = pageOffsetY
+        val pageBottom = pageTop + page.height
+        pageOffsetY = pageBottom
+        if (pageBottom < viewportTop || pageTop > viewportBottom) continue
+        for (line in page.lines) {
+            // 行 cp 范围与目标范围求交：line.firstChapterPos..line.lastChapterPos 与
+            // [startCp, endCp) 重叠才命中
+            if (line.lastChapterPos < startCp || line.firstChapterPos >= endCp) continue
+            val rectTop = pageTop + line.lineTop
+            val rectBottom = pageTop + line.lineBottom
+            if (rectBottom < viewportTop || rectTop > viewportBottom) continue
+            if (line.columns.isEmpty()) {
+                // 空段 / 图片段：整行宽 rect（用 chapter visibleWidth 作宽度近似）
+                canvas.drawRect(0f, rectTop, (chapter.viewWidth - chapter.paddingLeft * 2).toFloat(), rectBottom, paint)
+                continue
+            }
+            var leftX: Float? = null
+            var rightX: Float? = null
+            for (col in line.columns) {
+                if (col.chapterPosition >= startCp && col.chapterPosition < endCp) {
+                    if (leftX == null) leftX = col.start
+                    rightX = col.end
+                }
+            }
+            if (leftX != null && rightX != null) {
+                canvas.drawRect(leftX, rectTop, rightX, rectBottom, paint)
+            }
+        }
+    }
 }
