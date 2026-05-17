@@ -42,6 +42,13 @@ data class ScrollChapterLayout(
      * 会漏算（columns 为空 → null → 0），与持久化语义错位。显式字段保证正确性。
      */
     val totalCharCount: Int,
+    /**
+     * 排版时的 paddingLeft（像素）。column.start 是相对 paddingLeft **内侧**的 x 坐标
+     * （范围 0..visibleWidth），渲染层 ChapterPaneCanvas 需 translate(paddingLeft, 0)
+     * 让文字落在正确位置（不贴屏幕左缘）。
+     * 默认 0 兼容老调用方（已存在的 mock layout 不传也能 compile + 渲染贴左缘只是视觉问题）。
+     */
+    val paddingLeft: Int = 0,
 ) {
     /** 章是否为可见内容为空（所有 page.lines 都为空）。空章节渲染兜底"加载中"/"内容为空"占位。 */
     val isEmpty: Boolean

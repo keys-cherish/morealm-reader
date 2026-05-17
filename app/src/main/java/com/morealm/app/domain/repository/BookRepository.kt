@@ -118,6 +118,14 @@ class BookRepository @Inject constructor(
         chapterDao.getChapter(bookId, index)
 
     suspend fun saveChapters(bookId: String, chapters: List<BookChapter>) {
+        // 防御：禁止空 list 覆盖已有缓存 —— 任何调用方传空都视为 no-op。
+        // 历史 bug（2026-05-17 用户日志 12:48）：fallback 1-chapter placeholder 被
+        // 误 save 到 DB → 下次启动 cached 是 1 章 placeholder → 用户看到的"章节没了"。
+        // 此 guard 在 BookRepository 层兜底，无论上游调用方是否做 isNotEmpty 检查都安全。
+        if (chapters.isEmpty()) {
+            android.util.Log.w("BookRepository", "saveChapters skipped: empty list for bookId=$bookId (防止 wipe 已有 cache)")
+            return
+        }
         chapterDao.deleteByBookId(bookId)
         chapterDao.insertAll(chapters)
     }

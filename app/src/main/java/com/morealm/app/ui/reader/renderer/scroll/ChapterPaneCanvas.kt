@@ -97,15 +97,26 @@ fun ChapterPaneCanvas(
     Canvas(modifier) {
         drawIntoCanvas { canvas ->
             val nc = canvas.nativeCanvas
+            // paddingLeft 偏移：column.start 是相对 paddingLeft 内侧的 x（0..visibleWidth），
+            // translate 让所有 drawText / drawRect 整体右移 paddingLeft，避免内容贴屏幕左缘。
+            nc.save()
+            nc.translate(chapter.paddingLeft.toFloat(), 0f)
 
             // ─── 视口剔除：viewport 范围 lambda 在 draw scope 内读 state，
             //              享受 draw-only re-execution（pixelOffset 变化只重 draw 不 measure）
             val range = viewportRangeProvider()
-            if (range == null) return@drawIntoCanvas  // 整章不在视口（prev 章常态）
+            if (range == null) {
+                nc.restore()
+                return@drawIntoCanvas
+            }
 
             // 给一点缓冲（200px）避免边界 page 突然出现/消失闪烁
             val viewportTop = range.first - 200f
-            val viewportBottom = range.second + 200f
+            // 兜底：viewportHeightPx 在首帧 onSizeChanged 触发前 = 0，range.second == range.first
+            // → 视口范围 ±200 让首页一半被剔除（用户反馈：屏幕显示一半）。
+            // 检测到视口高度过小（< 400）时跳过剔除（画整章），首帧不掉内容。
+            val rawHeight = range.second - range.first
+            val viewportBottom = if (rawHeight < 400f) Float.MAX_VALUE else range.second + 200f
 
             // ─── 层 1：背景高亮 rect（仅画与 viewport 相交的 rect）───
             for (spec in bgSpecs) {
@@ -175,6 +186,8 @@ fun ChapterPaneCanvas(
                     }
                 }
             }
+
+            nc.restore()  // 平衡前面 nc.save() + translate(paddingLeft)
         }
     }
 }

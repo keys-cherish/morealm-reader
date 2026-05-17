@@ -55,6 +55,7 @@ fun ScrollCanvasReaderHost(
     fontSize: Int = 48,
     onChapterIndexChange: (Int) -> Unit = {},
     onSelectionAction: (ScrollSelectionAction, ScrollSelectionState) -> Unit = { _, _ -> },
+    onTapCenter: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val contentPaint = remember(fontSize) {
@@ -176,6 +177,7 @@ fun ScrollCanvasReaderHost(
                     // swap 后 state.currentChapterIndex 已变；通知外部 VM 更新持久化
                     onChapterIndexChange(state.currentChapterIndex)
                 },
+                onTapCenter = onTapCenter,
             )
             // M6.0 暂禁 SelectionOverlay / SelectionMenu —— pointerInput 拦截
             // down event 导致滚动失效。先确保用户能滚 + 验证跳章 bug 根治。
