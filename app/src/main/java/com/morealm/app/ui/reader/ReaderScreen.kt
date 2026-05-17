@@ -677,6 +677,8 @@ fun ReaderScreen(
                 isNight = isNight,
                 letterSpacing = effectiveReaderStyle?.letterSpacing ?: 0f,
                 textBold = effectiveReaderStyle?.textBold ?: 0,
+                lineSpacingExtra = readerLineHeight,
+                paragraphSpacing = effectiveReaderStyle?.paragraphSpacing ?: 8,
                 bgImageUri = readerBgImage,
                 bgColorArgb = readerBg.toArgb(),
                 // TTS auto-follow（与 V1 LazyScrollRenderer 等价路径）：

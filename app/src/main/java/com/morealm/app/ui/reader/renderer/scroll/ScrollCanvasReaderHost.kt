@@ -94,6 +94,16 @@ fun ScrollCanvasReaderHost(
     letterSpacing: Float = 0f,
     /** 字重：0=normal / 1=bold / 2=light（ReaderStyle.textBold）。 */
     textBold: Int = 0,
+    /**
+     * 行距倍率（ReaderStyle.lineHeight），1.0 = 行高刚好，1.5 = 1.5 倍。
+     * 引擎用 lineSpacingExtra = 此值；默认 1.2 与旧硬编码一致。
+     */
+    lineSpacingExtra: Float = 1.2f,
+    /**
+     * 段间距（ReaderStyle.paragraphSpacing，整数刻度，引擎内 px = textHeight * /10）。
+     * 默认 8 与旧硬编码一致。
+     */
+    paragraphSpacing: Int = 8,
     /** 阅读区背景图 uri；空串 = 纯色背景。来自 ReaderScreen 的 readerBgImage。 */
     bgImageUri: String = "",
     /** 阅读区纯色背景（android argb）—— 无背景图 / 背景图加载失败时使用。 */
@@ -196,7 +206,7 @@ fun ScrollCanvasReaderHost(
         }
     }
 
-    val engine = remember(viewWidth, viewHeight, paddingLeft, paddingRight, paddingTop, paddingBottom, contentPaint, titlePaint, chapterNumPaint) {
+    val engine = remember(viewWidth, viewHeight, paddingLeft, paddingRight, paddingTop, paddingBottom, contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing) {
         ScrollLayoutEngine(
             viewWidth = viewWidth,
             viewHeight = viewHeight,
@@ -207,6 +217,8 @@ fun ScrollCanvasReaderHost(
             titlePaint = titlePaint,
             contentPaint = contentPaint,
             chapterNumPaint = chapterNumPaint,
+            lineSpacingExtra = lineSpacingExtra,
+            paragraphSpacing = paragraphSpacing,
         )
     }
 
@@ -533,19 +545,19 @@ fun ScrollCanvasReaderHost(
                         },
                         onHighlight = onAddHighlight?.let { cb ->
                             { argb ->
-                                cb(cpRange.first, cpRange.last, selText, argb)
+                                cb(cpRange.first, cpRange.last + 1, selText, argb)
                                 selection = ScrollSelectionState.Empty
                             }
                         },
                         onEraseHighlight = onEraseHighlight?.let { cb ->
                             {
-                                cb(cpRange.first, cpRange.last)
+                                cb(cpRange.first, cpRange.last + 1)
                                 selection = ScrollSelectionState.Empty
                             }
                         },
                         onTextColor = onAddTextColor?.let { cb ->
                             { argb ->
-                                cb(cpRange.first, cpRange.last, selText, argb)
+                                cb(cpRange.first, cpRange.last + 1, selText, argb)
                                 selection = ScrollSelectionState.Empty
                             }
                         },
