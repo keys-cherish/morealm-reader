@@ -56,6 +56,10 @@ import androidx.compose.ui.unit.Constraints
 @Composable
 fun ScrollCanvasRenderer(
     state: ScrollCanvasReaderState,
+    /** ChapterPaneCanvas 用的正文 paint —— 必须与排版引擎同一份。 */
+    contentPaint: android.text.TextPaint,
+    titlePaint: android.text.TextPaint,
+    chapterNumPaint: android.text.TextPaint,
     modifier: Modifier = Modifier,
     onChapterShift: (delta: Int) -> Unit = {},
     onProgress: (Float) -> Unit = {},
@@ -130,6 +134,9 @@ fun ScrollCanvasRenderer(
             if (prev != null) {
                 ChapterPaneCanvas(
                     chapter = prev,
+                    contentPaint = contentPaint,
+                    titlePaint = titlePaint,
+                    chapterNumPaint = chapterNumPaint,
                     viewportRangeProvider = {
                         // prev 章在 view 中位置 = -offset - prevH；viewport 顶 view y = 0
                         // → viewport 在 prev 章内 y 范围 = [offset + prevH, offset + prevH + viewportH]
@@ -144,6 +151,9 @@ fun ScrollCanvasRenderer(
             if (cur != null) {
                 ChapterPaneCanvas(
                     chapter = cur,
+                    contentPaint = contentPaint,
+                    titlePaint = titlePaint,
+                    chapterNumPaint = chapterNumPaint,
                     viewportRangeProvider = {
                         val offset = state.pixelOffset
                         offset to (offset + viewportHeightPx)
@@ -155,6 +165,9 @@ fun ScrollCanvasRenderer(
             if (next != null) {
                 ChapterPaneCanvas(
                     chapter = next,
+                    contentPaint = contentPaint,
+                    titlePaint = titlePaint,
+                    chapterNumPaint = chapterNumPaint,
                     viewportRangeProvider = {
                         // next 章在 view 中位置 = -offset + curH；viewport 顶 view y = 0
                         // → viewport 在 next 章内 y 范围 = [offset - curH, offset - curH + viewportH]
