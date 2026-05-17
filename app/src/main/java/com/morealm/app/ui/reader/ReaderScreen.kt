@@ -1179,7 +1179,21 @@ fun ReaderScreen(
                 currentMode = pageTurnMode,
                 onModeChange = viewModel.settings::setPageTurnMode,
                 pageAnim = pageAnim,
-                onPageAnimChange = viewModel.settings::setPageAnim,
+                onPageAnimChange = { key ->
+                    // 修用户反馈"滚动模式下翻页没法切换"：
+                    // pageAnim (字符串 slide/cover/simulation/vertical/none) 是动画类型；
+                    // pageTurnMode (枚举 SCROLL/SWIPE_LR/...) 是渲染器模式（滚动 vs 分页）。
+                    // 用户点"上下滚动" → 滚动模式；点"仿真"/"覆盖"/"平移"/"无动画" → 分页模式。
+                    // 之前只改 pageAnim → V2 mount 判定 pageTurnMode 没变 → 渲染器不切换。
+                    viewModel.settings.setPageAnim(key)
+                    val newMode = if (key == "vertical") {
+                        PageTurnMode.SCROLL
+                    } else {
+                        // 其他动画都走分页模式（V1 CanvasRenderer），具体动画由 pageAnimType 决定
+                        PageTurnMode.SWIPE_LR
+                    }
+                    viewModel.settings.setPageTurnMode(newMode)
+                },
                 currentFont = fontFamily,
                 onFontChange = viewModel.settings::setFontFamily,
                 currentFontSize = fontSize,

@@ -579,6 +579,7 @@ fun BookSourceManageScreen(
                             val isLoggedIn = loginStatusMap[source.bookSourceUrl] == true
                             SourceItem(
                                 source = source,
+                                enabled = source.enabled,
                                 checkResult = checkResult,
                                 isLoggedIn = isLoggedIn,
                                 selected = source.bookSourceUrl in selectedUrls,
@@ -627,6 +628,7 @@ fun BookSourceManageScreen(
                                     val isLoggedIn = loginStatusMap[source.bookSourceUrl] == true
                                     SourceItem(
                                         source = source,
+                                        enabled = source.enabled,
                                         checkResult = checkResult,
                                         isLoggedIn = isLoggedIn,
                                         selected = source.bookSourceUrl in selectedUrls,
@@ -819,6 +821,22 @@ fun BookSourceManageScreen(
 @Composable
 private fun SourceItem(
     source: BookSource,
+    /**
+     * 单独提取的 enabled boolean 参数 —— 修用户反馈"toggle 不实时生效"。
+     *
+     * 根因（log 21:31:50 实锤）：source: BookSource 是 data class with 几十个字段，
+     * Compose strong skipping 把 SourceItem 看作 stable function。后续 source 参数变化
+     * 时（仅 enabled 字段从 true→false），Compose 比较 source.equals(prevSource)，
+     * data class equals 比较所有字段后返 false，本应 recompose。
+     *
+     * 但日志显示 SourceItem render log 只触发 1 次，后续 toggle 多次都没再触发 ——
+     * Compose 实际跳过了 SourceItem。可能与 LazyColumn item slot 复用 + Compose
+     * skipping policy 内部对"嵌套 data class 字段"的稳定性判断有关。
+     *
+     * 修：把 source.enabled 单独提取为 Boolean 参数（primitive stable），Compose 100%
+     * 识别参数变化触发重组。SourceItem 内 Switch.checked 用此参数而非 source.enabled。
+     */
+    enabled: Boolean,
     checkResult: CheckSource.CheckResult? = null,
     isLoggedIn: Boolean = false,
     selected: Boolean = false,
@@ -930,7 +948,7 @@ private fun SourceItem(
                 }
             }
             Switch(
-                checked = source.enabled,
+                checked = enabled,
                 onCheckedChange = if (selectionMode) null else { { onToggle() } },
                 enabled = !selectionMode,
                 colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
