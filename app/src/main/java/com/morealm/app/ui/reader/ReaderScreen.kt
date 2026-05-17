@@ -679,6 +679,11 @@ fun ReaderScreen(
                 textBold = effectiveReaderStyle?.textBold ?: 0,
                 lineSpacingExtra = readerLineHeight,
                 paragraphSpacing = effectiveReaderStyle?.paragraphSpacing ?: 8,
+                // 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer jumpToken/jumpChapterPosition 等价）：
+                // renderedChapter.restoreToken 由 ReaderChapterController.loadChapter 每次 nanoTime 换新值。
+                initialChapterPosition = renderedChapter.initialChapterPosition,
+                restoreToken = renderedChapter.restoreToken,
+                onProgressRestored = { viewModel.clearNavigateDirection() },
                 bgImageUri = readerBgImage,
                 bgColorArgb = readerBg.toArgb(),
                 // TTS auto-follow（与 V1 LazyScrollRenderer 等价路径）：
@@ -695,6 +700,8 @@ fun ReaderScreen(
                 onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
                 // 用户高亮：传整本书所有 highlight，Host 内按章过滤 + 投影
                 chapterHighlightsRaw = viewModel.highlights.collectAsStateWithLifecycle().value,
+                // 书签：传整本书所有 bookmark，Host 内按章过滤 + 画三角标记
+                bookmarks = viewModel.bookmarks.collectAsStateWithLifecycle().value,
                 // tap 命中高亮弹菜单：删除 + 分享（与 V1 LazyScrollSection 同源）
                 onDeleteHighlight = { id -> viewModel.highlight.delete(id) },
                 onShareHighlight = { highlight ->
