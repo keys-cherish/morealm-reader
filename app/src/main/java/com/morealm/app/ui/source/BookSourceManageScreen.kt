@@ -61,7 +61,14 @@ fun BookSourceManageScreen(
     val context = LocalContext.current
     // 用 SourcesSnapshot wrapper（reference-equality）绕开 StateFlow / Compose State 内置
     // 的 structural equality dedup —— combine 输出 list 内容相同时会被 dedup 导致 UI 不重组。
-    val sources = viewModel.sources.collectAsStateWithLifecycle().value.items
+    // 修用户反馈"toggle 不实时生效"：之前 `val sources = state.value.items` 一次性 unwrap
+    // 让 List 跟 SourcesSnapshot State 解耦 — recompose 后 sources 是 new List ref 但
+    // LazyColumn items() 内部按 key dedup item slot 时基于 list 元素结构相等。
+    // 用 derivedStateOf 让 sources 是 State<List>，Compose snapshot 自动 track .value 读取。
+    val sourcesSnapshotState = viewModel.sources.collectAsStateWithLifecycle()
+    val sources by remember(sourcesSnapshotState) {
+        androidx.compose.runtime.derivedStateOf { sourcesSnapshotState.value.items }
+    }
     val isImporting by viewModel.isImporting.collectAsStateWithLifecycle()
     val importProgress by viewModel.importProgress.collectAsStateWithLifecycle()
     val importResult by viewModel.importResult.collectAsStateWithLifecycle()

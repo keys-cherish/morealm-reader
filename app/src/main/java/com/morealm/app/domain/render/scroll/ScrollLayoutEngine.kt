@@ -165,7 +165,16 @@ class ScrollLayoutEngine(
         var paragraphCounter = 0
 
         fun flushPage() {
-            val height = currentPageLines.lastOrNull()?.lineBottom?.let { it + paddingBottom }
+            // 修复用户反馈"段间距过大"+ totalHeight 暴涨（285701/395359 px）：
+            // V2 是滚动模式（pixelOffset 像素滚），pages 仅是 viewport culling 单元，
+            // 内部不应该有"翻页"留白。之前 page.height = lineBottom + paddingBottom，
+            // flushPage 后 currentY = paddingTop → 内部 page 之间多 paddingBottom +
+            // paddingTop ≈ 600 px 视觉留白，223 个内部 page × 600 = 140k px 纯空白。
+            //
+            // 修：内部 page 之间不留白（page.height = lineBottom），currentY = 0 让下
+            // page 第一行紧贴上 page 末。仅章首 / 章末由 ScrollChapterLayout.paddingTop /
+            // paddingBottom 字段（Renderer placement 处理章间重叠）。
+            val height = currentPageLines.lastOrNull()?.lineBottom
                 ?: (paddingTop + paddingBottom).toFloat()
             pages.add(
                 ScrollPage(
@@ -176,7 +185,7 @@ class ScrollLayoutEngine(
                 )
             )
             currentPageLines = mutableListOf()
-            currentY = paddingTop.toFloat()
+            currentY = 0f  // 内部 page 顶不留 paddingTop（仅首 page 用 paddingTop, init 时已设）
         }
 
         // emitLine：把一行 columns 打包成 ScrollLine 追加到 currentPageLines；
@@ -207,7 +216,8 @@ class ScrollLayoutEngine(
             val finalBottom: Float
             if (needNewPage) {
                 flushPage()
-                finalTop = paddingTop.toFloat()
+                // 内部 page 顶不留 paddingTop（仅首 page 第一行用 paddingTop，由 init currentY 设置）
+                finalTop = 0f
                 finalBottom = finalTop + effectiveLineHeight
             } else {
                 finalTop = proposedTop
@@ -590,6 +600,12 @@ class ScrollLayoutEngine(
 
         if (currentPageLines.isNotEmpty()) {
             flushPage()
+        }
+        // 章末 paddingBottom：flushPage 现在 page.height 不含 paddingBottom（修留白暴涨），
+        // 但**最后一页**章末应该保留底部留白让正文不贴章节边界。给末 page.height 加回。
+        if (pages.isNotEmpty()) {
+            val last = pages.removeAt(pages.lastIndex)
+            pages.add(last.copy(height = last.height + paddingBottom))
         }
         // 空章节兜底：至少一空页，渲染层据此画"内容为空"占位
         if (pages.isEmpty()) {
