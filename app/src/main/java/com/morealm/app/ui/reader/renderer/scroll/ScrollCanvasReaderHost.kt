@@ -377,6 +377,8 @@ fun ScrollCanvasReaderHost(
                 searchHighlightChapterIndex = searchHighlightChapterIndex,
                 searchHighlightCpRange = searchHighlightCpRange,
                 searchHighlightArgb = searchHighlightArgb,
+                selectionChapterIndex = if (selection.isActive) selection.chapterIndex else -1,
+                selectionCpRange = if (selection.isActive) selection.cpRange else IntRange.EMPTY,
                 onChapterShift = { _ ->
                     onChapterIndexChange(state.currentChapterIndex)
                 },

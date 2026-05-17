@@ -66,6 +66,10 @@ fun ScrollCanvasRenderer(
     searchHighlightChapterIndex: Int = -1,
     searchHighlightCpRange: IntRange = IntRange.EMPTY,
     searchHighlightArgb: Int = 0x55FFFF00.toInt(),
+    /** 选区命中章 idx；与 currentChapter 不一致时不画选区背景 */
+    selectionChapterIndex: Int = -1,
+    selectionCpRange: IntRange = IntRange.EMPTY,
+    selectionArgb: Int = 0x4D5B6CFE.toInt(),
     modifier: Modifier = Modifier,
     onChapterShift: (delta: Int) -> Unit = {},
     onProgress: (Float) -> Unit = {},
@@ -155,10 +159,13 @@ fun ScrollCanvasRenderer(
                 Box(Modifier)
             }
             if (cur != null) {
-                // reveal / search 只在命中当前章时透传给中间块（prev/next 块从来不画这俩）
+                // reveal / search / selection 只在命中当前章时透传给中间块（prev/next 块从来不画这些）
                 val revealForCur = revealHighlight?.takeIf { it.chapterIndex == cur.chapterIndex }
                 val searchRangeForCur = if (searchHighlightChapterIndex == cur.chapterIndex) {
                     searchHighlightCpRange
+                } else IntRange.EMPTY
+                val selectionRangeForCur = if (selectionChapterIndex == cur.chapterIndex) {
+                    selectionCpRange
                 } else IntRange.EMPTY
                 ChapterPaneCanvas(
                     chapter = cur,
@@ -168,6 +175,8 @@ fun ScrollCanvasRenderer(
                     revealHighlight = revealForCur,
                     searchHighlightCpRange = searchRangeForCur,
                     searchHighlightArgb = searchHighlightArgb,
+                    selectionCpRange = selectionRangeForCur,
+                    selectionArgb = selectionArgb,
                     viewportRangeProvider = {
                         val offset = state.pixelOffset
                         offset to (offset + viewportHeightPx)
