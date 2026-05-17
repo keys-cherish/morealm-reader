@@ -165,6 +165,11 @@ fun ChapterPaneCanvas(
             // 修复用户反馈"文字选中标记都没有"：handle dot 是有的，但选区背景之前没画。
             if (!selectionCpRange.isEmpty()) {
                 bgFillPaint.color = selectionArgb
+                AppLog.info(
+                    "ChapterPaneCanvas",
+                    "selectionBg ch=${chapter.chapterIndex} cp=${selectionCpRange.first}..${selectionCpRange.last} " +
+                        "viewport=$viewportTop..$viewportBottom paddingL=${chapter.paddingLeft}",
+                )
                 drawCpRangeRects(
                     nc, chapter, selectionCpRange.first, selectionCpRange.last + 1,
                     viewportTop, viewportBottom, bgFillPaint,
@@ -361,6 +366,11 @@ private fun drawCpRangeRects(
             }
             if (leftX != null && rightX != null) {
                 canvas.drawRect(leftX, rectTop, rightX, rectBottom, paint)
+                com.morealm.app.core.log.AppLog.info(
+                    "ChapterPaneCanvas",
+                    "  drawCpRangeRect line.cp=${line.firstChapterPos}..${line.lastChapterPos} " +
+                        "rect=L${leftX}..R${rightX} T${rectTop}..B${rectBottom}",
+                )
             }
         }
     }

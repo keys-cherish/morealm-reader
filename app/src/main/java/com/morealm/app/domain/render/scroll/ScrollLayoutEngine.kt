@@ -433,15 +433,16 @@ class ScrollLayoutEngine(
 
                 // ── exceed 行末压缩（移植 V1 ChapterProvider.exceed L1034-1056 等价）──
                 // ZhLayout 处理 CJK 标点悬挂时会让 lineEnd 包含超出 visibleWidth 的标点。
-                // exceed 检测末 column.end > visibleWidth 时，按反向递减位移把所有 column
-                // 向左压缩，让末 column 贴 visibleWidth。这样字符不会画进 paddingRight 区。
+                // exceed 检测末 column.end > visibleWidth 时，按位移让末 column 贴 visibleWidth：
+                // 最后一列位移最大 (cc * size = excess)，最左列位移最小 (cc * 1)。
+                // 视觉效果：字符间距微缩，相邻 column 略重叠，行末刚好齐 visibleWidth。
                 val lastEnd = cols.last().end
                 val excess = lastEnd - visibleWidth.toFloat()
                 if (excess > 0f && cols.size >= 2) {
                     val cc = excess / cols.size
                     for (i in cols.indices) {
-                        // 反向：最后一列位移 0，倒数第二列 cc，... 最左列 cc*(n-1)
-                        val py = cc * (cols.size - 1 - i)
+                        // i=0 (first col) 位移 cc * 1；i=last 位移 cc * size = excess
+                        val py = cc * (i + 1)
                         val c = cols[i]
                         cols[i] = c.copy(start = c.start - py, end = c.end - py)
                     }
