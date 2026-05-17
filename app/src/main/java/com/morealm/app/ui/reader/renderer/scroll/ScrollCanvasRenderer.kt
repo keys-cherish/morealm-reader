@@ -78,6 +78,11 @@ fun ScrollCanvasRenderer(
     onChapterShift: (delta: Int) -> Unit = {},
     onProgress: (Float) -> Unit = {},
     onTapCenter: () -> Unit = {},
+    /**
+     * tap (xInView, yInView) 回调 —— Host 内做 tap-on-highlight 命中判定。
+     * 返回 true 表示已消费（如弹了 highlight 菜单），false 表示放过 → 调 onTapCenter。
+     */
+    onTap: (androidx.compose.ui.geometry.Offset) -> Boolean = { false },
     /** 长按 (xInView, yInView) 触发回调 —— Host 内做选区命中。 */
     onLongPress: (androidx.compose.ui.geometry.Offset) -> Unit = {},
 ) {
@@ -97,6 +102,7 @@ fun ScrollCanvasRenderer(
     var viewportHeightPx by remember { mutableIntStateOf(0) }
 
     val onTapCenterUpdated by rememberUpdatedState(onTapCenter)
+    val onTapUpdated by rememberUpdatedState(onTap)
     val onLongPressUpdated by rememberUpdatedState(onLongPress)
     Layout(
         modifier = modifier
@@ -130,10 +136,14 @@ fun ScrollCanvasRenderer(
             }
             .pointerInput(Unit) {
                 // detectTapGestures 不消费 down event 直到判定 tap / longPress，
-                // 与 .scrollable 共存：tap 触发 onTapCenter；longPress 触发 onLongPress；
+                // 与 .scrollable 共存：tap 先尝试 onTap（高亮命中），未命中再 fall-through 到
+                // onTapCenter（切控制栏）；longPress 触发 onLongPress（选区）；
                 // move 触发 scrollable 处理 fling。
                 detectTapGestures(
-                    onTap = { onTapCenterUpdated() },
+                    onTap = { offset ->
+                        val consumed = onTapUpdated(offset)
+                        if (!consumed) onTapCenterUpdated()
+                    },
                     onLongPress = { offset -> onLongPressUpdated(offset) },
                 )
             }
