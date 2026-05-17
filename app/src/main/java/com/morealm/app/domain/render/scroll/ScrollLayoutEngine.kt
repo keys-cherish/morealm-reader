@@ -45,7 +45,13 @@ class ScrollLayoutEngine(
     val paddingBottom: Int,
     val titlePaint: TextPaint,
     val contentPaint: TextPaint,
-    val paragraphIndent: String = "　　",
+    /**
+     * 段首缩进字符（默认空）—— 注意：实际场景中 [com.morealm.app.domain.webbook.ContentProcessor]
+     * 已经在每段文本前加了 "　　"，因此 engine 默认不再 额外加 indentWidth offset，否则
+     * 会变成双重缩进（用户反馈 image #11 缩进 ≈ 4 字宽）。
+     * 若上层传入未经 ContentProcessor 的 raw content（如某些路径），可显式设 "　　"。
+     */
+    val paragraphIndent: String = "",
     val textFullJustify: Boolean = true,
     val titleMode: Int = 0,         // 0=left, 1=center, 2=hidden
     val titleAlign: Int = 0,        // 0=left, 1=center, 2=right
@@ -134,7 +140,41 @@ class ScrollLayoutEngine(
         //   - 空段（连续 `\n\n` 之间的空字符串）**保留**：产生空 ScrollLine（columns 空、
         //     高 = contentLineHeight）+ chapterPosition += 1（用户决策 2026-05-17：
         //     空段占 1 个 cp，与原文 \n 位置 1:1 对齐）
-        val paragraphs = content.split('\n').map { it.trimEnd('\r') }
+        val rawParagraphs = content.split('\n').map { it.trimEnd('\r') }
+
+        // ── 重复标题去重（V1 ChapterProvider.stripDuplicateTitleSegments + isSameChapterTitle 等价）──
+        // 书源书籍 / EPUB 常常把章名重复写在正文开头，与自画 title 块同框 → 用户看到两次。
+        // 算法 1：stripDuplicateTitleSegments —— N=3..1 尝试，前 N 段拼接 normalized == title → drop。
+        // 算法 2：isSameChapterTitle —— 第 1 段单独 normalized == title → contentProvidesChapterTitle=true，跳过自画块。
+        val normalizedTitle = normalizeTitleForCompare(title)
+        // 找出非空段以便 stripDuplicateTitleSegments 拼接判定（空段不影响标题去重）
+        val nonEmptyParagraphs = rawParagraphs.filter { it.isNotBlank() }
+        var stripCount = 0
+        if (normalizedTitle.isNotEmpty() && nonEmptyParagraphs.isNotEmpty()) {
+            val maxN = minOf(3, nonEmptyParagraphs.size)
+            for (n in maxN downTo 1) {
+                val joined = nonEmptyParagraphs.take(n)
+                    .joinToString("") { normalizeTitleForCompare(it) }
+                if (joined == normalizedTitle) {
+                    stripCount = n
+                    break
+                }
+            }
+        }
+        // 若前 N 段 normalized 拼接等于 title → 从 rawParagraphs 头部跳过对应非空段
+        val paragraphs = if (stripCount == 0) {
+            rawParagraphs
+        } else {
+            var skipped = 0
+            rawParagraphs.dropWhile {
+                if (skipped >= stripCount) false
+                else {
+                    if (it.isNotBlank()) skipped++
+                    skipped <= stripCount
+                }
+            }
+        }
+        val contentProvidesChapterTitle = stripCount >= 1  // 已去掉重复 title 段 → 不再画自画 title 块
 
         val pages = mutableListOf<ScrollPage>()
         var currentPageLines = mutableListOf<ScrollLine>()
@@ -335,7 +375,7 @@ class ScrollLayoutEngine(
         // 章首块字符占 cp（chapter-num + title + 各自段末 \n），cp 累加到 chapterPositionCounter。
         // 这与旧引擎 stringBuilder 累加规则严格对齐，保证已存 Highlight.startChapterPos 在
         // 新引擎下反查到同字符（跨引擎兼容关键）。
-        if (titleMode != 2 && !omitChapterTitleBlock && title.isNotBlank()) {
+        if (titleMode != 2 && !omitChapterTitleBlock && !contentProvidesChapterTitle && title.isNotBlank()) {
             val (chapterNumText, titleText) = splitChapterNumAndTitle(title)
             val hasChapterNum = chapterNumText != null
             val hasTitle = titleText.isNotBlank()
@@ -466,7 +506,12 @@ class ScrollLayoutEngine(
                 if (chars.isEmpty()) return
 
                 if (useZhLayout) {
-                    val layout = ZhLayout(textChunk, contentPaint, visibleWidth, chars, widths, 0)
+                    // 修复用户反馈"首行缩进太大"：之前 indentSize=0 让 ZhLayout 按完整 visibleWidth
+                    // 切行，但 emitOneLine 又把首行 startX = indentWidth → 实际可用宽 = visibleWidth -
+                    // indentWidth，首行字数过多 → exceed 强力压缩 → 视觉感受"缩进很大字间距窄"。
+                    // 修：传 paragraphIndent.length 让 ZhLayout 知道首行少 indentSize 个字位置。
+                    val indentSize = if (isFirstChunkOfPara) paragraphIndent.length else 0
+                    val layout = ZhLayout(textChunk, contentPaint, visibleWidth, chars, widths, indentSize)
                     for (lineIndex in 0 until layout.lineCount) {
                         // ZhLayout.lineStart/lineEnd 是 UTF-16 char index（基于 text.length），
                         // 而 chars/widths 是 code-point 切分（surrogate pair 合并 1 元素）。
@@ -705,6 +750,18 @@ class ScrollLayoutEngine(
         append("zh=").append(useZhLayout).append(';')
         append("fj=").append(textFullJustify)
     }
+
+    /**
+     * 标题归一化（V1 ChapterProvider.normalizeTitleForCompare 等价）。
+     * 用于 stripDuplicateTitleSegments + isSameChapterTitle 比对：
+     *   - 去掉 ideographic space "　"
+     *   - 去掉所有空白
+     *   - trim
+     */
+    private fun normalizeTitleForCompare(value: String): String = value
+        .replace("　", "")
+        .replace(Regex("\\s+"), "")
+        .trim()
 
     /**
      * 拆分章节标题为 (chapter-num, title) 两部分。

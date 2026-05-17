@@ -107,7 +107,9 @@ fun ScrollChapterLayout.findColumnByPixel(x: Float, yWithinChapter: Float): Scro
     val column: ScrollColumn? = when {
         line.columns.isEmpty() -> null
         x < line.columns.first().start -> line.columns.first()
-        x >= line.columns.last().end -> line.columns.last()
+        // 严格大于：边界 x == last.end 时优先走 in-column 匹配（用 0 宽 column 退化场景
+        // 之前用 >= 会把所有 col.start=col.end=0 的 column 吸到末位 → 测试失败）
+        x > line.columns.last().end -> line.columns.last()
         else -> line.columns.firstOrNull { x in it.start..it.end }
             ?: line.columns.last()
     }
