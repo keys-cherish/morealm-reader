@@ -481,9 +481,9 @@ class AppPreferences @Inject constructor(
     val volumeKeyPage: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.VOLUME_KEY_PAGE] ?: true }
 
-    /** 实验性：SCROLL 模式启用 Canvas V2 引擎。默认 false。 */
+    /** SCROLL 模式启用 Canvas V2 引擎。v1.4 起默认 true（替换老滚动引擎，根治跨章跳章 bug）。 */
     val scrollCanvasV2: Flow<Boolean> = context.dataStore.data
-        .map { it[Keys.SCROLL_CANVAS_V2] ?: false }
+        .map { it[Keys.SCROLL_CANVAS_V2] ?: true }
 
     /**
      * 音量键方向反转。默认 false：音量下=下一页、音量上=上一页（与系统/Legado 一致）。

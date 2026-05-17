@@ -194,10 +194,12 @@ private data class ChangelogEntry(
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
         version = "v1.4",
-        date = "2026-05-15",
-        title = "Kindle 电子书完整支持 + 大文件夹导入加速",
+        date = "2026-05-17",
+        title = "滚动阅读新引擎（实验性）+ Kindle 完整支持 + 大文件夹导入加速",
         tag = ReleaseTag.LATEST,
         items = listOf(
+            ChangelogItem(ChangeType.NEW, "滚动阅读模式新引擎（默认启用）—— 固定 prev/cur/next 三章常驻 + 像素级滚动，从根上消除老滚动引擎的跨章跳章 bug（向上翻页连续跳几章 / 章序错乱）。功能与老引擎对齐：长按选词 + handle 拖动 / 8 项选区菜单 / 高亮 + 字色 + 下划线 / 字号 + 行距 + 段距 + 字体 + 字重实时生效 / 顶底状态栏 / 背景图 / TTS 段跟随 / 续读 + 书签跳转 / 章顶三角标记 / tap 已存高亮弹删除分享菜单。如遇到滚动模式有问题可在 设置 → 阅读 → 实验性功能 关掉退回老引擎"),
+            ChangelogItem(ChangeType.IMPROVE, "关于 Edge TTS（微软语音）—— Edge TTS 走微软官方接口，可能因网络环境 / 微软侧风控波动 / 频率限制等原因偶尔不可用。遇到 TTS 报错或无声音：稍候重试 / 换网络（4G ↔ WiFi）/ 或在阅读器 TTS 面板切到系统 TTS 引擎"),
             ChangelogItem(ChangeType.NEW, "azw3 / Kindle 电子书完整支持 —— 个别现代 azw3 现在能正常打开，章节目录、正文、封面都对了"),
             ChangelogItem(ChangeType.NEW, "竖排版多了「章标在左」选项 —— 设置 → 阅读 → 竖排版，可在「横排」「竖排（章标在右）」「竖排（章标在左）」三种间切换"),
             ChangelogItem(ChangeType.NEW, "空章节给清晰提示 —— 遇到分隔页、版权页等没有正文的章节，显示「本章暂无内容」，不再大片空白"),
@@ -205,7 +207,6 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             ChangelogItem(ChangeType.NEW, "导入时拦坏文件 —— .epub 后缀但内容是 0 字节 / 不是 ZIP 的文件在入库前被拒绝，避免书架占位卡死"),
             ChangelogItem(ChangeType.IMPROVE, "大文件夹导入显著加速 —— 上千本书的导入从「数分钟」缩到「半分钟以内」，先秒进书架占位，后台慢慢补封面 / 元数据"),
             ChangelogItem(ChangeType.IMPROVE, "漫画 / 小说自动识别更准 —— 带几张插图的个别轻小说不再被误判为漫画"),
-            ChangelogItem(ChangeType.IMPROVE, "回归小说阅读器定位 —— 不再识别 .rar / .7z / .cbz / .cbr 等漫画压缩包后缀，只保留 .zip"),
             ChangelogItem(ChangeType.IMPROVE, "快速连点同一本书不再叠开多个 —— 连点 5 次只进一次阅读器，按一次返回就回主页"),
             ChangelogItem(ChangeType.FIX, "跨章节后音量键 / 顶栏按钮翻页失灵 —— 章节切换后短时间内按音量键、按顶栏「上一页 / 下一页」按钮没反应，必须等几秒或退出重进。现在跨章瞬间就能按"),
             ChangelogItem(ChangeType.FIX, "仿真翻页（贝塞尔卷边）模式音量键能用了 —— 之前在仿真翻页下按音量键完全没反应（只能手指点屏幕翻），现在音量键也能触发卷边翻页动画"),
