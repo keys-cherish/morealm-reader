@@ -245,10 +245,23 @@ fun ScrollCanvasRenderer(
                 "mismatch=${curLayoutVw > 0 && curLayoutVw != viewWidth}",
         )
 
-        // measure 各块 height = chapter.totalHeight；null 章节高度 = 0 占位
-        val prevH = state.prevChapter?.totalHeight?.toInt() ?: 0
-        val curH = state.currentChapter?.totalHeight?.toInt() ?: 0
-        val nextH = state.nextChapter?.totalHeight?.toInt() ?: 0
+        // measure 各块 height = chapter.totalHeight；null 章节高度 = 0 占位。
+        // Compose Constraints 单维度 max ≈ 131070 px（18-bit 内部编码）。超过会 crash：
+        // IllegalArgumentException: Can't represent a width of W and height of H in Constraints
+        // 用户实测 ch=53 height=285701px → crash。安全 cap 到 130_000，超长章节末尾内容
+        // 不画出来（用户向下滚动会停在 cap 处，等同章节被截）。WARN log 帮排查异常排版。
+        val safeMaxH = 130_000
+        val prevH = (state.prevChapter?.totalHeight?.toInt() ?: 0).coerceAtMost(safeMaxH)
+        val curH = (state.currentChapter?.totalHeight?.toInt() ?: 0).coerceAtMost(safeMaxH)
+        val nextH = (state.nextChapter?.totalHeight?.toInt() ?: 0).coerceAtMost(safeMaxH)
+        val rawCurH = state.currentChapter?.totalHeight?.toInt() ?: 0
+        if (rawCurH > safeMaxH) {
+            com.morealm.app.core.log.AppLog.warn(
+                "ScrollCanvasRenderer",
+                "章节 totalHeight=$rawCurH 超过 Compose Constraints 安全上限 $safeMaxH，已 cap。" +
+                    " curIdx=${state.currentChapter?.chapterIndex} 排查 lineSpacingExtra / paragraphSpacing / paint.textSize 是否异常",
+            )
+        }
 
         val prevPlaceable = measurables[0].measure(
             Constraints.fixed(width = viewWidth, height = prevH),
