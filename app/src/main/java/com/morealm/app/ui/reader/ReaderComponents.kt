@@ -329,7 +329,9 @@ fun ReaderControlBar(
     //
     // 实测节奏：用户连续拖过 5 章 → 第 1 章 commit 完才处理第 5 章（中间章被 conflate 丢弃），
     // 每个 commit ~200-500ms，整体 1-3 秒走完不卡。比之前 cancel-restart-cancel 强得多。
-    val lastPreviewedIdxRef = remember { intArrayOf(-1) }
+    // (idx, withinPct) 联合 signature（Long 编码）—— 用户拖动同章内位置变化也要触发预览，
+    // 不只看 idx 一维。同 (idx, pct) 重复 emit 才 skip，避免无意义重复 in-place seek。
+    val lastPreviewSigRef = remember { longArrayOf(Long.MIN_VALUE) }
     LaunchedEffect(Unit) {
         snapshotFlow { seekValue }
             .filterNotNull()
@@ -338,21 +340,28 @@ fun ReaderControlBar(
                 if (totalChapters <= 0) return@collect
                 val raw = (v * totalChapters).coerceIn(0f, totalChapters.toFloat())
                 val previewIdx = raw.toInt().coerceIn(0, totalChapters - 1)
-                if (previewIdx == currentChapter || previewIdx == lastPreviewedIdxRef[0]) return@collect
-                lastPreviewedIdxRef[0] = previewIdx
+                val previewWithinPct = ((raw - previewIdx) * 100f).toInt().coerceIn(0, 99)
+                val sig = (previewIdx.toLong() shl 32) or previewWithinPct.toLong()
+                if (sig == lastPreviewSigRef[0]) return@collect
+                lastPreviewSigRef[0] = sig
                 pendingChapter = previewIdx
-                onSeekFullBook(previewIdx, 0)
-                // 等 currentChapter 实际追上目标，500ms 兜底（弱网 / 加载失败）。
-                // 这是串行的核心：不等就立即 collect 下一个，loadChapter 会并发。
-                withTimeoutOrNull(500L) {
-                    snapshotFlow { currentChapter }
-                        .first { it == previewIdx }
+                // 同章：onSeekFullBook 走 seekProgressInPlace 轻量 in-place（仅 nanoTime token
+                //       + _renderedChapter.copy → V2 Host placement-only pixelOffset）。
+                //       conflate 已节流上游高频 emit，collect 立即处理下一条无需等待。
+                // 跨章：fallback loadChapter，等 currentChapter 实际追上目标 500ms 兜底，
+                //       避免 chapterLoadJob cancel-restart 抖动。
+                onSeekFullBook(previewIdx, previewWithinPct)
+                if (previewIdx != currentChapter) {
+                    withTimeoutOrNull(500L) {
+                        snapshotFlow { currentChapter }
+                            .first { it == previewIdx }
+                    }
                 }
             }
     }
-    // seekValue 被清（松手后）→ 重置 lastPreviewedIdx，下次拖动从 currentChapter 重新起算
+    // seekValue 被清（松手后）→ 重置 lastPreviewSig，下次拖动从头算
     LaunchedEffect(seekValue) {
-        if (seekValue == null) lastPreviewedIdxRef[0] = -1
+        if (seekValue == null) lastPreviewSigRef[0] = Long.MIN_VALUE
     }
 
     LaunchedEffect(pendingChapter, currentChapter, sliderDragging) {

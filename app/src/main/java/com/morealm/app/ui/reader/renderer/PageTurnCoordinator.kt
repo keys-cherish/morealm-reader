@@ -137,6 +137,15 @@ internal class PageTurnCoordinator(
             pageFactory = factory,
             currentDisplayIndex = displayIndex,
             onBoundaryChapter = { direction ->
+                // [DIAG Bug-B 2026-05-18] boundary chapter 触发点：fillPage 在跨章
+                // 边界跑到这里 → 调 ViewModel.nextChapter / prevChapter → 内部走
+                // commitChapterShiftNext / Prev 同步腾挪。这是 Bug B 链路中第一处
+                // "决定要跨章"的信号点，看它什么时候打能反推动画为何缺失。
+                AppLog.info(
+                    "PageTurnFlicker",
+                    "onBoundaryChapter FIRE dir=$direction displayIdx=$displayIndex" +
+                        " coord.chapterIdx=$chapterIndex → 调用 onNextChapter/onPrevChapter（异步 commitChapterShift）",
+                )
                 when (direction) {
                     ReaderPageDirection.PREV -> onPrevChapter()
                     ReaderPageDirection.NEXT -> onNextChapter()
@@ -189,6 +198,12 @@ internal class PageTurnCoordinator(
         val factory = pageFactory ?: return null
         val content = createPageState(displayIndex).fillPage(direction)
         if (content == null) {
+            // [DIAG Bug-B 2026-05-18]
+            AppLog.info(
+                "PageTurnFlicker",
+                "commitPageTurn EARLY-NULL: dir=$direction displayIdx=$displayIndex coord.chIdx=$chapterIndex" +
+                    " (fillPage returned null)",
+            )
             pageDelegateState.stopScroll()
             return null
         }
@@ -210,15 +225,19 @@ internal class PageTurnCoordinator(
             val factoryCurChapterIdx = factory.snapshotCurrentChapterIndex()
             val factoryPrevChapterIdx = factory.snapshotPrevChapterIndex()
             val factoryPrevPageCount = factory.snapshotPrevChapterPageCount()
-            AppLog.debug(
+            // [DIAG Bug-B 2026-05-18] 提到 INFO 让用户复现能直接看到。
+            // boundary 路径就是 Bug B 关键节点：onBoundaryChapter 触发 onNextChapter /
+            // onPrevChapter（异步 commitChapterShift）后 return null，**完全没动画 API 调用**。
+            AppLog.info(
                 "PageTurnFlicker",
-                "[1] commitPageTurn BOUNDARY direction=$direction inputDisplayIdx=$displayIndex" +
+                "commitPageTurn BOUNDARY direction=$direction inputDisplayIdx=$displayIndex" +
                     " contentCurrentIdx=${content.currentDisplayIndex}" +
                     " boundaryDir=${content.boundaryDirection}" +
                     " lastSettledBefore=$lastSettledDisplayPage" +
                     " writeBackTo=$targetDisplayIndex" +
                     " coord.chapterIdx=$chapterIndex factory.curChIdx=$factoryCurChapterIdx" +
-                    " factory.prevChIdx=$factoryPrevChapterIdx factory.prevPC=$factoryPrevPageCount",
+                    " factory.prevChIdx=$factoryPrevChapterIdx factory.prevPC=$factoryPrevPageCount" +
+                    " → 触发 onBoundaryChapter(onNextChapter/onPrevChapter) 返回 null（无动画）",
             )
             targetDisplayIndex?.let { lastSettledDisplayPage = it }
             pageDelegateState.stopScroll()
@@ -245,6 +264,29 @@ internal class PageTurnCoordinator(
         if (!canCommitBoundary) return false
         commitPageTurn(startDisplayPage, direction, readerPageIndexSetter)
         return true
+    }
+
+    /**
+     * SLIDE / COVER unified pageCount 模式 helper。两动画下 pagerState.currentPage / pageCount
+     * 都是 unified（prev+cur+next 三章联合），需要把 state 数值跟 cur 章 local 来回转。
+     * 详 [ReaderPageFactory.unifiedPageCount] 注释 + project_source_toggle_no_recompose 同款
+     * 「确保所有等价比较 / 索引语义对齐架构」的命名铁则。
+     */
+    private fun isUnifiedPagingMode(): Boolean =
+        pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER
+
+    /** state.currentPage（unified or local 取决于模式）→ cur 章 local。 */
+    private fun pagerCurrentCurLocal(state: androidx.compose.foundation.pager.PagerState, factory: ReaderPageFactory): Int {
+        return if (isUnifiedPagingMode()) {
+            (state.currentPage - factory.unifiedCurStartIndex).coerceIn(0, (factory.unifiedCurChapterSize - 1).coerceAtLeast(0))
+        } else {
+            state.currentPage
+        }
+    }
+
+    /** cur 章 local → state.scrollToPage 用的 index（unified or local 取决于模式）。 */
+    private fun pagerTargetForCurLocal(local: Int, factory: ReaderPageFactory): Int {
+        return if (isUnifiedPagingMode()) factory.unifiedFromCurLocal(local) else local
     }
 
     fun turnPageByTap(direction: ReaderPageDirection, readerPageIndexSetter: (Int) -> Unit) {
@@ -279,9 +321,10 @@ internal class PageTurnCoordinator(
         if (!pageDelegateState.keyTurnPage(direction)) return
         val lastSettledBeforeSync = lastSettledDisplayPage
         val pagerCurrentPage = state.currentPage
-        // Sync with pagerState for non-simulation modes
+        // Sync with pagerState for non-simulation modes.
+        // unified 模式下 state.currentPage 是 unified index，转 cur local 再赋给 lastSettled。
         if (pageAnimType != PageAnimType.SIMULATION) {
-            lastSettledDisplayPage = state.currentPage
+            lastSettledDisplayPage = pagerCurrentCurLocal(state, factory)
         }
         val displayingPage = factory.pageAt(lastSettledDisplayPage)
         AppLog.info(
@@ -333,25 +376,11 @@ internal class PageTurnCoordinator(
         if (target != null) {
             pendingSettledDirection = direction
             pendingTurnStartDisplayPage = startDisplayPage
+            // unified 模式下 animateScrollToPage 用 unified target；其他模式用 cur local。
+            val animTarget = pagerTargetForCurLocal(target, factory)
             scope.launch {
-                runCatching { state.animateScrollToPage(target) }
-                // ── SIMULATION 模式 isRunning 死锁修复 (音量键 / 重复 tap 失灵) ──
-                // SIMULATION 用 SimulationReadView 自管贝塞尔渲染，PagerState 只
-                // 充当"当前页索引"的状态机，没有上层的 isScrollInProgress
-                // snapshotFlow 钩子去触发 [handlePagerSettled]。结果：
-                //   1. startAnim(direction) 设 isRunning = true
-                //   2. animateScrollToPage 完成
-                //   3. handlePagerSettled 永不被调到 → stopScroll 永不执行
-                //   4. isRunning 永远卡 true
-                //   5. 用户后续每次音量键 / tap 走 keyTurnPage → startAnim 看到
-                //      isRunning=true → return false → turnPageByTap 在 line 233
-                //      静默 return（连 ReaderTap ENTRY log 都不打）
-                //
-                // 复现：日志 19:28:26 那次 tap NEXT 成功 → 之后 11+ 次音量 PREV
-                // 全部只有 ReaderKey log 没有 ReaderTap log，与上述链条 100% 吻合。
-                //
-                // 修复：动画 await 完成后手动 stopScroll + 清 pendingSettledDirection。
-                // SLIDE/COVER 不需要因为它们走 handlePagerSettled 自然复位。
+                runCatching { state.animateScrollToPage(animTarget) }
+                // SIMULATION 死锁修复：详见原注释段。SLIDE/COVER 不需要手动复位。
                 if (pageAnimType == PageAnimType.SIMULATION) {
                     pageDelegateState.stopScroll()
                     pendingSettledDirection = null
@@ -359,16 +388,39 @@ internal class PageTurnCoordinator(
             }
             AppLog.info(
                 "ReaderTap",
-                "turnPageByTap animate: dir=$direction start=$startDisplayPage target=$target renderPC=$renderPageCount pageCount=$pageCount",
+                "turnPageByTap animate: dir=$direction start=$startDisplayPage target=$target" +
+                    " animTarget=$animTarget unified=${isUnifiedPagingMode()} renderPC=$renderPageCount pageCount=$pageCount",
             )
         } else if (
             (direction == ReaderPageDirection.PREV && factory.hasPrev(startDisplayPage)) ||
             (direction == ReaderPageDirection.NEXT && factory.hasNext(startDisplayPage))
         ) {
-            // 关键诊断点：target=null 但 hasNext/hasPrev=true 时走 commitPageTurn，
-            // 这条路径会跨章节（commitPageTurn 内部会调 nextChapter/prevChapter）。
-            // 用户报"点屏跳下一章"如果出在这里，常见原因：当前章节只有 1 页（renderPC=1）
-            // 或当前已停在章末且 moveToNext 返回 null。
+            // unified 路径下 (SLIDE/COVER) 让 HorizontalPager 物理穿过章节边界 → animate 到
+            // cross-chapter unified index，onPageSettled 会接到越界 settled 触发 commit shift。
+            // 其他模式 fallback 旧 commitPageTurn boundary 路径（instant scrollToPage(0)，无动画）。
+            if (isUnifiedPagingMode()) {
+                val crossTarget = when (direction) {
+                    ReaderPageDirection.NEXT -> factory.unifiedCurEndIndex + 1
+                    ReaderPageDirection.PREV -> factory.unifiedCurStartIndex - 1
+                    else -> -1
+                }
+                val unifiedPageCount = state.pageCount
+                if (crossTarget in 0 until unifiedPageCount) {
+                    pendingSettledDirection = direction
+                    pendingTurnStartDisplayPage = startDisplayPage
+                    scope.launch { runCatching { state.animateScrollToPage(crossTarget) } }
+                    AppLog.info(
+                        "ReaderTap",
+                        "turnPageByTap unified CROSS-CHAPTER: dir=$direction crossTarget=$crossTarget" +
+                            " curRange=[${factory.unifiedCurStartIndex}..${factory.unifiedCurEndIndex}] unifiedPC=$unifiedPageCount",
+                    )
+                    return
+                }
+                AppLog.info(
+                    "ReaderTap",
+                    "turnPageByTap unified CROSS but no neighbor pages (crossTarget=$crossTarget oob) → fallback commitPageTurn",
+                )
+            }
             AppLog.info(
                 "ReaderTap",
                 "turnPageByTap boundary→commit (CHAPTER ADVANCE): dir=$direction start=$startDisplayPage renderPC=$renderPageCount pageCount=$pageCount",
@@ -388,7 +440,8 @@ internal class PageTurnCoordinator(
         val state = pagerState ?: return
         if (!pageDelegateState.startAnim(direction)) return
         if (pageAnimType != PageAnimType.SIMULATION) {
-            lastSettledDisplayPage = state.currentPage
+            // unified 模式：state.currentPage 是 unified index，转 cur local
+            lastSettledDisplayPage = pagerCurrentCurLocal(state, factory)
         }
         // 同 turnPageByTap，用 pageCount 而非 renderPageCount 做边界判定。
         val startDisplayPage = lastSettledDisplayPage.coerceIn(0, pageCount - 1)
@@ -404,14 +457,23 @@ internal class PageTurnCoordinator(
             ReaderPageDirection.NEXT -> factory.moveToNext(startDisplayPage)
             ReaderPageDirection.NONE -> null
         }
+        // [DIAG Bug-B 跨章动画 2026-05-18] 临时 INFO 日志 — 复现后降级 DEBUG 或删除。
+        // 用户反馈 COVER / SLIDE 跨章无动画 + 竖条闪现。这条日志记录 turnPageByDrag
+        // 走哪条分支：target != null（章内有动画）/ target == null + boundary（跨章无动画）/
+        // 全无路径（stopScroll）。配合 line ~480 commitPageTurn boundary INFO 看完整链路。
+        AppLog.info(
+            "PageTurnFlicker",
+            "turnPageByDrag DECIDE dir=$direction anim=$pageAnimType start=$startDisplayPage target=$target" +
+                " hasPrev=${factory.hasPrev(startDisplayPage)} hasNext=${factory.hasNext(startDisplayPage)}" +
+                " pageCount=$pageCount renderPC=$renderPageCount coord.chIdx=$chapterIndex",
+        )
         if (target != null) {
             pendingSettledDirection = direction
             pendingTurnStartDisplayPage = startDisplayPage
+            // unified 模式 animateScrollToPage 用 unified target；其他模式用 cur local。
+            val animTarget = pagerTargetForCurLocal(target, factory)
             scope.launch {
-                runCatching { state.animateScrollToPage(target) }
-                // 同 turnPageByTap 修复：SIMULATION 没有 handlePagerSettled 复位，
-                // 必须在这里手动 stopScroll，否则 isRunning 卡 true → 后续 drag/
-                // tap/音量键全失灵。
+                runCatching { state.animateScrollToPage(animTarget) }
                 if (pageAnimType == PageAnimType.SIMULATION) {
                     pageDelegateState.stopScroll()
                     pendingSettledDirection = null
@@ -421,8 +483,42 @@ internal class PageTurnCoordinator(
             (direction == ReaderPageDirection.PREV && factory.hasPrev(startDisplayPage)) ||
             (direction == ReaderPageDirection.NEXT && factory.hasNext(startDisplayPage))
         ) {
+            // unified 路径 (SLIDE/COVER)：让 HorizontalPager 物理穿过章节边界，settled 后触发 commit。
+            // 其他模式 fallback 旧 commitPageTurn 路径（instant 无动画 = Bug B 原状）。
+            if (isUnifiedPagingMode()) {
+                val crossTarget = when (direction) {
+                    ReaderPageDirection.NEXT -> factory.unifiedCurEndIndex + 1
+                    ReaderPageDirection.PREV -> factory.unifiedCurStartIndex - 1
+                    else -> -1
+                }
+                val unifiedPageCount = state.pageCount
+                if (crossTarget in 0 until unifiedPageCount) {
+                    pendingSettledDirection = direction
+                    pendingTurnStartDisplayPage = startDisplayPage
+                    scope.launch { runCatching { state.animateScrollToPage(crossTarget) } }
+                    AppLog.info(
+                        "PageTurnFlicker",
+                        "turnPageByDrag unified CROSS-CHAPTER ANIMATE: dir=$direction crossTarget=$crossTarget" +
+                            " curRange=[${factory.unifiedCurStartIndex}..${factory.unifiedCurEndIndex}] unifiedPC=$unifiedPageCount",
+                    )
+                    return
+                }
+                AppLog.info(
+                    "PageTurnFlicker",
+                    "turnPageByDrag unified CROSS but oob (crossTarget=$crossTarget) → fallback commitPageTurn",
+                )
+            }
+            AppLog.info(
+                "PageTurnFlicker",
+                "turnPageByDrag CROSS-CHAPTER fallback (non-unified or oob): dir=$direction start=$startDisplayPage anim=$pageAnimType",
+            )
             commitPageTurn(startDisplayPage, direction, readerPageIndexSetter)
         } else {
+            AppLog.info(
+                "PageTurnFlicker",
+                "turnPageByDrag STOP: dir=$direction start=$startDisplayPage anim=$pageAnimType" +
+                    " (no target / no prev-next at all)",
+            )
             pageDelegateState.stopScroll()
         }
     }

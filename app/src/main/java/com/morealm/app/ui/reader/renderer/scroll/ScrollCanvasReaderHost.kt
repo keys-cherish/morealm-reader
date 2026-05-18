@@ -179,6 +179,13 @@ fun ScrollCanvasReaderHost(
      */
     initialChapterPosition: Int = 0,
     /**
+     * 跳 Slider 拖动 / 同章 in-place seek 的章内进度百分比（0..100）。
+     * 与 [restoreToken] 配套；[initialChapterPosition] > 0 优先（书签 cp 字符级定位）。
+     * 仅当 cp == 0 且 initialProgress > 0 时按 `pixelOffset = scrollableRange * progress / 100`
+     * 跳转 —— 「拖动 Slider 所见所得」路径。
+     */
+    initialProgress: Int = 0,
+    /**
      * 跳转幂等 key（每次跳转 caller 用 System.nanoTime() 换新值）；0L 表示无跳转。
      * Host 监听此值变化触发 imperative scroll；不变则正常滚动状态不被打扰。
      */
@@ -310,36 +317,48 @@ fun ScrollCanvasReaderHost(
         }
     }
 
-    // ── 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer.LaunchedEffect(jumpToken) 等价）──
+    // ── 跳书签 / 续读 / 搜索定位 / Slider 拖动 in-place seek ──
     // 两阶段契约：caller 保证 restoreToken != 0L 时 currentChapter 已是目标章。
     // Host 监听 restoreToken + state.currentChapter 双 key：token 变 + cur layout ready 即滚。
     //
-    // **关键守门（修跳章 bug）**：仅当 initialChapterPosition > 0 时才动 pixelOffset。
+    // 分支优先级：
+    //   1. initialChapterPosition > 0 → 按 cp 字符级定位（书签 / 搜索 / TTS 跟随）
+    //   2. initialChapterPosition == 0 && initialProgress > 0 → 按章内 progress (0-100)
+    //      算 pixelOffset = scrollableRange * progress / 100（拖动 Slider in-place seek
+    //      或 loadChapter restoreProgress）
+    //   3. 都是 0 → V2 swap 路径（applyScrollDelta 已正确设 pixelOffset，无需干预）
+    //
+    // **关键守门（修跳章 bug）**：仅当 cp > 0 或 progress > 0 时才动 pixelOffset。
     // V2 内部 applyScrollDelta swap → onChapterShift → viewModel.loadChapter(newIdx, pos=0)
-    // 会触发新 restoreToken。如果 JUMP 在 cp=0 也跑，pixelOffset 被强拉到 0 → 用户
-    // 视野从 swap 后的位置（章末 / 章首附近）跳到章顶 → 继续 fling 再 swap → 反复跳章。
-    // cp=0 时 V2 swap 已正确设置 pixelOffset，无需 JUMP 干预。
+    // 会触发新 restoreToken。如果 JUMP 在 cp=0 && progress=0 也跑，pixelOffset 被强拉到 0
+    // → 用户视野从 swap 后的位置（章末 / 章首附近）跳到章顶 → 继续 fling 再 swap →
+    // 反复跳章。cp=0 && progress=0 时 V2 swap 已正确设置 pixelOffset，无需 JUMP 干预。
     LaunchedEffect(restoreToken, state.currentChapter) {
         if (restoreToken == 0L) return@LaunchedEffect
-        if (initialChapterPosition <= 0) return@LaunchedEffect  // 守门：cp=0 跳过 JUMP
+        if (initialChapterPosition <= 0 && initialProgress <= 0) return@LaunchedEffect
         val layout = state.currentChapter ?: return@LaunchedEffect
         if (layout.chapterIndex != state.currentChapterIndex) return@LaunchedEffect
 
-        // 计算目标 cp 在章节内的 y 坐标 = pageOffset 累加 + line.lineTop
-        val hit = layout.findColumnAt(initialChapterPosition) ?: return@LaunchedEffect
-        var targetY = 0f
-        for (i in 0 until hit.page.pageIndex) targetY += layout.pages[i].height
-        targetY += hit.line.lineTop
-
-        // 把目标段滚到视口上 1/3（与 V1 LazyScroll JUMP anchorOffset 同款思路），
-        // 让用户看到目标的同时保留下文。
         val viewportH = viewHeight.coerceAtLeast(1)
-        val desiredOffset = (targetY - viewportH / 3f).coerceAtLeast(0f)
+        val desiredOffset: Float = if (initialChapterPosition > 0) {
+            // 分支 1：cp 字符级 —— pageOffset 累加 + line.lineTop → 目标段视口上 1/3
+            val hit = layout.findColumnAt(initialChapterPosition) ?: return@LaunchedEffect
+            var targetY = 0f
+            for (i in 0 until hit.page.pageIndex) targetY += layout.pages[i].height
+            targetY += hit.line.lineTop
+            (targetY - viewportH / 3f).coerceAtLeast(0f)
+        } else {
+            // 分支 2：章内 progress 百分比 —— pixelOffset = scrollable * progress / 100
+            // 与 onChapterProgressLive 上报算法对偶（progress = offset / scrollable * 100），
+            // 反算保证 Slider 拖到 N% 后阅读区显示同一 N% 位置（所见所得）。
+            val scrollableRange = (layout.totalHeight - viewportH).coerceAtLeast(1f)
+            (scrollableRange * initialProgress / 100f).coerceIn(0f, scrollableRange)
+        }
         state.pixelOffset = desiredOffset
         AppLog.info(
             "ScrollCanvasV2",
-            "JUMP restoreToken=$restoreToken cp=$initialChapterPosition → targetY=$targetY " +
-                "pixelOffset=$desiredOffset (viewportH=$viewportH layoutH=${layout.totalHeight})",
+            "JUMP restoreToken=$restoreToken cp=$initialChapterPosition prog=$initialProgress" +
+                " → pixelOffset=$desiredOffset (viewportH=$viewportH layoutH=${layout.totalHeight})",
         )
         onProgressRestored()
     }
@@ -721,11 +740,25 @@ fun ScrollCanvasReaderHost(
         if (infoBar != null && currentLayout != null) {
             val chapterTitle = currentLayout.title
 
-            // V2 没"页"概念（pixelOffset 像素滚动），page / progress / page_progress slot
-            // fallback 到 chapter_progress 保持显示。与旧 CanvasRenderer mapSlotForScroll 一致。
+            // V2 没"页"概念（像素滚动），slot 映射规则：
+            //   - "page"            → "chapter_progress"（章 i/n，最接近"页 i/n"语义）
+            //   - "progress"        → 保留，由 scrollPercentOverride 喂入像素级 Float 百分比
+            //   - "page_progress"   → 保留，组合"章 i/n  XX.X%"
+            // 用户反馈"滚动条实时不精确到具体页，而是章"——之前把 progress 也降级到
+            // chapter_progress 就是把像素级实时进度退化成章序号离散显示。
             fun mapSlot(s: String): String = when (s) {
-                "page", "progress", "page_progress" -> "chapter_progress"
+                "page" -> "chapter_progress"
                 else -> s
+            }
+            // 像素级实时百分比 0..100（Float）—— derivedStateOf 让只在 pixelOffset /
+            // currentChapter / viewHeight 变化时重算，InfoBar 文字下一帧自然更新。
+            // 与 onChapterProgressLive 算法一致，只是这里保留 Float 精度不 toInt。
+            val scrollPercent by remember(currentLayout, viewHeight) {
+                derivedStateOf {
+                    val totalH = currentLayout.totalHeight
+                    val scrollableRange = (totalH - viewHeight).coerceAtLeast(1f)
+                    (state.pixelOffset / scrollableRange * 100f).coerceIn(0f, 100f)
+                }
             }
 
             // 修复用户反馈"顶部被挡"：V2 InfoBar 之前直接贴 Box 顶 / 底，没考虑 status bar /
@@ -753,6 +786,7 @@ fun ScrollCanvasReaderHost(
                 batteryCharging = batteryStatus.charging,
                 currentTime = currentTime,
                 textColor = infoBar.textColor,
+                scrollPercentOverride = scrollPercent,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .fillMaxWidth()
@@ -788,6 +822,7 @@ fun ScrollCanvasReaderHost(
                 batteryCharging = batteryStatus.charging,
                 currentTime = currentTime,
                 textColor = infoBar.textColor,
+                scrollPercentOverride = scrollPercent,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()

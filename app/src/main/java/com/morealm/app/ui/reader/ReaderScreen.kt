@@ -684,8 +684,11 @@ fun ReaderScreen(
                 titleAlign = effectiveReaderStyle?.titleMode?.takeIf { it != 0 } ?: 0,  // titleMode 1=center → titleAlign 1
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
                 // 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer jumpToken/jumpChapterPosition 等价）：
-                // renderedChapter.restoreToken 由 ReaderChapterController.loadChapter 每次 nanoTime 换新值。
+                // renderedChapter.restoreToken 由 ReaderChapterController.loadChapter / seekProgressInPlace
+                // 每次 nanoTime 换新值。initialProgress 用于「Slider 拖动 in-place seek」路径
+                // （cp == 0 时按章内 progress 算 pixelOffset）。
                 initialChapterPosition = renderedChapter.initialChapterPosition,
+                initialProgress = renderedChapter.initialProgress,
                 restoreToken = renderedChapter.restoreToken,
                 onProgressRestored = { viewModel.clearNavigateDirection() },
                 bgImageUri = readerBgImage,
@@ -1086,13 +1089,17 @@ fun ReaderScreen(
                 onExitEdit = toolBarViewModel::exitEditMode,
                 onToggleToolVisibility = toolBarViewModel::toggleToolVisibility,
                 onReorder = toolBarViewModel::reorder,
-                // #3 全书拖动：(章号, 章内%) → loadChapter restoreProgress
+                // #3 全书拖动：(章号, 章内%) → 同章 in-place seek / 跨章 loadChapter
                 // 不在这里 hideControls：onSeekFullBook 在拖动期间会被「跨章预览」
                 // (ReaderControlBar 内的 conflate worker) 反复触发，每次都 hide 会让
                 // 整个浮层（菜单栏 + slider）拖到一半消失，用户彻底没法继续拖。
                 // 用户拖完想关 controls 自己点屏幕中央就行。
+                //
+                // 改用 seekProgressInPlace：同 idx 走轻量 in-place（仅写 _renderedChapter copy
+                // + nanoTime token），跨章 fallback loadChapter。让拖动期间「所见所得」
+                // 实时跟随阅读区像素位置而非永远停在章首。
                 onSeekFullBook = { idx, withinPct ->
-                    viewModel.loadChapter(idx, restoreProgress = withinPct)
+                    viewModel.seekProgressInPlace(idx, withinPct)
                 },
                 // #3 拖动预览：取目标章节标题（包含 TXT 自动分章 displayTitle 逻辑）
                 getChapterTitle = { idx ->

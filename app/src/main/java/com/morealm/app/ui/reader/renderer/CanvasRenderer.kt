@@ -964,7 +964,17 @@ fun CanvasRenderer(
     //
     // 跨章 PREV 闪烁应该走「等 publishCurTextChapter 完成再 commit chapterIndex」
     // 路线，而不是在 pager 层欺骗 pageCount。本次 revert，闪烁问题留待重新设计。
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = { renderPageCount })
+    // pageCount lambda 按 pageAnimType 分支：
+    //   - SLIDE / COVER → unifiedPageCount（prev+cur+next 三章联合），让 HorizontalPager
+    //     翻页穿过章节边界，跨章动画一致流畅（2026-05-18 Bug B 根治）。
+    //   - SIMULATION / SCROLL / NONE / SLIDE_VERTICAL → 单章 renderPageCount（旧逻辑）。
+    val pagerState = rememberPagerState(initialPage = 0, pageCount = {
+        if (pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER) {
+            pageFactory.unifiedPageCount
+        } else {
+            renderPageCount
+        }
+    })
 
     // Page-turn coordinator — replaces local page-turn functions and state.
     //
@@ -1032,6 +1042,27 @@ fun CanvasRenderer(
     }
     // Update deps on each recomposition so coordinator always sees latest values
     coordinator.updateDeps(pageFactory, pagerState, chapterIndex, pageCount, renderPageCount)
+
+    // [DIAG Bug-B unified 跳页 / SIMULATION 闪烁 2026-05-18]
+    // 每次重组打 pagerState.currentPage + unifiedPageCount + factory chapter idx。
+    // 假设：chapter 重组瞬间 pagerState.pageCount lambda 从旧 unified→新 unified，
+    // pagerState.currentPage 旧值被 HorizontalPager 自动 coerceIn 到新 range 渲染一帧错位置。
+    // 复现完命中即降级 DEBUG 或删。
+    androidx.compose.runtime.SideEffect {
+        val unifiedPC = if (pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER) {
+            pageFactory.unifiedPageCount
+        } else {
+            renderPageCount
+        }
+        AppLog.info(
+            "PageTurnFlicker",
+            "[recompose] anim=$pageAnimType chIdx=$chapterIndex factoryCurChIdx=${pageFactory.snapshotCurrentChapterIndex()}" +
+                " pagerCurrent=${pagerState.currentPage} unifiedPC=$unifiedPC renderPC=$renderPageCount" +
+                " curRange=[${pageFactory.unifiedCurStartIndex}..${pageFactory.unifiedCurEndIndex}]" +
+                " prevSize=${pageFactory.unifiedPrevChapterSize} nextSize=${pageFactory.unifiedNextChapterSize}" +
+                " coordLastSettled=${coordinator.lastSettledDisplayPage}",
+        )
+    }
 
     /**
      * Stable upper bound for `coordinator.lastSettledDisplayPage.coerceIn(...)`.
@@ -1106,21 +1137,22 @@ fun CanvasRenderer(
             // → Int.MAX_VALUE 在 layout streaming 早期也能给出稳定上限。
             val targetDisplay = coordinator.lastSettledDisplayPage
                 .coerceIn(0, safeDisplayMax)
-            // 切样式时 currentChapterKey 会因 readerStyle.hashCode() / fontSizePx 变 → 走这条
-            // sameChapter reflow 分支。打点观察 pagerState.currentPage 是否跟 targetDisplay
-            // 错位，错位幅度多大，决定 scrollToPage 的视觉表现是否被用户感知为"翻页"。
+            // SLIDE / COVER unified 路径下 pagerState 用 unified index，sameChapter reflow
+            // 也要转换。其他模式保持单章。
+            val targetScroll = if (pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER) {
+                pageFactory.unifiedFromCurLocal(targetDisplay)
+            } else {
+                targetDisplay
+            }
             AppLog.debug(
                 "StyleSwitch",
                 "reflow same-chapter ch=$chapterIndex pagerCurrent=${pagerState.currentPage}" +
-                    " target=$targetDisplay safeMax=$safeDisplayMax renderPC=$renderPageCount" +
-                    " willScroll=${pagerState.currentPage != targetDisplay}",
+                    " targetDisplay=$targetDisplay targetScroll=$targetScroll safeMax=$safeDisplayMax renderPC=$renderPageCount" +
+                    " willScroll=${pagerState.currentPage != targetScroll}",
             )
-            if (pagerState.currentPage != targetDisplay) {
-                // 对齐时把这一次 settle 标记成"忽略"，避免 scrollToPage 完成后
-                // 紧跟着的 onPageSettled(targetDisplay) 仍触发 saveProgress 写回
-                // (虽然写回的是同一个值不会损坏，但日志会更干净)。
+            if (pagerState.currentPage != targetScroll) {
                 coordinator.ignoredSettledDisplayPage = targetDisplay
-                pagerState.scrollToPage(targetDisplay)
+                pagerState.scrollToPage(targetScroll)
             }
             return@LaunchedEffect
         }
@@ -1141,14 +1173,20 @@ fun CanvasRenderer(
         coordinator.ignoredSettledDisplayPage = initialPage
         coordinator.pendingSettledDirection = null
         coordinator.lastSettledDisplayPage = initialPage
-        // lastReaderContent 由 coordinator.updateDeps 的 factoryChanged 不变量自动清空——
-        // chapter 切换会让 pageFactory remember 重建新实例，下次 recomposition updateDeps
-        // 检测引用变化即清空。此处散户清理是 v1.2 时代遗物，已冗余。
-        pagerState.scrollToPage(initialPage)
+        // SLIDE / COVER unified 路径下 pagerState 接 unified index，不是 cur 章 local，
+        // 章节切换后必须 scrollToPage 到新 cur 章在 unified 联合页号里的起始 + initialPage。
+        // 其他模式（SIMULATION / SCROLL / NONE / SLIDE_VERTICAL）保持 pagerState 单章语义。
+        val scrollTarget = if (pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER) {
+            pageFactory.unifiedFromCurLocal(initialPage)
+        } else {
+            initialPage
+        }
+        pagerState.scrollToPage(scrollTarget)
         // [DIAG SimPagerSync] 临时诊断日志 — 复现后降级 DEBUG 或删除
         AppLog.info(
             "SimPagerSync",
-            "ch-switch scrollToPage done: initialPage=$initialPage pagerState.currentPage(after)=${pagerState.currentPage} coord.lastSettled(after)=${coordinator.lastSettledDisplayPage} pageAnimType=$pageAnimType",
+            "ch-switch scrollToPage done: initialPage=$initialPage unifiedTarget=$scrollTarget" +
+                " pagerState.currentPage(after)=${pagerState.currentPage} coord.lastSettled(after)=${coordinator.lastSettledDisplayPage} pageAnimType=$pageAnimType",
         )
     }
 
@@ -1424,16 +1462,24 @@ fun CanvasRenderer(
         coordinator.reportProgress(coordinator.lastReaderContent)
 
         if (pageAnimType != PageAnimType.SIMULATION && pageAnimType != PageAnimType.SCROLL) {
+            // SLIDE / COVER unified 路径下 scrollToPage 用 unified target；
+            // NONE / SLIDE_VERTICAL 保持单章 target。
+            val scrollTargetForJump = if (pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER) {
+                pageFactory.unifiedFromCurLocal(targetPage)
+            } else {
+                targetPage
+            }
             coordinator.ignoredSettledDisplayPage = targetPage
             val beforeScroll = pagerState.currentPage
             try {
-                pagerState.scrollToPage(targetPage)
+                pagerState.scrollToPage(scrollTargetForJump)
                 val afterScroll = pagerState.currentPage
                 AppLog.info(
                     "BookmarkDebug",
                     "restoreProgress JUMP DONE ($pageAnimType) before=$beforeScroll after=$afterScroll" +
+                        " targetCurLocal=$targetPage targetScroll=$scrollTargetForJump" +
                         " coord.lastSettled=${coordinator.lastSettledDisplayPage}" +
-                        " scrollEffective=${afterScroll == targetPage}",
+                        " scrollEffective=${afterScroll == scrollTargetForJump}",
                 )
             } catch (e: Throwable) {
                 AppLog.error("BookmarkDebug", "scrollToPage threw: ${e.message}", e)
@@ -2169,6 +2215,15 @@ fun CanvasRenderer(
                 simDisplayPageLogState[1] = nowMs
                 simDisplayPageLogState[2] = 0L
             }
+            // ── SLIDE / COVER 跨章联合 pageCount 分支（2026-05-18 Bug B 修法）──
+            // SLIDE / COVER 模式下 pagerState.pageCount = unifiedPageCount（prev+cur+next 三章），
+            // 翻页穿过章节边界无 instant jump。其他模式（SIMULATION / SCROLL / NONE /
+            // SLIDE_VERTICAL）走旧逻辑，单章 pageCount = renderPageCount。
+            val isUnifiedPagingMode = pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER
+            // unified 路径下：onPageSettled 接到的是 unified pageIndex，content lambda
+            // 内 page 取值用 pageFactory.unifiedPageAt；其他模式保持单章。
+            val unifiedCurStart = if (isUnifiedPagingMode) pageFactory.unifiedCurStartIndex else 0
+            val unifiedCurEnd = if (isUnifiedPagingMode) pageFactory.unifiedCurEndIndex else 0
             AnimatedPageReader(
                 pagerState = pagerState,
                 animType = pageAnimType,
@@ -2177,40 +2232,76 @@ fun CanvasRenderer(
                 simulationDisplayPage = computedSimDisplayPage,
                 simulationViewRef = simulationViewRef,
                 onPageSettled = { settledPage ->
-                    // Diagnostic [3o] — 验证假设：pagerState 在 SCROLL 时被
-                    // 同步到 0，切到 SIMULATION 时若 HorizontalPager (在 SLIDE/
-                    // COVER 等其它分支) 或 SimulationPager 内部某处把
-                    // pagerState.currentPage=0 当成已 settled 上报，会写回
-                    // readerPageIndex=0 → 下一帧 coordinator 重建 displayPage=0
-                    // → 渲染章节首页那一帧。
                     AppLog.debug(
                         "PageTurnFlicker",
                         "[3o] onPageSettled RECV settledPage=$settledPage" +
                             " progressRestored=$progressRestored" +
                             " coordinatorLastSettled=${coordinator.lastSettledDisplayPage}" +
                             " readerPageIndex=$readerPageIndex" +
-                            " pageAnimType=$pageAnimType",
+                            " pageAnimType=$pageAnimType" +
+                            " unified=$isUnifiedPagingMode curRange=[$unifiedCurStart..$unifiedCurEnd]",
                     )
                     if (!progressRestored) {
                         coordinator.pendingSettledDirection = null
                         return@AnimatedPageReader
                     }
-                    coordinator.handlePagerSettled(settledPage) { readerPageIndex = it }
-                    // 翻页完成后清掉残留的选区和高亮 action menu
+                    // SLIDE / COVER 跨章检测：settledPage 越过 cur 区间 → commit chapter shift。
+                    if (isUnifiedPagingMode && pageFactory.snapshotCurrentChapterIndex() != null) {
+                        when {
+                            settledPage < unifiedCurStart -> {
+                                AppLog.info(
+                                    "PageTurnFlicker",
+                                    "[unified] PREV CROSS-CHAPTER settledUnified=$settledPage" +
+                                        " curStart=$unifiedCurStart → commitChapterShiftPrev(toLast=true)",
+                                )
+                                onPrevChapter()
+                                return@AnimatedPageReader
+                            }
+                            settledPage > unifiedCurEnd -> {
+                                AppLog.info(
+                                    "PageTurnFlicker",
+                                    "[unified] NEXT CROSS-CHAPTER settledUnified=$settledPage" +
+                                        " curEnd=$unifiedCurEnd → commitChapterShiftNext",
+                                )
+                                onNextChapter()
+                                return@AnimatedPageReader
+                            }
+                            else -> {
+                                // 章内 settle：把 unified 转 cur local 再走旧 handlePagerSettled
+                                val localIndex = settledPage - unifiedCurStart
+                                coordinator.handlePagerSettled(localIndex) { readerPageIndex = it }
+                            }
+                        }
+                    } else {
+                        coordinator.handlePagerSettled(settledPage) { readerPageIndex = it }
+                    }
                     if (selectionState.isActive) {
                         selectionState.clear()
                     }
                     highlightActionTarget = null
                 },
             ) { pageIndex ->
-                    PageContentBox(
-                page = coordinator.getPageAt(pageIndex),
-                    pageIndex = pageIndex,
-                    currentPage = if (pageAnimType == PageAnimType.SIMULATION) {
-                        coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax)
+                    // unified 路径下 pageIndex 是 unified（[0, unifiedPageCount)），content
+                    // lambda 直接调 pageFactory.unifiedPageAt(pageIndex) 取 prev/cur/next 任一页
+                    // → 章节边界对 HorizontalPager 透明，翻页动画穿过边界自然流畅。
+                    val pageForRender = if (isUnifiedPagingMode) {
+                        pageFactory.unifiedPageAt(pageIndex)
                     } else {
-                        pagerState.currentPage
-                    },
+                        coordinator.getPageAt(pageIndex)
+                    }
+                    // InfoBar 显示 currentPage 需要 cur 章内 local（用户期望"第 N 页 / 共 M 页"）。
+                    // unified 路径下把 unified - curStart 转 cur local，跨章瞬间可能 clamp 到端点。
+                    val displayCurrentPage = when {
+                        pageAnimType == PageAnimType.SIMULATION ->
+                            coordinator.lastSettledDisplayPage.coerceIn(0, safeDisplayMax)
+                        isUnifiedPagingMode ->
+                            (pagerState.currentPage - unifiedCurStart).coerceIn(0, (renderPageCount - 1).coerceAtLeast(0))
+                        else -> pagerState.currentPage
+                    }
+                    PageContentBox(
+                page = pageForRender,
+                    pageIndex = pageIndex,
+                    currentPage = displayCurrentPage,
                     backgroundColor = backgroundColor,
                     selectionState = selectionState,
                     chapterTitle = chapterTitle,
@@ -2457,6 +2548,13 @@ internal fun ReaderInfoBar(
     batteryCharging: Boolean = false,
     currentTime: String,
     textColor: Color,
+    /**
+     * V2 滚动模式的章内像素级实时百分比（0.0..100.0）；非 null 时 "progress" /
+     * "page_progress" slot 优先用它显示一位小数（如 25.6%），避开 V2 无"页"
+     * 概念导致的整章百分比"卡顿"显示。null = 走默认（currentPage.readProgress
+     * 或 pageIndex/pageCount 推导）。仅滚动 V2 Host 传非 null，其他模式留空。
+     */
+    scrollPercentOverride: Float? = null,
     modifier: Modifier = Modifier,
 ) {
     // If all slots are "none", don't render anything
@@ -2484,6 +2582,7 @@ internal fun ReaderInfoBar(
                 currentTime = currentTime,
                 tipColor = tipColor,
                 tipStyle = tipStyle,
+                scrollPercentOverride = scrollPercentOverride,
                 modifier = Modifier.weight(1f, fill = false),
             )
         }
@@ -2505,6 +2604,7 @@ internal fun ReaderInfoBar(
                 currentTime = currentTime,
                 tipColor = tipColor,
                 tipStyle = tipStyle,
+                scrollPercentOverride = scrollPercentOverride,
             )
         }
         if (slotRight != "none" && (slotLeft != "none" || slotCenter != "none")) {
@@ -2525,6 +2625,7 @@ internal fun ReaderInfoBar(
                 currentTime = currentTime,
                 tipColor = tipColor,
                 tipStyle = tipStyle,
+                scrollPercentOverride = scrollPercentOverride,
             )
         }
     }
@@ -2651,6 +2752,8 @@ internal fun InfoSlotContent(
     currentTime: String,
     tipColor: Color,
     tipStyle: TextStyle,
+    /** V2 滚动模式像素级实时百分比 0..100；非 null 时优先用它，详见 [ReaderInfoBar]。 */
+    scrollPercentOverride: Float? = null,
     modifier: Modifier = Modifier,
 ) {
     when (slot) {
@@ -2666,6 +2769,11 @@ internal fun InfoSlotContent(
         "battery_pct" -> Text("$batteryLevel%", style = tipStyle, modifier = modifier)
         "page" -> Text("${pageIndex + 1}/$pageCount", style = tipStyle, modifier = modifier)
         "progress" -> {
+            // V2 滚动 override 优先于 currentPage.readProgress / pageIndex 推导。
+            if (scrollPercentOverride != null) {
+                Text("%.1f%%".format(scrollPercentOverride), style = tipStyle, modifier = modifier)
+                return
+            }
             val readProgress = currentPage?.readProgress?.takeIf { it.isNotBlank() }
             if (readProgress != null) {
                 Text(readProgress, style = tipStyle, modifier = modifier)
@@ -2677,6 +2785,13 @@ internal fun InfoSlotContent(
             Text("%.1f%%".format(pct), style = tipStyle, modifier = modifier)
         }
         "page_progress" -> {
+            // V2 滚动 override：直接显示「章 i/n  XX.X%」，章号信息保留，
+            // 百分比来自像素 offset 实时算出。
+            if (scrollPercentOverride != null) {
+                val chPart = if (chaptersSize > 0) "${chapterIndex + 1}/$chaptersSize  " else ""
+                Text("$chPart${"%.1f%%".format(scrollPercentOverride)}", style = tipStyle, modifier = modifier)
+                return
+            }
             val readProgress = currentPage?.readProgress?.takeIf { it.isNotBlank() } ?: "0.0%"
             val actualPageSize = currentPage?.pageSize?.takeIf { it > 0 } ?: pageCount
             Text("${pageIndex + 1}/$actualPageSize  $readProgress", style = tipStyle, modifier = modifier)

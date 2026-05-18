@@ -62,7 +62,7 @@ android {
         minSdk = 21
         targetSdk = 35
         versionCode = 8
-        versionName = "1.4"
+        versionName = "1.5-dev"
 
         // Room schema export
         ksp {

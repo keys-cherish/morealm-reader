@@ -157,6 +157,63 @@ internal class ReaderPageFactory(
 
     fun isCurrentChapterDisplay(displayIndex: Int): Boolean = currentLocalIndex(displayIndex) != null
 
+    // ───────────────────────────────────────────────────────────────────────
+    // Cross-chapter unified pageCount (SLIDE / COVER only, 2026-05-18)
+    //
+    // 仅 SLIDE / COVER 翻页动画启用：让 HorizontalPager.pageCount 等于
+    // prevPages.size + pages.size + nextPages.size，HorizontalPager 翻页直接
+    // 穿过章节边界 → 跨章动画与章内动画一致流畅。SIMULATION / SCROLL / NONE /
+    // SLIDE_VERTICAL 不进此路径，仍按 [pageCount]（单章）渲染。
+    //
+    // 关键概念：
+    //   - **unifiedIndex** = 全局联合页号 [0, unifiedPageCount)
+    //   - 区间划分：
+    //       [0, prevPages.size)                     → prev 章 pages
+    //       [prevPages.size, prevPages.size+pages.size)        → cur 章 pages
+    //       [prevPages.size+pages.size, unifiedPageCount)      → next 章 pages
+    //   - chapter shift 触发条件：onPageSettled 时 settledUnified 不在 cur 区间
+    // ───────────────────────────────────────────────────────────────────────
+
+    /** Cross-chapter unified pageCount. prev/next 未加载时 size=0，等价于 [pageCount]。 */
+    val unifiedPageCount: Int
+        get() = (prevPages.size + pages.size + nextPages.size).coerceAtLeast(1)
+
+    /** prev 章 page 数。LaunchedEffect / restoreProgress 用来算 unified offset。 */
+    val unifiedPrevChapterSize: Int get() = prevPages.size
+
+    /** next 章 page 数。 */
+    val unifiedNextChapterSize: Int get() = nextPages.size
+
+    /** cur 章 page 数（= [pageCount]，别名让 unified 路径读起来对称）。 */
+    val unifiedCurChapterSize: Int get() = pages.size
+
+    /** cur 章在 unified 联合页号里的起始 index（= prevPages.size）。 */
+    val unifiedCurStartIndex: Int get() = prevPages.size
+
+    /** cur 章在 unified 联合页号里的末尾 index（含，可作 `<=` 比较）。 */
+    val unifiedCurEndIndex: Int get() = prevPages.size + (pages.size - 1).coerceAtLeast(0)
+
+    /** Map unified index → 对应 [TextPage]。越界时返回 cur 末页防 crash。 */
+    fun unifiedPageAt(unifiedIndex: Int): TextPage {
+        val prevSize = prevPages.size
+        val curSize = pages.size
+        return when {
+            unifiedIndex < 0 -> prevPages.firstOrNull() ?: pages.first()
+            unifiedIndex < prevSize -> prevPages[unifiedIndex]
+            unifiedIndex < prevSize + curSize -> pages[unifiedIndex - prevSize]
+            unifiedIndex < prevSize + curSize + nextPages.size -> nextPages[unifiedIndex - prevSize - curSize]
+            else -> pages.lastOrNull() ?: TextPage()
+        }
+    }
+
+    /**
+     * 把 cur 章本地 displayIndex 转 unified pageIndex（= prevSize + localIndex）。
+     * 用于 chapter 切换后 scrollToPage 算 target unified index、restoreProgress JUMP 算 target。
+     */
+    fun unifiedFromCurLocal(localIndex: Int): Int = prevPages.size + localIndex.coerceAtLeast(0)
+
+// companion object moved to bottom of class, merged with KEEP_SWIPE_TIP — see below.
+
     fun pageForTurn(displayIndex: Int, relativePos: Int): TextPage? {
         return when (relativePos) {
             -1 -> when {
@@ -250,7 +307,51 @@ internal class ReaderPageFactory(
         return TextPage(title = title).apply { textChapter = chapter }.format()
     }
 
-    private companion object {
-        const val KEEP_SWIPE_TIP = "继续滑动以加载下一章..."
+    // companion 内既有 private 常量也有 public 测试 helper —— 整体非 private，
+    // 私有内容用 @JvmStatic 或 internal 标记。这里 KEEP_SWIPE_TIP 仅本类用，留 internal 即可。
+    companion object {
+        internal const val KEEP_SWIPE_TIP = "继续滑动以加载下一章..."
+
+        /**
+         * Pure helper for unit tests: 给定 unified pageIndex + 三章 size，
+         * 返回 (chapterRelative, localIndex) — chapterRelative -1=prev / 0=cur / +1=next。
+         * 越界返回 cur 端点。
+         */
+        fun localFromUnifiedIndex(
+            unifiedIndex: Int,
+            prevCount: Int,
+            curCount: Int,
+            nextCount: Int,
+        ): Pair<Int, Int> {
+            val safeCur = curCount.coerceAtLeast(1)
+            return when {
+                unifiedIndex < 0 -> 0 to 0
+                unifiedIndex < prevCount -> -1 to unifiedIndex
+                unifiedIndex < prevCount + curCount -> 0 to (unifiedIndex - prevCount)
+                unifiedIndex < prevCount + curCount + nextCount -> 1 to (unifiedIndex - prevCount - curCount)
+                else -> 0 to (safeCur - 1)
+            }
+        }
+
+        /**
+         * Pure helper for unit tests + Coordinator: chapter shift 后旧 unified currentPage
+         * 应该重映射到新 cur 章的哪个 unified index。
+         *   - direction NEXT：新 cur 是旧 next → 新 unified target = newPrevCount + 0（新 cur 首页）
+         *   - direction PREV：新 cur 是旧 prev → 新 unified target = newPrevCount + (newCurCount - 1)（新 cur 末页）
+         *   - 其他 / NONE：返回原 unified（不重映射）
+         */
+        fun remapUnifiedAfterChapterShift(
+            oldUnified: Int,
+            isNextShift: Boolean,
+            isPrevShift: Boolean,
+            newPrevCount: Int,
+            newCurCount: Int,
+        ): Int {
+            return when {
+                isNextShift -> newPrevCount.coerceAtLeast(0)
+                isPrevShift -> newPrevCount + (newCurCount - 1).coerceAtLeast(0)
+                else -> oldUnified
+            }
+        }
     }
 }

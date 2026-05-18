@@ -536,6 +536,13 @@ class ReaderViewModel @Inject constructor(
     fun loadChapter(index: Int, restoreProgress: Int = 0, restoreChapterPosition: Int = 0) =
         chapter.loadChapter(index, restoreProgress, restoreChapterPosition)
 
+    /**
+     * 「拖动 Slider 所见所得」轻量 seek 入口。同章 in-place（不重 load 内容），
+     * 跨章 fallback [loadChapter]。详见 [ReaderChapterController.seekProgressInPlace]。
+     */
+    fun seekProgressInPlace(index: Int, progress: Int) =
+        chapter.seekProgressInPlace(index, progress)
+
     fun updateScrollProgress(pct: Int) = progress.updateScrollProgress(pct)
     fun onVisiblePageChanged(index: Int, title: String, readProgress: String, chapterPosition: Int = 0) =
         progress.onVisiblePageChanged(index, title, readProgress, chapterPosition)
