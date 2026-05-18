@@ -149,6 +149,11 @@ fun ReaderScreen(
     // 当帧重写。CanvasRenderer 的 syncPrev/NextTextChapter prop 优先于 prelayoutCache 派生。
     val syncPrevTextChapterValue by viewModel.chapter.prevTextChapter.collectAsStateWithLifecycle()
     val syncNextTextChapterValue by viewModel.chapter.nextTextChapter.collectAsStateWithLifecycle()
+    // 2026-05-18 跨章闪烁根治：commit chapter shift 主线程当帧 _curTextChapter.value=nextCh
+    // （已排好版的 TextChapter），让 CanvasRenderer.chapter 跳过 ReflowEngine 异步层
+    // （主线程 StateFlow → State fast path，跟 syncPrev/Next 同款 ~1 帧 latency），
+    // 跨章瞬间 factory.currentChapter 立即是新章，零错位帧。
+    val syncCurTextChapterValue by viewModel.chapter.curTextChapter.collectAsStateWithLifecycle()
     val showControls by viewModel.isControlsVisible.collectAsStateWithLifecycle()
     val showTtsPanel by viewModel.isTtsPanelVisible.collectAsStateWithLifecycle()
     val showSettings by viewModel.isSettingsPanelVisible.collectAsStateWithLifecycle()
@@ -967,6 +972,7 @@ fun ReaderScreen(
                 onNextTextChapterReady = { idx, ch -> viewModel.chapter.publishNextTextChapter(idx, ch) },
                 syncPrevTextChapter = syncPrevTextChapterValue,
                 syncNextTextChapter = syncNextTextChapterValue,
+                syncCurTextChapter = syncCurTextChapterValue,
                 // Phase 2e: 滚动模式跨章 commit 优先走同步腾挪——成功则 ChapterController
                 // 当帧已更新所有相关 StateFlow，CanvasRenderer 跳过 onNextChapter()/onPrevChapter()
                 // 避免老 loadChapter 异步路径覆盖。返回 false 时回退老路径。

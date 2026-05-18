@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -30,6 +31,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -254,6 +256,19 @@ fun CanvasRenderer(
     syncPrevTextChapter: com.morealm.app.domain.render.TextChapter? = null,
     syncNextTextChapter: com.morealm.app.domain.render.TextChapter? = null,
     /**
+     * 2026-05-18 跨章闪烁根治：cur 章同步真值。来自 ReaderChapterController._curTextChapter
+     * StateFlow，commitChapterShiftNext/Prev 主线程当帧赋值（已 preload 排好版的 TextChapter）。
+     *
+     * 优先级：[syncCurTextChapter] > [textChapter]（来自 ReflowEngine.state Ready 异步 emit）。
+     * 跨章 commit 后 syncCur 同步到位（~1 帧 collectAsState latency），跳过 ReflowEngine
+     * 异步 layoutChapter 50ms，让 factory.currentChapter 跨章瞬间直接是新章 → 零错位帧。
+     *
+     * Legado 对标：ReadBook.curTextChapter 是普通 Kotlin var，main thread 同步赋值 + View
+     * 同步重绘（PageDelegate.upContent → invalidate）→ Legado 跨章零延迟。MoRealm Compose
+     * 架构不能完全消除 Compose 重组延迟，但 syncCur 让 cur 跟 syncPrev/Next 同一 fast path。
+     */
+    syncCurTextChapter: com.morealm.app.domain.render.TextChapter? = null,
+    /**
      * Phase 2 MD3 同步腾挪 commit 入口 — 由 ScrollRenderer 在 onChapterCommit
      * 触发时调用。返回 true 表示同步腾挪成功（ChapterController 当帧已更新三个真值），
      * 此时 CanvasRenderer 跳过老 [onNextChapter] / [onPrevChapter] 回调（避免 loadChapter
@@ -369,11 +384,20 @@ fun CanvasRenderer(
     }
     val topInfoBarPx = if (headerHasContent) infoBarHeightPx else 0
     val bottomInfoBarPx = if (footerHasContent) infoBarHeightPx else 0
-    // Ensure content padding is at least as large as the cutout insets
+    // status bar / navigation bar inset：SIMULATION 模式把 InfoBar 烘进 bitmap 内时
+    // 占据 barHeightPx=64dp（含 status bar inset ≈ 26dp + 真 InfoBar 38dp），但 layout
+    // 只用 40dp 留白 → SIMULATION 的 InfoBar 底部和正文大字标题区域重叠 → 标题被压。
+    // 让 effectivePadTop / Bottom 也含 status bar / nav bar inset，跟 SIMULATION 的
+    // PageInfoOverlaySpec.barHeightPx 对齐（64dp）。COVER/SLIDE 浮层 InfoBar 40dp 贴
+    // Box 顶部时 status bar 区被系统覆盖，浮层可见区仍是 40dp - status bar = 14dp，
+    // 但 layout 留白增加 status bar 高度后，大字标题位于 status bar + 40dp 之下，
+    // 跟 COVER 浮层不冲突；SIMULATION bitmap 内 InfoBar 64dp 也跟 layout 留白对齐。
+    val statusBarTopPx = with(density) { WindowInsets.statusBars.getTop(density) }
+    val navBarBottomPx = with(density) { WindowInsets.navigationBars.getBottom(density) }
     val effectivePadLeft = maxOf(padHPx, cutoutLeft)
     val effectivePadRight = maxOf(padHPx, cutoutRight)
-    val effectivePadTop = maxOf(padTopPx, cutoutTop) + topInfoBarPx
-    val effectivePadBottom = maxOf(padBotPx, cutoutBottom) + bottomInfoBarPx
+    val effectivePadTop = maxOf(padTopPx, cutoutTop, statusBarTopPx) + topInfoBarPx
+    val effectivePadBottom = maxOf(padBotPx, cutoutBottom, navBarBottomPx) + bottomInfoBarPx
     val fontSizePx = with(density) { fontSize.sp.toPx() }
 
     // ── Battery level + charging (ported from Legado ReadBookActivity battery receiver) ──
@@ -741,7 +765,36 @@ fun CanvasRenderer(
         )
     }
 
-    val chapter = textChapter
+    // 2026-05-18 跨章闪烁根治：优先用 syncCurTextChapter（主线程 commit shift 同步真值），
+    // 跳过 ReflowEngine 异步层，让 factory 跨章瞬间拿到正确 currentChapter。
+    // 但必须校验 syncCur.chapterIndex == chapterIndex (prop)，避免 ReflowEngine 字号 reflow
+    // 中间态时 syncCur 仍是旧值污染。一致性 invariant 让 syncCur 仅在跨章 commit 后第一帧
+    // 生效，之后切回 textChapter（ReflowEngine 同步排版后的真值）。
+    val chapter = syncCurTextChapter
+        ?.takeIf { it.chapterIndex == chapterIndex && (textChapter == null || textChapter!!.chapterIndex != chapterIndex) }
+        ?: textChapter
+    // [DIAG Bug 跨章闪烁 v5 chapter-source 时序] 每次重组打 chapter prop / syncCur / textChapter 三源
+    // 实际 chapterIndex + 守门选哪条 + chapter.pageSize。验证 commit shift 后三源 latency。
+    AppLog.info(
+        "PageTurnFlicker",
+        "[chapter-source] prop.chIdx=$chapterIndex" +
+            " syncCur.chIdx=${syncCurTextChapter?.chapterIndex} syncCur.pageSize=${syncCurTextChapter?.pageSize}" +
+            " textChapter.chIdx=${textChapter?.chapterIndex} textChapter.pageSize=${textChapter?.pageSize}" +
+            " chosen.chIdx=${chapter?.chapterIndex} chosen.pageSize=${chapter?.pageSize}" +
+            " syncPrev.chIdx=${syncPrevTextChapter?.chapterIndex}" +
+            " syncNext.chIdx=${syncNextTextChapter?.chapterIndex}",
+    )
+    // 同步腾挪 pageCount：chapter 已合并 syncCur 真值，pageCount 也跟着走 — 否则
+    // restoreProgress 用 textChapter 旧 pageSize 算 target 错位（如 startFromLastPage=true
+    // 时算成旧章末页 idx 而非新章末页）。SideEffect 在 commit phase 写入 mutableIntStateOf，
+    // 跟 LaunchedEffect(reflowEngine.state) 内的 pageCount 写入并存，谁后写谁生效；
+    // 跨章 stale 窗口内此处保证 pageCount 跟 chapter.pageSize 一致。
+    val targetPageCount = chapter?.pageSize?.coerceAtLeast(1) ?: 1
+    androidx.compose.runtime.SideEffect {
+        if (pageCount != targetPageCount) {
+            pageCount = targetPageCount
+        }
+    }
     // chapter.pages 不为空时直接用；否则 placeholder（初始 Idle / 跨章窗口）。
     //
     // ReflowEngine 不变量保证：Reflowing.visible 始终是上一次 Ready 的完整 chapter，
@@ -964,17 +1017,92 @@ fun CanvasRenderer(
     //
     // 跨章 PREV 闪烁应该走「等 publishCurTextChapter 完成再 commit chapterIndex」
     // 路线，而不是在 pager 层欺骗 pageCount。本次 revert，闪烁问题留待重新设计。
-    // pageCount lambda 按 pageAnimType 分支：
-    //   - SLIDE / COVER → unifiedPageCount（prev+cur+next 三章联合），让 HorizontalPager
-    //     翻页穿过章节边界，跨章动画一致流畅（2026-05-18 Bug B 根治）。
-    //   - SIMULATION / SCROLL / NONE / SLIDE_VERTICAL → 单章 renderPageCount（旧逻辑）。
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = {
-        if (pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER) {
-            pageFactory.unifiedPageCount
-        } else {
-            renderPageCount
+    // ── pagerState 跨章/跨模式重映射防御（2026-05-18 Bug 跳页根治）──
+    //
+    // 根因：SLIDE/COVER unified 模式下 pagerState.currentPage 是 unified index
+    // （prevSize + cur local）。当 prev/next chapter 异步加载完成（publishPrev/NextTextChapter）
+    // 后 pageFactory remember 重建，unifiedCurStartIndex 跳跃（如 0→16）。但
+    // pagerState.currentPage 不会自动跟随重映射 —— stale 值直接落到旧 unified 区段
+    // （prev 章末页），HorizontalPager 渲染一帧错的章节，用户视觉跳章。
+    //
+    // 修法：用 `key(pageAnimType, unifiedCurStartIndex)` 包 rememberPagerState。
+    // 任一变化时 pagerState 重建，initialPage 用 curLocalSnapshot 保留的 cur local
+    // 重新算 unified 目标。同帧根治，无错位帧。一并修 Bug 1 模式切换跳页
+    // （pageAnimType 变化触发同款重建）。
+    //
+    // curLocalSnapshot 在每次重组的 SideEffect 同步记录 — pagerState 重建前一帧
+    // 的 cur local 是真值；新 pagerState initialPage 直接复用这个 cur local 即可
+    // 保持视觉位置不变。
+    val curLocalSnapshot = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    // key 必须包含 chapterIndex —— 跨章 NEXT 时如果旧 prev / 新 prev pages 数量巧合相等
+    // （如都是 16），unifiedCurStartIndex 不变，单靠 unifiedCurStartIndex 作 key 漏触发
+    // pagerState 重建 → pagerCurrent 保留跨章触发那刻的 unified=N+1 越界值 → 渲染 cur
+    // 末页错位帧。chapterIndex 在 commit shift 主线程当帧变化，作 key 的一部分保证跨章
+    // 必触发 pagerState 重建。日志 20260518_202024 NEXT 155→156 复现。
+    val pagerState = androidx.compose.runtime.key(
+        pageAnimType,
+        chapterIndex,
+        pageFactory.unifiedCurStartIndex,
+    ) {
+        val isUnifiedMode = pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER
+        // curLocalSnapshot 约定：
+        //   - >= 0  ：显式 cur local（同章 reflow / pagerState 同模式重建）
+        //   - == -1 ：PREV shift sentinel，pagerState 重建时取 newCurSize - 1（新 cur 末页，
+        //             连续阅读语义）。NEXT shift 直接写 0。
+        val targetCurLocal = when {
+            curLocalSnapshot.intValue == -1 -> {
+                // PREV shift → 新 cur 末页
+                (pageFactory.unifiedCurChapterSize - 1).coerceAtLeast(0)
+            }
+            else -> curLocalSnapshot.intValue.coerceAtLeast(0)
         }
-    })
+        val initialPageForState = if (isUnifiedMode) {
+            (pageFactory.unifiedCurStartIndex + targetCurLocal)
+                .coerceIn(0, (pageFactory.unifiedPageCount - 1).coerceAtLeast(0))
+        } else {
+            targetCurLocal.coerceIn(0, (renderPageCount - 1).coerceAtLeast(0))
+        }
+        AppLog.info(
+            "PageTurnFlicker",
+            "[unified-remap] pagerState REBUILD pageAnim=$pageAnimType curStart=${pageFactory.unifiedCurStartIndex}" +
+                " curLocalSnap=${curLocalSnapshot.intValue} targetCurLocal=$targetCurLocal initialPage=$initialPageForState" +
+                " unifiedPC=${pageFactory.unifiedPageCount} renderPC=$renderPageCount",
+        )
+        rememberPagerState(initialPage = initialPageForState, pageCount = {
+            if (isUnifiedMode) pageFactory.unifiedPageCount else renderPageCount
+        })
+    }
+    // [DIAG 跨章闪烁 v6 2026-05-18 偶发 race 验证]
+    //
+    // pagerState 实例切换 (key() 重建) 是当前根因猜测的核心。DisposableEffect(pagerState)
+    // 绑定到 pagerState 实例，key 变化时新实例不等于旧实例 → 触发 dispose old + setup new。
+    //
+    // 记录两个时间点（SystemClock.elapsedRealtime）：
+    //   [pager-life] MOUNT    新 pagerState 上场，记 hash + initialPage + 时间戳
+    //   [pager-life] DISPOSE  旧 pagerState 下场，记 hash + 末 currentPage + 在场 ms
+    //
+    // 关键时间窗：旧 DISPOSE 到新 MOUNT 之间的 gap = HorizontalPager remount 黑屏窗口；
+    // 期间 GPU 画 RenderNode 缓存（旧 pagerState 末帧 + slot 27 残留 = 用户看到的闪烁）。
+    androidx.compose.runtime.DisposableEffect(pagerState) {
+        val mountTime = android.os.SystemClock.elapsedRealtime()
+        AppLog.info(
+            "PageTurnFlicker",
+            "[pager-life] MOUNT pagerState@${System.identityHashCode(pagerState).toString(16)}" +
+                " initialPage=${pagerState.currentPage}" +
+                " pageCount=${pagerState.pageCount}" +
+                " at=$mountTime",
+        )
+        onDispose {
+            val disposeTime = android.os.SystemClock.elapsedRealtime()
+            AppLog.info(
+                "PageTurnFlicker",
+                "[pager-life] DISPOSE pagerState@${System.identityHashCode(pagerState).toString(16)}" +
+                    " lastPage=${pagerState.currentPage}" +
+                    " liveMs=${disposeTime - mountTime}",
+            )
+        }
+    }
+    // SideEffect 已移到 coordinator.updateDeps 之后（L~1185），因为需要引用 coordinator。
 
     // Page-turn coordinator — replaces local page-turn functions and state.
     //
@@ -1042,6 +1170,66 @@ fun CanvasRenderer(
     }
     // Update deps on each recomposition so coordinator always sees latest values
     coordinator.updateDeps(pageFactory, pagerState, chapterIndex, pageCount, renderPageCount)
+
+    // 每次重组同步记录 cur local，让 pagerState 下一次重建时 initialPage 算得对。
+    // SideEffect 跑在 commit phase（layout/draw 后），此时 pagerState.currentPage
+    // 是已 settle 的稳定值。
+    androidx.compose.runtime.SideEffect {
+        val isUnifiedMode = pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER
+        if (isUnifiedMode) {
+            val rel = pagerState.currentPage - pageFactory.unifiedCurStartIndex
+            val curSize = pageFactory.unifiedCurChapterSize
+            val renderedPage = pageFactory.unifiedPageAt(pagerState.currentPage)
+            val displayCurPage = (pagerState.currentPage - pageFactory.unifiedCurStartIndex)
+                .coerceIn(0, (pageFactory.unifiedCurChapterSize - 1).coerceAtLeast(0))
+            AppLog.info(
+                "PageTurnFlicker",
+                "[render-after-recompose] pagerCur=${pagerState.currentPage} curStart=${pageFactory.unifiedCurStartIndex}" +
+                    " curRange=[${pageFactory.unifiedCurStartIndex}..${pageFactory.unifiedCurEndIndex}]" +
+                    " unifiedPC=${pageFactory.unifiedPageCount} displayCurPage=$displayCurPage" +
+                    " renders ch${renderedPage.chapterIndex}.idx${renderedPage.index}" +
+                    " title='${renderedPage.title.take(15)}'" +
+                    " rel=$rel curSize=$curSize curLocalSnap=${curLocalSnapshot.intValue}",
+            )
+            if (rel in 0 until curSize) {
+                curLocalSnapshot.intValue = rel
+            }
+        } else if (pageAnimType == PageAnimType.SIMULATION || pageAnimType == PageAnimType.SCROLL) {
+            // SIMULATION / SCROLL 模式：pagerState 是摆设，currentPage 不反映真实页（停 0）。
+            // 用 coordinator.lastSettledDisplayPage 作 cur local 真值。这样切回 COVER/SLIDE
+            // 时 curLocalSnap 已经是用户实际所在页 → pagerState 重建 initialPage 直接对，
+            // 无 ch-switch LaunchedEffect 后续 scrollToPage 拉回造成的"首页闪一帧再滑到末页"。
+            val local = coordinator.lastSettledDisplayPage.coerceIn(0, (renderPageCount - 1).coerceAtLeast(0))
+            curLocalSnapshot.intValue = local
+        } else {
+            // NONE / SLIDE_VERTICAL 等：pagerState 反映 cur local，直接用 pagerCurrent。
+            val cur = pagerState.currentPage
+            if (cur in 0 until renderPageCount.coerceAtLeast(1)) {
+                curLocalSnapshot.intValue = cur
+            }
+        }
+    }
+
+    // [DIAG Bug 模式切换闪烁 2026-05-18 v4] 跟踪 pageAnimType 切换 timeline。
+    // 模式切换时 pagerState（key 含 pageAnimType）必重建。但 SimulationView 创建/销毁 +
+    // bitmap idle 缓存清理也可能贡献闪烁。把切换前后 pagerCur / readerPageIndex /
+    // coordLastSettled / curLocalSnap 都打出来，看哪个数据不一致。
+    val lastPageAnimType = remember { arrayOf<PageAnimType?>(null) }
+    androidx.compose.runtime.SideEffect {
+        val prev = lastPageAnimType[0]
+        if (prev != pageAnimType) {
+            AppLog.info(
+                "PageTurnFlicker",
+                "[anim-switch] $prev → $pageAnimType pagerCur=${pagerState.currentPage}" +
+                    " readerPageIndex=$readerPageIndex coordLastSettled=${coordinator.lastSettledDisplayPage}" +
+                    " curLocalSnap=${curLocalSnapshot.intValue}" +
+                    " chapterIndex=$chapterIndex curStart=${pageFactory.unifiedCurStartIndex}" +
+                    " unifiedPC=${pageFactory.unifiedPageCount} renderPC=$renderPageCount" +
+                    " pageCount=$pageCount",
+            )
+            lastPageAnimType[0] = pageAnimType
+        }
+    }
 
     // [DIAG Bug-B unified 跳页 / SIMULATION 闪烁 2026-05-18]
     // 每次重组打 pagerState.currentPage + unifiedPageCount + factory chapter idx。
@@ -1587,7 +1775,11 @@ fun CanvasRenderer(
         textColorArgb = textColor.toArgb(),
         backgroundColorArgb = bgArgb,
         paddingHorizontalPx = with(density) { paddingHorizontal.dp.toPx() },
-        barHeightPx = with(density) { 64.dp.toPx() },
+        // barHeightPx 从历史 64dp 改成 40dp，跟 COVER 浮层 ReaderInfoBar.height(40.dp) 一致。
+        // SIMULATION 在 bitmap 内画 InfoBar 时 y 起点已经是 topInsetPx（status bar 下方），
+        // 64dp 会让 InfoBar 占据 [26..90]dp 范围，跟 layout effectivePadTop=66dp 重叠
+        // 24dp，导致章节大字标题被压。改 40dp 后 [26..66]dp，跟 layout 留白对齐。
+        barHeightPx = with(density) { 40.dp.toPx() },
         verticalPaddingPx = with(density) { 8.dp.toPx() },
         textSizePx = with(density) { 10.sp.toPx() },
         // status bar 显示时把顶栏整体下推，避免章节标题贴住系统状态栏；
@@ -2249,19 +2441,27 @@ fun CanvasRenderer(
                     if (isUnifiedPagingMode && pageFactory.snapshotCurrentChapterIndex() != null) {
                         when {
                             settledPage < unifiedCurStart -> {
+                                // PREV shift：新 cur (旧 prev) 应显示**末页**（手势 PREV 连续阅读语义）。
+                                // 用 -1 sentinel 让 pagerState 重建 lambda 识别后取 newCurSize-1。
+                                // 不直接写 newCurSize-1 是因为 newCurSize 此刻未知（factory 还没重建）。
+                                curLocalSnapshot.intValue = -1
                                 AppLog.info(
                                     "PageTurnFlicker",
                                     "[unified] PREV CROSS-CHAPTER settledUnified=$settledPage" +
-                                        " curStart=$unifiedCurStart → commitChapterShiftPrev(toLast=true)",
+                                        " curStart=$unifiedCurStart → curLocalSnap=-1 (末页 sentinel)" +
+                                        " → commitChapterShiftPrev(toLast=true)",
                                 )
                                 onPrevChapter()
                                 return@AnimatedPageReader
                             }
                             settledPage > unifiedCurEnd -> {
+                                // NEXT shift：新 cur (旧 next) 应显示**首页**（章首）。
+                                curLocalSnapshot.intValue = 0
                                 AppLog.info(
                                     "PageTurnFlicker",
                                     "[unified] NEXT CROSS-CHAPTER settledUnified=$settledPage" +
-                                        " curEnd=$unifiedCurEnd → commitChapterShiftNext",
+                                        " curEnd=$unifiedCurEnd → curLocalSnap=0 (首页)" +
+                                        " → commitChapterShiftNext",
                                 )
                                 onNextChapter()
                                 return@AnimatedPageReader
@@ -2289,6 +2489,19 @@ fun CanvasRenderer(
                     } else {
                         coordinator.getPageAt(pageIndex)
                     }
+                    // [DIAG Bug 跨章闪烁 v5 2026-05-18] 关闭 dedupe，打所有 content lambda invoke。
+                    // 跨章 commit + factory 重建 + pagerState 重建瞬间，HorizontalPager 内部
+                    // LazyLayout 可能 measure 多个 slots（含 pre-cache 邻页）。如果某个 slot
+                    // 短暂入视野（pagerState 实例切换 transition），用户看到错位 chapter。
+                    // 打所有 invoke 看 measure phase 完整 picture，定位是否有 slot 11 (prev 章末页)
+                    // 在 pagerCur=27 时被请求渲染。复现完命中即降级 DEBUG 或删。
+                    AppLog.info(
+                        "PageTurnFlicker",
+                        "[content-render] pageIdx=$pageIndex pagerCur=${pagerState.currentPage}" +
+                            " curStart=${if (isUnifiedPagingMode) pageFactory.unifiedCurStartIndex else 0}" +
+                            " renders ch${pageForRender.chapterIndex}.idx${pageForRender.index}" +
+                            " title='${pageForRender.title.take(15)}'",
+                    )
                     // InfoBar 显示 currentPage 需要 cur 章内 local（用户期望"第 N 页 / 共 M 页"）。
                     // unified 路径下把 unified - curStart 转 cur local，跨章瞬间可能 clamp 到端点。
                     val displayCurrentPage = when {
@@ -2298,6 +2511,53 @@ fun CanvasRenderer(
                             (pagerState.currentPage - unifiedCurStart).coerceIn(0, (renderPageCount - 1).coerceAtLeast(0))
                         else -> pagerState.currentPage
                     }
+                    // [DIAG 跨章闪烁 v6 2026-05-18 偶发 race 三探针]
+                    //
+                    // 上轮 v5 探针发现 onPlaced.positionInParent 在 HorizontalPager 内 slot
+                    // 永远 (0,0)（每个 slot 的直接 parent 是 page Box）—— x/y 字段废弃，仅保留
+                    // **onPlaced 回调发生与否** 这个信号（哪些 slot 真被 LazyLayout place）。
+                    //
+                    // 新增 [slot-draw]：drawWithContent.drawContent() 后打日志，节流 100ms/slot。
+                    // **draw 阶段**才反映 GPU 真正绘制。measure+place 都过了但 drawWithContent
+                    // 没回调 → 说明 slot 没进 GPU 绘制路径（被 graphicsLayer translateX 移出屏）。
+                    // [slot-draw] 调用 ≠ slot 在视野内（graphicsLayer 也可能移到屏外），但**没
+                    // [slot-draw]** 一定不在视野内。
+                    //
+                    // 用户能多次复现跨章闪烁。3 探针组合定位 race 窗口：
+                    //   [pager-life]    pagerState 实例切换的 mount/dispose 时间戳 + 在场 ms
+                    //   [content-render] measure 阶段调用（已有）
+                    //   [slot-place]    layout phase 放置（仅看回调时机，无坐标信息）
+                    //   [slot-draw]     draw phase 真实绘制
+                    //
+                    // 复现完命中即降级 DEBUG 或删。
+                    val lastSlotDrawAt = remember(pageIndex) { longArrayOf(0L) }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .onPlaced { _ ->
+                                AppLog.info(
+                                    "PageTurnFlicker",
+                                    "[slot-place] pageIdx=$pageIndex" +
+                                        " pagerCur=${pagerState.currentPage}" +
+                                        " curStart=${if (isUnifiedPagingMode) pageFactory.unifiedCurStartIndex else 0}" +
+                                        " ch${pageForRender.chapterIndex}.idx${pageForRender.index}",
+                                )
+                            }
+                            .drawWithContent {
+                                drawContent()
+                                val now = android.os.SystemClock.elapsedRealtime()
+                                if (now - lastSlotDrawAt[0] > 100L) {
+                                    lastSlotDrawAt[0] = now
+                                    AppLog.info(
+                                        "PageTurnFlicker",
+                                        "[slot-draw] pageIdx=$pageIndex" +
+                                            " pagerCur=${pagerState.currentPage}" +
+                                            " curStart=${if (isUnifiedPagingMode) pageFactory.unifiedCurStartIndex else 0}" +
+                                            " ch${pageForRender.chapterIndex}.idx${pageForRender.index}",
+                                    )
+                                }
+                            }
+                    ) {
                     PageContentBox(
                 page = pageForRender,
                     pageIndex = pageIndex,
@@ -2344,6 +2604,7 @@ fun CanvasRenderer(
                         selectionState.selectEndMove(textPos)
                     },
                 )
+                    }
             }
             // ── SIMULATION 模式选区/cursor overlay ──
             //
