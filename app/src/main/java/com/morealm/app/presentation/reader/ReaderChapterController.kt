@@ -1430,6 +1430,54 @@ class ReaderChapterController(
         _currentChapterIndex.value = index
     }
 
+    /**
+     * 「拖动 Slider 所见所得」轻量 seek 入口（2026-05-18）。
+     *
+     * 同 [loadChapter] 的对比：
+     *   - 跨章 (index != _currentChapterIndex.value) → 直接 fallback [loadChapter]，
+     *     走完整 cancel/restart + chapterLoadJob + readChapter IO + 重排版路径。
+     *   - 同章 (index == _currentChapterIndex.value) → 不重 load 章节内容，
+     *     仅重写 [_renderedChapter] 的 (initialProgress, restoreToken) → 下游
+     *     [com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderHost] 的
+     *     LaunchedEffect(restoreToken) 监听到新 token 后按 progress / 100 算 pixelOffset
+     *     直接 placement-only 写入，**60fps 顺，无 Recompose / Measure**。
+     *
+     * 调用方：ReaderControlBar 拖动 conflate worker（高频）+ 松手 onValueChangeFinished
+     * （低频）共用。同 (idx, progress) 重复调用时 _renderedChapter.copy 仍写一遍——
+     * restoreToken 必然 nanoTime 不同，下游 LaunchedEffect 会重新执行（cancel-restart
+     * 是 Compose 协程 cheap 操作；写 pixelOffset 是 mutableFloatStateOf 也 cheap）。
+     *
+     * 注意：此方法**不**主动调 saveProgressNow——拖动期间用户位置不稳定，等
+     * onValueChangeFinished 通过 [ReaderProgressController] snapshot 收集器节流持久化。
+     */
+    fun seekProgressInPlace(index: Int, progress: Int) {
+        val curIdx = _currentChapterIndex.value
+        if (index != curIdx) {
+            // 跨章：走完整 loadChapter 路径（与现有 onSeekFullBook 同等价格）
+            loadChapter(index, restoreProgress = progress)
+            return
+        }
+        val clamped = progress.coerceIn(0, 100)
+        val rendered = _renderedChapter.value
+        if (rendered.index != index) {
+            // 罕见竞态：rendered 还没切到 curIdx → fallback loadChapter 强同步
+            loadChapter(index, restoreProgress = clamped)
+            return
+        }
+        _renderedChapter.value = rendered.copy(
+            initialProgress = clamped,
+            initialChapterPosition = 0,
+            restoreToken = System.nanoTime(),
+        )
+        if (::scrollProgressState.isInitialized) {
+            scrollProgressState.value = clamped
+        }
+        com.morealm.app.core.log.AppLog.debug(
+            "ProgressSeek",
+            "seekProgressInPlace SAME-CH idx=$index progress=$clamped (token bumped)",
+        )
+    }
+
     /** 给 ChapterWindowSource 用的章节标题查询 —— 本身就是 [chapters] flow 的薄包装。 */
     fun chapterTitleAt(index: Int): String =
         _chapters.value.getOrNull(index)?.title.orEmpty()

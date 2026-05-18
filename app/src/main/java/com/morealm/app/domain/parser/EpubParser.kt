@@ -47,7 +47,11 @@ object EpubParser {
 
     private const val COVER_IMAGE_SENTINEL = "cover.jpeg"
     private const val COVER_IMAGE_MARKER = "data-morealm-cover"
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v3"
+    // v4 bump：v3 cache key 用 targetHref（去掉 #fragment）→ 同 xhtml 多 navPoint
+    // 共用 cache 文件 → 第二个 navPoint 起永远返回首次内容（用户报"无论跳哪章都显示首章"
+    // 的根因，2026-05-18）。v4 起 cache key 用 chapter.url 完整 url 含 fragment，
+    // 旧 v3 cache 全部失效，第一次打开重新解析。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v4"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
@@ -771,9 +775,12 @@ object EpubParser {
     fun readChapter(context: Context, uri: Uri, chapter: BookChapter): String {
         val targetHref = chapter.url.substringBeforeLast("#")
         if (targetHref.isEmpty()) return ""
+        // cache key 用 chapter.url 完整 url（含 fragment）—— 同 xhtml 多 navPoint 时
+        // #fragment 决定截取范围，纯 targetHref 当 key 会让所有 navPoint 共享同一缓存。
+        val cacheKey = chapter.url
 
         // Check disk cache
-        val cached = readCachedChapter(context, uri, targetHref)
+        val cached = readCachedChapter(context, uri, cacheKey)
         if (cached != null) return cached
 
         // Read via epublib random access
@@ -802,7 +809,7 @@ object EpubParser {
             processContent(elements, context, uri, targetHref, book)
         } ?: ""
 
-        if (content.isNotEmpty()) writeCachedChapter(context, uri, targetHref, content)
+        if (content.isNotEmpty()) writeCachedChapter(context, uri, cacheKey, content)
         return content
     }
     // ── Body parsing & image rewriting ─────────────────
@@ -1306,7 +1313,9 @@ object EpubParser {
     }
 
     private fun chapterCacheFile(context: Context, epubUri: Uri, path: String): File =
-        File(context.cacheDir, "$CHAPTER_CACHE_DIR/${epubUri.hashCode()}/${path.replace('/', '_')}.html")
+        // 同时 escape '/' 和 '#'：path 现在含 #fragment（区分同 xhtml 多 navPoint）。
+        // '#' 在文件系统多数 OK，但稳妥起见转 '_at_' 避坑。
+        File(context.cacheDir, "$CHAPTER_CACHE_DIR/${epubUri.hashCode()}/${path.replace("/", "_").replace("#", "_at_")}.html")
 
     private fun isStaleChapterCache(path: String, text: String): Boolean {
         if (text.contains(COVER_IMAGE_MARKER)) return true
@@ -1334,7 +1343,8 @@ object EpubParser {
         val end = (aroundIndex + 4).coerceAtMost(chapters.size)
         val nearby = chapters.subList(start, end)
         val uncached = nearby.filter { ch ->
-            ch.url.isNotEmpty() && !chapterCacheFile(context, uri, ch.url.substringBeforeLast("#")).exists()
+            // cache key 与 readChapter 对齐：完整 chapter.url 含 fragment。
+            ch.url.isNotEmpty() && !chapterCacheFile(context, uri, ch.url).exists()
         }
         if (uncached.isEmpty()) return
         val t0 = System.currentTimeMillis()
@@ -1345,9 +1355,8 @@ object EpubParser {
         )
         withEpubBook(context, uri) { book ->
             for (ch in uncached) {
-                val href = ch.url.substringBeforeLast("#")
                 val content = readChapterFromBook(book, ch, context, uri)
-                if (content.isNotEmpty()) writeCachedChapter(context, uri, href, content)
+                if (content.isNotEmpty()) writeCachedChapter(context, uri, ch.url, content)
             }
         }
         AppLog.info(

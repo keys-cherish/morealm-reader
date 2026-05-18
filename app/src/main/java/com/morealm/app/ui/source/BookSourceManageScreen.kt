@@ -66,8 +66,26 @@ fun BookSourceManageScreen(
     // LazyColumn items() 内部按 key dedup item slot 时基于 list 元素结构相等。
     // 用 derivedStateOf 让 sources 是 State<List>，Compose snapshot 自动 track .value 读取。
     val sourcesSnapshotState = viewModel.sources.collectAsStateWithLifecycle()
+    // referentialEqualityPolicy 修 toggle 不实时根因（2026-05-18 日志铁证）：
+    // BookSource.equals 只比 bookSourceUrl 无视 enabled（L84-87 BookSource.kt）→
+    // derivedStateOf 默认 structuralEqualityPolicy 走 List.equals 走 BookSource.equals →
+    // toggle 后所有 url 相同 → equals=true → 判"结果没变"不通知依赖 → Screen 不重组。
+    // 改成 referentialEqualityPolicy：每次 combine emit 都 new List ref（srcList.map 结果），
+    // ref 必不等 → 触发依赖重组 → Screen / items / SourceItem / Switch 全链路刷新。
     val sources by remember(sourcesSnapshotState) {
-        androidx.compose.runtime.derivedStateOf { sourcesSnapshotState.value.items }
+        androidx.compose.runtime.derivedStateOf(androidx.compose.runtime.referentialEqualityPolicy()) {
+            sourcesSnapshotState.value.items
+        }
+    }
+    // [DIAG SourceToggle 2026-05-18] 屏顶 SideEffect：每次 recompose 都跑，记录
+    // 上游 sources 实际状态。若 enabled count 在 toggle 后变化 → 上游 OK；若不变
+    // → ViewModel combine 没真 emit 新值，或 StateFlow dedup 吞了。
+    androidx.compose.runtime.SideEffect {
+        val enabledCnt = sources.count { it.enabled }
+        com.morealm.app.core.log.AppLog.info(
+            "SourceToggleDiag",
+            "Screen RECOMPOSE sources.size=${sources.size} enabled=$enabledCnt snapshotRef=${System.identityHashCode(sourcesSnapshotState.value)}",
+        )
     }
     val isImporting by viewModel.isImporting.collectAsStateWithLifecycle()
     val importProgress by viewModel.importProgress.collectAsStateWithLifecycle()
@@ -180,12 +198,18 @@ fun BookSourceManageScreen(
         }
     }
 
-    val filteredSources = remember(sources, searchQuery) {
-        if (searchQuery.isBlank()) sources
-        else sources.filter {
-            it.bookSourceName.contains(searchQuery, ignoreCase = true) ||
-            it.bookSourceUrl.contains(searchQuery, ignoreCase = true) ||
-            (it.bookSourceGroup ?: "").contains(searchQuery, ignoreCase = true)
+    // filteredSources 必须用 derivedStateOf(referentialEqualityPolicy()) 而非 remember：
+    // remember(sources, ...) 等价比较走 List.equals → BookSource.equals 只比 url → toggle 后
+    // remember 命中返回旧 list ref → LazyColumn items 拿旧 source 实例 → Switch stale。
+    // derivedStateOf 让 Screen 重组时按 referential 触发重算（每次 combine emit 新 list ref）。
+    val filteredSources by remember(searchQuery) {
+        androidx.compose.runtime.derivedStateOf(androidx.compose.runtime.referentialEqualityPolicy()) {
+            if (searchQuery.isBlank()) sources
+            else sources.filter {
+                it.bookSourceName.contains(searchQuery, ignoreCase = true) ||
+                it.bookSourceUrl.contains(searchQuery, ignoreCase = true) ||
+                (it.bookSourceGroup ?: "").contains(searchQuery, ignoreCase = true)
+            }
         }
     }
 
@@ -197,8 +221,12 @@ fun BookSourceManageScreen(
     val sortByStr by viewModel.sortBy.collectAsStateWithLifecycle()
     val sortAsc by viewModel.sortAscending.collectAsStateWithLifecycle()
     val sortKey = SourceSortKey.fromKey(sortByStr)
-    val sortedSources = remember(filteredSources, sortKey, sortAsc) {
-        filteredSources.sortedBySourceKey(sortKey, sortAsc)
+    // sortedSources 同 filteredSources：用 derivedStateOf(referentialEqualityPolicy()) 绕开
+    // BookSource.equals 只比 url 的去重陷阱。
+    val sortedSources by remember(sortKey, sortAsc) {
+        androidx.compose.runtime.derivedStateOf(androidx.compose.runtime.referentialEqualityPolicy()) {
+            filteredSources.sortedBySourceKey(sortKey, sortAsc)
+        }
     }
 
     // ── 分组模式（持久化字符串 → 强类型 enum） ─────────────────────────
@@ -206,8 +234,12 @@ fun BookSourceManageScreen(
     val groupModeStr by viewModel.groupMode.collectAsStateWithLifecycle()
     val groupMode = SourceGroupMode.fromKey(groupModeStr)
     // 分组结果只在源/搜索/模式变化时重算一次，避免每次重组遍历整个 source 列表。
-    val grouped = remember(sortedSources, groupMode) {
-        groupSources(sortedSources, groupMode)
+    // 同 filteredSources / sortedSources：用 derivedStateOf(referentialEqualityPolicy())
+    // 绕 BookSource.equals 只比 url 的陷阱。
+    val grouped by remember(groupMode) {
+        androidx.compose.runtime.derivedStateOf(androidx.compose.runtime.referentialEqualityPolicy()) {
+            groupSources(sortedSources, groupMode)
+        }
     }
     // 折叠组的 key 集合：rememberSaveable 让旋转 / 进程死亡也能保留状态。
     // 切换分组方式时 key 含义变了（比如从域名切到类型），旧 key 全部失效，主动清空。
@@ -574,6 +606,14 @@ fun BookSourceManageScreen(
                     if (groupMode == SourceGroupMode.NONE) {
                         // 不分组：保留旧行为，单层 items。
                         items(filteredSources, key = { it.bookSourceUrl }) { source ->
+                            // [DIAG SourceToggle 2026-05-18] items lambda 调用日志。
+                            // LazyColumn 即使 key 不变也应该 invoke 内容 lambda（除非整列
+                            // skip）。这条日志只在 lambda 真被调时打——若 toggle 后没出 →
+                            // LazyColumn 没看到 list 变化（list 引用相等？snapshot 没流到？）。
+                            com.morealm.app.core.log.AppLog.info(
+                                "SourceToggleDiag",
+                                "items LAMBDA url=...${source.bookSourceUrl.takeLast(20)} enabled=${source.enabled}",
+                            )
                             val checkResult = checkResults[source.bookSourceUrl]
                             // 不再 inline 跑 evalJS —— 直接查 ViewModel 预算的 map。
                             val isLoggedIn = loginStatusMap[source.bookSourceUrl] == true
@@ -856,12 +896,16 @@ private fun SourceItem(
     // **原子合并**值——overlay 写入和真值更新在同一 emission 内一起到达 UI，无需 UI 端
     // 再做 enabledOverride fallback（之前的 UI fallback 因 onEach 改 overlay 与 stateIn
     // emit 跨 transaction 引发 Compose snapshot race，日志 191200 实锤）。
-    LaunchedEffect(source.enabled) {
-        com.morealm.app.core.log.AppLog.info(
-            "SourceToggleDiag",
-            "SourceItem render url=${source.bookSourceUrl} enabled=${source.enabled}",
-        )
-    }
+    //
+    // [DIAG SourceToggle 2026-05-18] composable 函数体顶部 immediate log（每次 recompose
+    // 都跑，跟之前 LaunchedEffect(source.enabled) 不一样—— LaunchedEffect 只在 enabled
+    // 变化时触发，掩盖了"Compose 根本没重 invoke SourceItem"的情况）。
+    // 同时打 enabled 参数实际值 + source.enabled 字段值 + 是否相等，定位是哪一层 stale。
+    com.morealm.app.core.log.AppLog.info(
+        "SourceToggleDiag",
+        "SourceItem CALL url=...${source.bookSourceUrl.takeLast(20)} param.enabled=$enabled" +
+            " source.enabled=${source.enabled} same=${enabled == source.enabled}",
+    )
     val enabledColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val disabledColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
     val bgColorAnim = animateColorAsState(
@@ -947,8 +991,18 @@ private fun SourceItem(
                     )
                 }
             }
+            // [DIAG SourceToggle 2026-05-18] Switch checked= 处 .also 日志。
+            // 这是「UI 真假」最后一公里：composable 顶层日志可能因 stale closure / 参数
+            // 没传到这里，所以在 Switch checked 实际取值时再打一次最终 boolean。
+            // 若 SourceItem CALL 出新 enabled 但 Switch CHECKED= 还是旧值 → 参数传递断了；
+            // 若 Switch CHECKED= 出新值但视觉仍旧 → Compose Switch 内部 stale。
             Switch(
-                checked = enabled,
+                checked = enabled.also {
+                    com.morealm.app.core.log.AppLog.info(
+                        "SourceToggleDiag",
+                        "Switch CHECKED= url=...${source.bookSourceUrl.takeLast(20)} actual=$it",
+                    )
+                },
                 onCheckedChange = if (selectionMode) null else { { onToggle() } },
                 enabled = !selectionMode,
                 colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
