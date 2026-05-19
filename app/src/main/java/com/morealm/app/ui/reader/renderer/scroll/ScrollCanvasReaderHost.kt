@@ -21,6 +21,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -306,33 +307,43 @@ fun ScrollCanvasReaderHost(
 
     val state = remember { ScrollCanvasReaderState(initialChapterIndex = currentChapterIndex) }
 
+    // ── Phase 4 page-level：注入 page 序列管理器 ──
+    // chapterShiftCallback 在 factory 跨章 swap 时调用，同步切 state.prev/cur/next 引用。
+    // 解耦：Factory 不直接写 state 字段，state 暴露 swapToNext/Prev 方法。
+    val pageFactory = remember(state) {
+        com.morealm.app.domain.render.scroll.ScrollPageFactory(
+            dataSource = state,
+            chapterShiftCallback = { delta ->
+                if (delta == +1) state.swapToNext() else state.swapToPrev()
+            },
+        )
+    }
+
     LaunchedEffect(currentChapterIndex, chapterCount) {
         state.chapterCount = chapterCount
-        // [DIAG 滚动跨章抽搐 2026-05-18]
-        // 嫌疑：内部 applyScrollDelta swap 已把 state.currentChapterIndex 更新为新值，
-        // 但外部 prop currentChapterIndex 滞后到达（VM 异步），prop 终于追上后此 effect
-        // 触发。如果两值在 effect 体执行瞬间不一致 → 触发 reset → pixelOffset=0 + 三章
-        // null → 用户视觉"回到顶部 + 重新加载"= 抽搐。
-        AppLog.info(
-            "ScrollCanvasV2",
-            "[host-effect] trigger prop.chIdx=$currentChapterIndex state.chIdx=${state.currentChapterIndex}" +
-                " state.pixelOffset=${state.pixelOffset.toInt()} chapterCount=$chapterCount" +
-                " curChapter=${state.currentChapter?.chapterIndex}",
-        )
+        // Phase 4b/5 简化：外部 prop currentChapterIndex 变化（用户从外部跳转）时调
+        // setExternalChapterIndex 整体重设 state；同章 idx 不变则 no-op。
+        // 与重构前 RESET 路径相比：单向数据流模型，不再因 prop ↔ state race 误触 RESET。
+        // currentChapterIndex 字段 Phase 5 收紧为 private set，外部仅此路径可改。
         if (state.currentChapterIndex != currentChapterIndex) {
-            AppLog.warn(
+            AppLog.info(
                 "ScrollCanvasV2",
-                "[host-effect] RESET! state.chIdx=${state.currentChapterIndex} → prop=$currentChapterIndex" +
-                    " pixelOffset=${state.pixelOffset.toInt()}→0 prev/cur/next 全部清 null",
+                "[host-effect] external chapter jump: ${state.currentChapterIndex} → $currentChapterIndex",
             )
-            state.currentChapterIndex = currentChapterIndex
-            state.pixelOffset = 0f
-            state.prevChapter = null
-            state.currentChapter = null
-            state.nextChapter = null
-        } else {
-            AppLog.debug("ScrollCanvasV2", "[host-effect] skip reset (state == prop)")
+            state.setExternalChapterIndex(currentChapterIndex)
         }
+    }
+
+    // ── Phase 5：onChapterIndexChange 节流通知 VM ──
+    // factory 跨章 swap 同步切 state.currentChapterIndex（即时，无延迟）。但通知 VM
+    // 持久化 / 元数据更新走 debounce(150ms)：fling 期快速跨多章时只触发最后一次，
+    // 避免 VM 高频写 IO。snapshotFlow 自动监听 state.currentChapterIndex 变化。
+    val onChapterIndexChangeUpdated by rememberUpdatedState(onChapterIndexChange)
+    LaunchedEffect(state) {
+        snapshotFlow { state.currentChapterIndex }
+            .distinctUntilChanged()
+            .debounce(150L)
+            .collect { onChapterIndexChangeUpdated(it) }
     }
 
     // ── 跳书签 / 续读 / 搜索定位 / Slider 拖动 in-place seek ──
@@ -358,25 +369,44 @@ fun ScrollCanvasReaderHost(
         if (layout.chapterIndex != state.currentChapterIndex) return@LaunchedEffect
 
         val viewportH = viewHeight.coerceAtLeast(1)
-        val desiredOffset: Float = if (initialChapterPosition > 0) {
-            // 分支 1：cp 字符级 —— pageOffset 累加 + line.lineTop → 目标段视口上 1/3
+        // Phase 6 page-level：定位到 (targetPageIdx, pageOffsetInPage)，调 factory.moveToPage
+        // + 设 state.pageOffset。两种分支共用相同的"算出目标 chapter-relative Y → 反算 page 索引"算法。
+        val targetChapterY: Float = if (initialChapterPosition > 0) {
+            // 分支 1：cp 字符级 —— 找 cp 所在 page + 行；视口上 1/3 显示
             val hit = layout.findColumnAt(initialChapterPosition) ?: return@LaunchedEffect
-            var targetY = 0f
-            for (i in 0 until hit.page.pageIndex) targetY += layout.pages[i].height
-            targetY += hit.line.lineTop
-            (targetY - viewportH / 3f).coerceAtLeast(0f)
+            var y = 0f
+            for (i in 0 until hit.page.pageIndex) y += layout.pages[i].height
+            y += hit.line.lineTop
+            (y - viewportH / 3f).coerceAtLeast(0f)
         } else {
-            // 分支 2：章内 progress 百分比 —— pixelOffset = scrollable * progress / 100
-            // 与 onChapterProgressLive 上报算法对偶（progress = offset / scrollable * 100），
-            // 反算保证 Slider 拖到 N% 后阅读区显示同一 N% 位置（所见所得）。
+            // 分支 2：章内 progress 百分比 —— 按 totalHeight 反算到 chapter-relative Y
+            // 与 page-level 进度上报算法对偶
             val scrollableRange = (layout.totalHeight - viewportH).coerceAtLeast(1f)
             (scrollableRange * initialProgress / 100f).coerceIn(0f, scrollableRange)
         }
-        state.pixelOffset = desiredOffset
+        // 把 chapter-relative Y 反算成 (targetPageIdx, pageOffsetInPage)
+        var accY = 0f
+        var targetPageIdx = 0
+        var pageOffsetInPage = 0f
+        for ((i, page) in layout.pages.withIndex()) {
+            if (targetChapterY < accY + page.height) {
+                targetPageIdx = i
+                pageOffsetInPage = (targetChapterY - accY).coerceIn(0f, page.height)
+                break
+            }
+            accY += page.height
+            // 兜底：targetChapterY 超过 totalHeight 时停在末页末
+            if (i == layout.pages.lastIndex) {
+                targetPageIdx = i
+                pageOffsetInPage = page.height
+            }
+        }
+        pageFactory.moveToPage(targetPageIdx)
+        state.pageOffset = pageOffsetInPage
         AppLog.info(
             "ScrollCanvasV2",
             "JUMP restoreToken=$restoreToken cp=$initialChapterPosition prog=$initialProgress" +
-                " → pixelOffset=$desiredOffset (viewportH=$viewportH layoutH=${layout.totalHeight})",
+                " → page=$targetPageIdx pageOffset=$pageOffsetInPage (chapterY=$targetChapterY viewportH=$viewportH)",
         )
         onProgressRestored()
     }
@@ -447,37 +477,66 @@ fun ScrollCanvasReaderHost(
     }
     var highlightActionAnchor by remember { mutableStateOf(Offset.Zero) }
 
-    // ── 高亮 spec 投影（V1 LazyScrollSection 按章过滤 + 渲染等价路径）──
-    // 当前章 / 上一章 / 下一章 layout 变化 OR highlightRaw 列表变化时重投影。
-    // 投影 = 按 cp 范围算 rects，与 ChapterPaneCanvas drawCpRangeRects 算法等价但缓存。
-    val prevHighlightSpecs = remember(state.prevChapter, chapterHighlightsRaw) {
-        state.prevChapter?.let {
-            com.morealm.app.domain.render.scroll.ScrollHighlightProjector.project(it, chapterHighlightsRaw)
-        } ?: emptyList()
+    // ── page-level 高亮 spec 投影（Phase 4 新增）──
+    // 重构前：按 prev/cur/next 整章投影 → ChapterPaneCanvas 内部 viewport 剔除
+    // 重构后：按 curPage/nextPage/nextPlusPage 单 page 投影 → PagePaneCanvas 直接消费
+    // factory 的 4 个 page getter 变化时重投影；rawHighlight 变化时也重投影。
+    val curPageHighlightSpecs by androidx.compose.runtime.derivedStateOf {
+        val page = pageFactory.curPage
+        if (page.chapterIndex < 0) return@derivedStateOf emptyList()
+        val chFiltered = chapterHighlightsRaw.filter { it.chapterIndex == page.chapterIndex }
+        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+            page, state.currentChapter?.viewWidth ?: 1080, chFiltered,
+        )
     }
-    val curHighlightSpecs = remember(state.currentChapter, chapterHighlightsRaw) {
-        state.currentChapter?.let {
-            com.morealm.app.domain.render.scroll.ScrollHighlightProjector.project(it, chapterHighlightsRaw)
-        } ?: emptyList()
+    val nextPageHighlightSpecs by androidx.compose.runtime.derivedStateOf {
+        val page = pageFactory.nextPage
+        if (page.chapterIndex < 0) return@derivedStateOf emptyList()
+        val chFiltered = chapterHighlightsRaw.filter { it.chapterIndex == page.chapterIndex }
+        val viewW = if (page.chapterIndex == state.currentChapter?.chapterIndex) {
+            state.currentChapter?.viewWidth
+        } else state.nextChapter?.viewWidth
+        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+            page, viewW ?: 1080, chFiltered,
+        )
     }
-    val nextHighlightSpecs = remember(state.nextChapter, chapterHighlightsRaw) {
-        state.nextChapter?.let {
-            com.morealm.app.domain.render.scroll.ScrollHighlightProjector.project(it, chapterHighlightsRaw)
-        } ?: emptyList()
+    val nextPlusPageHighlightSpecs by androidx.compose.runtime.derivedStateOf {
+        val page = pageFactory.nextPlusPage
+        if (page.chapterIndex < 0) return@derivedStateOf emptyList()
+        val chFiltered = chapterHighlightsRaw.filter { it.chapterIndex == page.chapterIndex }
+        val viewW = if (page.chapterIndex == state.currentChapter?.chapterIndex) {
+            state.currentChapter?.viewWidth
+        } else state.nextChapter?.viewWidth
+        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+            page, viewW ?: 1080, chFiltered,
+        )
     }
 
-    // 书签 cp 列表（按章过滤）—— 渲染层据此画三角标记
-    val prevBookmarkCps = remember(state.prevChapter, bookmarks) {
-        val ch = state.prevChapter?.chapterIndex ?: return@remember emptyList<Int>()
-        bookmarks.filter { it.chapterIndex == ch }.map { it.chapterPos }
+    // ── page-level 书签 cp 过滤 ──
+    // 按 page chapterIndex + page cp 范围双重过滤
+    val curPageBookmarkCps by androidx.compose.runtime.derivedStateOf {
+        val page = pageFactory.curPage
+        if (page.chapterIndex < 0 || page.lines.isEmpty()) return@derivedStateOf emptyList<Int>()
+        val firstCp = page.lines.first().firstChapterPos
+        val lastCp = page.lines.last().lastChapterPos
+        bookmarks.filter { it.chapterIndex == page.chapterIndex && it.chapterPos in firstCp..lastCp }
+            .map { it.chapterPos }
     }
-    val curBookmarkCps = remember(state.currentChapter, bookmarks) {
-        val ch = state.currentChapter?.chapterIndex ?: return@remember emptyList<Int>()
-        bookmarks.filter { it.chapterIndex == ch }.map { it.chapterPos }
+    val nextPageBookmarkCps by androidx.compose.runtime.derivedStateOf {
+        val page = pageFactory.nextPage
+        if (page.chapterIndex < 0 || page.lines.isEmpty()) return@derivedStateOf emptyList<Int>()
+        val firstCp = page.lines.first().firstChapterPos
+        val lastCp = page.lines.last().lastChapterPos
+        bookmarks.filter { it.chapterIndex == page.chapterIndex && it.chapterPos in firstCp..lastCp }
+            .map { it.chapterPos }
     }
-    val nextBookmarkCps = remember(state.nextChapter, bookmarks) {
-        val ch = state.nextChapter?.chapterIndex ?: return@remember emptyList<Int>()
-        bookmarks.filter { it.chapterIndex == ch }.map { it.chapterPos }
+    val nextPlusPageBookmarkCps by androidx.compose.runtime.derivedStateOf {
+        val page = pageFactory.nextPlusPage
+        if (page.chapterIndex < 0 || page.lines.isEmpty()) return@derivedStateOf emptyList<Int>()
+        val firstCp = page.lines.first().firstChapterPos
+        val lastCp = page.lines.last().lastChapterPos
+        bookmarks.filter { it.chapterIndex == page.chapterIndex && it.chapterPos in firstCp..lastCp }
+            .map { it.chapterPos }
     }
 
     // ── 电池 / 时间维护（与 CanvasRenderer line 380-389 同款）──
@@ -502,36 +561,41 @@ fun ScrollCanvasReaderHost(
     // scrollableState 由 ScrollCanvasRenderer 内部持有，无法直接动它 —— 改写 pixelOffset
     // 即可达到同等效果（pixelOffset 是 mutableFloatStateOf，写入立即触发 placement-only
     // 重组，下一帧视口就更新）。
-    val ttsTargetY by remember(state.currentChapter, ttsChapterIndex, ttsChapterPosition) {
+    val ttsTargetInfo by remember(state.currentChapter, ttsChapterIndex, ttsChapterPosition) {
         derivedStateOf {
             val layout = state.currentChapter ?: return@derivedStateOf null
             if (ttsChapterIndex < 0 || ttsChapterIndex != layout.chapterIndex) return@derivedStateOf null
             if (ttsChapterPosition < 0) return@derivedStateOf null
             val hit = layout.findColumnAt(ttsChapterPosition) ?: return@derivedStateOf null
-            // 累加 hit.page 之前所有 page.height + 当前 page 内 line.lineTop
+            // 返回 (chapter-relative Y, target page idx, line lineTop in page)
             var y = 0f
-            for (i in 0 until hit.page.pageIndex) {
-                y += layout.pages[i].height
-            }
-            y += hit.line.lineTop
-            y
+            for (i in 0 until hit.page.pageIndex) y += layout.pages[i].height
+            Triple(y + hit.line.lineTop, hit.page.pageIndex, hit.line.lineTop)
         }
     }
-    LaunchedEffect(ttsTargetY) {
-        val targetY = ttsTargetY ?: return@LaunchedEffect
+    LaunchedEffect(ttsTargetInfo) {
+        val info = ttsTargetInfo ?: return@LaunchedEffect
         val viewportH = viewHeight
         if (viewportH <= 0) return@LaunchedEffect
-        // 当前视口范围 = [pixelOffset, pixelOffset + viewportH]
+        val (targetChapterY, targetPageIdx, lineTopInPage) = info
+        // 当前 chapter-relative Y = pageStartY(curPageIdx) + state.pageOffset
+        val layout = state.currentChapter ?: return@LaunchedEffect
+        var curChapterY = 0f
+        for (i in 0 until pageFactory.pageIndex.coerceAtMost(layout.pages.lastIndex)) {
+            curChapterY += layout.pages[i].height
+        }
+        curChapterY += state.pageOffset
         // 目标段已在视口内 → 不滚（不打扰用户）
-        val curOffset = state.pixelOffset
-        if (targetY in curOffset..(curOffset + viewportH - 200f)) return@LaunchedEffect
-        // 否则把目标段滚到视口上 1/3 处（与 V1 LazyScrollRenderer anchorOffset / 2 类似，
-        // V2 用上 1/3 让朗读段下方还有"接下来要读的"上下文）
-        val desiredOffset = (targetY - viewportH / 3f).coerceAtLeast(0f)
-        state.pixelOffset = desiredOffset
+        if (targetChapterY in curChapterY..(curChapterY + viewportH - 200f)) return@LaunchedEffect
+        // 跳到目标 page，pageOffset 设为目标行视口上 1/3
+        pageFactory.moveToPage(targetPageIdx)
+        val targetPage = pageFactory.curPage
+        val desiredPageOffset = (lineTopInPage - viewportH / 3f).coerceAtLeast(0f)
+            .coerceAtMost(targetPage.height)
+        state.pageOffset = desiredPageOffset
         AppLog.debug(
             "ScrollCanvasV2",
-            "TTS follow: targetY=$targetY → pixelOffset $curOffset → $desiredOffset (viewportH=$viewportH)",
+            "TTS follow: chapterY=$targetChapterY → page=$targetPageIdx pageOffset=$desiredPageOffset",
         )
     }
 
@@ -539,14 +603,23 @@ fun ScrollCanvasReaderHost(
     // V1 LazyScrollRenderer line 501-550 同款思路：UI 跟随用 live、DB 写入用 persist。
     // 进度计算 = pixelOffset / (totalHeight - viewportH) 比 / totalHeight 准确（避免章末
     // 进度永远停在 90% 多）。
+    // Phase 6 page-level 进度上报算法：
+    //   全章 chapter-relative Y = sum(pages[0..pageIdx-1].height) + state.pageOffset
+    //   全章可滚动范围 = totalHeight - viewportH
+    //   progress = curChapterY / scrollableRange * 100
     LaunchedEffect(state.currentChapter, viewHeight) {
         val layout = state.currentChapter ?: return@LaunchedEffect
         if (layout.totalHeight <= 0f) return@LaunchedEffect
-        snapshotFlow { state.pixelOffset }
+        snapshotFlow { pageFactory.pageIndex to state.pageOffset }
             .sample(150L)
-            .map { offset ->
+            .map { (pageIdx, pgOffset) ->
+                var y = 0f
+                for (i in 0 until pageIdx.coerceAtMost(layout.pages.lastIndex)) {
+                    y += layout.pages[i].height
+                }
+                y += pgOffset
                 val scrollableRange = (layout.totalHeight - viewHeight).coerceAtLeast(1f)
-                val progress = (offset / scrollableRange * 100f).toInt().coerceIn(0, 100)
+                val progress = (y / scrollableRange * 100f).toInt().coerceIn(0, 100)
                 layout.chapterIndex to progress
             }
             .distinctUntilChanged()
@@ -555,11 +628,16 @@ fun ScrollCanvasReaderHost(
     LaunchedEffect(state.currentChapter, viewHeight) {
         val layout = state.currentChapter ?: return@LaunchedEffect
         if (layout.totalHeight <= 0f) return@LaunchedEffect
-        snapshotFlow { state.pixelOffset }
+        snapshotFlow { pageFactory.pageIndex to state.pageOffset }
             .debounce(800L)
-            .map { offset ->
+            .map { (pageIdx, pgOffset) ->
+                var y = 0f
+                for (i in 0 until pageIdx.coerceAtMost(layout.pages.lastIndex)) {
+                    y += layout.pages[i].height
+                }
+                y += pgOffset
                 val scrollableRange = (layout.totalHeight - viewHeight).coerceAtLeast(1f)
-                val progress = (offset / scrollableRange * 100f).toInt().coerceIn(0, 100)
+                val progress = (y / scrollableRange * 100f).toInt().coerceIn(0, 100)
                 layout.chapterIndex to progress
             }
             .distinctUntilChanged()
@@ -593,6 +671,7 @@ fun ScrollCanvasReaderHost(
         if (currentLayout != null) {
             ScrollCanvasRenderer(
                 state = state,
+                pageFactory = pageFactory,
                 contentPaint = contentPaint,
                 titlePaint = titlePaint,
                 chapterNumPaint = chapterNumPaint,
@@ -602,14 +681,17 @@ fun ScrollCanvasReaderHost(
                 searchHighlightArgb = searchHighlightArgb,
                 selectionChapterIndex = if (selection.isActive) selection.chapterIndex else -1,
                 selectionCpRange = if (selection.isActive) selection.cpRange else IntRange.EMPTY,
-                prevHighlightSpecs = prevHighlightSpecs,
-                curHighlightSpecs = curHighlightSpecs,
-                nextHighlightSpecs = nextHighlightSpecs,
-                prevBookmarkCps = prevBookmarkCps,
-                curBookmarkCps = curBookmarkCps,
-                nextBookmarkCps = nextBookmarkCps,
+                curPageHighlightSpecs = curPageHighlightSpecs,
+                nextPageHighlightSpecs = nextPageHighlightSpecs,
+                nextPlusPageHighlightSpecs = nextPlusPageHighlightSpecs,
+                curPageBookmarkCps = curPageBookmarkCps,
+                nextPageBookmarkCps = nextPageBookmarkCps,
+                nextPlusPageBookmarkCps = nextPlusPageBookmarkCps,
                 onChapterShift = { _ ->
-                    onChapterIndexChange(state.currentChapterIndex)
+                    // Phase 5：通知 VM 的路径已迁移到上方 snapshotFlow + debounce 自动节流。
+                    // 此回调保留空实现（factory swap 时仍触发），未来 Phase 6 可能用作即时
+                    // prefetch trigger（如果 LaunchedEffect 监听 currentChapterIndex 的 prefetch
+                    // 路径 latency 不够）。
                 },
                 onTapCenter = {
                     // 选区 active 时 tap 取消选区，否则 toggle controls
@@ -622,10 +704,14 @@ fun ScrollCanvasReaderHost(
                     }
                 },
                 onTap = { offset ->
-                    // tap-on-highlight 命中：tap 落点的 cp 与某条 highlight 的 cp 范围相交 →
-                    // 弹删除/分享菜单（HighlightActionToolbar）。consumed=true 拦住 onTapCenter。
+                    // tap-on-highlight 命中：Phase 6 page-level 坐标转换：
+                    //   view-local y → chapter-local y = pageStartY(curPageIdx) + state.pageOffset + view-y
+                    //   （curPage 顶在 view 中 y = -state.pageOffset，所以 view-y 对应 page-y = view-y + pageOffset）
                     if (chapterHighlightsRaw.isEmpty()) return@ScrollCanvasRenderer false
-                    val yInChapter = offset.y + state.pixelOffset
+                    var pageStartY = 0f
+                    val pageIdx = pageFactory.pageIndex.coerceAtMost(currentLayout.pages.lastIndex)
+                    for (i in 0 until pageIdx) pageStartY += currentLayout.pages[i].height
+                    val yInChapter = pageStartY + state.pageOffset + offset.y
                     val hit = currentLayout.findColumnByPixel(offset.x - currentLayout.paddingLeft, yInChapter)
                         ?: return@ScrollCanvasRenderer false
                     val cp = hit.column?.chapterPosition ?: hit.line.firstChapterPos
@@ -638,14 +724,14 @@ fun ScrollCanvasReaderHost(
                     true
                 },
                 onLongPress = { offset ->
-                    // longPress 触发选区命中。坐标转换：
-                    //   - offset 是 view-local（detectTapGestures 提供）
-                    //   - engine column.x 是 chapter-local（[0..visibleWidth]，不含 paddingLeft）
-                    //   - 故 x = view-x - paddingLeft；y = view-y + pixelOffset
-                    // anchorInBox 仍传 view-local 给 SelectionToolbar 当 Popup anchor（PopupPositionProvider
-                    // 内部用 anchorBounds.topLeft + anchorRect 转 window 坐标，应给 view-local）。
+                    // longPress 触发选区命中。Phase 6 page-level 坐标转换（同 onTap）：
+                    //   x = view-x - paddingLeft（不变）
+                    //   y = pageStartY + state.pageOffset + view-y
                     val xInChapter = offset.x - currentLayout.paddingLeft
-                    val yInChapter = offset.y + state.pixelOffset
+                    var pageStartY = 0f
+                    val pageIdx = pageFactory.pageIndex.coerceAtMost(currentLayout.pages.lastIndex)
+                    for (i in 0 until pageIdx) pageStartY += currentLayout.pages[i].height
+                    val yInChapter = pageStartY + state.pageOffset + offset.y
                     val sel = handleLongPress(
                         layout = currentLayout,
                         chapterIndex = currentLayout.chapterIndex,
@@ -657,11 +743,18 @@ fun ScrollCanvasReaderHost(
                 },
             )
             // 选区 overlay（画 handle + handle drag）
+            // Phase 6 page-level：pixelOffsetProvider 仍返回 chapter-relative Y（保留 Overlay 接口），
+            // 但内部计算从 pageFactory.pageIndex + state.pageOffset 累加。
             ScrollSelectionOverlay(
                 selection = selection,
                 onSelectionChange = { selection = it },
                 layout = currentLayout,
-                pixelOffsetProvider = { state.pixelOffset },
+                pixelOffsetProvider = {
+                    var y = 0f
+                    val pageIdx = pageFactory.pageIndex.coerceAtMost(currentLayout.pages.lastIndex)
+                    for (i in 0 until pageIdx) y += currentLayout.pages[i].height
+                    y + state.pageOffset
+                },
                 scrollableState = null,  // 自动滚动联动 M6.x 完善
                 viewportHeightProvider = { viewHeight },
             )
@@ -768,14 +861,17 @@ fun ScrollCanvasReaderHost(
                 "page" -> "chapter_progress"
                 else -> s
             }
-            // 像素级实时百分比 0..100（Float）—— derivedStateOf 让只在 pixelOffset /
-            // currentChapter / viewHeight 变化时重算，InfoBar 文字下一帧自然更新。
-            // 与 onChapterProgressLive 算法一致，只是这里保留 Float 精度不 toInt。
+            // Phase 6 page-level：从 pageFactory.pageIndex + state.pageOffset 累加 chapter-relative Y
+            // 算 scrollPercent。与 onChapterProgressLive 算法一致，保留 Float 精度不 toInt。
             val scrollPercent by remember(currentLayout, viewHeight) {
                 derivedStateOf {
                     val totalH = currentLayout.totalHeight
                     val scrollableRange = (totalH - viewHeight).coerceAtLeast(1f)
-                    (state.pixelOffset / scrollableRange * 100f).coerceIn(0f, 100f)
+                    var y = 0f
+                    val pageIdx = pageFactory.pageIndex.coerceAtMost(currentLayout.pages.lastIndex)
+                    for (i in 0 until pageIdx) y += currentLayout.pages[i].height
+                    y += state.pageOffset
+                    (y / scrollableRange * 100f).coerceIn(0f, 100f)
                 }
             }
 
