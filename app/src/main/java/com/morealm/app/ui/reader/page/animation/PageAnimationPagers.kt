@@ -168,7 +168,7 @@ fun AnimatedPageReader(
                 SlidePager(pagerState, modifier, onPageSettled, pageContent)
             }
         }
-        PageAnimType.SCROLL -> ScrollPager(pagerState, modifier, pageContent)
+        PageAnimType.SCROLL -> error("SCROLL handled by ScrollCanvasReaderHost, not AnimatedPageReader")
         PageAnimType.NONE -> {
             LaunchedEffect(pagerState.currentPage) {
                 onPageSettled(pagerState.currentPage)

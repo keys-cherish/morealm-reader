@@ -291,21 +291,6 @@ fun CanvasRenderer(
      * book.localPath != null && chapters.all { it.isAutoSplitChapter() }` 计算后传入。
      */
     omitChapterTitleBlock: Boolean = false,
-    /**
-     * SCROLL 模式专用滑动窗口数据源（由 ReaderViewModel 提供，见
-     * [com.morealm.app.presentation.reader.ReaderViewModel.chapterWindow]）。
-     *
-     * 非 null 时本组件在 SCROLL 路径下：
-     *   1. 在 [LaunchedEffect(layoutInputs)] 里把 [chapterLayouter] attach 给 windowSource，
-     *      让它能用当前排版上下文（屏幕尺寸 / 字号 / padding 等）排版章节
-     *   2. 在 [LaunchedEffect(chapterIndex, restoreToken)] 里调 `windowSource.resetTo(...)`
-     *      响应初次进入 / 用户跳转
-     *   3. 把 windowSource 透传给 [LazyScrollSection]，由其驱动 LazyColumn 段落窗口
-     *
-     * null 时 SCROLL 路径回落到旧 _prev/_cur/_nextTextChapter 三 flow + 三段窗口逻辑
-     * （翻页 / 仿真模式不受影响，永远不读这个字段）。
-     */
-    chapterWindow: com.morealm.app.presentation.reader.scroll.ChapterWindowSource? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -615,58 +600,6 @@ fun CanvasRenderer(
         }
     }
 
-    // ── SCROLL 重架：chapterLayouter 注入到 ChapterWindowSource ──
-    //
-    // ChapterWindowSource 在 ViewModel 层创建，但排版函数依赖 layoutInputs（屏幕尺寸 / paint
-    // / padding，全是 Compose state），只能在 Composable 里 attach。layoutInputs 变化时
-    // 重新 attach（改字号、改 padding、转屏后），让窗口里后续 append/prepend 用最新排版。
-    LaunchedEffect(chapterWindow, layoutInputs) {
-        if (chapterWindow == null) return@LaunchedEffect
-        val provider = layoutInputs.provider
-        val firstAttach = chapterWindow.chapterLayouter == null
-        chapterWindow.chapterLayouter = { title, content, idx, chSize, omit ->
-            try {
-                provider.layoutChapter(
-                    title = title,
-                    content = content,
-                    chapterIndex = idx,
-                    chaptersSize = chSize,
-                    omitChapterTitleBlock = omit,
-                )
-            } catch (e: Exception) {
-                AppLog.warn("CanvasRenderer", "windowSource.chapterLayouter failed for idx=$idx: ${e.message}", e)
-                null
-            }
-        }
-        // 首次 attach（用户进入阅读器 / 切书）时 loadedChapters 还没填，relayout 没东西
-        // 可做。后续 layoutInputs 变化（用户在设置面板拖字号 / 上下左右边距 slider /
-        // 改行距 / 改自定义 CSS 等）走这条分支，把已加载章节按新 padding 重排版 +
-        // 替换 paragraphs，让用户看到边距实时跟随。
-        if (!firstAttach && chapterWindow.loadedChapters.isNotEmpty()) {
-            chapterWindow.relayoutAll()
-        }
-    }
-
-    // ── SCROLL 重架：chapterIndex / restoreToken 变化触发 windowSource.resetTo ──
-    //
-    // 只有在用户主动跳章（书签 / TOC / 续读首次进入）时 chapterIndex / restoreToken 会
-    // 变；自然滚动跨章时 setCurrentChapterIndexFromScroll 不改 token，所以这条 effect
-    // 不会被滚动触发，避免产生 reset 风暴。
-    LaunchedEffect(chapterWindow, chapterIndex, restoreToken, pageAnimType) {
-        if (chapterWindow == null) return@LaunchedEffect
-        if (pageAnimType != PageAnimType.SCROLL) return@LaunchedEffect
-        if (chapterIndex < 0) return@LaunchedEffect
-        // 同章 reload（用户拖底部进度条到当前章不同位置 / 章内书签跳转）走轻路径：
-        // 不 clear 窗口、不重 fetch，只更新 pendingJump 让 LazyScroll 滚到新位置。
-        // 修复 resetTo 风暴见 [ChapterWindowSource.requestJumpWithinWindow] 注释。
-        if (chapterIndex in chapterWindow.loadedChapters) {
-            chapterWindow.requestJumpWithinWindow(chapterIndex, initialChapterPosition)
-            return@LaunchedEffect
-        }
-        AppLog.debug("CanvasRenderer", "windowSource.resetTo(chIdx=$chapterIndex, chPos=$initialChapterPosition, token=$restoreToken)")
-        chapterWindow.resetTo(chapterIndex, initialChapterPosition)
-    }
-
     // ── ReflowEngine 状态机（B 方案：根治 reflow cancel 丢失 + 移除 priorChapter 推导补丁）──
     //
     // 旧实现把 layoutChapterAsync 直接挂在 LaunchedEffect(currentChapterKey, layoutInputs)
@@ -934,12 +867,8 @@ fun CanvasRenderer(
         }
     }
 
-    LaunchedEffect(chapter, chapterWindow?.chapterByIdx?.get(chapterIndex)) {
-        // SCROLL 重架路径：windowSource 持有的 TextChapter 是真正排版完成的版本，
-        // 而 CanvasRenderer 内部的 `chapter`（textChapter）在 SCROLL 模式下可能是
-        // placeholder 或与 windowSource 不同步。优先从 windowSource 取段落位置。
-        val effectiveChapter = chapterWindow?.chapterByIdx?.get(chapterIndex) ?: chapter
-        val positions = effectiveChapter?.getParagraphs(pageSplit = false)
+    LaunchedEffect(chapter) {
+        val positions = chapter?.getParagraphs(pageSplit = false)
             ?.map { it.chapterPosition }
             .orEmpty()
         onReadAloudParagraphPositions(positions)
