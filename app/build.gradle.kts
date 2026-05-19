@@ -191,6 +191,12 @@ dependencies {
     // 引入 cash QuickJS / dokar3 quickjs-kt 这类 ES2020+ JS runtime。
     implementation("org.mozilla:rhino:1.8.1")
 
+    // 自研 EPUB 解析库（KMP）—— 通过 ../epub-lib composite build 引入（详 settings.gradle.kts）。
+    // 阶段 1 仅接入验证编译通路，EpubParser 仍走 Jsoup 旧路径并存；后续阶段切换 +
+    // 验证覆盖率后再删 Jsoup。
+    implementation("com.morealm.epub:epub-core")
+    implementation("com.morealm.epub:epub-compat")
+
     // Image
     implementation(libs.coil.compose)
     implementation("io.coil-kt:coil-svg:2.7.0")
