@@ -159,7 +159,6 @@ fun ReaderScreen(
     val showSettings by viewModel.isSettingsPanelVisible.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
-    val scrollCanvasV2Enabled by viewModel.settings.scrollCanvasV2.collectAsStateWithLifecycle()
     // ── 排版方向偏好 ──
     // 唯一被 ReaderScreen 关心的用法：在下方挑选 CanvasRenderer (横排)
     // 还是 VerticalReaderView (竖排) 渲染。绝不传给 CanvasRenderer——
@@ -640,11 +639,9 @@ fun ReaderScreen(
                     com.morealm.app.domain.render.ReadingDirection.VERTICAL_RL
                 },
             )
-        } else if (scrollCanvasV2Enabled && pageTurnMode == PageTurnMode.SCROLL && hasReaderTarget) {
-            // ── M6 实验：SCROLL Canvas V2 引擎（独立排版 + 三块面板 + pixelOffset） ──
-            // feature flag scrollCanvasV2 默认 false 走旧 LazyScrollRenderer 路径；
-            // 用户在阅读设置打开 V2 toggle 走本分支验证跳章 bug 是否根治。
-            // 旧 LazyScrollRenderer 保留至用户测试通过后再删（用户决策 2026-05-17）。
+        } else if (pageTurnMode == PageTurnMode.SCROLL && hasReaderTarget) {
+            // SCROLL 模式专用 V2 Canvas 引擎（独立排版 + 三块面板 + pixelOffset）。
+            // V1 LazyScrollRenderer 已在 1.5 删除。
             val density = LocalDensity.current
             val configuration = LocalConfiguration.current
             val viewWidthPx = with(density) { configuration.screenWidthDp.dp.toPx().toInt() }

@@ -152,11 +152,6 @@ class AppPreferences @Inject constructor(
         val TAP_LEFT_ACTION = stringPreferencesKey("tap_left_action") // next/prev
         val VOLUME_KEY_PAGE = booleanPreferencesKey("volume_key_page")
         val VOLUME_KEY_REVERSE = booleanPreferencesKey("volume_key_reverse")
-        /**
-         * 实验性：SCROLL 模式启用 Canvas V2 引擎（独立排版 + 三块面板 + pixelOffset
-         * 架构层面消除跳章 bug）。默认 false 走旧 LazyScrollRenderer 路径。
-         */
-        val SCROLL_CANVAS_V2 = booleanPreferencesKey("scroll_canvas_v2")
         val HEADSET_BUTTON_PAGE = booleanPreferencesKey("headset_button_page")
         val VOLUME_KEY_LONG_PRESS = stringPreferencesKey("volume_key_long_press") // off|page|chapter
         val RESUME_LAST_READ = booleanPreferencesKey("resume_last_read")
@@ -480,10 +475,6 @@ class AppPreferences @Inject constructor(
 
     val volumeKeyPage: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.VOLUME_KEY_PAGE] ?: true }
-
-    /** SCROLL 模式启用 Canvas V2 引擎。v1.4 起默认 true（替换老滚动引擎，根治跨章跳章 bug）。 */
-    val scrollCanvasV2: Flow<Boolean> = context.dataStore.data
-        .map { it[Keys.SCROLL_CANVAS_V2] ?: true }
 
     /**
      * 音量键方向反转。默认 false：音量下=下一页、音量上=上一页（与系统/Legado 一致）。
@@ -840,8 +831,6 @@ class AppPreferences @Inject constructor(
     }
     suspend fun setVolumeKeyPage(enabled: Boolean) = update(Keys.VOLUME_KEY_PAGE, enabled)
 
-    /** 实验性：SCROLL 模式启用 Canvas V2 引擎。 */
-    suspend fun setScrollCanvasV2(enabled: Boolean) = update(Keys.SCROLL_CANVAS_V2, enabled)
     suspend fun setVolumeKeyReverse(enabled: Boolean) = update(Keys.VOLUME_KEY_REVERSE, enabled)
     suspend fun setHeadsetButtonPage(enabled: Boolean) = update(Keys.HEADSET_BUTTON_PAGE, enabled)
     suspend fun setVolumeKeyLongPress(mode: String) = update(Keys.VOLUME_KEY_LONG_PRESS, mode)

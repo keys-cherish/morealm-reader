@@ -28,10 +28,6 @@ class ReadingSettingsViewModel @Inject constructor(
     val volumeKeyPage: StateFlow<Boolean> = prefs.volumeKeyPage
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
-    /** 实验性：SCROLL 模式启用 Canvas V2 引擎。 */
-    val scrollCanvasV2: StateFlow<Boolean> = prefs.scrollCanvasV2
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
     val volumeKeyReverse: StateFlow<Boolean> = prefs.volumeKeyReverse
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
@@ -98,8 +94,6 @@ class ReadingSettingsViewModel @Inject constructor(
     fun setReadingDirection(v: String) = viewModelScope.launch { prefs.setReadingDirection(v) }
     fun setTapLeftAction(v: String) = viewModelScope.launch { prefs.setTapLeftAction(v) }
     fun setVolumeKeyPage(v: Boolean) = viewModelScope.launch { prefs.setVolumeKeyPage(v) }
-    /** 实验性：SCROLL 模式 Canvas V2 引擎开关。 */
-    fun setScrollCanvasV2(v: Boolean) = viewModelScope.launch { prefs.setScrollCanvasV2(v) }
     fun setVolumeKeyReverse(v: Boolean) = viewModelScope.launch { prefs.setVolumeKeyReverse(v) }
     fun setHeadsetButtonPage(v: Boolean) = viewModelScope.launch { prefs.setHeadsetButtonPage(v) }
     fun setVolumeKeyLongPress(v: String) = viewModelScope.launch { prefs.setVolumeKeyLongPress(v) }
