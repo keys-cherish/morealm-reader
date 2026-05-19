@@ -732,7 +732,14 @@ fun ReaderScreen(
                         }
                     }
                 },
-                onChapterIndexChange = { newIdx -> viewModel.loadChapter(newIdx) },
+                onChapterIndexChange = { newIdx ->
+                    // Page-level swap 反向通知 VM（不是用户主动 jump）—— 走轻量 API：
+                    // 仅同步 _currentChapterIndex.value，不 trigger restoreToken / 不重 load
+                    // chapter content / 不动 _renderedChapter。如果误调 loadChapter 会让
+                    // ChapterController 内部 trigger restoreToken 反传到 Host LaunchedEffect
+                    // 形成 race（日志 MoRealm_log_20260519_160147.txt line 257/297/359 复现）。
+                    viewModel.chapter.setCurrentChapterIndexFromScroll(newIdx)
+                },
                 onTapCenter = {
                     if (toolbarEditing) {
                         toolBarViewModel.exitEditMode()
