@@ -22,7 +22,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.apache.commons.text.StringEscapeUtils
@@ -98,6 +100,30 @@ class ReaderChapterController(
 
     private val _currentChapterIndex = MutableStateFlow(0)
     val currentChapterIndex: StateFlow<Int> = _currentChapterIndex.asStateFlow()
+
+    /**
+     * **settled chapter index**（仿 Compose PagerState `settledPage` 模型）—— fling /
+     * 跨章 swap 期间保持稳定，待 300ms 静止后才更新。
+     *
+     * 用途：低频副作用应该订阅这个而不是 [currentChapterIndex]
+     *   - `saveProgress` 持久化进度 → 用 settled（避免 fling 跨多章时反复写 DB）
+     *   - TTS `handleSeek` 跨章 → 用 settled（避免 fling 中 TTS 章节判断抖动）
+     *   - 章节元数据加载（如目录高亮当前章）→ 用 settled
+     *
+     * 高频 UI（InfoBar 章号 / page i/n 显示）仍订阅 [currentChapterIndex] (live)
+     * 以保证用户视觉即时响应。
+     *
+     * 设计参考：2026-05-19 四方 agent 验证 V2 page-level 失败根因后引入。详
+     * memory `feedback_high_freq_state_imperative.md` + `project_v2_architecture_failure_mode.md`。
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    val settledChapterIndex: StateFlow<Int> = _currentChapterIndex
+        .debounce(300L)
+        .stateIn(
+            scope,
+            kotlinx.coroutines.flow.SharingStarted.Eagerly,
+            _currentChapterIndex.value,
+        )
 
     private val _chapterContent = MutableStateFlow("")
     val chapterContent: StateFlow<String> = _chapterContent.asStateFlow()
@@ -1428,6 +1454,21 @@ class ReaderChapterController(
         if (index < 0 || index >= _chapters.value.size) return
         if (_currentChapterIndex.value == index) return
         _currentChapterIndex.value = index
+
+        // 同步 visiblePageState.chapterIndex —— 防 saveProgress 用 stale chapterIndex
+        // 写错章（V2 page-level 4 方验证发现的第 4 个独立真值）。
+        // 参考 commitChapterShiftNext line 311-316 同款同步模式。
+        if (::visiblePageState.isInitialized) {
+            val cur = visiblePageState.value
+            if (cur.chapterIndex != index) {
+                val title = _chapters.value.getOrNull(index)?.title.orEmpty()
+                visiblePageState.value = cur.copy(
+                    chapterIndex = index,
+                    title = title,
+                    chapterPosition = 0,
+                )
+            }
+        }
     }
 
     /**

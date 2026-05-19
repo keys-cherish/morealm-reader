@@ -79,20 +79,30 @@ class ScrollCanvasReaderState(
      * 由 scroll handler 在 swap 完成后独立设置（page 顶贴视口）。
      */
     fun swapToNext() {
-        prevChapter = currentChapter
-        currentChapter = nextChapter
-        nextChapter = null  // null → debounce 预加载检测到 stale 后异步替换（不耦合 swap）
-        currentChapterIndex += 1
+        // 4 连写包在 Compose 事务里 —— observer 只能在 commit 时看到最终态，
+        // 避免 partial state 被 LaunchedEffect / derivedStateOf 拍到。
+        // 详 memory `project_v2_architecture_failure_mode.md` 第 4 方质疑发现：
+        // mutableState 每次写都 schedule dispatch，4 写入暴露 4 race window；
+        // Legado View 体系靠同栈帧 + postInvalidate 帧末合并天然原子，
+        // Compose 必须用 Snapshot.withMutableSnapshot 拿回同等原子性。
+        androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+            prevChapter = currentChapter
+            currentChapter = nextChapter
+            nextChapter = null
+            currentChapterIndex += 1
+        }
     }
 
     /**
      * 与 [swapToNext] 对偶 —— chapterShiftCallback(-1) 时调用。
      */
     fun swapToPrev() {
-        nextChapter = currentChapter
-        currentChapter = prevChapter
-        prevChapter = null
-        currentChapterIndex -= 1
+        androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+            nextChapter = currentChapter
+            currentChapter = prevChapter
+            prevChapter = null
+            currentChapterIndex -= 1
+        }
     }
 
     /**
@@ -104,10 +114,12 @@ class ScrollCanvasReaderState(
      * layout 加载完后另设。
      */
     fun setExternalChapterIndex(idx: Int) {
-        currentChapterIndex = idx
-        pageOffset = 0f
-        prevChapter = null
-        currentChapter = null
-        nextChapter = null
+        androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+            currentChapterIndex = idx
+            pageOffset = 0f
+            prevChapter = null
+            currentChapter = null
+            nextChapter = null
+        }
     }
 }
