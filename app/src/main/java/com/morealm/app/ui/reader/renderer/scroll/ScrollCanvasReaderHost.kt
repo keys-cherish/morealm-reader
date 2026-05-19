@@ -333,6 +333,13 @@ fun ScrollCanvasReaderHost(
     // factory 跨章 swap 同步切 state.currentChapterIndex（即时，无延迟）。但通知 VM
     // 持久化 / 元数据更新走 debounce(150ms)：fling 期快速跨多章时只触发最后一次，
     // 避免 VM 高频写 IO。snapshotFlow 自动监听 state.currentChapterIndex 变化。
+    //
+    // 契约约定 (2026-05-19 根治反向 propagate race)：caller 实现 onChapterIndexChange 必须
+    // 用「轻量同步语义」(不 trigger restoreToken / 不重 load chapter content)。
+    // 推荐: `viewModel.chapter.setCurrentChapterIndexFromScroll(idx)`。
+    // 反例: `viewModel.loadChapter(idx)` 会让 ChapterController 内部 trigger restoreToken+prop
+    // 反传到 Host → LaunchedEffect(restoreToken) 误判为外部 jump → 反向 setExternal 振荡
+    // (日志 MoRealm_log_20260519_160147.txt line 257/297/359 即此根因)。
     val onChapterIndexChangeUpdated by rememberUpdatedState(onChapterIndexChange)
     LaunchedEffect(state) {
         snapshotFlow { state.currentChapterIndex }
@@ -361,8 +368,10 @@ fun ScrollCanvasReaderHost(
         if (restoreToken == 0L) return@LaunchedEffect
 
         // Phase 6b：restoreToken 是「外部主动 jump」唯一标识。先处理 chapter idx 切换：
-        // 仅当 prop != state 时 setExternalChapterIndex（章号 jump）。这条路径配合上面砍掉的
-        // LaunchedEffect(currentChapterIndex) 共同消除 prefetch 反向 propagate 振荡。
+        // 仅当 prop != state 时 setExternalChapterIndex（章号 jump）。这条路径只处理
+        // 真正的外部 jump（用户从目录 / 书签 / Slider 跨章），不再有 page-level swap 反向
+        // propagate 的回流问题——根治在 caller 端：onChapterIndexChange 必须用轻量
+        // setCurrentChapterIndexFromScroll，不 trigger restoreToken。
         if (state.currentChapterIndex != currentChapterIndex) {
             AppLog.info(
                 "ScrollCanvasV2",
@@ -447,6 +456,9 @@ fun ScrollCanvasReaderHost(
                 withContext(Dispatchers.Default) {
                     engine.layoutChapter(content.chapterIndex, content.title, content.content)
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Compose LaunchedEffect 重启时的正常 cancel，不当 error log（hotfix2 2026-05-19）
+                throw e  // 必须 rethrow 让协程框架感知 cancel
             } catch (e: Throwable) {
                 AppLog.warn("ScrollCanvasV2", "loadAndLayout FAILED idx=$idx: ${e.message}", e)
                 null
