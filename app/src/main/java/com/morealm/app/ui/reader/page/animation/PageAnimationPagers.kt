@@ -50,7 +50,11 @@ fun String.toPageAnimType(): PageAnimType = when (this.lowercase()) {
     "slide_vertical", "vertical_slide", "上下翻页" -> PageAnimType.SLIDE_VERTICAL
     "cover" -> PageAnimType.COVER
     "simulation" -> PageAnimType.SIMULATION
-    "scroll", "vertical" -> PageAnimType.SCROLL
+    // "scroll" / "vertical" 偏好残留 —— v1.5 起 SCROLL 模式由 PageTurnMode=SCROLL
+    // 触发 ScrollCanvasReaderHost 独立接管，不走翻页路径。PageAnim 偏好里残留
+    // "scroll" 字符串映射成 NONE 避免进 CanvasRenderer SCROLL safety net 崩溃
+    // (commit b176ec3 V1 删除时遗留)。
+    "scroll", "vertical" -> PageAnimType.NONE
     else -> PageAnimType.SLIDE
 }
 
@@ -168,7 +172,13 @@ fun AnimatedPageReader(
                 SlidePager(pagerState, modifier, onPageSettled, pageContent)
             }
         }
-        PageAnimType.SCROLL -> error("SCROLL handled by ScrollCanvasReaderHost, not AnimatedPageReader")
+        PageAnimType.SCROLL -> {
+            // safety net：用户偏好残留 PageAnim="scroll" 时 toPageAnimType 已映射成 NONE，
+            // 理论上不进本分支；保险起见 fallback 到 NONE 行为（HorizontalPager userScrollEnabled=false）
+            // 避免直接崩溃。SCROLL 真正路径在 ScrollCanvasReaderHost。
+            LaunchedEffect(pagerState.currentPage) { onPageSettled(pagerState.currentPage) }
+            HorizontalPager(state = pagerState, modifier = modifier.fillMaxSize(), userScrollEnabled = false) { pageContent(it) }
+        }
         PageAnimType.NONE -> {
             LaunchedEffect(pagerState.currentPage) {
                 onPageSettled(pagerState.currentPage)

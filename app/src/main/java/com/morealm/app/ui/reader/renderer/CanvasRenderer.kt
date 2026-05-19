@@ -2113,9 +2113,15 @@ fun CanvasRenderer(
             )
     ) {
         if (pageAnimType == PageAnimType.SCROLL) {
-            // SCROLL 模式由 ScrollCanvasReaderHost 接管（v1.5 起 V1 LazyScrollSection 已删除）；
-            // ReaderScreen 内 if-else 已 route 到 V2 Host，本分支理论上不可达，仅留 safety net。
-            error("SCROLL handled by ScrollCanvasReaderHost, not CanvasRenderer")
+            // SCROLL 由 ScrollCanvasReaderHost 接管。但 PageAnim 偏好独立于 PageTurnMode：
+            // 用户旧偏好 PageAnim="scroll" 但 PageTurnMode≠SCROLL 时仍可能走到这里。
+            // 不抛 error 避免崩溃，AppLog.warn 留痕。toPageAnimType "scroll" 已映射成 NONE
+            // (PageAnimationPagers.kt)，正常路径不会走到这里。
+            com.morealm.app.core.log.AppLog.warn(
+                "CanvasRenderer",
+                "pageAnimType=SCROLL leaked into CanvasRenderer; rendering blank fallback. " +
+                    "Check ReaderScreen routing + PageAnimType.toPageAnimType() mapping.",
+            )
         } else {
             // Diagnostic — pairs with [2] coordinator REBUILD and [3p]
             // SimulationPager COMPOSE so we can see the chain:
