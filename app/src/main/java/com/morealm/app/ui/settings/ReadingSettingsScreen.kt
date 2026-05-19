@@ -21,7 +21,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 // 的整体审美一致。下面这一组是设置页用到的全部图标，用 alphabetical 排序方便维护。
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Animation
-import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.FormatAlignCenter
@@ -69,7 +68,6 @@ fun ReadingSettingsScreen(
     val readingDirection by viewModel.readingDirection.collectAsStateWithLifecycle()
     val tapLeftAction by viewModel.tapLeftAction.collectAsStateWithLifecycle()
     val volumeKeyPage by viewModel.volumeKeyPage.collectAsStateWithLifecycle()
-    val scrollCanvasV2 by viewModel.scrollCanvasV2.collectAsStateWithLifecycle()
     val volumeKeyReverse by viewModel.volumeKeyReverse.collectAsStateWithLifecycle()
     val headsetButtonPage by viewModel.headsetButtonPage.collectAsStateWithLifecycle()
     val volumeKeyLongPress by viewModel.volumeKeyLongPress.collectAsStateWithLifecycle()
@@ -160,18 +158,6 @@ fun ReadingSettingsScreen(
                     title = "耳机 / 蓝牙翻页器",
                     checked = headsetButtonPage,
                     onCheckedChange = { viewModel.setHeadsetButtonPage(it) },
-                )
-            }
-
-            // ── 实验性功能（用户主动启用，可随时关闭回退旧实现）──
-            SectionHeader("实验性功能")
-            SettingsCard {
-                SettingsToggleRow(
-                    icon = Icons.Outlined.Build,
-                    title = "滚动模式 Canvas V2",
-                    subtitle = "全新滚动引擎（架构层面消除跳章），开启后立即生效。出问题关闭即回退旧引擎。",
-                    checked = scrollCanvasV2,
-                    onCheckedChange = { viewModel.setScrollCanvasV2(it) },
                 )
             }
 
