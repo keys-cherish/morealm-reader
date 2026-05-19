@@ -1,15 +1,18 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
-import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.animation.core.AnimationState
+import androidx.compose.animation.core.animateDecay
+import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.rememberScrollableState
-import androidx.compose.foundation.gestures.scrollable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -20,9 +23,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 /**
  * 滚动 Canvas 阅读器 UI 入口 —— 三块面板（prev/cur/next）+ pixelOffset 像素累加滚动。
@@ -90,16 +97,35 @@ fun ScrollCanvasRenderer(
     /** 长按 (xInView, yInView) 触发回调 —— Host 内做选区命中。 */
     onLongPress: (androidx.compose.ui.geometry.Offset) -> Unit = {},
 ) {
-    // ── M2.4 滚动手势接入 ──
-    // rememberScrollableState consume delta：跨章 swap 时 applyScrollDelta 内同帧
-    // 完成 chapter 引用切换 + pixelOffset reset，全程消费 delta 不留尾。
-    // Compose 的 scrollable 自带 fling decay（无需额外做）。
-    // rememberUpdatedState 防止 onChapterShift lambda 闭包陈旧 —— 调用方每次 recompose
-    // 传入的 lambda 可能不同，但 scrollState 是 remember 的，闭包内必须读 updated 引用。
+    // ── D 方案 2026-05-18 滚动手势自实现 ──
+    //
+    // 历史：M2.4 用 rememberScrollableState + Modifier.scrollable，Compose 内部 fling 物理
+    // 与 V2 swap atomic 跳跃冲突 → "章顶/末持续拖动 + 未松手" 抽搐根因（日志 20260518_223712
+    // 显示 10 秒内 19 次 SWAP NEXT/PREV 交替振荡，每次 pixelOffset 跳 23000+px）。
+    //
+    // D 方案：完全脱离 Modifier.scrollable，自管 drag + fling：
+    //   1. detectVerticalDragGestures 精确控制 drag session 边界
+    //   2. VelocityTracker 算抬手 fling 速度
+    //   3. AnimationState.animateDecay + rememberSplineBasedDecay 实现 fling 物理（同
+    //      androidx Pager 内部用的同款 decay 曲线，手感不差）
+    //   4. **drag session 内最多 1 次 swap**：用户手指持续拖时 pixelOffset 在新章边界
+    //      附近不会反复触发 swap（必须抬手再按下才能再次跨章）。fling 期不限（用户
+    //      期望惯性多跨章自然）
+    //   5. onDragStart cancel fling job：用户新按下时立即停 fling，无 race
+    //
+    // rememberUpdatedState 防止 onChapterShift / onTap / onLongPress lambda 闭包陈旧 ——
+    // 调用方 recompose 传新 lambda，但 pointerInput 块的 state 是 remember 的。
+    val scope = rememberCoroutineScope()
+    val flingDecay = rememberSplineBasedDecay<Float>()
+    val velocityTracker = remember { VelocityTracker() }
+    var flingJob by remember { mutableStateOf<Job?>(null) }
+    // session 内已 swap 次数（0 = 允许 swap / 1+ = 后续只在新章内滚动 + clamp，不再跨章）
+    var dragSwapsConsumed by remember { mutableIntStateOf(0) }
+    // onDragStart 时的 chapterIndex 快照 —— onVerticalDrag 内与 state.currentChapterIndex 比较
+    // 检测 swap 是否触发过（applyScrollDelta swap 路径同步更新 state.currentChapterIndex）。
+    var chIdxAtDragStart by remember { mutableIntStateOf(state.currentChapterIndex) }
+
     val onChapterShiftUpdated by rememberUpdatedState(onChapterShift)
-    val scrollState = rememberScrollableState { delta ->
-        applyScrollDelta(state, delta, onChapterShiftUpdated)
-    }
 
     // viewportHeightPx 通过 onSizeChanged 维护（容器尺寸变化 / 屏幕旋转时更新）
     // ChapterPaneCanvas 视口剔除 lambda 用这个值算 viewport 在各块内的可见范围。
@@ -139,10 +165,6 @@ fun ScrollCanvasRenderer(
                 )
             }
             .pointerInput(Unit) {
-                // detectTapGestures 不消费 down event 直到判定 tap / longPress，
-                // 与 .scrollable 共存：tap 先尝试 onTap（高亮命中），未命中再 fall-through 到
-                // onTapCenter（切控制栏）；longPress 触发 onLongPress（选区）；
-                // move 触发 scrollable 处理 fling。
                 detectTapGestures(
                     onTap = { offset ->
                         val consumed = onTapUpdated(offset)
@@ -151,7 +173,124 @@ fun ScrollCanvasRenderer(
                     onLongPress = { offset -> onLongPressUpdated(offset) },
                 )
             }
-            .scrollable(state = scrollState, orientation = Orientation.Vertical),
+            .pointerInput(Unit) {
+                // 自实现 drag + fling，替代 Modifier.scrollable。两个 pointerInput
+                // Modifier 并存：tap/longPress 优先消费（detectTapGestures 内部用 awaitFirstDown
+                // + 短暂等待判定 tap）；判定不是 tap 时本块 detectVerticalDragGestures 接管。
+                detectVerticalDragGestures(
+                    onDragStart = {
+                        // 用户新按下 → 停止任何在跑的 fling + 重置 velocity tracker +
+                        // 重置 session swap 计数（允许本 session 再 swap 1 次）+
+                        // 记录起始 chapterIndex（onVerticalDrag 内比较检测 swap 触发）。
+                        val flingWasActive = flingJob?.isActive == true
+                        flingJob?.cancel()
+                        flingJob = null
+                        velocityTracker.resetTracking()
+                        dragSwapsConsumed = 0
+                        chIdxAtDragStart = state.currentChapterIndex
+                        com.morealm.app.core.log.AppLog.info(
+                            "ScrollCanvasV2",
+                            "[drag] START chIdx=${state.currentChapterIndex} pixelOffset=${state.pixelOffset.toInt()}" +
+                                " flingCancelled=$flingWasActive",
+                        )
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        velocityTracker.addPosition(change.uptimeMillis, change.position)
+                        // detectVerticalDragGestures.dragAmount 与 Modifier.scrollable 的 raw delta
+                        // 同方向（手指向下滑 dragAmount > 0 / 向上滑 < 0）。
+                        // applyScrollDelta 内部 `newOffset = pixelOffset - delta`：
+                        //   - 手指向下滑 dragAmount > 0 → newOffset < pixelOffset → 视口看前面 ✓
+                        //   - 手指向上滑 dragAmount < 0 → newOffset > pixelOffset → 视口看后面 ✓
+                        // delta 直接传 dragAmount，不取反。
+                        applyScrollDelta(
+                            state = state,
+                            delta = dragAmount,
+                            onChapterShift = onChapterShiftUpdated,
+                            // 本 session 已 swap 过 1 次 → 后续 delta 只章内累加 / clamp，
+                            // 不再 swap。根治反复振荡。
+                            allowSwap = dragSwapsConsumed == 0,
+                            source = "drag",
+                        )
+                        // 检测本帧是否 swap 了：applyScrollDelta swap 路径同步更新
+                        // state.currentChapterIndex。与 onDragStart 时的 chIdxAtDragStart 比较，
+                        // 不一致即 swap 触发过 → 标记 session 已消耗 swap 配额。
+                        if (dragSwapsConsumed == 0 && state.currentChapterIndex != chIdxAtDragStart) {
+                            dragSwapsConsumed = 1
+                            com.morealm.app.core.log.AppLog.info(
+                                "ScrollCanvasV2",
+                                "[drag] CONSUMED chIdxAtStart=$chIdxAtDragStart → cur=${state.currentChapterIndex}" +
+                                    " dragSwapsConsumed=1 后续 delta 禁 swap",
+                            )
+                        }
+                        change.consume()
+                    },
+                    onDragEnd = {
+                        val flingVelocity = velocityTracker.calculateVelocity().y
+                        com.morealm.app.core.log.AppLog.info(
+                            "ScrollCanvasV2",
+                            "[drag] END velocity=${flingVelocity.toInt()} dragSwapsConsumed=$dragSwapsConsumed" +
+                                " chIdx=${state.currentChapterIndex} pixelOffset=${state.pixelOffset.toInt()}",
+                        )
+                        flingJob?.cancel()
+                        flingJob = scope.launch {
+                            try {
+                                var lastValue = 0f
+                                var frames = 0
+                                com.morealm.app.core.log.AppLog.info(
+                                    "ScrollCanvasV2",
+                                    "[fling] START velocity=${flingVelocity.toInt()} inheritedSwapCount=$dragSwapsConsumed",
+                                )
+                                AnimationState(
+                                    initialValue = 0f,
+                                    initialVelocity = flingVelocity,
+                                ).animateDecay(flingDecay) {
+                                    val frameDelta = value - lastValue
+                                    lastValue = value
+                                    frames++
+                                    // fling 继承 drag session 守门 — 整个 drag+fling 周期只允 1 次 swap。
+                                    val beforeChIdx = state.currentChapterIndex
+                                    applyScrollDelta(
+                                        state = state,
+                                        delta = frameDelta,
+                                        onChapterShift = onChapterShiftUpdated,
+                                        allowSwap = dragSwapsConsumed == 0,
+                                        source = "fling",
+                                    )
+                                    if (dragSwapsConsumed == 0 &&
+                                        state.currentChapterIndex != beforeChIdx) {
+                                        dragSwapsConsumed = 1
+                                        com.morealm.app.core.log.AppLog.info(
+                                            "ScrollCanvasV2",
+                                            "[fling] CONSUMED frame=$frames chIdxBefore=$beforeChIdx" +
+                                                " → cur=${state.currentChapterIndex} 后续 fling 帧禁 swap",
+                                        )
+                                    }
+                                }
+                                com.morealm.app.core.log.AppLog.info(
+                                    "ScrollCanvasV2",
+                                    "[fling] END natural frames=$frames" +
+                                        " chIdx=${state.currentChapterIndex} pixelOffset=${state.pixelOffset.toInt()}",
+                                )
+                            } catch (_: CancellationException) {
+                                com.morealm.app.core.log.AppLog.info(
+                                    "ScrollCanvasV2",
+                                    "[fling] CANCELLED chIdx=${state.currentChapterIndex}" +
+                                        " pixelOffset=${state.pixelOffset.toInt()}",
+                                )
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        com.morealm.app.core.log.AppLog.info(
+                            "ScrollCanvasV2",
+                            "[drag] CANCEL chIdx=${state.currentChapterIndex}" +
+                                " pixelOffset=${state.pixelOffset.toInt()}",
+                        )
+                        velocityTracker.resetTracking()
+                        dragSwapsConsumed = 0
+                    },
+                )
+            },
         content = {
             // 三块子节点固定顺序 prev/cur/next；null 章节 emit 空 Box 占位。
             // viewportRangeProvider lambda 在 draw scope 内调用：享受 draw-only re-execution

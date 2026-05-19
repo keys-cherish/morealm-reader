@@ -308,12 +308,30 @@ fun ScrollCanvasReaderHost(
 
     LaunchedEffect(currentChapterIndex, chapterCount) {
         state.chapterCount = chapterCount
+        // [DIAG 滚动跨章抽搐 2026-05-18]
+        // 嫌疑：内部 applyScrollDelta swap 已把 state.currentChapterIndex 更新为新值，
+        // 但外部 prop currentChapterIndex 滞后到达（VM 异步），prop 终于追上后此 effect
+        // 触发。如果两值在 effect 体执行瞬间不一致 → 触发 reset → pixelOffset=0 + 三章
+        // null → 用户视觉"回到顶部 + 重新加载"= 抽搐。
+        AppLog.info(
+            "ScrollCanvasV2",
+            "[host-effect] trigger prop.chIdx=$currentChapterIndex state.chIdx=${state.currentChapterIndex}" +
+                " state.pixelOffset=${state.pixelOffset.toInt()} chapterCount=$chapterCount" +
+                " curChapter=${state.currentChapter?.chapterIndex}",
+        )
         if (state.currentChapterIndex != currentChapterIndex) {
+            AppLog.warn(
+                "ScrollCanvasV2",
+                "[host-effect] RESET! state.chIdx=${state.currentChapterIndex} → prop=$currentChapterIndex" +
+                    " pixelOffset=${state.pixelOffset.toInt()}→0 prev/cur/next 全部清 null",
+            )
             state.currentChapterIndex = currentChapterIndex
             state.pixelOffset = 0f
             state.prevChapter = null
             state.currentChapter = null
             state.nextChapter = null
+        } else {
+            AppLog.debug("ScrollCanvasV2", "[host-effect] skip reset (state == prop)")
         }
     }
 
