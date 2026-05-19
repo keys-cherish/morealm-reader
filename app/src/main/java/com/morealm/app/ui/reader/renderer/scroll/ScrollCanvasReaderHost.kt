@@ -379,14 +379,13 @@ fun ScrollCanvasReaderHost(
     // 会触发新 restoreToken。如果 JUMP 在 cp=0 && progress=0 也跑，pixelOffset 被强拉到 0
     // → 用户视野从 swap 后的位置（章末 / 章首附近）跳到章顶 → 继续 fling 再 swap →
     // 反复跳章。cp=0 && progress=0 时 V2 swap 已正确设置 pixelOffset，无需 JUMP 干预。
-    // Phase 6c（真根治 2026-05-19）：仅处理 cp/progress jump，章 idx jump 已迁移到
-    // 上方 LaunchedEffect(currentChapterIndex)。两个 effect 解耦后：
-    // - 章 idx jump：prop 变化触发，与 layout ready 无关
-    // - cp/progress jump：等 layout ready 后触发（layout.chapterIndex == state.currentChapterIndex 守门）
-    // 同一 restoreToken 在 currentChapter 变化时重启 effect 也安全：只走 cp/progress 分支，
-    // 不会再误判章 idx mismatch 反向 setExternal。
+    // restoreToken 消费幂等：同一 token 只 JUMP 一次。
+    // state.currentChapter 在 key 里意味着 layout ready 后 effect 重启；但如果同一 token
+    // 已 JUMP 过（上一轮 effect），不该再 JUMP。不变量：一个 restoreToken 对应一次性跳转事件。
+    var lastConsumedRestoreToken by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
     LaunchedEffect(restoreToken, state.currentChapter) {
         if (restoreToken == 0L) return@LaunchedEffect
+        if (restoreToken == lastConsumedRestoreToken) return@LaunchedEffect
         if (initialChapterPosition <= 0 && initialProgress <= 0) return@LaunchedEffect
         val layout = state.currentChapter ?: return@LaunchedEffect
         if (layout.chapterIndex != state.currentChapterIndex) return@LaunchedEffect
@@ -426,10 +425,12 @@ fun ScrollCanvasReaderHost(
         }
         pageFactory.moveToPage(targetPageIdx)
         state.pageOffset = pageOffsetInPage
+        lastConsumedRestoreToken = restoreToken
         AppLog.info(
             "ScrollCanvasV2",
             "JUMP restoreToken=$restoreToken cp=$initialChapterPosition prog=$initialProgress" +
-                " → page=$targetPageIdx pageOffset=$pageOffsetInPage (chapterY=$targetChapterY viewportH=$viewportH)",
+                " → page=$targetPageIdx pageOffset=$pageOffsetInPage (chapterY=$targetChapterY viewportH=$viewportH)" +
+                " [consumed, won't re-trigger]",
         )
         onProgressRestored()
     }
