@@ -445,51 +445,62 @@ fun ScrollCanvasReaderHost(
         if (state.nextChapter?.styleSignature != sig) state.nextChapter = null
     }
 
+    // ── 章节加载：curChapter 即时 + prevNext 延迟预加载 ──
+    //
+    // 跨章 swap 解耦（2026-05-19 架构改进）：
+    //   swap = O(1) 引用轮换（swapToNext/Prev 不置 null，保留 stale 引用）
+    //   预加载 = 独立 debounce，不耦合 swap
+    //
+    // 为什么分两个 effect：
+    //   curChapter 必须即时加载（首次进 reader / 外部跳章后必须立即有内容可显示）
+    //   prevNext 章可以 debounce（章边界反复拖时不触发加载，稳定 300ms 后才加载）
+    //   → 与 Legado ReadBook 等价体感（swap 瞬间完成，预加载静默）
+
+    suspend fun loadAndLayout(idx: Int): com.morealm.app.domain.render.scroll.ScrollChapterLayout? {
+        return try {
+            val content = withContext(Dispatchers.IO) { loadChapterContent(idx) } ?: return null
+            AppLog.info("ScrollCanvasV2", "  loaded idx=$idx contentLen=${content.content.length}")
+            withContext(Dispatchers.Default) {
+                engine.layoutChapter(content.chapterIndex, content.title, content.content)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            AppLog.warn("ScrollCanvasV2", "loadAndLayout FAILED idx=$idx: ${e.message}", e)
+            null
+        }
+    }
+
+    // effect 1：curChapter 即时加载（key = currentChapterIndex + engine）
     LaunchedEffect(state.currentChapterIndex, engine) {
         val curIdx = state.currentChapterIndex
-        val needLoadCur = state.currentChapter?.chapterIndex != curIdx
-        val needLoadPrev = curIdx > 0 && state.prevChapter?.chapterIndex != curIdx - 1
-        val needLoadNext = curIdx < chapterCount - 1 && state.nextChapter?.chapterIndex != curIdx + 1
-        AppLog.info(
-            "ScrollCanvasV2",
-            "HOST sync cur=$curIdx loadCur=$needLoadCur loadPrev=$needLoadPrev loadNext=$needLoadNext " +
-                "(chapterCount=$chapterCount viewWidth=$viewWidth viewHeight=$viewHeight)",
-        )
-
-        suspend fun loadAndLayout(idx: Int): com.morealm.app.domain.render.scroll.ScrollChapterLayout? {
-            return try {
-                val content = withContext(Dispatchers.IO) { loadChapterContent(idx) } ?: return null
-                AppLog.info("ScrollCanvasV2", "  loaded idx=$idx contentLen=${content.content.length}")
-                withContext(Dispatchers.Default) {
-                    engine.layoutChapter(content.chapterIndex, content.title, content.content)
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                // Compose LaunchedEffect 重启时的正常 cancel，不当 error log（hotfix2 2026-05-19）
-                throw e  // 必须 rethrow 让协程框架感知 cancel
-            } catch (e: Throwable) {
-                AppLog.warn("ScrollCanvasV2", "loadAndLayout FAILED idx=$idx: ${e.message}", e)
-                null
-            }
-        }
-
-        if (needLoadCur) {
-            val curLayout = loadAndLayout(curIdx)
-            if (curLayout != null) {
-                state.currentChapter = curLayout
-                AppLog.info("ScrollCanvasV2", "  cur layout READY pages=${curLayout.pages.size} totalH=${curLayout.totalHeight}")
+        if (state.currentChapter?.chapterIndex != curIdx) {
+            AppLog.info("ScrollCanvasV2", "HOST loadCur idx=$curIdx")
+            val layout = loadAndLayout(curIdx)
+            if (layout != null) {
+                state.currentChapter = layout
+                AppLog.info("ScrollCanvasV2", "  cur READY pages=${layout.pages.size} totalH=${layout.totalHeight}")
             } else {
                 state.currentChapter = null
-                AppLog.warn("ScrollCanvasV2", "cur NULL idx=$curIdx — 无内容可滑")
+                AppLog.warn("ScrollCanvasV2", "cur NULL idx=$curIdx")
             }
         }
-        if (needLoadPrev) {
-            val prevLayout = loadAndLayout(curIdx - 1)
-            if (state.currentChapterIndex == curIdx) state.prevChapter = prevLayout
-        }
-        if (needLoadNext) {
-            val nextLayout = loadAndLayout(curIdx + 1)
-            if (state.currentChapterIndex == curIdx) state.nextChapter = nextLayout
-        }
+    }
+
+    // effect 2：prevNext 延迟预加载（debounce 300ms，章边界反复拖不触发）
+    LaunchedEffect(engine) {
+        snapshotFlow { state.currentChapterIndex }
+            .debounce(300L)
+            .collect { curIdx ->
+                if (curIdx > 0 && state.prevChapter?.chapterIndex != curIdx - 1) {
+                    val layout = loadAndLayout(curIdx - 1)
+                    if (state.currentChapterIndex == curIdx) state.prevChapter = layout
+                }
+                if (curIdx < state.chapterCount - 1 && state.nextChapter?.chapterIndex != curIdx + 1) {
+                    val layout = loadAndLayout(curIdx + 1)
+                    if (state.currentChapterIndex == curIdx) state.nextChapter = layout
+                }
+            }
     }
 
     // 选区状态（M4-revive 已修：SelectionOverlay fullscreen pointerInput 已删除，长按检测
