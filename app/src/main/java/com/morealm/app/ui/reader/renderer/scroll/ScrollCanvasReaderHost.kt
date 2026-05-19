@@ -319,14 +319,29 @@ fun ScrollCanvasReaderHost(
         )
     }
 
-    // Phase 6b（振荡修复 2026-05-19）：chapterCount 独立追踪，不再被 prop currentChapterIndex
-    // 变化驱动 setExternalChapterIndex —— 否则会与 prefetch 副作用形成死循环：
-    //   page-level swap → state.currentChapterIndex 变 → snapshotFlow 通知 VM → VM 更新
-    //   MutableStateFlow → prop 反传 → 之前的 setExternalChapterIndex 触发 → 章号反向
-    //   → prefetch 再触发 → ... 105/104 反复振荡（实测日志 MoRealm_log_20260519_154516.txt）
-    // 修复后：prop currentChapterIndex 变化忽略（除非配合 restoreToken 表示真正的外部 jump）。
-    LaunchedEffect(chapterCount) {
+    // Phase 6c（真根治 2026-05-19）：prop currentChapterIndex 变化直接驱动 setExternalChapterIndex。
+    //
+    // 前置条件：caller (ReaderScreen) 的 onChapterIndexChange 必须用轻量
+    // setCurrentChapterIndexFromScroll（不动 restoreToken），让 page-level swap 反向通知
+    // VM 时 prop 变化但 state 也已变化（state.swapToNext/Prev 先于通知 VM），
+    // 触发 effect 时 state == prop → no-op，不会反向 setExternal。
+    //
+    // 真正的外部 jump（用户从目录/书签/Slider 跨章）才走 loadChapter → restoreToken 变
+    // + prop 变 → state != prop → setExternal ✓ 合法。
+    //
+    // 故意只用 currentChapterIndex 作为 key（不带 state.currentChapter）：避免章节 layout
+    // 变化（setExternal 后清空 currentChapter → 重新加载 → currentChapter 重新赋值）触发
+    // 同一 prop 的二次 effect 引发反向 race（日志 MoRealm_log_20260519_161302.txt
+    // line 245/246 即此问题：同一 token 反复触发 effect 用旧 prop 反向 setExternal）。
+    LaunchedEffect(currentChapterIndex, chapterCount) {
         state.chapterCount = chapterCount
+        if (state.currentChapterIndex != currentChapterIndex) {
+            AppLog.info(
+                "ScrollCanvasV2",
+                "[host-effect] external jump idx ${state.currentChapterIndex} → $currentChapterIndex",
+            )
+            state.setExternalChapterIndex(currentChapterIndex)
+        }
     }
 
     // ── Phase 5：onChapterIndexChange 节流通知 VM ──
@@ -364,23 +379,14 @@ fun ScrollCanvasReaderHost(
     // 会触发新 restoreToken。如果 JUMP 在 cp=0 && progress=0 也跑，pixelOffset 被强拉到 0
     // → 用户视野从 swap 后的位置（章末 / 章首附近）跳到章顶 → 继续 fling 再 swap →
     // 反复跳章。cp=0 && progress=0 时 V2 swap 已正确设置 pixelOffset，无需 JUMP 干预。
+    // Phase 6c（真根治 2026-05-19）：仅处理 cp/progress jump，章 idx jump 已迁移到
+    // 上方 LaunchedEffect(currentChapterIndex)。两个 effect 解耦后：
+    // - 章 idx jump：prop 变化触发，与 layout ready 无关
+    // - cp/progress jump：等 layout ready 后触发（layout.chapterIndex == state.currentChapterIndex 守门）
+    // 同一 restoreToken 在 currentChapter 变化时重启 effect 也安全：只走 cp/progress 分支，
+    // 不会再误判章 idx mismatch 反向 setExternal。
     LaunchedEffect(restoreToken, state.currentChapter) {
         if (restoreToken == 0L) return@LaunchedEffect
-
-        // Phase 6b：restoreToken 是「外部主动 jump」唯一标识。先处理 chapter idx 切换：
-        // 仅当 prop != state 时 setExternalChapterIndex（章号 jump）。这条路径只处理
-        // 真正的外部 jump（用户从目录 / 书签 / Slider 跨章），不再有 page-level swap 反向
-        // propagate 的回流问题——根治在 caller 端：onChapterIndexChange 必须用轻量
-        // setCurrentChapterIndexFromScroll，不 trigger restoreToken。
-        if (state.currentChapterIndex != currentChapterIndex) {
-            AppLog.info(
-                "ScrollCanvasV2",
-                "[host-effect] external jump idx ${state.currentChapterIndex} → $currentChapterIndex (token=$restoreToken)",
-            )
-            state.setExternalChapterIndex(currentChapterIndex)
-            return@LaunchedEffect  // 等新 layout ready 触发下一轮 effect 再处理 cp/progress jump
-        }
-
         if (initialChapterPosition <= 0 && initialProgress <= 0) return@LaunchedEffect
         val layout = state.currentChapter ?: return@LaunchedEffect
         if (layout.chapterIndex != state.currentChapterIndex) return@LaunchedEffect
