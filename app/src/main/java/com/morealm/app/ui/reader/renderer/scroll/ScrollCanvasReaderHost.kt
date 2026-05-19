@@ -319,19 +319,14 @@ fun ScrollCanvasReaderHost(
         )
     }
 
-    LaunchedEffect(currentChapterIndex, chapterCount) {
+    // Phase 6b（振荡修复 2026-05-19）：chapterCount 独立追踪，不再被 prop currentChapterIndex
+    // 变化驱动 setExternalChapterIndex —— 否则会与 prefetch 副作用形成死循环：
+    //   page-level swap → state.currentChapterIndex 变 → snapshotFlow 通知 VM → VM 更新
+    //   MutableStateFlow → prop 反传 → 之前的 setExternalChapterIndex 触发 → 章号反向
+    //   → prefetch 再触发 → ... 105/104 反复振荡（实测日志 MoRealm_log_20260519_154516.txt）
+    // 修复后：prop currentChapterIndex 变化忽略（除非配合 restoreToken 表示真正的外部 jump）。
+    LaunchedEffect(chapterCount) {
         state.chapterCount = chapterCount
-        // Phase 4b/5 简化：外部 prop currentChapterIndex 变化（用户从外部跳转）时调
-        // setExternalChapterIndex 整体重设 state；同章 idx 不变则 no-op。
-        // 与重构前 RESET 路径相比：单向数据流模型，不再因 prop ↔ state race 误触 RESET。
-        // currentChapterIndex 字段 Phase 5 收紧为 private set，外部仅此路径可改。
-        if (state.currentChapterIndex != currentChapterIndex) {
-            AppLog.info(
-                "ScrollCanvasV2",
-                "[host-effect] external chapter jump: ${state.currentChapterIndex} → $currentChapterIndex",
-            )
-            state.setExternalChapterIndex(currentChapterIndex)
-        }
     }
 
     // ── Phase 5：onChapterIndexChange 节流通知 VM ──
@@ -364,6 +359,19 @@ fun ScrollCanvasReaderHost(
     // 反复跳章。cp=0 && progress=0 时 V2 swap 已正确设置 pixelOffset，无需 JUMP 干预。
     LaunchedEffect(restoreToken, state.currentChapter) {
         if (restoreToken == 0L) return@LaunchedEffect
+
+        // Phase 6b：restoreToken 是「外部主动 jump」唯一标识。先处理 chapter idx 切换：
+        // 仅当 prop != state 时 setExternalChapterIndex（章号 jump）。这条路径配合上面砍掉的
+        // LaunchedEffect(currentChapterIndex) 共同消除 prefetch 反向 propagate 振荡。
+        if (state.currentChapterIndex != currentChapterIndex) {
+            AppLog.info(
+                "ScrollCanvasV2",
+                "[host-effect] external jump idx ${state.currentChapterIndex} → $currentChapterIndex (token=$restoreToken)",
+            )
+            state.setExternalChapterIndex(currentChapterIndex)
+            return@LaunchedEffect  // 等新 layout ready 触发下一轮 effect 再处理 cp/progress jump
+        }
+
         if (initialChapterPosition <= 0 && initialProgress <= 0) return@LaunchedEffect
         val layout = state.currentChapter ?: return@LaunchedEffect
         if (layout.chapterIndex != state.currentChapterIndex) return@LaunchedEffect
