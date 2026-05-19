@@ -319,26 +319,29 @@ fun ScrollCanvasReaderHost(
         )
     }
 
-    // Phase 6c（真根治 2026-05-19）：prop currentChapterIndex 变化直接驱动 setExternalChapterIndex。
-    //
-    // 前置条件：caller (ReaderScreen) 的 onChapterIndexChange 必须用轻量
-    // setCurrentChapterIndexFromScroll（不动 restoreToken），让 page-level swap 反向通知
-    // VM 时 prop 变化但 state 也已变化（state.swapToNext/Prev 先于通知 VM），
-    // 触发 effect 时 state == prop → no-op，不会反向 setExternal。
-    //
-    // 真正的外部 jump（用户从目录/书签/Slider 跨章）才走 loadChapter → restoreToken 变
-    // + prop 变 → state != prop → setExternal ✓ 合法。
-    //
-    // 故意只用 currentChapterIndex 作为 key（不带 state.currentChapter）：避免章节 layout
-    // 变化（setExternal 后清空 currentChapter → 重新加载 → currentChapter 重新赋值）触发
-    // 同一 prop 的二次 effect 引发反向 race（日志 MoRealm_log_20260519_161302.txt
-    // line 245/246 即此问题：同一 token 反复触发 effect 用旧 prop 反向 setExternal）。
-    LaunchedEffect(currentChapterIndex, chapterCount) {
+    // chapterCount 同步给 state（独立 effect，不参与 setExternal 决策）。
+    LaunchedEffect(chapterCount) {
         state.chapterCount = chapterCount
-        if (state.currentChapterIndex != currentChapterIndex) {
+    }
+
+    // 外部 jump 触发器：仅看 restoreToken 变化，不看 currentChapterIndex prop。
+    //
+    // 根因（2026-05-19 MoRealm_log_20260519_195536）：原 LaunchedEffect 用
+    // (currentChapterIndex, chapterCount) 作 key，依赖契约「state.swapToNext 先变 +
+    // snapshotFlow 通知 VM 后 prop 同步 → effect 触发时 state == prop → no-op」。
+    // 但 snapshotFlow 有 debounce(150ms)，频繁跨章时 prop 永远滞后 state。旧 prop 终于
+    // emit 时 state 已经在新值，state != prop → setExternal 把 state 强行拉回旧 prop。
+    // 章边界来回 fling 会形成"swap→prop catch up→反向 setExternal"的闪烁死循环。
+    //
+    // 真正的外部 jump（目录/书签/Slider/loadChapter）一定换 restoreToken (System.nanoTime)。
+    // setCurrentChapterIndexFromScroll 故意不动 restoreToken (line 352-357 契约)。
+    // 用 restoreToken 当 key 既能识别合法 external jump，又能把 page-level 反向 propagate
+    // 自动过滤掉。
+    LaunchedEffect(restoreToken) {
+        if (restoreToken != 0L && state.currentChapterIndex != currentChapterIndex) {
             AppLog.info(
                 "ScrollCanvasV2",
-                "[host-effect] external jump idx ${state.currentChapterIndex} → $currentChapterIndex",
+                "[host-effect] external jump idx ${state.currentChapterIndex} → $currentChapterIndex (token=$restoreToken)",
             )
             state.setExternalChapterIndex(currentChapterIndex)
         }
