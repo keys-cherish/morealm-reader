@@ -1328,15 +1328,13 @@ fun ReaderScreen(
             onChapterClick = { chapterIndex ->
                 showChapterList = false
                 val clicked = chapters.getOrNull(chapterIndex)
-                val windowDump = viewModel.chapterWindow.loadedChapters.toList()
                 com.morealm.app.core.log.AppLog.info(
                     "ChapterIdxDebug",
                     "onChapterClick listIdx=$chapterIndex" +
                         " pageTurnMode=$pageTurnMode" +
                         " currentIndex=$currentIndex visiblePage.chIdx=${visiblePage.chapterIndex}" +
                         " ch.index=${clicked?.index} ch.title=\"${clicked?.title}\"" +
-                        " ch.url=${clicked?.url}" +
-                        " window.loaded=$windowDump",
+                        " ch.url=${clicked?.url}",
                 )
                 viewModel.loadChapter(chapterIndex)
             },
