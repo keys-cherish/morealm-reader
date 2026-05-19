@@ -963,24 +963,20 @@ fun CanvasRenderer(
     // 的 cur local 是真值；新 pagerState initialPage 直接复用这个 cur local 即可
     // 保持视觉位置不变。
     val curLocalSnapshot = remember { androidx.compose.runtime.mutableIntStateOf(0) }
-    // key 必须包含 chapterIndex —— 跨章 NEXT 时如果旧 prev / 新 prev pages 数量巧合相等
-    // （如都是 16），unifiedCurStartIndex 不变，单靠 unifiedCurStartIndex 作 key 漏触发
-    // pagerState 重建 → pagerCurrent 保留跨章触发那刻的 unified=N+1 越界值 → 渲染 cur
-    // 末页错位帧。chapterIndex 在 commit shift 主线程当帧变化，作 key 的一部分保证跨章
-    // 必触发 pagerState 重建。日志 20260518_202024 NEXT 155→156 复现。
-    val pagerState = androidx.compose.runtime.key(
-        pageAnimType,
-        chapterIndex,
-        pageFactory.unifiedCurStartIndex,
-    ) {
+    // 阶段 A（2026-05-19 跨章闪烁根治）：pagerState 跨章不重建。
+    //
+    // 旧设计 key(pageAnimType, chapterIndex, unifiedCurStartIndex)：跨章瞬间 pagerState
+    // 实例销毁重建 + factory 同帧重建 → HorizontalPager DISPOSE / MOUNT 黑窗 + CanvasRecorder
+    // 全换 → 跨章那一帧顿（4 Agent ABCD 调研根因 + 对照 Legado var 指针轮换）。
+    //
+    // 新设计 key(pageAnimType)：只在 PageAnim 切换（如 SLIDE→COVER）才重建。跨章时通过
+    // LaunchedEffect 监听 unifiedCurStartIndex 变化 → scrollToPage 重映射 pagerState.currentPage
+    // 到新 cur 区间（见下方 [pagerState cross-chapter remap]）。pageCount = { lambda } 自动
+    // 跟随 pageFactory.unifiedPageCount，HorizontalPager 重 measure 但 pagerState 实例永驻。
+    val pagerState = androidx.compose.runtime.key(pageAnimType) {
         val isUnifiedMode = pageAnimType == PageAnimType.SLIDE || pageAnimType == PageAnimType.COVER
-        // curLocalSnapshot 约定：
-        //   - >= 0  ：显式 cur local（同章 reflow / pagerState 同模式重建）
-        //   - == -1 ：PREV shift sentinel，pagerState 重建时取 newCurSize - 1（新 cur 末页，
-        //             连续阅读语义）。NEXT shift 直接写 0。
         val targetCurLocal = when {
             curLocalSnapshot.intValue == -1 -> {
-                // PREV shift → 新 cur 末页
                 (pageFactory.unifiedCurChapterSize - 1).coerceAtLeast(0)
             }
             else -> curLocalSnapshot.intValue.coerceAtLeast(0)
@@ -993,7 +989,7 @@ fun CanvasRenderer(
         }
         AppLog.info(
             "PageTurnFlicker",
-            "[unified-remap] pagerState REBUILD pageAnim=$pageAnimType curStart=${pageFactory.unifiedCurStartIndex}" +
+            "[stage-A] pagerState INIT pageAnim=$pageAnimType curStart=${pageFactory.unifiedCurStartIndex}" +
                 " curLocalSnap=${curLocalSnapshot.intValue} targetCurLocal=$targetCurLocal initialPage=$initialPageForState" +
                 " unifiedPC=${pageFactory.unifiedPageCount} renderPC=$renderPageCount",
         )
@@ -1001,6 +997,7 @@ fun CanvasRenderer(
             if (isUnifiedMode) pageFactory.unifiedPageCount else renderPageCount
         })
     }
+
     // [DIAG 跨章闪烁 v6 2026-05-18 偶发 race 验证]
     //
     // pagerState 实例切换 (key() 重建) 是当前根因猜测的核心。DisposableEffect(pagerState)
@@ -1136,6 +1133,41 @@ fun CanvasRenderer(
             if (cur in 0 until renderPageCount.coerceAtLeast(1)) {
                 curLocalSnapshot.intValue = cur
             }
+        }
+    }
+
+    // [pagerState cross-chapter remap]（阶段 A 跨章闪烁配套，2026-05-19）：
+    //
+    // pagerState 跨章不重建后，pagerState.currentPage 仍停留在跨章触发那刻的 unified 越界值
+    // （PREV: settledPage < unifiedCurStart / NEXT: settledPage > unifiedCurEnd）。
+    // commit chapter shift 后 factory 重建 → unifiedCurStartIndex 跳变 → HorizontalPager
+    // 看到新 pageCount 但 currentPage stale → 渲染错位帧。
+    //
+    // 修：监听 unifiedCurStartIndex + unifiedCurChapterSize 变化（factory 重建后才变），
+    // 立即 scrollToPage 把 pagerState.currentPage 拉到新 cur 区间正确位置。
+    // 仅 unified 模式（SLIDE / COVER）需要；其他模式 currentPage 是单章 local，
+    // 章节切换由 LaunchedEffect(currentChapterKey, pageAnimType) 处理。
+    LaunchedEffect(
+        pageFactory.unifiedCurStartIndex,
+        pageFactory.unifiedCurChapterSize,
+        pageAnimType,
+    ) {
+        if (pageAnimType != PageAnimType.SLIDE && pageAnimType != PageAnimType.COVER) return@LaunchedEffect
+        val targetCurLocal = when {
+            curLocalSnapshot.intValue == -1 -> (pageFactory.unifiedCurChapterSize - 1).coerceAtLeast(0)
+            else -> curLocalSnapshot.intValue.coerceAtLeast(0)
+        }
+        val newTarget = (pageFactory.unifiedCurStartIndex + targetCurLocal)
+            .coerceIn(0, (pageFactory.unifiedPageCount - 1).coerceAtLeast(0))
+        if (pagerState.currentPage != newTarget) {
+            AppLog.info(
+                "PageTurnFlicker",
+                "[stage-A] cross-chapter remap pagerCurrent=${pagerState.currentPage} → $newTarget" +
+                    " curStart=${pageFactory.unifiedCurStartIndex} curSize=${pageFactory.unifiedCurChapterSize}" +
+                    " targetCurLocal=$targetCurLocal unifiedPC=${pageFactory.unifiedPageCount}",
+            )
+            coordinator.ignoredSettledDisplayPage = targetCurLocal
+            pagerState.scrollToPage(newTarget)
         }
     }
 
