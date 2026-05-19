@@ -58,6 +58,76 @@ object ScrollHighlightProjector {
     }
 
     /**
+     * **page-level 投影**（Phase 4 新增）—— 把单 page 内的高亮投影到 page 坐标系。
+     *
+     * 与 [project] 的差异：
+     * - 输入是单 [ScrollPage]，不是整章 layout
+     * - 输出 spec.rects 的 top/bottom 是 **page-relative**（line.lineTop / lineBottom 直接用）
+     * - 调用方传入已按 chapterIndex 过滤的 highlights（避免本函数重复过滤）
+     *
+     * 用于 page-level Renderer 的 PagePaneCanvas 直接消费。
+     *
+     * @param page 单 page 排版结果
+     * @param chapterViewWidth 章节视口宽（用于空段 / 图片段 rect 取全行宽）
+     * @param chapterHighlights 该章节已过滤的 highlights（不再按 chapterIndex 过滤）
+     * @return 该 page 内可绘制的 spec 列表；rects 坐标相对 page 顶
+     */
+    fun projectForPage(
+        page: ScrollPage,
+        chapterViewWidth: Int,
+        chapterHighlights: List<Highlight>,
+    ): List<ScrollHighlightDrawSpec> {
+        if (chapterHighlights.isEmpty()) return emptyList()
+        if (page.lines.isEmpty()) return emptyList()
+
+        // 计算 page cp 范围 [first, last]，提前过滤完全不在 page 的 highlight
+        val pageFirstCp = page.lines.first().firstChapterPos
+        val pageLastCp = page.lines.last().lastChapterPos
+
+        val viewWidthF = chapterViewWidth.toFloat()
+        return chapterHighlights.mapNotNull { h ->
+            // 完全不相交跳过
+            if (h.endChapterPos < pageFirstCp || h.startChapterPos > pageLastCp) return@mapNotNull null
+
+            val rects = mutableListOf<ScrollHighlightRect>()
+            for (line in page.lines) {
+                if (line.lastChapterPos < h.startChapterPos || line.firstChapterPos > h.endChapterPos) continue
+                val rectLeft: Float
+                val rectRight: Float
+                if (line.columns.isEmpty()) {
+                    rectLeft = 0f
+                    rectRight = viewWidthF
+                } else {
+                    val matched = line.columns.filter { it.chapterPosition in h.startChapterPos..h.endChapterPos }
+                    if (matched.isEmpty()) continue
+                    rectLeft = matched.first().start
+                    rectRight = matched.last().end
+                }
+                rects.add(
+                    ScrollHighlightRect(
+                        pageIndex = page.pageIndex,
+                        // page-relative：直接用 line.lineTop / lineBottom
+                        top = line.lineTop,
+                        bottom = line.lineBottom,
+                        left = rectLeft,
+                        right = rectRight,
+                    ),
+                )
+            }
+            if (rects.isEmpty()) return@mapNotNull null
+            ScrollHighlightDrawSpec(
+                highlightId = h.id,
+                kind = h.kind,
+                argb = h.colorArgb,
+                underlineStyle = h.underlineStyle,
+                cpRangeFirst = h.startChapterPos,
+                cpRangeLast = h.endChapterPos,
+                rects = rects,
+            )
+        }
+    }
+
+    /**
      * 收集 [startCp, endCp]（含起含止）覆盖的所有矩形。
      *
      * 空 line / 图片段 line 命中时 rect = 全行宽（left=0, right=viewWidth）—— 视觉上整行高亮。
