@@ -79,10 +79,9 @@ class ScrollCanvasReaderState(
      * 由 scroll handler 在 swap 完成后独立设置（page 顶贴视口）。
      */
     fun swapToNext() {
-        val stale = prevChapter
         prevChapter = currentChapter
         currentChapter = nextChapter
-        nextChapter = stale  // stale 引用轮换（不置 null → 不触发副作用风暴）
+        nextChapter = null  // null → debounce 预加载检测到 stale 后异步替换（不耦合 swap）
         currentChapterIndex += 1
     }
 
@@ -90,10 +89,9 @@ class ScrollCanvasReaderState(
      * 与 [swapToNext] 对偶 —— chapterShiftCallback(-1) 时调用。
      */
     fun swapToPrev() {
-        val stale = nextChapter
         nextChapter = currentChapter
         currentChapter = prevChapter
-        prevChapter = stale  // 同上轮换
+        prevChapter = null
         currentChapterIndex -= 1
     }
 
