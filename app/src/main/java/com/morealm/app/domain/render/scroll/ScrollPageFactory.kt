@@ -46,11 +46,14 @@ class ScrollPageFactory(
 
     /**
      * 当前 page 在 [ScrollChapterDataSource.currentChapter] 内的索引（0-based）。
-     * 跨章 swap 时被重设为 0（向后）/ lastIndex（向前）。
-     * 外部通过 [moveToPage] / [moveToFirstPageOfChapter] / [moveToLastPageOfChapter] 改。
+     * **必须是 mutableIntStateOf**：Renderer measure scope 通过 [curPage] 等 getter
+     * read 本字段。普通 var 让 Compose 无法订阅 → 章内 page 切换 pageIndex++ 不触发
+     * measure → 画面停在旧 page → 滚到下 page 时延迟切换 = 用户感受到的"滚动闪烁"。
      */
-    var pageIndex: Int = 0
-        private set
+    private val _pageIndex = androidx.compose.runtime.mutableIntStateOf(0)
+    var pageIndex: Int
+        get() = _pageIndex.intValue
+        private set(value) { _pageIndex.intValue = value }
 
     // ── 4 page 槽（仿 Legado）──
     // 章末 page 时 nextPage 自然取 nextChapter.pages[0]（跨章拼接），nextPlusPage 取 [1]。

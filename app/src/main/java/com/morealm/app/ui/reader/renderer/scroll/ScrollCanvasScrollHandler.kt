@@ -52,37 +52,57 @@ internal fun applyPageScrollDelta(
         return delta
     }
 
+    val pageOffBefore = state.pageOffset
+    val pageIdxBefore = factory.pageIndex
+    val chIdxBefore = state.currentChapterIndex
     state.pageOffset -= delta
 
     when {
         // 向下越界（pageOffset ≥ curPageH）：单次跨 1 page
         state.pageOffset >= curPageH -> {
-            if (factory.moveToNext()) {
-                // 跨 page 成功（章内 OR 跨章）；factory 内部 swap 后 curPage 已变
+            val moveOk = factory.moveToNext()
+            if (moveOk) {
                 state.pageOffset -= curPageH
-                // 如果仍越界（fling 单帧想跨 2+ page）→ clamp 到新 page 末，等下帧再跨
                 val newPageH = factory.curPage.height
                 if (newPageH > 0f && state.pageOffset >= newPageH) {
                     state.pageOffset = newPageH
                 }
+                if (state.currentChapterIndex != chIdxBefore) {
+                    com.morealm.app.core.log.AppLog.info(
+                        "SwapDiag",
+                        "[SHIFT-NEXT] delta=$delta pageOff=$pageOffBefore→${state.pageOffset} curPageH=$curPageH newPageH=$newPageH chIdx=$chIdxBefore→${state.currentChapterIndex}",
+                    )
+                }
             } else {
-                // 末章末页 / next 加载中 → clamp 到 pageH（"拖不过去"但不卡死）
                 state.pageOffset = curPageH
+                com.morealm.app.core.log.AppLog.info(
+                    "SwapDiag",
+                    "[SHIFT-NEXT-FAIL] delta=$delta pageOff=$pageOffBefore→$curPageH pageIdx=$pageIdxBefore curPageH=$curPageH hasNext=${state.hasNextChapter()} nextNull=${state.nextChapter == null}",
+                )
             }
         }
 
         // 向上越界（pageOffset < 0）：单次跨 1 page prev
         state.pageOffset < 0f -> {
-            if (factory.moveToPrev()) {
+            val moveOk = factory.moveToPrev()
+            if (moveOk) {
                 val newPageH = factory.curPage.height
                 state.pageOffset += newPageH
-                // 同上：仍越界 → clamp 到 0
                 if (state.pageOffset < 0f) {
                     state.pageOffset = 0f
                 }
+                if (state.currentChapterIndex != chIdxBefore) {
+                    com.morealm.app.core.log.AppLog.info(
+                        "SwapDiag",
+                        "[SHIFT-PREV] delta=$delta pageOff=$pageOffBefore→${state.pageOffset} curPageH=$curPageH newPageH=$newPageH chIdx=$chIdxBefore→${state.currentChapterIndex}",
+                    )
+                }
             } else {
-                // 首章首页 / prev 加载中 → clamp 到 0
                 state.pageOffset = 0f
+                com.morealm.app.core.log.AppLog.info(
+                    "SwapDiag",
+                    "[SHIFT-PREV-FAIL] delta=$delta pageOff=$pageOffBefore→0 pageIdx=$pageIdxBefore hasPrev=${state.hasPrevChapter()} prevNull=${state.prevChapter == null}",
+                )
             }
         }
 
