@@ -991,10 +991,6 @@ fun ReaderScreen(
                     }
                 },
                 omitChapterTitleBlock = isAutoSplitTxt,
-                // SCROLL 模式专用：把 ViewModel 的 ChapterWindowSource 透传下去，
-                // CanvasRenderer 会在 SCROLL 路径下旁路 commitChapterShift / restoreProgress
-                // JUMP 链路。命门定位见 `C:/Users/test/.claude/plans/glittery-dancing-swing.md`。
-                chapterWindow = viewModel.chapterWindow,
                 modifier = Modifier.fillMaxSize(),
             )
             } // end ReadAloudPositionScope lambda
