@@ -14,21 +14,40 @@ import com.morealm.app.domain.render.TextPage
 internal class ReaderPageFactory(
     private val dataSource: ReaderDataSource,
 ) {
-    private val currentChapter: TextChapter? = dataSource.currentChapter
-    private val prevChapter: TextChapter? = dataSource.prevChapter
-    private val nextChapter: TextChapter? = dataSource.nextChapter
-    private val pageIndex: Int = dataSource.pageIndex
-    private val currentPages: List<TextPage> = currentChapter?.snapshotPages().orEmpty()
-    private val displayPages: List<TextPage> =
-        currentPages.ifEmpty { listOf(formattedTitlePage(currentChapter?.title.orEmpty(), currentChapter)) }
-    private val prevPages: List<TextPage> = prevChapter?.snapshotPages().orEmpty()
-    private val nextPages: List<TextPage> = nextChapter?.snapshotPages().orEmpty()
-    private val currentChapterCompleted: Boolean = currentChapter?.isCompleted == true
-    private val prevChapterCompleted: Boolean = prevChapter?.isCompleted == true
+    // ── 阶段 B2（2026-05-19）所有字段改 getter 透传 dataSource ──
+    //
+    // 旧设计：构造时 snapshot dataSource 全部字段成 `private val`，factory 实例
+    // 一旦创建就是冻结快照。跨章后必须 remember(chapter, prev, next, ...) 重建
+    // factory → 重建 CanvasRecorder → DISPOSE/MOUNT 黑窗 + 重 measure = 跨章顿一下。
+    //
+    // 新设计：dataSource 用 MutableReaderDataSource（mutableState backing），
+    // factory 实例永驻，通过 getter 读 dataSource 最新值。Compose snapshot system
+    // 在 measure / placement / derivedStateOf 等读取路径自动跟踪 dependency，
+    // 跨章 setAll() 时 observer 看到 atomic commit 不会撕裂。
+    //
+    // 性能：getter 调用比 val 读多一次方法 + dataSource 字段 mutableState read。
+    // 每帧 ~20 次访问（measure/placement/draw 各几次），mutableState.value 在 snapshot
+    // system 下是 lock-free read，性能可接受。如未来需要可加内部 cachedSnapshot
+    // 复用相同 chapter ref 的 pages list（snapshotPages() 可能复制开销）。
+    private val currentChapter: TextChapter? get() = dataSource.currentChapter
+    private val prevChapter: TextChapter? get() = dataSource.prevChapter
+    private val nextChapter: TextChapter? get() = dataSource.nextChapter
+    private val pageIndex: Int get() = dataSource.pageIndex
+    private val currentPages: List<TextPage>
+        get() = currentChapter?.snapshotPages().orEmpty()
+    private val displayPages: List<TextPage>
+        get() = currentPages.ifEmpty {
+            listOf(formattedTitlePage(currentChapter?.title.orEmpty(), currentChapter))
+        }
+    private val prevPages: List<TextPage> get() = prevChapter?.snapshotPages().orEmpty()
+    private val nextPages: List<TextPage> get() = nextChapter?.snapshotPages().orEmpty()
+    private val currentChapterCompleted: Boolean get() = currentChapter?.isCompleted == true
+    private val prevChapterCompleted: Boolean get() = prevChapter?.isCompleted == true
 
-    val currentPageIndex: Int = pageIndex.coerceIn(0, (displayPages.size - 1).coerceAtLeast(0))
+    val currentPageIndex: Int
+        get() = pageIndex.coerceIn(0, (displayPages.size - 1).coerceAtLeast(0))
 
-    val pages: List<TextPage> = displayPages
+    val pages: List<TextPage> get() = displayPages
 
     val pageCount: Int get() = pages.size.coerceAtLeast(1)
     val currentChapterPageCount: Int get() = displayPages.size.coerceAtLeast(1)
