@@ -136,7 +136,9 @@ class ReaderProgressController(
             combine(
                 _scrollProgress,
                 _visiblePage,
-                chapterController.currentChapterIndex,
+                // Phase E: 用 settledChapterIndex（debounce 300ms）替代 currentChapterIndex (live)
+                // 章边界反复 fling 时 saveProgress 不跟跳 → DB 写入次数大幅减少
+                chapterController.settledChapterIndex,
             ) { scroll, visible, currentIdx ->
                 val cnt = chapterController.chapters.value.size
                 val rawIdx = if (visible.chapterIndex in 0 until cnt) {

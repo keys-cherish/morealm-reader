@@ -913,6 +913,19 @@ fun ScrollCanvasReaderHost(
                 }
             }
 
+            // Phase E（settled chapter index）：InfoBar 章号订阅这个而不是 state.currentChapterIndex (live)
+            // —— 章边界反复 fling 时 InfoBar 章号 300ms 内不变（仿 PagerState settledPage）。
+            // state.currentChapterIndex 仍是 swap 同步真值，但只有内部 effect / 选区 / TTS 跟随用。
+            // 详 memory `feedback_high_freq_state_imperative.md` PagerState current/settled 双导出原则。
+            val settledChapterIndexInHost by androidx.compose.runtime.produceState(
+                initialValue = state.currentChapterIndex,
+                state,
+            ) {
+                snapshotFlow { state.currentChapterIndex }
+                    .debounce(300L)
+                    .collect { value = it }
+            }
+
             // 修复用户反馈"顶部被挡"：V2 InfoBar 之前直接贴 Box 顶 / 底，没考虑 status bar /
             // navigation bar / display cutout（刘海屏 / 居中挖孔）。与 V1 CanvasRenderer 同源：
             // 给 top InfoBar 加 statusBars + displayCutout 顶部 padding，bottom InfoBar 加
@@ -932,7 +945,7 @@ fun ScrollCanvasReaderHost(
                 pageIndex = 0,
                 pageCount = 0,
                 currentPage = null,
-                chapterIndex = state.currentChapterIndex,
+                chapterIndex = settledChapterIndexInHost,
                 chaptersSize = infoBar.chaptersSize,
                 batteryLevel = batteryStatus.level,
                 batteryCharging = batteryStatus.charging,
@@ -968,7 +981,7 @@ fun ScrollCanvasReaderHost(
                 pageIndex = 0,
                 pageCount = 0,
                 currentPage = null,
-                chapterIndex = state.currentChapterIndex,
+                chapterIndex = settledChapterIndexInHost,
                 chaptersSize = infoBar.chaptersSize,
                 batteryLevel = batteryStatus.level,
                 batteryCharging = batteryStatus.charging,
