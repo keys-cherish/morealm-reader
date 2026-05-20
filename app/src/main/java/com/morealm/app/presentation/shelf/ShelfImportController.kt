@@ -381,6 +381,17 @@ class ShelfImportController(
                     AppLog.warn("Import", "EPUB extractAll failed: ${e.message}")
                     EpubParser.ImportBundle()
                 }
+                // ── 探针（Phase B 起步）：用 epub-core 也开一次同本书，输出对比日志。
+                // 仅 log，不参与决策；下一步按可读性 + 输出一致性决定哪个方法先替换。
+                com.morealm.app.domain.parser.EpubCoreBridge.withCoreBook(context, uri) { coreBook ->
+                    AppLog.info(
+                        "EpubCoreProbe",
+                        "core open OK title='${coreBook.metadata.title}' " +
+                            "author='${coreBook.metadata.creators.firstOrNull().orEmpty()}' " +
+                            "spine=${coreBook.spine.size} toc=${coreBook.toc.size} " +
+                            "coverHref='${coreBook.metadata.coverHref.orEmpty()}'",
+                    )
+                }
                 book.copy(
                     title = bundle.metadata.title.takeIf { it.isNotBlank() } ?: book.title,
                     author = bundle.metadata.author.takeIf { it.isNotBlank() } ?: book.author,
