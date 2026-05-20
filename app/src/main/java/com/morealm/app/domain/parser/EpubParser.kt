@@ -103,23 +103,135 @@ object EpubParser {
      * 完成后 cache 命中率高得多。
      */
     fun extractAllForImport(context: Context, uri: Uri): ImportBundle {
-        return withEpubBook(context, uri) { book ->
-            val meta = book.metadata
+        return EpubCoreBridge.withCoreBook(context, uri) { book ->
+            val m = book.metadata
             val metadata = EpubMetadata(
-                title = meta.firstTitle.orEmpty(),
-                author = meta.authors.firstOrNull()?.toString()
-                    ?.replace("^, |, $".toRegex(), "").orEmpty(),
-                description = meta.descriptions.firstOrNull()?.let {
-                    if (it.contains('<')) Jsoup.parse(it).text() else it
-                }.orEmpty(),
-                subject = runCatching {
-                    meta.subjects?.filter { it.isNotBlank() }?.joinToString(",").orEmpty()
-                }.getOrDefault(""),
+                title = m.title,
+                author = m.creators.firstOrNull().orEmpty().replace("^, |, $".toRegex(), ""),
+                description = m.description.let { d ->
+                    if (d.contains('<')) Jsoup.parse(d).text() else d
+                },
+                subject = m.subjects.filter { it.isNotBlank() }.joinToString(","),
+                language = m.language,
+                publisher = m.publisher,
+                opfPath = book.opfPath,
             )
-            val coverPath = extractCoverFromBook(context, uri, book)
-            val isComic = isComicByResources(book)
+            val coverPath = extractCoverViaCore(context, uri, book)
+            val isComic = isComicViaCore(book)
             ImportBundle(metadata, coverPath, isComic)
         } ?: ImportBundle()
+    }
+
+    /**
+     * 用 epub-core 拿封面字节并写到 cacheDir/epub_covers/{uri.hashCode()}/cover.jpg。
+     *
+     * 优先级：
+     * 1. [com.morealm.epub.Metadata.coverHref] —— epub-core 已合并 EPUB2 `<meta name="cover">`
+     *    与 EPUB3 `properties="cover-image"` 两种来源
+     * 2. spine 前 [SPINE_COVER_SCAN_LIMIT] 项文件名含 cover/title 的 xhtml，取其首张 img
+     * 3. manifest 任一 image 资源兜底
+     */
+    private fun extractCoverViaCore(context: Context, uri: Uri, book: com.morealm.epub.EpubBook): String? {
+        val coverHref = book.metadata.coverHref ?: findFallbackCoverHrefViaCore(book) ?: return null
+        val cacheDir = File(context.cacheDir, "epub_covers/${uri.hashCode()}")
+        val file = File(cacheDir, "cover.jpg")
+        if (file.exists()) return file.absolutePath
+        return try {
+            cacheDir.mkdirs()
+            val bytes = book.resource(coverHref) ?: return null
+            decodeAndWriteScaledCover(bytes, file)
+        } catch (oom: OutOfMemoryError) {
+            AppLog.warn("EpubParser", "Cover OOM via core: ${oom.message}")
+            System.gc()
+            null
+        } catch (e: Exception) {
+            AppLog.warn("EpubParser", "Cover via core failed: ${e.message}")
+            null
+        }
+    }
+
+    private fun findFallbackCoverHrefViaCore(book: com.morealm.epub.EpubBook): String? {
+        // 1. manifest properties="cover-image"（EPUB 3）—— epub-core 已合并到 metadata.coverHref，
+        //    走到这里 = metadata.coverHref 为空但 manifest 仍可能声明。再扫一遍以防万一。
+        val coverItem = book.opfPackage.manifest.firstOrNull { it.hasProperty("cover-image") }
+        if (coverItem != null) {
+            AppLog.info("EpubParser", "Cover via manifest cover-image properties: ${coverItem.href}")
+            return coverItem.href
+        }
+        // 2. spine 前 N 项 + 文件名启发式
+        val spineLimit = book.spine.size.coerceAtMost(SPINE_COVER_SCAN_LIMIT)
+        for (i in 0 until spineLimit) {
+            val ch = book.spine[i]
+            val lowerHref = ch.href.lowercase()
+            val isLikelyCover = "cover" in lowerHref || "title" in lowerHref
+            if (!isLikelyCover) continue
+            val img = firstImageHrefInXhtmlBytes(ch.bytes()) ?: continue
+            val resolved = resolveImageInManifest(book, ch.href, img) ?: continue
+            AppLog.info("EpubParser", "Cover via spine page name match: ${ch.href} → $resolved")
+            return resolved
+        }
+        // 3. manifest 任一 image 兜底
+        val anyImage = book.opfPackage.manifest.firstOrNull { it.mediaType.startsWith("image/") }
+        if (anyImage != null) {
+            AppLog.info("EpubParser", "Cover via manifest any-image fallback: ${anyImage.href}")
+            return anyImage.href
+        }
+        return null
+    }
+
+    private fun firstImageHrefInXhtmlBytes(bytes: ByteArray): String? {
+        return try {
+            val text = bytes.decodeToString()
+            val img = Jsoup.parse(text).select("img").firstOrNull() ?: return null
+            img.attr("src").ifBlank { null }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun resolveImageInManifest(
+        book: com.morealm.epub.EpubBook,
+        chapterHref: String,
+        imgHref: String,
+    ): String? {
+        // 1. 直接命中 manifest
+        if (book.opfPackage.manifest.any { it.href == imgHref }) return imgHref
+        // 2. URL decode 再试（中日韩文件名）
+        val decoded = runCatching { URLDecoder.decode(imgHref, "UTF-8") }.getOrNull().orEmpty()
+        if (decoded.isNotBlank() && book.opfPackage.manifest.any { it.href == decoded }) return decoded
+        // 3. 相对路径解析（章节 xhtml 父目录 + img 相对路径）
+        val baseDir = chapterHref.substringBeforeLast('/', "")
+        val resolved = if (baseDir.isEmpty()) imgHref else "$baseDir/$imgHref"
+        if (book.opfPackage.manifest.any { it.href == resolved }) return resolved
+        return null
+    }
+
+    /**
+     * 用 epub-core 判定漫画。算法与 [isComicByResources] 完全一致，只是数据源换成
+     * [com.morealm.epub.opf.ManifestItem] + [com.morealm.epub.EpubBook.resourceSize]。
+     */
+    private fun isComicViaCore(book: com.morealm.epub.EpubBook): Boolean {
+        // Level 1: rendition:layout = pre-paginated
+        if (book.rendition.layout == com.morealm.epub.opf.RenditionLayout.PrePaginated) {
+            AppLog.info("EpubParser", "detectIsComic → Comic (rendition.layout=pre-paginated)")
+            return true
+        }
+
+        // Level 2: 结构指纹
+        var nImg = 0
+        var nHtml = 0
+        var htmlTotalBytes = 0L
+        for (item in book.opfPackage.manifest) {
+            val mt = item.mediaType
+            when {
+                mt.startsWith("image/") -> nImg++
+                isDocumentMediaType(mt) -> {
+                    nHtml++
+                    htmlTotalBytes += (book.resourceSize(item.href) ?: 0L).coerceAtLeast(0L)
+                }
+            }
+        }
+        return classifyByStructure(nHtml, nImg, htmlTotalBytes)
     }
 
     data class ImportBundle(
