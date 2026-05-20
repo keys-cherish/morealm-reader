@@ -850,6 +850,21 @@ fun ReaderScreen(
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
                 bgColorArgb = readerBg.toArgb(),
                 restoreToken = renderedChapter.restoreToken,
+                infoBar = ScrollCanvasInfoBarConfig(
+                    chaptersSize = chapters.size,
+                    textColor = readerFg,
+                    backgroundColor = readerBg,
+                    hasBgImage = readerBgImage.isNotBlank(),
+                    paddingHorizontal = marginHorizontal,
+                    showChapterName = showChapterNameSetting,
+                    showTimeBattery = showTimeBatterySetting,
+                    headerLeft = hdrLeft,
+                    headerCenter = hdrCenter,
+                    headerRight = hdrRight,
+                    footerLeft = ftrLeft,
+                    footerCenter = ftrCenter,
+                    footerRight = ftrRight,
+                ),
                 onChapterIndexChange = { newIdx ->
                     viewModel.chapter.setCurrentChapterIndexFromScroll(newIdx)
                 },
