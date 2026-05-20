@@ -924,6 +924,11 @@ fun ReaderScreen(
                         }
                     }
                 },
+                // P4.5 TTS 跟随 / 高亮 / 书签
+                ttsChapterIndex = currentIndex,
+                ttsChapterPosition = viewModel.tts.ttsChapterPosition
+                    .collectAsStateWithLifecycle(initialValue = -1).value,
+                bookmarks = viewModel.bookmarks.collectAsStateWithLifecycle().value,
                 infoBar = ScrollCanvasInfoBarConfig(
                     chaptersSize = chapters.size,
                     textColor = readerFg,

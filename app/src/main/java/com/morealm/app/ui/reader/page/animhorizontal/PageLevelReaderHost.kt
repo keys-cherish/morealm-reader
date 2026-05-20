@@ -128,6 +128,19 @@ fun PageLevelReaderHost(
     onAddUnderline: ((startCp: Int, endCp: Int, content: String, colorArgb: Int, style: Int) -> Unit)? = null,
     onDeleteHighlight: ((id: String) -> Unit)? = null,
     onShareHighlight: ((com.morealm.app.domain.entity.Highlight) -> Unit)? = null,
+    // ── TTS 段跟随 / 搜索高亮 / 跳转呼吸高亮 / 书签三角（P4.5 接入）──
+    /** TTS 朗读当前段所在的章 idx；< 0 = 未朗读。 */
+    ttsChapterIndex: Int = -1,
+    /** TTS 朗读当前段在章内 chapterPosition；< 0 = 未朗读。 */
+    ttsChapterPosition: Int = -1,
+    /** 搜索命中章 idx；-1 = 无。 */
+    searchHighlightChapterIndex: Int = -1,
+    searchHighlightCpRange: IntRange = IntRange.EMPTY,
+    searchHighlightArgb: Int = 0x55FFFF00.toInt(),
+    /** 跳转后呼吸高亮；caller 已用 chapterIndex 过滤旧章。 */
+    revealHighlight: com.morealm.app.ui.reader.renderer.RevealHighlight? = null,
+    /** 全书所有书签 —— Host 内按 cur page 范围过滤画三角。 */
+    bookmarks: List<com.morealm.app.domain.entity.Bookmark> = emptyList(),
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -281,6 +294,52 @@ fun PageLevelReaderHost(
             .collect { (chIdx, prog) -> onChapterProgressPersist(chIdx, prog) }
     }
 
+    // ── TTS 段自动跟随（P4.5）——找到目标段所在 page → moveToPage（横向 page-level
+    //   不需 pageOffset 调整, 整页瞬切到目标 page）──
+    val ttsTargetPageIdx by remember(core.state.currentChapter, ttsChapterIndex, ttsChapterPosition) {
+        derivedStateOf {
+            val layout = core.state.currentChapter ?: return@derivedStateOf -1
+            if (ttsChapterIndex < 0 || ttsChapterIndex != layout.chapterIndex) return@derivedStateOf -1
+            if (ttsChapterPosition < 0) return@derivedStateOf -1
+            val hit = layout.findColumnAt(ttsChapterPosition) ?: return@derivedStateOf -1
+            hit.page.pageIndex
+        }
+    }
+    LaunchedEffect(ttsTargetPageIdx) {
+        val target = ttsTargetPageIdx
+        if (target < 0) return@LaunchedEffect
+        // 目标 page 已是当前 page → 不动（不打扰用户）
+        if (target == core.pageFactory.pageIndex) return@LaunchedEffect
+        core.pageFactory.moveToPage(target)
+        com.morealm.app.core.log.AppLog.debug(
+            "PageLevelReaderHost",
+            "TTS follow: moveToPage $target (cur was ${core.pageFactory.pageIndex})",
+        )
+    }
+
+    // ── page-level 高亮 spec 投影（P4.5）──
+    // 当前只投影 cur page（NONE 模式只显示 cur）。SLIDE/COVER 后续接入时再加 next/prev。
+    val curPageHighlightSpecs by androidx.compose.runtime.derivedStateOf {
+        val page = core.pageFactory.curPage
+        if (page.chapterIndex < 0) return@derivedStateOf emptyList()
+        val chFiltered = chapterHighlightsRaw.filter { it.chapterIndex == page.chapterIndex }
+        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+            page,
+            core.state.currentChapter?.viewWidth ?: 1080,
+            chFiltered,
+        )
+    }
+    // cur page 书签 cp 过滤
+    val curPageBookmarkCps by androidx.compose.runtime.derivedStateOf {
+        val page = core.pageFactory.curPage
+        if (page.chapterIndex < 0 || page.lines.isEmpty()) return@derivedStateOf emptyList<Int>()
+        val firstCp = page.lines.first().firstChapterPos
+        val lastCp = page.lines.last().lastChapterPos
+        bookmarks
+            .filter { it.chapterIndex == page.chapterIndex && it.chapterPos in firstCp..lastCp }
+            .map { it.chapterPos }
+    }
+
     // ── 选区 / 长按 / tap-on-highlight 状态（P4.4 接入）──
     // 共享在 Host 层（Legado ReadView 模型）：长按检测 + 选区状态 + 高亮 action 弹窗
     // 都在 Host，所有 Renderer (NONE/SLIDE/COVER) 共享。Renderer 不再自己接 pointerInput。
@@ -383,8 +442,14 @@ fun PageLevelReaderHost(
                         contentPaint = contentPaint,
                         titlePaint = titlePaint,
                         chapterNumPaint = chapterNumPaint,
+                        revealHighlight = revealHighlight,
+                        searchHighlightChapterIndex = searchHighlightChapterIndex,
+                        searchHighlightCpRange = searchHighlightCpRange,
+                        searchHighlightArgb = searchHighlightArgb,
                         selectionChapterIndex = selectionChapterIndex,
                         selectionCpRange = selectionCpRange,
+                        curPageHighlightSpecs = curPageHighlightSpecs,
+                        curPageBookmarkCps = curPageBookmarkCps,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -398,8 +463,14 @@ fun PageLevelReaderHost(
                         contentPaint = contentPaint,
                         titlePaint = titlePaint,
                         chapterNumPaint = chapterNumPaint,
+                        revealHighlight = revealHighlight,
+                        searchHighlightChapterIndex = searchHighlightChapterIndex,
+                        searchHighlightCpRange = searchHighlightCpRange,
+                        searchHighlightArgb = searchHighlightArgb,
                         selectionChapterIndex = selectionChapterIndex,
                         selectionCpRange = selectionCpRange,
+                        curPageHighlightSpecs = curPageHighlightSpecs,
+                        curPageBookmarkCps = curPageBookmarkCps,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
