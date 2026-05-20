@@ -35,6 +35,12 @@ import com.morealm.app.ui.reader.page.animation.PageAnimType
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.sample
+import androidx.compose.runtime.snapshotFlow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -56,6 +62,7 @@ import java.util.Locale
  * 选区 / TTS / InfoBar / 进度上报 / restoreToken JUMP P3 接入 ReaderScreen 时
  * 再依次补全（按"独立 Host 自管"原则）。
  */
+@OptIn(FlowPreview::class)
 @Composable
 fun PageLevelReaderHost(
     currentChapterIndex: Int,
@@ -85,6 +92,10 @@ fun PageLevelReaderHost(
     restoreToken: Long = 0L,
     /** InfoBar 顶/底状态栏配置；null = 不画状态栏（纯净内容模式）。 */
     infoBar: ScrollCanvasInfoBarConfig? = null,
+    /** 进度上报 live 回调（每章 0-100 整数）—— sample 150ms，UI 跟随用。 */
+    onChapterProgressLive: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
+    /** 进度上报 persist 回调 —— debounce 800ms，停止翻页后才上报；caller 在此写 DB。 */
+    onChapterProgressPersist: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -179,6 +190,34 @@ fun PageLevelReaderHost(
         loadChapterContent = loadChapterContent,
         engine = engine,
     )
+
+    // ── 进度上报 live (sample 150ms) + persist (debounce 800ms) ──
+    // page-level 横向语义：progress = (curPage idx + 1) / pageCount * 100。
+    // 与 SCROLL 的 chapter-Y / scrollableRange 算法不同（横向无连续滚动概念）。
+    LaunchedEffect(core.state.currentChapter) {
+        val layout = core.state.currentChapter ?: return@LaunchedEffect
+        snapshotFlow { core.pageFactory.pageIndex }
+            .sample(150L)
+            .map { pageIdx ->
+                val total = layout.pages.size.coerceAtLeast(1)
+                val progress = ((pageIdx + 1).toFloat() / total * 100f).toInt().coerceIn(0, 100)
+                layout.chapterIndex to progress
+            }
+            .distinctUntilChanged()
+            .collect { (chIdx, prog) -> onChapterProgressLive(chIdx, prog) }
+    }
+    LaunchedEffect(core.state.currentChapter) {
+        val layout = core.state.currentChapter ?: return@LaunchedEffect
+        snapshotFlow { core.pageFactory.pageIndex }
+            .debounce(800L)
+            .map { pageIdx ->
+                val total = layout.pages.size.coerceAtLeast(1)
+                val progress = ((pageIdx + 1).toFloat() / total * 100f).toInt().coerceIn(0, 100)
+                layout.chapterIndex to progress
+            }
+            .distinctUntilChanged()
+            .collect { (chIdx, prog) -> onChapterProgressPersist(chIdx, prog) }
+    }
 
     // 电池 / 时间维护（InfoBar 用）
     val context = LocalContext.current
