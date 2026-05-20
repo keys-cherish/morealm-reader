@@ -822,7 +822,7 @@ fun ReaderScreen(
             com.morealm.app.ui.reader.page.animhorizontal.PageLevelReaderHost(
                 currentChapterIndex = currentIndex,
                 chapterCount = chapters.size,
-                animType = com.morealm.app.ui.reader.page.animation.PageAnimType.NONE,
+                animType = pageAnim.toPageAnimType(),
                 loadChapterContent = loadFn@{ idx ->
                     val chap = chapters.getOrNull(idx) ?: return@loadFn null
                     val content = viewModel.chapter.fetchAndPrepareChapter(idx) ?: return@loadFn null

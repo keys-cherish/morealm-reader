@@ -16,12 +16,15 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -54,6 +57,21 @@ import androidx.compose.runtime.snapshotFlow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/**
+ * Renderer 暴露给 Host 的「按当前动画 commit 翻页」句柄。
+ *
+ * SLIDE / COVER 各自的 [SlidePageRenderer] / [CoverPageRenderer] 在 DisposableEffect
+ * 内把自身的 animateAndCommit 注入到 [animateToNext] / [animateToPrev]；
+ * Host 的 zone tap（左/右 1/3 点击）走 controller，从而触发各自的平移/覆盖动画，
+ * 而不是直接调 [com.morealm.app.domain.render.scroll.ScrollPageFactory.moveToPrev]/[moveToNext] 瞬切。
+ *
+ * NONE Renderer 不注册 controller，Host 自动 fallback 到 moveToPrev/Next 瞬切（NONE 语义本身就无动画）。
+ */
+class PageTurnAnimController {
+    var animateToNext: (suspend () -> Unit)? = null
+    var animateToPrev: (suspend () -> Unit)? = null
+}
 
 /**
  * page-level 翻页阅读器宿主 —— 服务 COVER / SLIDE / NONE 三种横向翻页动画。
@@ -398,6 +416,11 @@ fun PageLevelReaderHost(
             .map { it.chapterPos }
     }
 
+    // ── zone tap → 各 Renderer 自身动画 commit（Legado PageDelegate 模型）──
+    // SLIDE/COVER Renderer 通过 turnCtrl 注入 animateAndCommit lambda；NONE 不注册 → fallback 瞬切。
+    val turnCtrl = remember { PageTurnAnimController() }
+    val tapScope = rememberCoroutineScope()
+
     // ── 选区 / 长按 / tap-on-highlight 状态（P4.4 接入）──
     // 共享在 Host 层（Legado ReadView 模型）：长按检测 + 选区状态 + 高亮 action 弹窗
     // 都在 Host，所有 Renderer (NONE/SLIDE/COVER) 共享。Renderer 不再自己接 pointerInput。
@@ -461,9 +484,23 @@ fun PageLevelReaderHost(
                         // NONE / COVER / SLIDE 都通过 Host 共享层 zone tap 翻页（瞬切语义）。
                         // drag 期间的动画由各 Renderer 内部 own (settle-to-edge)。
                         val w = size.width.toFloat()
+                        val zone = when {
+                            offset.x < w * 0.33f -> "L"
+                            offset.x > w * 0.67f -> "R"
+                            else -> "M"
+                        }
+                        com.morealm.app.core.log.AppLog.info("PageLvlHost", "DIAG onTap zone=$zone animType=$animType x=${offset.x} w=$w")
                         when {
-                            offset.x < w * 0.33f -> core.pageFactory.moveToPrev()
-                            offset.x > w * 0.67f -> core.pageFactory.moveToNext()
+                            offset.x < w * 0.33f -> {
+                                val animate = turnCtrl.animateToPrev
+                                if (animate != null) tapScope.launch { animate() }
+                                else core.pageFactory.moveToPrev()
+                            }
+                            offset.x > w * 0.67f -> {
+                                val animate = turnCtrl.animateToNext
+                                if (animate != null) tapScope.launch { animate() }
+                                else core.pageFactory.moveToNext()
+                            }
                             else -> onTapCenter()
                         }
                     },
@@ -528,6 +565,7 @@ fun PageLevelReaderHost(
                         curPageBookmarkCps = curPageBookmarkCps,
                         nextPageBookmarkCps = nextPageBookmarkCps,
                         nextPlusPageBookmarkCps = nextPlusPageBookmarkCps,
+                        turnCtrl = turnCtrl,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -551,6 +589,7 @@ fun PageLevelReaderHost(
                         curPageBookmarkCps = curPageBookmarkCps,
                         nextPageBookmarkCps = nextPageBookmarkCps,
                         prevPageBookmarkCps = prevPageBookmarkCps,
+                        turnCtrl = turnCtrl,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
