@@ -10,6 +10,7 @@ import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.parser.epub.ChapterBlock
 import com.morealm.app.domain.parser.epub.EpubHtmlStructurer
 import com.morealm.app.domain.parser.epub.StructuredChapterContent
+import com.morealm.app.domain.parser.epub.streaming.StreamingChapterReader
 import me.ag2s.epublib.domain.EpubBook
 import me.ag2s.epublib.domain.Resource
 import me.ag2s.epublib.domain.TOCReference
@@ -771,6 +772,14 @@ object EpubParser {
      * 1. 无 toc → spine 顺序回退（封面/第N章）
      * 2. 有 toc → spine 内 toc 之前的当卷首 + toc 递归 + 父子去重保留更长 title +
      *    嵌套层级缩进
+     *
+     * **chapter.url 用 ZIP 绝对路径**（OPF dir 前缀 + epub-core item.href）—— 与
+     * 老 [buildChapterList] 输出的 me.ag2s Resource.href 格式保持一致，让现有
+     * [readChapter] / [readChapterFromBook] 老路径继续 work。原因：me.ag2s
+     * 的 `PackageDocumentReader.fixHrefs` 被注释掉了（不裁 ZIP 前缀），所以
+     * Resource.href = "OEBPS/Text/cover.xhtml"；而 epub-core Chapter.href =
+     * "Text/cover.xhtml"（OPF 相对，标准 EPUB 行为）。两者直接平移会让老路径
+     * 失配。统一用 ZIP 绝对路径绕开 me.ag2s 这个特性差异。
      */
     private fun buildChapterListViaCore(
         bookId: String,
@@ -778,6 +787,7 @@ object EpubParser {
     ): List<BookChapter> {
         val chapters = mutableListOf<BookChapter>()
         val toc = book.toc
+        val opfDir = book.opfPath.substringBeforeLast('/', "")
 
         if (toc.isEmpty()) {
             book.spine.items.forEachIndexed { i, chapter ->
@@ -787,13 +797,13 @@ object EpubParser {
                 chapters.add(
                     BookChapter(
                         id = "${bookId}_$i", bookId = bookId, index = i,
-                        title = title, url = chapter.href,
+                        title = title, url = toZipAbsHref(opfDir, chapter.href),
                     ),
                 )
             }
         } else {
-            parseFirstPagesViaCore(bookId, book, toc, chapters)
-            parseTocRefsViaCore(bookId, toc, chapters)
+            parseFirstPagesViaCore(bookId, book, toc, opfDir, chapters)
+            parseTocRefsViaCore(bookId, toc, opfDir, chapters)
             chapters.forEachIndexed { i, ch ->
                 chapters[i] = ch.copy(id = "${bookId}_$i", index = i)
             }
@@ -809,6 +819,7 @@ object EpubParser {
         bookId: String,
         book: com.morealm.epub.EpubBook,
         toc: List<com.morealm.epub.ncx.TocEntry>,
+        opfDir: String,
         chapters: MutableList<BookChapter>,
     ) {
         val firstEntry = toc.firstOrNull { it.src.isNotBlank() } ?: return
@@ -821,7 +832,8 @@ object EpubParser {
                 ?: tryExtractTitleViaCore(chapter) ?: "--卷首--"
             chapters.add(
                 BookChapter(
-                    id = "", bookId = bookId, index = 0, title = title, url = chapter.href,
+                    id = "", bookId = bookId, index = 0, title = title,
+                    url = toZipAbsHref(opfDir, chapter.href),
                 ),
             )
         }
@@ -830,6 +842,7 @@ object EpubParser {
     private fun parseTocRefsViaCore(
         bookId: String,
         refs: List<com.morealm.epub.ncx.TocEntry>,
+        opfDir: String,
         chapters: MutableList<BookChapter>,
     ) {
         // 父子去重（按完整 src 含 fragment 当 key，保留 title 最长那条）+
@@ -859,13 +872,23 @@ object EpubParser {
                 if (ref.src.isNotBlank()) {
                     val raw = ref.label
                     val withIndent = if (raw.isBlank()) raw else prefix + raw
-                    addOrMerge(withIndent, ref.src)
+                    addOrMerge(withIndent, toZipAbsHref(opfDir, ref.src))
                 }
                 if (ref.children.isNotEmpty()) recurse(ref.children, depth + 1)
             }
         }
         recurse(refs, depth = 0)
     }
+
+    /**
+     * 把 OPF 相对 href（epub-core item.href / toc src）拼成 ZIP 绝对路径。
+     * 跟 me.ag2s 老路径的 Resource.href 格式对齐（OPF 在子目录时前缀 = OPF dir）。
+     *
+     * 不做 ".." normalize —— me.ag2s 现状也是直接拼接，保持 byte-for-byte 一致。
+     * fragment（"#xxx"）原样保留在末尾。
+     */
+    private fun toZipAbsHref(opfDir: String, href: String): String =
+        if (opfDir.isEmpty()) href else "$opfDir/$href"
 
     private fun tryExtractTitleViaCore(chapter: com.morealm.epub.Chapter): String? {
         return try {
@@ -1018,7 +1041,20 @@ object EpubParser {
             val elements = org.jsoup.select.Elements()
             // Use href index map for O(1) start lookup instead of linear scan
             val startIdx = hrefIndexFor(uri)?.get(targetHref) ?: contents.indexOfFirst { it.href == targetHref }
-            if (startIdx < 0) return@withEpubBook ""
+            if (startIdx < 0) {
+                val preview = contents.take(8).map { it.href }
+                AppLog.warn(
+                    "EpubParser",
+                    "readChapter MISS target='$targetHref' chapterUrl='${chapter.url}' " +
+                        "contents.size=${contents.size} preview=$preview",
+                )
+                return@withEpubBook ""
+            }
+            AppLog.info(
+                "EpubParser",
+                "readChapter FOUND target='$targetHref' startIdx=$startIdx nextHref='$nextHref' " +
+                    "startFrag='$startFragment' endFrag='$endFragment'",
+            )
 
             elements.add(parseBody(contents[startIdx], startFragment, endFragment.takeIf { contents[startIdx].href == nextHref }))
             if (nextHref == null || contents[startIdx].href != nextHref) {
@@ -1185,38 +1221,99 @@ object EpubParser {
         context: Context, uri: Uri, chapter: BookChapter,
     ): StructuredChapterContent {
         val targetHref = chapter.url.substringBeforeLast("#")
-        if (targetHref.isEmpty()) return StructuredChapterContent(emptyList())
+        AppLog.info("EpubParser", "readChapterStructured enter uri=$uri title=${chapter.title} url=${chapter.url}")
+        if (targetHref.isEmpty()) {
+            AppLog.warn("EpubParser", "readChapterStructured empty targetHref → empty")
+            return StructuredChapterContent(emptyList())
+        }
 
-        return withEpubBook(context, uri) { book ->
-            val contents = book.contents ?: return@withEpubBook StructuredChapterContent(emptyList())
-            val nextHref = chapter.nextUrl?.substringBeforeLast("#")
-            val startFragment = chapter.url.substringAfter("#", "").takeIf { it.isNotEmpty() }
-            val endFragment = chapter.nextUrl?.substringAfter("#", "")?.takeIf { it.isNotEmpty() }
-
-            val elements = org.jsoup.select.Elements()
-            val startIdx = hrefIndexFor(uri)?.get(targetHref) ?: contents.indexOfFirst { it.href == targetHref }
-            if (startIdx < 0) return@withEpubBook StructuredChapterContent(emptyList())
-
-            elements.add(parseBody(contents[startIdx], startFragment, endFragment.takeIf { contents[startIdx].href == nextHref }))
-            if (nextHref == null || contents[startIdx].href != nextHref) {
-                for (i in (startIdx + 1) until contents.size) {
-                    val res = contents[i]
-                    if (nextHref != null && res.href == nextHref) {
-                        if (endFragment != null) elements.add(parseBody(res, null, endFragment))
-                        break
-                    }
-                    elements.add(parseBody(res, null, null))
-                }
+        val result = EpubCoreBridge.withCoreBook(context, uri) { book ->
+            AppLog.info("EpubParser", "readChapterStructured book opened spine=${book.spine.size} cover=${book.metadata.coverHref ?: "null"}")
+            val imgLookup: (String) -> String? = { src ->
+                extractImageFromCoreBook(context, uri, src, book)?.let { "file://${it.absolutePath}" }
             }
-
-            sanitizeAndRewriteImages(elements, context, uri, targetHref, book)
-            // 多个 body （跨 XHTML 文件拼接）—— 把每个 body 的结构化结果按顺序合并
-            val allBlocks = ArrayList<ChapterBlock>()
-            elements.forEach { body ->
-                allBlocks.addAll(EpubHtmlStructurer.structuredFromBody(body).blocks)
+            val coverLookup: () -> String? = {
+                extractCoverFromCoreBook(context, uri, book)?.let { "file://${it.absolutePath}" }
             }
-            StructuredChapterContent(allBlocks)
-        } ?: StructuredChapterContent(emptyList())
+            StreamingChapterReader.read(book, chapter, imgLookup, coverLookup)
+        }
+        if (result == null) {
+            AppLog.warn("EpubParser", "readChapterStructured withCoreBook returned null (book open failed)")
+            return StructuredChapterContent(emptyList())
+        }
+        return result
+    }
+
+    /**
+     * 从 epub-core [com.morealm.epub.EpubBook] 拿章节图片字节、压缩落盘到
+     * `epub_images/{uri.hash}/{src.replace('/','_')}` cache（与老
+     * [extractImageFromBook] 同 cache key 规则，复用历史 cache）。
+     *
+     * 不处理 cover sentinel — cover 经 [extractCoverFromCoreBook] 单独路径。
+     */
+    private fun extractImageFromCoreBook(
+        context: Context,
+        epubUri: Uri,
+        imagePath: String,
+        book: com.morealm.epub.EpubBook,
+    ): File? {
+        val normalized = imagePath.replace('\\', '/')
+        val cacheDir = File(context.cacheDir, "epub_images/${epubUri.hashCode()}")
+        val cachedFile = File(cacheDir, normalized.replace('/', '_'))
+        if (cachedFile.exists()) {
+            AppLog.debug("EpubParser", "extractImg cache-hit $normalized")
+            return cachedFile
+        }
+
+        val direct = book.resource(normalized)
+        val decoded = if (direct == null) {
+            runCatching { book.resource(URLDecoder.decode(normalized, "UTF-8")) }.getOrNull()
+        } else null
+        val bytes = direct ?: decoded
+        if (bytes == null) {
+            AppLog.warn("EpubParser", "extractImg miss $normalized (decoded variant also null)")
+            return null
+        }
+
+        cacheDir.mkdirs()
+        writeImageCompressed(bytes, cachedFile)
+        AppLog.debug("EpubParser", "extractImg ok $normalized ${bytes.size}B → ${cachedFile.absolutePath}")
+        return cachedFile
+    }
+
+    /**
+     * 从 epub-core [com.morealm.epub.EpubBook] 拿 cover 字节
+     * （[com.morealm.epub.Metadata.coverHref] → [com.morealm.epub.EpubBook.resourceByZipName]），
+     * 压缩落盘到 `epub_images/{uri.hash}/cover_{zipPath.replace('/','_')}`。
+     *
+     * 不和普通 img cache 冲突：filename 前缀 `cover_` 隔离。
+     */
+    private fun extractCoverFromCoreBook(
+        context: Context,
+        epubUri: Uri,
+        book: com.morealm.epub.EpubBook,
+    ): File? {
+        val coverHref = book.metadata.coverHref?.takeIf { it.isNotEmpty() }
+        if (coverHref == null) {
+            AppLog.warn("EpubParser", "extractCover metadata.coverHref is null")
+            return null
+        }
+        val cacheDir = File(context.cacheDir, "epub_images/${epubUri.hashCode()}")
+        val cachedFile = File(cacheDir, "cover_${coverHref.replace('/', '_')}")
+        if (cachedFile.exists()) {
+            AppLog.debug("EpubParser", "extractCover cache-hit $coverHref")
+            return cachedFile
+        }
+
+        val bytes = book.resourceByZipName(coverHref)
+        if (bytes == null) {
+            AppLog.warn("EpubParser", "extractCover zip miss coverHref=$coverHref")
+            return null
+        }
+        cacheDir.mkdirs()
+        writeImageCompressed(bytes, cachedFile)
+        AppLog.debug("EpubParser", "extractCover ok $coverHref ${bytes.size}B")
+        return cachedFile
     }
 
     /**
@@ -1614,6 +1711,19 @@ object EpubParser {
                 if (endFragment != null) elements.add(parseBody(res, null, endFragment))
                 break
             }
+        }
+        if (!found) {
+            val preview = contents.take(8).map { it.href }
+            AppLog.warn(
+                "EpubParser",
+                "readChapterFromBook MISS target='$targetHref' chapterUrl='${chapter.url}' " +
+                    "contents.size=${contents.size} preview=$preview",
+            )
+        } else {
+            AppLog.info(
+                "EpubParser",
+                "readChapterFromBook FOUND target='$targetHref' elements=${elements.size}",
+            )
         }
         return processContent(elements, context, uri, targetHref, book)
     }
