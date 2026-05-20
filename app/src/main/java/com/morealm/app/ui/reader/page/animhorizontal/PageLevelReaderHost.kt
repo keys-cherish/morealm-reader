@@ -204,7 +204,10 @@ fun PageLevelReaderHost(
 
     // safe area + InfoBar 占位（infoBar != null 时正文 padding 给 InfoBar 让位避免遮挡）
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val infoBarHeightPx = with(density) { 64.dp.toPx() }.toInt()
+    // page-level 模式 InfoBar 让位高度：48dp 足够装一行 fontSize 10sp + battery icon
+    // (Row centered)；之前 64dp 是 CanvasRenderer 时代的设计，page-level 浪费 16dp。
+    val infoBarHeightDp = 48.dp
+    val infoBarHeightPx = with(density) { infoBarHeightDp.toPx() }.toInt()
     val statusBarPx = with(density) {
         WindowInsets.statusBars.asPaddingValues().calculateTopPadding().toPx()
     }.toInt()
@@ -219,8 +222,11 @@ fun PageLevelReaderHost(
     }.toInt()
     val topInsetPx = maxOf(statusBarPx, cutoutTopPx)
     val bottomInsetPx = maxOf(navBarPx, cutoutBottomPx)
-    val effectivePadTop = if (infoBar != null) paddingTop + topInsetPx + infoBarHeightPx else paddingTop + topInsetPx
-    val effectivePadBottom = if (infoBar != null) paddingBottom + bottomInsetPx + infoBarHeightPx else paddingBottom + bottomInsetPx
+    // page-level 模式 padding 仅"状态栏 + InfoBar"让位，不再叠加用户配置的 paddingTop/Bottom
+    // —— 后者本意是"正文与边界留白"，但 InfoBar 让位已经远超它（infoBarHeightPx=192>paddingTop=120），
+    // 叠加会浪费 ~120px 屏幕空间（截图章中 page 顶/底两块大空白）。
+    val effectivePadTop = if (infoBar != null) topInsetPx + infoBarHeightPx else topInsetPx + paddingTop
+    val effectivePadBottom = if (infoBar != null) bottomInsetPx + infoBarHeightPx else bottomInsetPx + paddingBottom
 
     val engine = remember(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
@@ -729,7 +735,7 @@ fun PageLevelReaderHost(
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .fillMaxWidth()
-                        .height(64.dp + topInsetDp)
+                        .height(infoBarHeightDp + topInsetDp)
                         .then(
                             if (infoBar.hasBgImage) Modifier
                             else Modifier.background(
@@ -761,7 +767,7 @@ fun PageLevelReaderHost(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .fillMaxWidth()
-                        .height(64.dp + bottomInsetDp)
+                        .height(infoBarHeightDp + bottomInsetDp)
                         .then(
                             if (infoBar.hasBgImage) Modifier
                             else Modifier.background(
