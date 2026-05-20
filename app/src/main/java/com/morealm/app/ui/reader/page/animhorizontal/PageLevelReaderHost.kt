@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
 import com.morealm.app.domain.render.scroll.ScrollLayoutEngine
+import com.morealm.app.domain.render.scroll.findColumnAt
 import com.morealm.app.ui.reader.page.animation.PageAnimType
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
@@ -40,6 +41,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.sample
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.snapshotFlow
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -90,6 +92,12 @@ fun PageLevelReaderHost(
     textFullJustify: Boolean = true,
     bgColorArgb: Int = Color.WHITE,
     restoreToken: Long = 0L,
+    /** 跳书签 / 续读 / 搜索定位的目标章内 chapterPosition（cp）。0 = 章首。 */
+    initialChapterPosition: Int = 0,
+    /** 跳 Slider 拖动 / 同章 in-place seek 的章内进度百分比（0..100）。initialChapterPosition > 0 优先。 */
+    initialProgress: Int = 0,
+    /** JUMP 完成后回调（caller 通常清除 navigateDirection）。 */
+    onProgressRestored: () -> Unit = {},
     /** InfoBar 顶/底状态栏配置；null = 不画状态栏（纯净内容模式）。 */
     infoBar: ScrollCanvasInfoBarConfig? = null,
     /** 进度上报 live 回调（每章 0-100 整数）—— sample 150ms，UI 跟随用。 */
@@ -190,6 +198,36 @@ fun PageLevelReaderHost(
         loadChapterContent = loadChapterContent,
         engine = engine,
     )
+
+    // ── 跳书签 / 续读 / 搜索定位 / Slider 拖动 in-place seek ──
+    // 两阶段契约：caller 保证 restoreToken != 0L 时 currentChapter 已是目标章。
+    // 横向 page-level JUMP 算法（与 SCROLL chapter-Y 算法不同）：
+    //   - initialChapterPosition > 0 → findColumnAt(cp) 找目标 cp 所在 page → moveToPage
+    //   - initialProgress > 0       → targetPageIdx = progress / 100 * pageCount
+    // restoreToken 消费幂等：同一 token 只 JUMP 一次。
+    var lastConsumedRestoreToken by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(restoreToken, core.state.currentChapter) {
+        if (restoreToken == 0L) return@LaunchedEffect
+        if (restoreToken == lastConsumedRestoreToken) return@LaunchedEffect
+        if (initialChapterPosition <= 0 && initialProgress <= 0) return@LaunchedEffect
+        val layout = core.state.currentChapter ?: return@LaunchedEffect
+        if (layout.chapterIndex != core.state.currentChapterIndex) return@LaunchedEffect
+
+        val total = layout.pages.size.coerceAtLeast(1)
+        val targetPageIdx: Int = if (initialChapterPosition > 0) {
+            val hit = layout.findColumnAt(initialChapterPosition)
+            hit?.page?.pageIndex?.coerceIn(0, total - 1) ?: 0
+        } else {
+            ((initialProgress.toFloat() / 100f) * total).toInt().coerceIn(0, total - 1)
+        }
+        core.pageFactory.moveToPage(targetPageIdx)
+        lastConsumedRestoreToken = restoreToken
+        com.morealm.app.core.log.AppLog.info(
+            "PageLevelReaderHost",
+            "JUMP restoreToken=$restoreToken cp=$initialChapterPosition prog=$initialProgress → page=$targetPageIdx (total=$total) [consumed]",
+        )
+        onProgressRestored()
+    }
 
     // ── 进度上报 live (sample 150ms) + persist (debounce 800ms) ──
     // page-level 横向语义：progress = (curPage idx + 1) / pageCount * 100。
