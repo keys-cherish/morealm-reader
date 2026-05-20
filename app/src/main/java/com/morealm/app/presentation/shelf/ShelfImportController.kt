@@ -77,14 +77,6 @@ class ShelfImportController(
                 AppLog.warn("Import", "Unsupported format: $name")
                 return@launch
             }
-            if (bookRepo.findByLocalPath(uri.toString()) != null) {
-                _folderImportState.value = FolderImportState(
-                    message = "已在书架：$name",
-                )
-                AppLog.info("Import", "Already imported: $name")
-                return@launch
-            }
-
             // ── 文件健全性预检（按格式分发到对应 magic 校验） ──
             //
             // 实测有用户拿到 0 字节填充的 .epub 占位文件（下载残缺 / 备份恢复未完成），
@@ -94,6 +86,21 @@ class ShelfImportController(
                     message = "文件损坏或不是有效的 $format：$name",
                 )
                 AppLog.warn("Import", "Rejected invalid $format header: $name")
+                return@launch
+            }
+
+            // ── 落地到私有目录：SAF Uri → filesDir/books/{hash}.{ext} → file:// Uri ──
+            // 之后业务层用稳定 path，不再依赖 SAF 授权 / 不依赖原文件位置（详见
+            // [com.morealm.app.domain.parser.LocalBookStorage]）。
+            val localUri = com.morealm.app.domain.parser.LocalBookStorage
+                .saveAsLocal(context, uri, ext) ?: run {
+                _folderImportState.value = FolderImportState(message = "保存到本地失败：$name")
+                AppLog.error("Import", "LocalBookStorage.saveAsLocal returned null for $name")
+                return@launch
+            }
+            if (bookRepo.findByLocalPath(localUri.toString()) != null) {
+                _folderImportState.value = FolderImportState(message = "已在书架：$name")
+                AppLog.info("Import", "Already imported: $name")
                 return@launch
             }
 
@@ -111,7 +118,7 @@ class ShelfImportController(
                     id = UUID.randomUUID().toString(),
                     title = parsed.first,
                     author = parsed.second,
-                    localPath = uri.toString(),
+                    localPath = localUri.toString(),
                     format = format,
                     addedAt = System.currentTimeMillis(),
                 )
@@ -137,7 +144,7 @@ class ShelfImportController(
             // 失败不回滚 placeholder ——「文件名书」比「书消失」体验好得多；
             // 重要的 isComic 字段即便此处失败，BookFormatProbeViewModel 仍会兜底 detect。
             try {
-                val enriched = enrichBookMetadata(placeholderBook, uri, format)
+                val enriched = enrichBookMetadata(placeholderBook, localUri, format)
                 if (enriched != null && enriched != placeholderBook) {
                     bookRepo.update(applyAutoGroup(enriched))
                     AppLog.info(
@@ -298,7 +305,7 @@ class ShelfImportController(
             val format: BookFormat,
         )
 
-        // ── Phase 1: header 预检 + 文件名解析 → placeholder Book → 批量 insert ──
+        // ── Phase 1: header 预检 + 落地到私有目录 + 文件名解析 → placeholder Book → 批量 insert ──
         val pending = ArrayList<PendingBook>(files.size)
         for ((idx, item) in files.withIndex()) {
             val format = detectFormat(item.name)
@@ -307,7 +314,14 @@ class ShelfImportController(
                 AppLog.warn("Import", "Rejected invalid $format header: ${item.name}")
                 continue
             }
-            if (bookRepo.findByLocalPath(item.uri.toString()) != null) continue
+            val ext = item.name.substringAfterLast('.', "").lowercase()
+            val localUri = com.morealm.app.domain.parser.LocalBookStorage
+                .saveAsLocal(context, item.uri, ext)
+            if (localUri == null) {
+                AppLog.warn("Import", "saveAsLocal failed for ${item.name}")
+                continue
+            }
+            if (bookRepo.findByLocalPath(localUri.toString()) != null) continue
 
             val parsed = parseBookFilename(item.name)
             val book = applyAutoGroup(
@@ -315,7 +329,7 @@ class ShelfImportController(
                     id = UUID.randomUUID().toString(),
                     title = parsed.first,
                     author = parsed.second,
-                    localPath = item.uri.toString(),
+                    localPath = localUri.toString(),
                     format = format,
                     folderId = folderId,
                     addedAt = System.currentTimeMillis() + idx,
@@ -337,7 +351,7 @@ class ShelfImportController(
         val enrichJobs = pending.map { pb ->
             async(enrichDispatcher) {
                 runCatching {
-                    enrichBookMetadata(pb.book, pb.item.uri, pb.format)?.let { applyAutoGroup(it) }
+                    enrichBookMetadata(pb.book, Uri.parse(pb.book.localPath), pb.format)?.let { applyAutoGroup(it) }
                 }.onFailure { t ->
                     AppLog.warn("Import", "enrich failed ${pb.book.title}: ${t.message}")
                 }.getOrNull()
