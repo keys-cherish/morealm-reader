@@ -31,11 +31,19 @@ import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
 import com.morealm.app.domain.render.scroll.ScrollLayoutEngine
+import com.morealm.app.domain.render.scroll.extractText
 import com.morealm.app.domain.render.scroll.findColumnAt
+import com.morealm.app.domain.render.scroll.findColumnByPixel
 import com.morealm.app.ui.reader.page.animation.PageAnimType
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
+import com.morealm.app.ui.reader.renderer.SelectionToolbar
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
+import com.morealm.app.ui.reader.renderer.scroll.ScrollSelectionOverlay
+import com.morealm.app.ui.reader.renderer.scroll.ScrollSelectionState
+import com.morealm.app.ui.reader.renderer.scroll.handleCancelSelection
+import com.morealm.app.ui.reader.renderer.scroll.handleLongPress
+import androidx.compose.ui.geometry.Offset
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -104,6 +112,22 @@ fun PageLevelReaderHost(
     onChapterProgressLive: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
     /** 进度上报 persist 回调 —— debounce 800ms，停止翻页后才上报；caller 在此写 DB。 */
     onChapterProgressPersist: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
+    // ── 选区 / 长按 / 高亮（P4.4 接入）──
+    /** 全书所有高亮（用于 tap-on-highlight 命中检测）。 */
+    chapterHighlightsRaw: List<com.morealm.app.domain.entity.Highlight> = emptyList(),
+    selectionMenuConfig: com.morealm.app.domain.entity.SelectionMenuConfig =
+        com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
+    onCopyText: (String) -> Unit = {},
+    onSpeakFromHere: (chapterPosition: Int) -> Unit = {},
+    onTranslateText: (String) -> Unit = {},
+    onLookupWord: (String) -> Unit = {},
+    onShareQuote: (String) -> Unit = {},
+    onAddHighlight: ((startCp: Int, endCp: Int, content: String, colorArgb: Int) -> Unit)? = null,
+    onEraseHighlight: ((startCp: Int, endCp: Int) -> Unit)? = null,
+    onAddTextColor: ((startCp: Int, endCp: Int, content: String, colorArgb: Int) -> Unit)? = null,
+    onAddUnderline: ((startCp: Int, endCp: Int, content: String, colorArgb: Int, style: Int) -> Unit)? = null,
+    onDeleteHighlight: ((id: String) -> Unit)? = null,
+    onShareHighlight: ((com.morealm.app.domain.entity.Highlight) -> Unit)? = null,
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -257,6 +281,15 @@ fun PageLevelReaderHost(
             .collect { (chIdx, prog) -> onChapterProgressPersist(chIdx, prog) }
     }
 
+    // ── 选区 / 长按 / tap-on-highlight 状态（P4.4 接入）──
+    // 共享在 Host 层（Legado ReadView 模型）：长按检测 + 选区状态 + 高亮 action 弹窗
+    // 都在 Host，所有 Renderer (NONE/SLIDE/COVER) 共享。Renderer 不再自己接 pointerInput。
+    var selection by remember { mutableStateOf(ScrollSelectionState.Empty) }
+    var highlightActionTarget by remember(core.state.currentChapterIndex) {
+        mutableStateOf<com.morealm.app.domain.entity.Highlight?>(null)
+    }
+    var highlightActionAnchor by remember { mutableStateOf(Offset.Zero) }
+
     // 电池 / 时间维护（InfoBar 用）
     val context = LocalContext.current
     val batteryStatus by rememberBatteryStatus(context)
@@ -268,10 +301,79 @@ fun PageLevelReaderHost(
         }
     }
 
-    Box(modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(bgColorArgb))) {
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(androidx.compose.ui.graphics.Color(bgColorArgb))
+            // Host 共享层 tap + 长按（NONE 模式 zone tap 也在这；SLIDE/COVER 后续接入时
+            // drag 在 Renderer 内自管，tap 仍由本层处理）。
+            .pointerInput(animType, selection.isActive, highlightActionTarget != null, chapterHighlightsRaw) {
+                detectTapGestures(
+                    onTap = { offset ->
+                        // 优先级 1: 选区 active → tap 取消选区
+                        if (selection.isActive) {
+                            selection = handleCancelSelection()
+                            return@detectTapGestures
+                        }
+                        // 优先级 2: highlight action 弹出 → tap 关闭
+                        if (highlightActionTarget != null) {
+                            highlightActionTarget = null
+                            return@detectTapGestures
+                        }
+                        // 优先级 3: tap-on-highlight 命中已存高亮 → 弹删除/分享菜单
+                        val layout = core.state.currentChapter
+                        if (layout != null && chapterHighlightsRaw.isNotEmpty()) {
+                            val hit = layout.findColumnByPixel(
+                                offset.x - layout.paddingLeft,
+                                offset.y,
+                            )
+                            val cp = hit?.column?.chapterPosition ?: hit?.line?.firstChapterPos
+                            if (cp != null) {
+                                val highlight = chapterHighlightsRaw.firstOrNull { h ->
+                                    h.chapterIndex == layout.chapterIndex &&
+                                        cp >= h.startChapterPos && cp < h.endChapterPos
+                                }
+                                if (highlight != null) {
+                                    highlightActionAnchor = offset
+                                    highlightActionTarget = highlight
+                                    return@detectTapGestures
+                                }
+                            }
+                        }
+                        // 优先级 4: zone tap 翻页（NONE 模式）/ onTapCenter
+                        if (animType == PageAnimType.NONE) {
+                            val w = size.width.toFloat()
+                            when {
+                                offset.x < w * 0.33f -> core.pageFactory.moveToPrev()
+                                offset.x > w * 0.67f -> core.pageFactory.moveToNext()
+                                else -> onTapCenter()
+                            }
+                        } else {
+                            // SLIDE/COVER zone tap 由 Renderer 自管（带动画）；这里只 onTapCenter
+                            onTapCenter()
+                        }
+                    },
+                    onLongPress = { offset ->
+                        // 共享层长按 → 算选区。横向 page-level cur page 顶贴 view y=0，
+                        // 所以 y 直接传 offset.y 当 chapter-Y 用（不需 pageOffset 累加）。
+                        val layout = core.state.currentChapter ?: return@detectTapGestures
+                        val sel = handleLongPress(
+                            layout = layout,
+                            chapterIndex = layout.chapterIndex,
+                            x = offset.x - layout.paddingLeft,
+                            yInChapter = offset.y,
+                            anchorInBox = offset,
+                        )
+                        if (sel.isActive) selection = sel
+                    },
+                )
+            }
+    ) {
         val currentLayout = core.state.currentChapter
         if (currentLayout != null) {
-            // dispatch 到具体 Renderer（独立 own 自己的动画 + drag）
+            val selectionChapterIndex = if (selection.isActive) selection.chapterIndex else -1
+            val selectionCpRange = if (selection.isActive) selection.cpRange else IntRange.EMPTY
+            // dispatch 到具体 Renderer（独立 own 自己的动画 + drag；不再接 pointerInput tap）
             when (animType) {
                 PageAnimType.NONE -> {
                     NonePageRenderer(
@@ -281,24 +383,14 @@ fun PageLevelReaderHost(
                         contentPaint = contentPaint,
                         titlePaint = titlePaint,
                         chapterNumPaint = chapterNumPaint,
-                        modifier = Modifier.fillMaxSize().pointerInput(animType) {
-                            // NONE 无动画手势：zone tap 直接 moveToPrev/Next（共享在 Host 层
-                            // 不下放到 Renderer，符合"长按/选区/手势共享" Legado 模型）。
-                            detectTapGestures { offset ->
-                                val w = size.width.toFloat()
-                                when {
-                                    offset.x < w * 0.33f -> core.pageFactory.moveToPrev()
-                                    offset.x > w * 0.67f -> core.pageFactory.moveToNext()
-                                    else -> onTapCenter()
-                                }
-                            }
-                        },
+                        selectionChapterIndex = selectionChapterIndex,
+                        selectionCpRange = selectionCpRange,
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
                 // TODO P4.next: PageAnimType.SLIDE -> SlidePageRenderer(...)
                 // TODO P5: PageAnimType.COVER -> CoverPageRenderer(...)
                 else -> {
-                    // 未实现的动画 fallback NONE 渲染（safety net，避免显示空白）
                     NonePageRenderer(
                         state = core.state,
                         pageFactory = core.pageFactory,
@@ -306,9 +398,68 @@ fun PageLevelReaderHost(
                         contentPaint = contentPaint,
                         titlePaint = titlePaint,
                         chapterNumPaint = chapterNumPaint,
+                        selectionChapterIndex = selectionChapterIndex,
+                        selectionCpRange = selectionCpRange,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
+            }
+
+            // ── 选区 Overlay (handle drag) + SelectionToolbar (菜单) ──
+            // 横向 page-level 模式 pixelOffsetProvider 返回 0（cur page 顶贴 view y=0 不偏移）
+            ScrollSelectionOverlay(
+                selection = selection,
+                onSelectionChange = { selection = it },
+                layout = currentLayout,
+                pixelOffsetProvider = { 0f },
+                scrollableState = null,
+                viewportHeightProvider = { viewHeight },
+            )
+            if (selection.isActive && selection.chapterIndex == currentLayout.chapterIndex) {
+                val cpRange = selection.cpRange
+                val endHit = currentLayout.findColumnAt(cpRange.last)
+                if (endHit != null) {
+                    val selText = currentLayout.extractText(cpRange)
+                    SelectionToolbar(
+                        offset = selection.anchorInBox,
+                        onCopy = { onCopyText(selText); selection = ScrollSelectionState.Empty },
+                        onSpeak = { onSpeakFromHere(cpRange.first); selection = ScrollSelectionState.Empty },
+                        onTranslate = { onTranslateText(selText); selection = ScrollSelectionState.Empty },
+                        onShare = { onShareQuote(selText); selection = ScrollSelectionState.Empty },
+                        onLookup = { onLookupWord(selText); selection = ScrollSelectionState.Empty },
+                        onHighlight = onAddHighlight?.let { cb ->
+                            { argb -> cb(cpRange.first, cpRange.last + 1, selText, argb); selection = ScrollSelectionState.Empty }
+                        },
+                        onEraseHighlight = onEraseHighlight?.let { cb ->
+                            { cb(cpRange.first, cpRange.last + 1); selection = ScrollSelectionState.Empty }
+                        },
+                        onTextColor = onAddTextColor?.let { cb ->
+                            { argb -> cb(cpRange.first, cpRange.last + 1, selText, argb); selection = ScrollSelectionState.Empty }
+                        },
+                        onUnderline = onAddUnderline?.let { cb ->
+                            { argb, style -> cb(cpRange.first, cpRange.last, selText, argb, style); selection = ScrollSelectionState.Empty }
+                        },
+                        onDismiss = { selection = ScrollSelectionState.Empty },
+                        config = selectionMenuConfig,
+                    )
+                }
+            }
+
+            // tap-on-highlight 弹删除/分享菜单
+            highlightActionTarget?.let { target ->
+                com.morealm.app.ui.reader.renderer.HighlightActionToolbar(
+                    offset = highlightActionAnchor,
+                    colorArgb = target.colorArgb,
+                    onDelete = {
+                        onDeleteHighlight?.invoke(target.id)
+                        highlightActionTarget = null
+                    },
+                    onShare = {
+                        onShareHighlight?.invoke(target)
+                        highlightActionTarget = null
+                    },
+                    onDismiss = { highlightActionTarget = null },
+                )
             }
 
             // ── InfoBar 顶/底（P4.1 接入，与 SCROLL Host 同款 + 横向 page-level slot 语义）──

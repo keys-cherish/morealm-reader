@@ -855,6 +855,75 @@ fun ReaderScreen(
                 onProgressRestored = { viewModel.clearNavigateDirection() },
                 onChapterProgressLive = { _, prog -> viewModel.updateScrollProgress(prog) },
                 onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
+                // P4.4 选区 / 高亮 / 长按（与 V2 SCROLL Host 同款 callback 配置）
+                chapterHighlightsRaw = viewModel.highlights.collectAsStateWithLifecycle().value,
+                selectionMenuConfig = selectionMenuConfig,
+                onCopyText = { text -> viewModel.copyTextToClipboard(text) },
+                onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
+                onTranslateText = { text -> openTranslate(text) },
+                onLookupWord = { text -> openWebSearch(text) },
+                onShareQuote = { text ->
+                    runCatching {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(android.content.Intent.EXTRA_TEXT, text)
+                        }
+                        context.startActivity(android.content.Intent.createChooser(intent, "分享"))
+                    }
+                },
+                onAddHighlight = { start, end, content, argb ->
+                    viewModel.highlight.add(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                    )
+                },
+                onEraseHighlight = { start, end ->
+                    viewModel.highlight.eraseInRange(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                    )
+                },
+                onAddTextColor = { start, end, content, argb ->
+                    viewModel.highlight.add(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                        kind = com.morealm.app.domain.entity.Highlight.KIND_TEXT_COLOR,
+                    )
+                },
+                onAddUnderline = { start, end, content, argb, style ->
+                    viewModel.highlight.add(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                        kind = com.morealm.app.domain.entity.Highlight.KIND_UNDERLINE,
+                        underlineStyle = style,
+                    )
+                },
+                onDeleteHighlight = { id -> viewModel.highlight.delete(id) },
+                onShareHighlight = { highlight ->
+                    val ok = com.morealm.app.ui.reader.share.HighlightShareCard.shareAsImage(context, highlight)
+                    if (!ok) {
+                        runCatching {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(
+                                    android.content.Intent.EXTRA_TEXT,
+                                    "${highlight.content}\n\n— 《${highlight.bookTitle}》· ${highlight.chapterTitle}",
+                                )
+                            }
+                            context.startActivity(android.content.Intent.createChooser(intent, "分享高亮"))
+                        }
+                    }
+                },
                 infoBar = ScrollCanvasInfoBarConfig(
                     chaptersSize = chapters.size,
                     textColor = readerFg,
