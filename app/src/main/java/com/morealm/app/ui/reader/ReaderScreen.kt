@@ -803,6 +803,62 @@ fun ReaderScreen(
                     footerRight = ftrRight,
                 ),
             )
+        } else if (pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.NONE && hasReaderTarget) {
+            // NONE（无动画翻页）走新 PageLevelReaderHost（page-level 横向 Host）。
+            // P3 阶段验证 page-level core 在新 Host 内能跑通基本功能：章节加载 / 跨章
+            // swap / zone tap 翻页。**当前缺**：选区 / 长按 / TTS / InfoBar / 高亮 /
+            // 书签 / 续读 JUMP / 进度上报 —— 后续阶段在 PageLevelReaderHost 内补全。
+            //
+            // COVER / SLIDE 仍走旧 CanvasRenderer，P4 / P5 阶段补到 PageLevelReaderHost。
+            val density = LocalDensity.current
+            val configuration = LocalConfiguration.current
+            val viewWidthPx = with(density) { configuration.screenWidthDp.dp.toPx().toInt() }
+            val viewHeightPx = with(density) { configuration.screenHeightDp.dp.toPx().toInt() }
+            val paddingHPx = with(density) { marginHorizontal.dp.toPx().toInt() }
+            val paddingTopPx = with(density) { marginTopVal.dp.toPx().toInt() }
+            val paddingBottomPx = with(density) { marginBottomVal.dp.toPx().toInt() }
+            val fontSizePx = with(density) { readerFontSize.sp.toPx().toInt() }
+            com.morealm.app.ui.reader.page.animhorizontal.PageLevelReaderHost(
+                currentChapterIndex = currentIndex,
+                chapterCount = chapters.size,
+                animType = com.morealm.app.ui.reader.page.animation.PageAnimType.NONE,
+                loadChapterContent = loadFn@{ idx ->
+                    val chap = chapters.getOrNull(idx) ?: return@loadFn null
+                    val content = viewModel.chapter.fetchAndPrepareChapter(idx) ?: return@loadFn null
+                    com.morealm.app.domain.reader.scroll.ScrollChapterContent(
+                        chapterIndex = idx,
+                        title = chap.title,
+                        content = content,
+                    )
+                },
+                viewWidth = viewWidthPx,
+                viewHeight = viewHeightPx,
+                paddingLeft = paddingHPx,
+                paddingRight = paddingHPx,
+                paddingTop = paddingTopPx,
+                paddingBottom = paddingBottomPx,
+                fontSize = fontSizePx,
+                textColorArgb = readerFg.toArgb(),
+                typeface = readerTypeface,
+                isNight = isNight,
+                letterSpacing = effectiveReaderStyle?.letterSpacing ?: 0f,
+                textBold = effectiveReaderStyle?.textBold ?: 0,
+                lineSpacingExtra = readerLineHeight,
+                paragraphSpacing = effectiveReaderStyle?.paragraphSpacing ?: 8,
+                titleMode = effectiveReaderStyle?.titleMode ?: 0,
+                titleAlign = effectiveReaderStyle?.titleMode?.takeIf { it != 0 } ?: 0,
+                textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
+                bgColorArgb = readerBg.toArgb(),
+                restoreToken = renderedChapter.restoreToken,
+                onChapterIndexChange = { newIdx ->
+                    viewModel.chapter.setCurrentChapterIndexFromScroll(newIdx)
+                },
+                onTapCenter = {
+                    if (toolbarEditing) toolBarViewModel.exitEditMode()
+                    else viewModel.toggleControls()
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
         } else if (hasReaderTarget) {
             // 把 ttsChapterPosition 的 collect 收敛进这个 leaf composable —— 段切
             // 时只重组 [ReadAloudPositionScope] 自己 + 内部 lambda 里的 CanvasRenderer
