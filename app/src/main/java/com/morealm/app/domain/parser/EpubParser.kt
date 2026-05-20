@@ -603,10 +603,12 @@ object EpubParser {
 
     /** 按 href 读资源原字节。失败返回 null。供 [EpubComicResourceLoader.readBytes] 使用。 */
     fun readResourceBytes(context: Context, uri: Uri, href: String): ByteArray? {
-        return withEpubBook(context, uri) { book ->
-            val res = book.resources?.getByHref(href)
-                ?: book.resources?.getByHref(URLDecoder.decode(href, "UTF-8"))
-            try { res?.data } catch (e: Exception) {
+        return EpubCoreBridge.withCoreBook(context, uri) { book ->
+            try {
+                book.resource(href) ?: book.resource(
+                    runCatching { URLDecoder.decode(href, "UTF-8") }.getOrNull().orEmpty(),
+                )
+            } catch (e: Exception) {
                 AppLog.warn("EpubParser", "readResourceBytes failed href=$href: ${e.message}")
                 null
             }
@@ -759,8 +761,119 @@ object EpubParser {
     // ── Chapter list ─────────────────────────────────────
 
     fun parseChapters(context: Context, uri: Uri): List<BookChapter> {
-        return withEpubBook(context, uri) { book -> buildChapterList(uri.toString(), book) }
-            ?: emptyList()
+        return EpubCoreBridge.withCoreBook(context, uri) { book ->
+            buildChapterListViaCore(uri.toString(), book)
+        } ?: emptyList()
+    }
+
+    /**
+     * 用 epub-core 数据源构建章节列表。算法与 [buildChapterList] 完全等价：
+     * 1. 无 toc → spine 顺序回退（封面/第N章）
+     * 2. 有 toc → spine 内 toc 之前的当卷首 + toc 递归 + 父子去重保留更长 title +
+     *    嵌套层级缩进
+     */
+    private fun buildChapterListViaCore(
+        bookId: String,
+        book: com.morealm.epub.EpubBook,
+    ): List<BookChapter> {
+        val chapters = mutableListOf<BookChapter>()
+        val toc = book.toc
+
+        if (toc.isEmpty()) {
+            book.spine.items.forEachIndexed { i, chapter ->
+                val title = chapter.title?.takeIf { it.isNotBlank() }
+                    ?: tryExtractTitleViaCore(chapter)
+                    ?: if (i == 0) "封面" else "第${i + 1}章"
+                chapters.add(
+                    BookChapter(
+                        id = "${bookId}_$i", bookId = bookId, index = i,
+                        title = title, url = chapter.href,
+                    ),
+                )
+            }
+        } else {
+            parseFirstPagesViaCore(bookId, book, toc, chapters)
+            parseTocRefsViaCore(bookId, toc, chapters)
+            chapters.forEachIndexed { i, ch ->
+                chapters[i] = ch.copy(id = "${bookId}_$i", index = i)
+            }
+        }
+
+        for (i in 0 until chapters.size - 1) {
+            chapters[i] = chapters[i].copy(nextUrl = chapters[i + 1].url)
+        }
+        return chapters
+    }
+
+    private fun parseFirstPagesViaCore(
+        bookId: String,
+        book: com.morealm.epub.EpubBook,
+        toc: List<com.morealm.epub.ncx.TocEntry>,
+        chapters: MutableList<BookChapter>,
+    ) {
+        val firstEntry = toc.firstOrNull { it.src.isNotBlank() } ?: return
+        val firstHref = firstEntry.src.substringBeforeLast("#")
+        for (chapter in book.spine.items) {
+            val mtype = book.opfPackage.byId[chapter.id]?.mediaType.orEmpty()
+            if (!mtype.contains("htm")) continue
+            if (chapter.href == firstHref) break
+            val title = chapter.title?.takeIf { it.isNotBlank() }
+                ?: tryExtractTitleViaCore(chapter) ?: "--卷首--"
+            chapters.add(
+                BookChapter(
+                    id = "", bookId = bookId, index = 0, title = title, url = chapter.href,
+                ),
+            )
+        }
+    }
+
+    private fun parseTocRefsViaCore(
+        bookId: String,
+        refs: List<com.morealm.epub.ncx.TocEntry>,
+        chapters: MutableList<BookChapter>,
+    ) {
+        // 父子去重（按完整 src 含 fragment 当 key，保留 title 最长那条）+
+        // 嵌套层级缩进 prefix（与旧 [parseTocRefs] 同款算法）。
+        val seenByHref = HashMap<String, Int>()
+        fun addOrMerge(title: String, href: String) {
+            val existingIdx = seenByHref[href]
+            if (existingIdx != null) {
+                val ex = chapters[existingIdx]
+                if (title.length > ex.title.length) {
+                    chapters[existingIdx] = ex.copy(title = title.ifBlank { ex.title })
+                }
+            } else {
+                seenByHref[href] = chapters.size
+                chapters.add(
+                    BookChapter(
+                        id = "", bookId = bookId, index = 0,
+                        title = title.ifBlank { "未命名章节" },
+                        url = href,
+                    ),
+                )
+            }
+        }
+        fun recurse(rs: List<com.morealm.epub.ncx.TocEntry>, depth: Int) {
+            val prefix = "  ".repeat(depth.coerceAtMost(6))
+            for (ref in rs) {
+                if (ref.src.isNotBlank()) {
+                    val raw = ref.label
+                    val withIndent = if (raw.isBlank()) raw else prefix + raw
+                    addOrMerge(withIndent, ref.src)
+                }
+                if (ref.children.isNotEmpty()) recurse(ref.children, depth + 1)
+            }
+        }
+        recurse(refs, depth = 0)
+    }
+
+    private fun tryExtractTitleViaCore(chapter: com.morealm.epub.Chapter): String? {
+        return try {
+            val text = chapter.bytes().decodeToString()
+            Jsoup.parse(text).select("title").text().takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun buildChapterList(bookId: String, book: EpubBook): List<BookChapter> {
