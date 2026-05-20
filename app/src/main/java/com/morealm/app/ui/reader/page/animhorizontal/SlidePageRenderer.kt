@@ -79,26 +79,33 @@ fun SlidePageRenderer(
         if (startOffset == targetEdge) return
         val distance = kotlin.math.abs(targetEdge - startOffset)
         val durationMs = (distance / viewportW * 280f).toInt().coerceIn(120, 320)
-        animate(
-            initialValue = startOffset,
-            targetValue = targetEdge,
-            animationSpec = tween(durationMillis = durationMs),
-        ) { value, _ -> state.pageOffset = value }
-        val beforeChIdx = state.currentChapterIndex
-        when {
-            targetEdge > 0 && pageFactory.moveToNext() -> {
-                state.pageOffset = 0f
-                if (state.currentChapterIndex != beforeChIdx) {
-                    onChapterShiftUpdated(state.currentChapterIndex - beforeChIdx)
+        try {
+            animate(
+                initialValue = startOffset,
+                targetValue = targetEdge,
+                animationSpec = tween(durationMillis = durationMs),
+            ) { value, _ -> state.pageOffset = value }
+        } finally {
+            // 无论正常完成还是被 cancel（新 tap 打断），都立即把 pageOffset 推到 targetEdge
+            // 并 commit 翻页。等价 Legado abortAnim()+fillPage：前一次 tap 的翻页不丢失。
+            // finally 内只有 sync 操作（state 写 + moveToNext sync 调用），不需 NonCancellable。
+            state.pageOffset = targetEdge
+            val beforeChIdx = state.currentChapterIndex
+            when {
+                targetEdge > 0 && pageFactory.moveToNext() -> {
+                    state.pageOffset = 0f
+                    if (state.currentChapterIndex != beforeChIdx) {
+                        onChapterShiftUpdated(state.currentChapterIndex - beforeChIdx)
+                    }
                 }
-            }
-            targetEdge < 0 && pageFactory.moveToPrev() -> {
-                state.pageOffset = 0f
-                if (state.currentChapterIndex != beforeChIdx) {
-                    onChapterShiftUpdated(state.currentChapterIndex - beforeChIdx)
+                targetEdge < 0 && pageFactory.moveToPrev() -> {
+                    state.pageOffset = 0f
+                    if (state.currentChapterIndex != beforeChIdx) {
+                        onChapterShiftUpdated(state.currentChapterIndex - beforeChIdx)
+                    }
                 }
+                else -> state.pageOffset = 0f
             }
-            else -> state.pageOffset = 0f
         }
     }
 

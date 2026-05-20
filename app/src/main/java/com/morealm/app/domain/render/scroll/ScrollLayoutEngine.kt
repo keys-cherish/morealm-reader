@@ -68,6 +68,13 @@ class ScrollLayoutEngine(
      * 桥接 [com.morealm.app.domain.render.ImageCache] 的实现，单测可注入 mock。
      */
     val imageDimensionsResolver: ScrollImageDimensionsResolver = ScrollImageDimensionsResolver.NoOp,
+    /**
+     * 翻页布局模式：false = SCROLL 连续滚动（章内 page 之间 currentY=0 紧贴无留白，让滚动连续）；
+     * true = page-level 翻页 (NONE/COVER/SLIDE)，章内每个 page 第一行 lineTop = paddingTop，
+     * 给顶部 InfoBar 渐变让位避免半透盖文（参 bug-casebook 2026-05-20 案例：
+     * P4.6 失败的原因是只动了 flushPage 没动 needNewPage 路径，本次两处都按 mode fork）。
+     */
+    val pageLevelMode: Boolean = false,
 ) {
 
     val visibleWidth: Int = viewWidth - paddingLeft - paddingRight
@@ -185,7 +192,8 @@ class ScrollLayoutEngine(
                 )
             )
             currentPageLines = mutableListOf()
-            currentY = 0f  // 内部 page 顶不留 paddingTop（仅首 page 用 paddingTop, init 时已设）
+            // page-level 模式：章内每 page 都给 paddingTop 让位 InfoBar；SCROLL 模式保持 0 紧贴
+            currentY = if (pageLevelMode) paddingTop.toFloat() else 0f
         }
 
         // emitLine：把一行 columns 打包成 ScrollLine 追加到 currentPageLines；
@@ -216,8 +224,8 @@ class ScrollLayoutEngine(
             val finalBottom: Float
             if (needNewPage) {
                 flushPage()
-                // 内部 page 顶不留 paddingTop（仅首 page 第一行用 paddingTop，由 init currentY 设置）
-                finalTop = 0f
+                // page-level 模式：新 page 第一行用 paddingTop 让位 InfoBar；SCROLL 模式紧贴 0
+                finalTop = if (pageLevelMode) paddingTop.toFloat() else 0f
                 finalBottom = finalTop + effectiveLineHeight
             } else {
                 finalTop = proposedTop
@@ -620,6 +628,15 @@ class ScrollLayoutEngine(
         }
 
         val totalHeight = pages.fold(0f) { acc, p -> acc + p.height }
+
+        // ── 诊断日志（章中 page 首行被 InfoBar 盖根因排查 2026-05-20）──
+        // 列出每 page 的第一行 lineTop。期望章首 page = paddingTop，章中 page = 0（bug）。
+        // page-level 模式下 page 1+ 第一行 lineTop=0 → 紧贴 viewport 顶 → 被 InfoBar 渐变盖半透。
+        AppLog.info(
+            "PageTopDiag",
+            "ch=$chapterIndex paddingTop=$paddingTop pages=${pages.size} " +
+                "firstLineTops=${pages.map { p -> p.lines.firstOrNull()?.lineTop?.toInt() ?: -1 }}",
+        )
 
         // ── 诊断日志（吞字根因排查 2026-05-17）──
         // 排版结束记录关键参数：viewWidth（外层传入）/ visibleWidth（扣 padding 后实际可排区）/

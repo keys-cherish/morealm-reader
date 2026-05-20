@@ -86,26 +86,33 @@ fun CoverPageRenderer(
         if (startOffset == targetEdge) return
         val distance = kotlin.math.abs(targetEdge - startOffset)
         val durationMs = (distance / viewportW * 280f).toInt().coerceIn(120, 320)
-        animate(
-            initialValue = startOffset,
-            targetValue = targetEdge,
-            animationSpec = tween(durationMillis = durationMs),
-        ) { value, _ -> state.pageOffset = value }
-        val beforeChIdx = state.currentChapterIndex
-        when {
-            targetEdge > 0 && pageFactory.moveToNext() -> {
-                state.pageOffset = 0f
-                if (state.currentChapterIndex != beforeChIdx) {
-                    onChapterShiftUpdated(state.currentChapterIndex - beforeChIdx)
+        try {
+            animate(
+                initialValue = startOffset,
+                targetValue = targetEdge,
+                animationSpec = tween(durationMillis = durationMs),
+            ) { value, _ -> state.pageOffset = value }
+        } finally {
+            // 无论正常完成还是被 cancel（新 tap 打断），都立即把 pageOffset 推到 targetEdge
+            // 并 commit 翻页。等价 Legado abortAnim()+fillPage：前一次 tap 的翻页不丢失。
+            // finally 内只有 sync 操作（state 写 + moveToNext sync 调用），不需 NonCancellable。
+            state.pageOffset = targetEdge
+            val beforeChIdx = state.currentChapterIndex
+            when {
+                targetEdge > 0 && pageFactory.moveToNext() -> {
+                    state.pageOffset = 0f
+                    if (state.currentChapterIndex != beforeChIdx) {
+                        onChapterShiftUpdated(state.currentChapterIndex - beforeChIdx)
+                    }
                 }
-            }
-            targetEdge < 0 && pageFactory.moveToPrev() -> {
-                state.pageOffset = 0f
-                if (state.currentChapterIndex != beforeChIdx) {
-                    onChapterShiftUpdated(state.currentChapterIndex - beforeChIdx)
+                targetEdge < 0 && pageFactory.moveToPrev() -> {
+                    state.pageOffset = 0f
+                    if (state.currentChapterIndex != beforeChIdx) {
+                        onChapterShiftUpdated(state.currentChapterIndex - beforeChIdx)
+                    }
                 }
+                else -> state.pageOffset = 0f
             }
-            else -> state.pageOffset = 0f
         }
     }
 
@@ -204,7 +211,10 @@ fun CoverPageRenderer(
                 selectionCpRange
             } else IntRange.EMPTY
 
-            // 索引 0：curPage（始终在 0,0，不动）
+            // 索引 0：curPage（始终在 0,0，不动）+ 接缝阴影（COVER 模拟 next/prev 投影到 cur）
+            // 阴影画在 cur 上而非 next/prev 内：next 自带 padding 让 next 内 0..24px 是空白，
+            // 画在那里看起来不像投影。画到 cur 一侧后，next/prev 不覆盖此区域（接缝外侧），
+            // 视觉上是 next/prev "上层纸张"投阴影到 cur "下层纸张"。
             PagePaneCanvas(
                 page = curPage,
                 chapterViewWidth = chapterViewWidth,
@@ -219,9 +229,48 @@ fun CoverPageRenderer(
                 searchHighlightArgb = searchHighlightArgb,
                 selectionCpRange = selectionRangeForCur,
                 selectionArgb = selectionArgb,
-                modifier = Modifier.fillMaxSize().background(backgroundColor),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(backgroundColor)
+                    .drawWithContent {
+                        drawContent()
+                        val offset = state.pageOffset
+                        val shadowWidth = 24f
+                        when {
+                            // NEXT 进行中：next 在 (W-offset, *)，接缝在 cur 上 x=W-offset，
+                            // 阴影 24px 紧贴接缝左侧（cur 一侧），右黑→左透明
+                            offset > 0f -> {
+                                val seamX = size.width - offset
+                                drawRect(
+                                    brush = Brush.horizontalGradient(
+                                        0f to Color.Transparent,
+                                        1f to Color.Black.copy(alpha = 0.45f),
+                                        startX = seamX - shadowWidth,
+                                        endX = seamX,
+                                    ),
+                                    topLeft = androidx.compose.ui.geometry.Offset(seamX - shadowWidth, 0f),
+                                    size = androidx.compose.ui.geometry.Size(shadowWidth, size.height),
+                                )
+                            }
+                            // PREV 进行中：prev 在 (-W-offset, *) 即覆盖 cur (0..|offset|)，
+                            // 接缝在 cur 上 x=|offset|，阴影 24px 紧贴接缝右侧（cur 一侧），左黑→右透明
+                            offset < 0f -> {
+                                val seamX = -offset
+                                drawRect(
+                                    brush = Brush.horizontalGradient(
+                                        0f to Color.Black.copy(alpha = 0.45f),
+                                        1f to Color.Transparent,
+                                        startX = seamX,
+                                        endX = seamX + shadowWidth,
+                                    ),
+                                    topLeft = androidx.compose.ui.geometry.Offset(seamX, 0f),
+                                    size = androidx.compose.ui.geometry.Size(shadowWidth, size.height),
+                                )
+                            }
+                        }
+                    },
             )
-            // 索引 1：nextPage（从右滑入覆盖 cur），带左边阴影
+            // 索引 1：nextPage（从右滑入覆盖 cur）—— 阴影已搬到 cur 上，next 这里只画内容
             PagePaneCanvas(
                 page = nextPage,
                 chapterViewWidth = chapterViewWidth,
@@ -231,27 +280,9 @@ fun CoverPageRenderer(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = nextPageHighlightSpecs,
                 bookmarkCps = nextPageBookmarkCps,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(backgroundColor)
-                    .drawWithContent {
-                        drawContent()
-                        if (state.pageOffset > 0f) {
-                            val shadowWidth = 24f
-                            drawRect(
-                                brush = Brush.horizontalGradient(
-                                    0f to Color.Black.copy(alpha = 0.45f),
-                                    1f to Color.Transparent,
-                                    startX = 0f,
-                                    endX = shadowWidth,
-                                ),
-                                topLeft = androidx.compose.ui.geometry.Offset(0f, 0f),
-                                size = androidx.compose.ui.geometry.Size(shadowWidth, size.height),
-                            )
-                        }
-                    },
+                modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
-            // 索引 2：prevPage（从左滑入覆盖 cur），带右边阴影
+            // 索引 2：prevPage（从左滑入覆盖 cur）—— 阴影已搬到 cur 上，prev 这里只画内容
             PagePaneCanvas(
                 page = prevPage,
                 chapterViewWidth = chapterViewWidth,
@@ -261,25 +292,7 @@ fun CoverPageRenderer(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = prevPageHighlightSpecs,
                 bookmarkCps = prevPageBookmarkCps,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(backgroundColor)
-                    .drawWithContent {
-                        drawContent()
-                        if (state.pageOffset < 0f) {
-                            val shadowWidth = 24f
-                            drawRect(
-                                brush = Brush.horizontalGradient(
-                                    0f to Color.Transparent,
-                                    1f to Color.Black.copy(alpha = 0.45f),
-                                    startX = size.width - shadowWidth,
-                                    endX = size.width,
-                                ),
-                                topLeft = androidx.compose.ui.geometry.Offset(size.width - shadowWidth, 0f),
-                                size = androidx.compose.ui.geometry.Size(shadowWidth, size.height),
-                            )
-                        }
-                    },
+                modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
         },
     ) { measurables, constraints ->
