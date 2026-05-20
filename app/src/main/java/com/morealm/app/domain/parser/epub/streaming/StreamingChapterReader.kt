@@ -1,5 +1,6 @@
 package com.morealm.app.domain.parser.epub.streaming
 
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.parser.epub.ChapterBlock
 import com.morealm.app.domain.parser.epub.StructuredChapterContent
@@ -37,6 +38,8 @@ import com.morealm.epub.compat.TableMergeVisitor
  */
 object StreamingChapterReader {
 
+    private const val TAG = "EpubStream"
+
     /**
      * @param imgLookup Maps an `<img src>` (as authored in the XHTML, before
      *   URI resolution) to a viewer-renderable file URL. Return `null` to
@@ -54,10 +57,15 @@ object StreamingChapterReader {
         coverLookup: () -> String?,
     ): StructuredChapterContent {
         val targetHref = chapter.url.substringBeforeLast("#")
-        if (targetHref.isEmpty()) return StructuredChapterContent(emptyList())
+        AppLog.info(TAG, "read enter url=${chapter.url} target=$targetHref next=${chapter.nextUrl ?: "null"}")
+        if (targetHref.isEmpty()) {
+            AppLog.warn(TAG, "read empty targetHref → empty blocks")
+            return StructuredChapterContent(emptyList())
+        }
 
         if (isCoverPage(targetHref)) {
             val coverUrl = coverLookup()
+            AppLog.info(TAG, "read cover-page target=$targetHref coverUrl=${coverUrl ?: "null"}")
             if (!coverUrl.isNullOrEmpty()) {
                 return StructuredChapterContent(listOf(ChapterBlock.Image(coverUrl)))
             }
@@ -70,7 +78,12 @@ object StreamingChapterReader {
 
         val spine = book.spine.items
         val startIdx = spine.indexOfFirst { it.href == targetHref }
-        if (startIdx < 0) return StructuredChapterContent(emptyList())
+        AppLog.info(TAG, "read spine.size=${spine.size} startIdx=$startIdx start=$startFragment end=$endFragment")
+        if (startIdx < 0) {
+            val preview = spine.take(8).map { it.href }
+            AppLog.warn(TAG, "read spine miss target=$targetHref; first hrefs=$preview")
+            return StructuredChapterContent(emptyList())
+        }
 
         val builder = ChapterBlockBuilder()
 
@@ -93,7 +106,9 @@ object StreamingChapterReader {
             }
         }
 
-        return builder.build()
+        val result = builder.build()
+        AppLog.info(TAG, "read done target=$targetHref blocks=${result.blocks.size}")
+        return result
     }
 
     private fun parseChapterTo(
@@ -103,12 +118,51 @@ object StreamingChapterReader {
         startFragment: String?,
         endFragment: String?,
     ) {
-        val imgRewrite = ImgRewriteVisitor(builder, imgLookup)
+        val bytesPreview = runCatching { chapter.bytes().size }.getOrNull()
+        AppLog.info(TAG, "parseChapterTo href=${chapter.href} start=$startFragment end=$endFragment bytes=$bytesPreview")
+        // XHTML 里 <img src> 通常是 chapter-relative（"cover.jpg" / "../Images/x.jpg"）。
+        // ZIP 资源用 OPF-relative href 寻址，故先按 chapter.href 把 src resolve 成
+        // OPF-relative 再交给 caller 的 imgLookup —— 与老 EpubParser.parseBody 内的
+        // `URI(chapterHref).resolve(src)` 行为一致，回归 D.5b 切换前的相对路径解析。
+        val chapterRelativeLookup: (String) -> String? = { rawSrc ->
+            val resolved = resolveRelative(chapter.href, rawSrc)
+            val out = imgLookup(resolved)
+            AppLog.debug(TAG, "img raw=$rawSrc base=${chapter.href} resolved=$resolved → ${out ?: "null"}")
+            out
+        }
+        val imgRewrite = ImgRewriteVisitor(builder, chapterRelativeLookup)
         val tableMerge = TableMergeVisitor(imgRewrite)
         val rubyRewrite = RubyRewriteVisitor(tableMerge)
         val svgRewrite = SvgImageRewriteVisitor(rubyRewrite)
         val fragmentSlice = FragmentSliceVisitor(svgRewrite, startFragment, endFragment)
         chapter.streamTo(fragmentSlice)
+    }
+
+    /**
+     * Resolve [src] relative to [baseHref]; both are OPF-relative paths.
+     * Mirrors the old `URI(chapterHref).resolve(src)` path used by
+     * EpubParser.parseBody so the visitor lookup gets an OPF-relative href
+     * regardless of how the original XHTML wrote the src.
+     *
+     * Examples (base = "Text/ch1.xhtml"):
+     *   "cover.jpg"        → "Text/cover.jpg"
+     *   "../Images/x.jpg"  → "Images/x.jpg"
+     *   "/Images/x.jpg"    → "Images/x.jpg"   (absolute inside the EPUB)
+     *   "http://..."       → unchanged       (external URL)
+     *
+     * Falls back to the raw src on any parse failure — the caller's lookup
+     * then has a chance to handle it itself.
+     */
+    internal fun resolveRelative(baseHref: String, src: String): String {
+        if (src.isEmpty()) return src
+        return try {
+            java.net.URLDecoder.decode(
+                java.net.URI(baseHref).resolve(src).toString(),
+                "UTF-8",
+            )
+        } catch (_: Exception) {
+            src
+        }
     }
 
     /**
