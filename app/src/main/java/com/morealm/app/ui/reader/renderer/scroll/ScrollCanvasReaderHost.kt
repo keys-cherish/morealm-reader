@@ -305,66 +305,20 @@ fun ScrollCanvasReaderHost(
         )
     }
 
-    val state = remember { ScrollCanvasReaderState(initialChapterIndex = currentChapterIndex) }
-
-    // ── Phase 4 page-level：注入 page 序列管理器 ──
-    // chapterShiftCallback 在 factory 跨章 swap 时调用，同步切 state.prev/cur/next 引用。
-    // 解耦：Factory 不直接写 state 字段，state 暴露 swapToNext/Prev 方法。
-    val pageFactory = remember(state) {
-        com.morealm.app.domain.render.scroll.ScrollPageFactory(
-            dataSource = state,
-            chapterShiftCallback = { delta ->
-                if (delta == +1) state.swapToNext() else state.swapToPrev()
-            },
-        )
-    }
-
-    // chapterCount 同步给 state（独立 effect，不参与 setExternal 决策）。
-    LaunchedEffect(chapterCount) {
-        state.chapterCount = chapterCount
-    }
-
-    // 外部 jump 触发器：仅看 restoreToken 变化，不看 currentChapterIndex prop。
-    //
-    // 根因（2026-05-19 MoRealm_log_20260519_195536）：原 LaunchedEffect 用
-    // (currentChapterIndex, chapterCount) 作 key，依赖契约「state.swapToNext 先变 +
-    // snapshotFlow 通知 VM 后 prop 同步 → effect 触发时 state == prop → no-op」。
-    // 但 snapshotFlow 有 debounce(150ms)，频繁跨章时 prop 永远滞后 state。旧 prop 终于
-    // emit 时 state 已经在新值，state != prop → setExternal 把 state 强行拉回旧 prop。
-    // 章边界来回 fling 会形成"swap→prop catch up→反向 setExternal"的闪烁死循环。
-    //
-    // 真正的外部 jump（目录/书签/Slider/loadChapter）一定换 restoreToken (System.nanoTime)。
-    // setCurrentChapterIndexFromScroll 故意不动 restoreToken (line 352-357 契约)。
-    // 用 restoreToken 当 key 既能识别合法 external jump，又能把 page-level 反向 propagate
-    // 自动过滤掉。
-    LaunchedEffect(restoreToken) {
-        if (restoreToken != 0L && state.currentChapterIndex != currentChapterIndex) {
-            AppLog.info(
-                "ScrollCanvasV2",
-                "[host-effect] external jump idx ${state.currentChapterIndex} → $currentChapterIndex (token=$restoreToken)",
-            )
-            state.setExternalChapterIndex(currentChapterIndex)
-        }
-    }
-
-    // ── Phase 5：onChapterIndexChange 节流通知 VM ──
-    // factory 跨章 swap 同步切 state.currentChapterIndex（即时，无延迟）。但通知 VM
-    // 持久化 / 元数据更新走 debounce(150ms)：fling 期快速跨多章时只触发最后一次，
-    // 避免 VM 高频写 IO。snapshotFlow 自动监听 state.currentChapterIndex 变化。
-    //
-    // 契约约定 (2026-05-19 根治反向 propagate race)：caller 实现 onChapterIndexChange 必须
-    // 用「轻量同步语义」(不 trigger restoreToken / 不重 load chapter content)。
-    // 推荐: `viewModel.chapter.setCurrentChapterIndexFromScroll(idx)`。
-    // 反例: `viewModel.loadChapter(idx)` 会让 ChapterController 内部 trigger restoreToken+prop
-    // 反传到 Host → LaunchedEffect(restoreToken) 误判为外部 jump → 反向 setExternal 振荡
-    // (日志 MoRealm_log_20260519_160147.txt line 257/297/359 即此根因)。
-    val onChapterIndexChangeUpdated by rememberUpdatedState(onChapterIndexChange)
-    LaunchedEffect(state) {
-        snapshotFlow { state.currentChapterIndex }
-            .distinctUntilChanged()
-            .debounce(150L)
-            .collect { onChapterIndexChangeUpdated(it) }
-    }
+    // page-level 共享 core（state + factory + chapterCount / restoreToken / snapshotFlow /
+    // styleSignature / 章节加载 effect 全部抽到 helper）。详见
+    // [com.morealm.app.domain.render.pageanim.rememberPageLevelCore] 文档。
+    // SCROLL Host 仅保留垂直特有逻辑（JUMP / TTS / 进度 / 选区 Overlay / InfoBar）。
+    val core = com.morealm.app.domain.render.pageanim.rememberPageLevelCore(
+        currentChapterIndex = currentChapterIndex,
+        chapterCount = chapterCount,
+        restoreToken = restoreToken,
+        onChapterIndexChange = onChapterIndexChange,
+        loadChapterContent = loadChapterContent,
+        engine = engine,
+    )
+    val state = core.state
+    val pageFactory = core.pageFactory
 
     // ── 跳书签 / 续读 / 搜索定位 / Slider 拖动 in-place seek ──
     // 两阶段契约：caller 保证 restoreToken != 0L 时 currentChapter 已是目标章。
@@ -438,73 +392,8 @@ fun ScrollCanvasReaderHost(
         onProgressRestored()
     }
 
-    // engine 引用变化（fontSize / typeface / padding / 任一影响排版的参数变）→
-    // 现有所有 layout 失效（用旧 paint 排的，行宽/行高都错），必须强制重排所有 3 章。
-    // 用 styleSignature 对比：layout 的 signature 与当前 engine 的 signature 不一致 = 失效。
-    LaunchedEffect(engine) {
-        val sig = engine.computeStyleSignature()
-        if (state.currentChapter?.styleSignature != sig) state.currentChapter = null
-        if (state.prevChapter?.styleSignature != sig) state.prevChapter = null
-        if (state.nextChapter?.styleSignature != sig) state.nextChapter = null
-    }
-
-    // ── 章节加载：curChapter 即时 + prevNext 延迟预加载 ──
-    //
-    // 跨章 swap 解耦（2026-05-19 架构改进）：
-    //   swap = O(1) 引用轮换（swapToNext/Prev 不置 null，保留 stale 引用）
-    //   预加载 = 独立 debounce，不耦合 swap
-    //
-    // 为什么分两个 effect：
-    //   curChapter 必须即时加载（首次进 reader / 外部跳章后必须立即有内容可显示）
-    //   prevNext 章可以 debounce（章边界反复拖时不触发加载，稳定 300ms 后才加载）
-    //   → 与 Legado ReadBook 等价体感（swap 瞬间完成，预加载静默）
-
-    suspend fun loadAndLayout(idx: Int): com.morealm.app.domain.render.scroll.ScrollChapterLayout? {
-        return try {
-            val content = withContext(Dispatchers.IO) { loadChapterContent(idx) } ?: return null
-            AppLog.info("ScrollCanvasV2", "  loaded idx=$idx contentLen=${content.content.length}")
-            withContext(Dispatchers.Default) {
-                engine.layoutChapter(content.chapterIndex, content.title, content.content)
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            AppLog.warn("ScrollCanvasV2", "loadAndLayout FAILED idx=$idx: ${e.message}", e)
-            null
-        }
-    }
-
-    // effect 1：curChapter 即时加载（key = currentChapterIndex + engine）
-    LaunchedEffect(state.currentChapterIndex, engine) {
-        val curIdx = state.currentChapterIndex
-        if (state.currentChapter?.chapterIndex != curIdx) {
-            AppLog.info("ScrollCanvasV2", "HOST loadCur idx=$curIdx")
-            val layout = loadAndLayout(curIdx)
-            if (layout != null) {
-                state.currentChapter = layout
-                AppLog.info("ScrollCanvasV2", "  cur READY pages=${layout.pages.size} totalH=${layout.totalHeight}")
-            } else {
-                state.currentChapter = null
-                AppLog.warn("ScrollCanvasV2", "cur NULL idx=$curIdx")
-            }
-        }
-    }
-
-    // effect 2：prevNext 延迟预加载（debounce 300ms，章边界反复拖不触发）
-    LaunchedEffect(engine) {
-        snapshotFlow { state.currentChapterIndex }
-            .debounce(300L)
-            .collect { curIdx ->
-                if (curIdx > 0 && state.prevChapter?.chapterIndex != curIdx - 1) {
-                    val layout = loadAndLayout(curIdx - 1)
-                    if (state.currentChapterIndex == curIdx) state.prevChapter = layout
-                }
-                if (curIdx < state.chapterCount - 1 && state.nextChapter?.chapterIndex != curIdx + 1) {
-                    val layout = loadAndLayout(curIdx + 1)
-                    if (state.currentChapterIndex == curIdx) state.nextChapter = layout
-                }
-            }
-    }
+    // styleSignature 失效 / 章节加载 (curChapter 即时 + prevNext debounce 预加载) 已抽到
+    // [com.morealm.app.domain.render.pageanim.rememberPageLevelCore] 由 core 自动启动。
 
     // 选区状态（M4-revive 已修：SelectionOverlay fullscreen pointerInput 已删除，长按检测
     // 改由 ScrollCanvasRenderer 内 detectTapGestures.onLongPress 触发；handle drag 仍在
