@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -68,6 +69,8 @@ fun CoverPageRenderer(
     curPageBookmarkCps: List<Int> = emptyList(),
     nextPageBookmarkCps: List<Int> = emptyList(),
     prevPageBookmarkCps: List<Int> = emptyList(),
+    /** Host 注入：zone tap → 走本 Renderer 的 animateAndCommit 覆盖动画；null = Host fallback 瞬切 */
+    turnCtrl: PageTurnAnimController? = null,
     modifier: Modifier = Modifier,
     onChapterShift: (delta: Int) -> Unit = {},
 ) {
@@ -106,17 +109,40 @@ fun CoverPageRenderer(
         }
     }
 
+    // Host zone tap 注入：走本 Renderer 的 animateAndCommit 让 zone tap 也有覆盖动画。
+    DisposableEffect(turnCtrl) {
+        turnCtrl?.animateToNext = {
+            val viewportW = viewportWidthPx.toFloat()
+            if (viewportW > 0f) animateAndCommit(viewportW, viewportW)
+        }
+        turnCtrl?.animateToPrev = {
+            val viewportW = viewportWidthPx.toFloat()
+            if (viewportW > 0f) animateAndCommit(-viewportW, viewportW)
+        }
+        onDispose {
+            turnCtrl?.animateToNext = null
+            turnCtrl?.animateToPrev = null
+        }
+    }
+
+    var diagDragMoves by remember { mutableIntStateOf(0) }
     Layout(
         modifier = modifier
             .onSizeChanged { viewportWidthPx = it.width }
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(
                     onDragStart = {
+                        com.morealm.app.core.log.AppLog.info("CoverRenderer", "DIAG onDragStart viewportW=$viewportWidthPx pageOffset=${state.pageOffset}")
+                        diagDragMoves = 0
                         flingJob?.cancel()
                         flingJob = null
                         velocityTracker.resetTracking()
                     },
                     onHorizontalDrag = { change, dragAmount ->
+                        if (diagDragMoves < 3) {
+                            com.morealm.app.core.log.AppLog.info("CoverRenderer", "DIAG onHorizontalDrag #$diagDragMoves dx=$dragAmount off=${state.pageOffset}")
+                        }
+                        diagDragMoves++
                         velocityTracker.addPosition(change.uptimeMillis, change.position)
                         val viewportW = viewportWidthPx.toFloat()
                         if (viewportW > 0f) {
@@ -132,6 +158,7 @@ fun CoverPageRenderer(
                     },
                     onDragEnd = {
                         val flingVelocity = velocityTracker.calculateVelocity().x
+                        com.morealm.app.core.log.AppLog.info("CoverRenderer", "DIAG onDragEnd moves=$diagDragMoves off=${state.pageOffset} vel=$flingVelocity")
                         flingJob?.cancel()
                         flingJob = scope.launch {
                             try {
