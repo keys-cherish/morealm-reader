@@ -339,6 +339,64 @@ fun PageLevelReaderHost(
             .filter { it.chapterIndex == page.chapterIndex && it.chapterPos in firstCp..lastCp }
             .map { it.chapterPos }
     }
+    // SLIDE 用 nextPage / nextPlusPage；COVER 用 nextPage / prevPage
+    val nextPageHighlightSpecs by androidx.compose.runtime.derivedStateOf {
+        val page = core.pageFactory.nextPage
+        if (page.chapterIndex < 0) return@derivedStateOf emptyList()
+        val chFiltered = chapterHighlightsRaw.filter { it.chapterIndex == page.chapterIndex }
+        val viewW = if (page.chapterIndex == core.state.currentChapter?.chapterIndex) {
+            core.state.currentChapter?.viewWidth
+        } else core.state.nextChapter?.viewWidth
+        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+            page, viewW ?: 1080, chFiltered,
+        )
+    }
+    val nextPlusPageHighlightSpecs by androidx.compose.runtime.derivedStateOf {
+        val page = core.pageFactory.nextPlusPage
+        if (page.chapterIndex < 0) return@derivedStateOf emptyList()
+        val chFiltered = chapterHighlightsRaw.filter { it.chapterIndex == page.chapterIndex }
+        val viewW = if (page.chapterIndex == core.state.currentChapter?.chapterIndex) {
+            core.state.currentChapter?.viewWidth
+        } else core.state.nextChapter?.viewWidth
+        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+            page, viewW ?: 1080, chFiltered,
+        )
+    }
+    val prevPageHighlightSpecs by androidx.compose.runtime.derivedStateOf {
+        val page = core.pageFactory.prevPage
+        if (page.chapterIndex < 0) return@derivedStateOf emptyList()
+        val chFiltered = chapterHighlightsRaw.filter { it.chapterIndex == page.chapterIndex }
+        val viewW = if (page.chapterIndex == core.state.currentChapter?.chapterIndex) {
+            core.state.currentChapter?.viewWidth
+        } else core.state.prevChapter?.viewWidth
+        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+            page, viewW ?: 1080, chFiltered,
+        )
+    }
+    val nextPageBookmarkCps by androidx.compose.runtime.derivedStateOf {
+        val page = core.pageFactory.nextPage
+        if (page.chapterIndex < 0 || page.lines.isEmpty()) return@derivedStateOf emptyList<Int>()
+        val firstCp = page.lines.first().firstChapterPos
+        val lastCp = page.lines.last().lastChapterPos
+        bookmarks.filter { it.chapterIndex == page.chapterIndex && it.chapterPos in firstCp..lastCp }
+            .map { it.chapterPos }
+    }
+    val nextPlusPageBookmarkCps by androidx.compose.runtime.derivedStateOf {
+        val page = core.pageFactory.nextPlusPage
+        if (page.chapterIndex < 0 || page.lines.isEmpty()) return@derivedStateOf emptyList<Int>()
+        val firstCp = page.lines.first().firstChapterPos
+        val lastCp = page.lines.last().lastChapterPos
+        bookmarks.filter { it.chapterIndex == page.chapterIndex && it.chapterPos in firstCp..lastCp }
+            .map { it.chapterPos }
+    }
+    val prevPageBookmarkCps by androidx.compose.runtime.derivedStateOf {
+        val page = core.pageFactory.prevPage
+        if (page.chapterIndex < 0 || page.lines.isEmpty()) return@derivedStateOf emptyList<Int>()
+        val firstCp = page.lines.first().firstChapterPos
+        val lastCp = page.lines.last().lastChapterPos
+        bookmarks.filter { it.chapterIndex == page.chapterIndex && it.chapterPos in firstCp..lastCp }
+            .map { it.chapterPos }
+    }
 
     // ── 选区 / 长按 / tap-on-highlight 状态（P4.4 接入）──
     // 共享在 Host 层（Legado ReadView 模型）：长按检测 + 选区状态 + 高亮 action 弹窗
@@ -399,17 +457,14 @@ fun PageLevelReaderHost(
                                 }
                             }
                         }
-                        // 优先级 4: zone tap 翻页（NONE 模式）/ onTapCenter
-                        if (animType == PageAnimType.NONE) {
-                            val w = size.width.toFloat()
-                            when {
-                                offset.x < w * 0.33f -> core.pageFactory.moveToPrev()
-                                offset.x > w * 0.67f -> core.pageFactory.moveToNext()
-                                else -> onTapCenter()
-                            }
-                        } else {
-                            // SLIDE/COVER zone tap 由 Renderer 自管（带动画）；这里只 onTapCenter
-                            onTapCenter()
+                        // 优先级 4: zone tap 翻页（所有横向 page-level 模式）。
+                        // NONE / COVER / SLIDE 都通过 Host 共享层 zone tap 翻页（瞬切语义）。
+                        // drag 期间的动画由各 Renderer 内部 own (settle-to-edge)。
+                        val w = size.width.toFloat()
+                        when {
+                            offset.x < w * 0.33f -> core.pageFactory.moveToPrev()
+                            offset.x > w * 0.67f -> core.pageFactory.moveToNext()
+                            else -> onTapCenter()
                         }
                     },
                     onLongPress = { offset ->
@@ -453,8 +508,52 @@ fun PageLevelReaderHost(
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
-                // TODO P4.next: PageAnimType.SLIDE -> SlidePageRenderer(...)
-                // TODO P5: PageAnimType.COVER -> CoverPageRenderer(...)
+                PageAnimType.SLIDE -> {
+                    SlidePageRenderer(
+                        state = core.state,
+                        pageFactory = core.pageFactory,
+                        backgroundColor = androidx.compose.ui.graphics.Color(bgColorArgb),
+                        contentPaint = contentPaint,
+                        titlePaint = titlePaint,
+                        chapterNumPaint = chapterNumPaint,
+                        revealHighlight = revealHighlight,
+                        searchHighlightChapterIndex = searchHighlightChapterIndex,
+                        searchHighlightCpRange = searchHighlightCpRange,
+                        searchHighlightArgb = searchHighlightArgb,
+                        selectionChapterIndex = selectionChapterIndex,
+                        selectionCpRange = selectionCpRange,
+                        curPageHighlightSpecs = curPageHighlightSpecs,
+                        nextPageHighlightSpecs = nextPageHighlightSpecs,
+                        nextPlusPageHighlightSpecs = nextPlusPageHighlightSpecs,
+                        curPageBookmarkCps = curPageBookmarkCps,
+                        nextPageBookmarkCps = nextPageBookmarkCps,
+                        nextPlusPageBookmarkCps = nextPlusPageBookmarkCps,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                PageAnimType.COVER -> {
+                    CoverPageRenderer(
+                        state = core.state,
+                        pageFactory = core.pageFactory,
+                        backgroundColor = androidx.compose.ui.graphics.Color(bgColorArgb),
+                        contentPaint = contentPaint,
+                        titlePaint = titlePaint,
+                        chapterNumPaint = chapterNumPaint,
+                        revealHighlight = revealHighlight,
+                        searchHighlightChapterIndex = searchHighlightChapterIndex,
+                        searchHighlightCpRange = searchHighlightCpRange,
+                        searchHighlightArgb = searchHighlightArgb,
+                        selectionChapterIndex = selectionChapterIndex,
+                        selectionCpRange = selectionCpRange,
+                        curPageHighlightSpecs = curPageHighlightSpecs,
+                        nextPageHighlightSpecs = nextPageHighlightSpecs,
+                        prevPageHighlightSpecs = prevPageHighlightSpecs,
+                        curPageBookmarkCps = curPageBookmarkCps,
+                        nextPageBookmarkCps = nextPageBookmarkCps,
+                        prevPageBookmarkCps = prevPageBookmarkCps,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
                 else -> {
                     NonePageRenderer(
                         state = core.state,

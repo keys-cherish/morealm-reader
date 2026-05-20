@@ -803,13 +803,14 @@ fun ReaderScreen(
                     footerRight = ftrRight,
                 ),
             )
-        } else if (pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.NONE && hasReaderTarget) {
-            // NONE（无动画翻页）走新 PageLevelReaderHost（page-level 横向 Host）。
-            // P3 阶段验证 page-level core 在新 Host 内能跑通基本功能：章节加载 / 跨章
-            // swap / zone tap 翻页。**当前缺**：选区 / 长按 / TTS / InfoBar / 高亮 /
-            // 书签 / 续读 JUMP / 进度上报 —— 后续阶段在 PageLevelReaderHost 内补全。
-            //
-            // COVER / SLIDE 仍走旧 CanvasRenderer，P4 / P5 阶段补到 PageLevelReaderHost。
+        } else if (
+            (pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.NONE ||
+                pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.COVER ||
+                pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.SLIDE) &&
+            hasReaderTarget
+        ) {
+            // NONE / COVER / SLIDE 三种横向翻页全走新 PageLevelReaderHost（page-level）。
+            // SIMULATION 仍走旧 CanvasRenderer (Legado 仿真翻页 P5 不动)。
             val density = LocalDensity.current
             val configuration = LocalConfiguration.current
             val viewWidthPx = with(density) { configuration.screenWidthDp.dp.toPx().toInt() }
