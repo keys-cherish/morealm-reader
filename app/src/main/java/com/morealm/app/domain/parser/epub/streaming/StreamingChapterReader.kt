@@ -56,32 +56,40 @@ object StreamingChapterReader {
         imgLookup: (src: String) -> String?,
         coverLookup: () -> String?,
     ): StructuredChapterContent {
-        val targetHref = chapter.url.substringBeforeLast("#")
-        AppLog.info(TAG, "read enter url=${chapter.url} target=$targetHref next=${chapter.nextUrl ?: "null"}")
-        if (targetHref.isEmpty()) {
+        val rawTargetHref = chapter.url.substringBeforeLast("#")
+        AppLog.info(TAG, "read enter url=${chapter.url} target=$rawTargetHref next=${chapter.nextUrl ?: "null"}")
+        if (rawTargetHref.isEmpty()) {
             AppLog.warn(TAG, "read empty targetHref → empty blocks")
             return StructuredChapterContent(emptyList())
         }
 
-        if (isCoverPage(targetHref)) {
-            val coverUrl = coverLookup()
-            AppLog.info(TAG, "read cover-page target=$targetHref coverUrl=${coverUrl ?: "null"}")
-            if (!coverUrl.isNullOrEmpty()) {
-                return StructuredChapterContent(listOf(ChapterBlock.Image(coverUrl)))
-            }
-            // cover bytes 不可用：fall through，按 XHTML 流式解析（cover.xhtml 里可能本来就 link img）
-        }
+        // chapter.url 是 ZIP 绝对路径（D.4 buildChapterListViaCore 输出的 toZipAbsHref
+        // 与 me.ag2s Resource.href 对齐），但 epub-core spine.items[].href 是 OPF 相对路径。
+        // 在 spine 查找前先 strip OPF dir 前缀，否则 indexOfFirst 永不匹配。
+        val opfDir = book.opfPath.substringBeforeLast('/', "")
+        val targetHref = stripOpfDir(opfDir, rawTargetHref)
 
         val startFragment = chapter.url.substringAfter("#", "").takeIf { it.isNotEmpty() }
         val endFragment = chapter.nextUrl?.substringAfter("#", "")?.takeIf { it.isNotEmpty() }
-        val nextHref = chapter.nextUrl?.substringBeforeLast("#")
+        val nextHref = chapter.nextUrl
+            ?.substringBeforeLast("#")
+            ?.let { stripOpfDir(opfDir, it) }
 
         val spine = book.spine.items
         val startIdx = spine.indexOfFirst { it.href == targetHref }
-        AppLog.info(TAG, "read spine.size=${spine.size} startIdx=$startIdx start=$startFragment end=$endFragment")
+        AppLog.info(TAG, "read spine.size=${spine.size} startIdx=$startIdx opfDir='$opfDir' opfRelTarget='$targetHref' start=$startFragment end=$endFragment")
         if (startIdx < 0) {
             val preview = spine.take(8).map { it.href }
             AppLog.warn(TAG, "read spine miss target=$targetHref; first hrefs=$preview")
+            // spine miss 时退到 cover lookup 兜底（少数 EPUB 把 cover xhtml 不放 spine
+            // 而是单独 manifest item；此时退到 metadata.cover 至少能显示一张封面图）
+            if (isCoverPage(targetHref)) {
+                val coverUrl = coverLookup()
+                if (!coverUrl.isNullOrEmpty()) {
+                    AppLog.info(TAG, "read spine miss but cover-page fallback coverUrl=$coverUrl")
+                    return StructuredChapterContent(listOf(ChapterBlock.Image(coverUrl)))
+                }
+            }
             return StructuredChapterContent(emptyList())
         }
 
@@ -131,7 +139,10 @@ object StreamingChapterReader {
             out
         }
         val imgRewrite = ImgRewriteVisitor(builder, chapterRelativeLookup)
-        val tableMerge = TableMergeVisitor(imgRewrite)
+        // forwardImages=true：日文轻小说封面 / 标题页常用 table 排版（chibi 角色头像 +
+        // 单字大字标题混在 table cell 里）。默认 false 会把 table 内的 img 全吞掉，
+        // 导致用户看到的标题页只有文字没有图。开启后 img block 独立 emit，段落仍合并。
+        val tableMerge = TableMergeVisitor(imgRewrite, forwardImages = true)
         val rubyRewrite = RubyRewriteVisitor(tableMerge)
         val svgRewrite = SvgImageRewriteVisitor(rubyRewrite)
         val fragmentSlice = FragmentSliceVisitor(svgRewrite, startFragment, endFragment)
@@ -175,5 +186,19 @@ object StreamingChapterReader {
     private fun isCoverPage(href: String): Boolean {
         val normalized = href.lowercase()
         return normalized.contains("titlepage.xhtml") || normalized.contains("cover")
+    }
+
+    /**
+     * Strip OPF dir prefix from a ZIP-absolute href to match
+     * [com.morealm.epub.Chapter.href] which uses OPF-relative paths.
+     *
+     * "OEBPS/Text/cover.xhtml" + opfDir "OEBPS" → "Text/cover.xhtml"
+     * "Text/cover.xhtml" + opfDir "OEBPS" → "Text/cover.xhtml"  (idempotent)
+     * "cover.xhtml" + opfDir "" → "cover.xhtml"                  (OPF in root)
+     */
+    private fun stripOpfDir(opfDir: String, href: String): String {
+        if (opfDir.isEmpty()) return href
+        val prefix = "$opfDir/"
+        return if (href.startsWith(prefix)) href.removePrefix(prefix) else href
     }
 }

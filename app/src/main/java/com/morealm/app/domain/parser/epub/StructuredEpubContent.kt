@@ -88,4 +88,32 @@ data class StructuredChapterContent(val blocks: List<ChapterBlock>) {
             }
         }
     }
+
+    /**
+     * 把结构化块列表展平成与老 [com.morealm.app.domain.parser.EpubParser.formatKeepImg]
+     * 输出兼容的纯文本 + `<img src>` 字符串 —— L1.5 桥接路径用：让 streaming 解析的
+     * 结果能直接喂给当前 reader 字符串排版层（30+ 渲染文件不动）。
+     *
+     * 输出契约：
+     *  - 每个块一行，行间用 `\n` 分隔（与 formatKeepImg 单 \n 段距对齐）
+     *  - Heading / Paragraph 直接吐文本（Heading 不加任何前缀 —— 老 reader 字符串排版
+     *    本来就无法区分；L2 之后渲染层接 ChapterBlock 才能用 Heading.level 改字号）
+     *  - Image 输出 `<img src="...">`，老 formatImageRegex 能识别 + 单独渲染图块
+     *  - 全局 trim 去掉首尾空白
+     */
+    fun flattenToString(): String {
+        if (blocks.isEmpty()) return ""
+        val sb = StringBuilder()
+        for (block in blocks) {
+            val line = when (block) {
+                is ChapterBlock.Heading -> block.text
+                is ChapterBlock.Paragraph -> block.text
+                is ChapterBlock.Image -> "<img src=\"${block.src}\">"
+            }
+            if (line.isEmpty()) continue
+            if (sb.isNotEmpty()) sb.append('\n')
+            sb.append(line)
+        }
+        return sb.toString()
+    }
 }

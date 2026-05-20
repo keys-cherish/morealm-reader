@@ -52,7 +52,10 @@ object EpubParser {
     // 共用 cache 文件 → 第二个 navPoint 起永远返回首次内容（用户报"无论跳哪章都显示首章"
     // 的根因，2026-05-18）。v4 起 cache key 用 chapter.url 完整 url 含 fragment，
     // 旧 v3 cache 全部失效，第一次打开重新解析。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v4"
+    // v6 = streaming 修复轮 2（strip OPF dir + cover short-circuit 移除 + TableMerge
+    // forwardImages + extractCover book.resource 兜底）。v5 cache 写入时的 streaming
+    // 仍 spine miss / cover miss，留下脏内容。每次 streaming 逻辑改动必须 bump 版本号。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v6"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
@@ -1031,44 +1034,12 @@ object EpubParser {
         val cached = readCachedChapter(context, uri, cacheKey)
         if (cached != null) return cached
 
-        // Read via epublib random access
-        val content = withEpubBook(context, uri) { book ->
-            val contents = book.contents ?: return@withEpubBook ""
-            val nextHref = chapter.nextUrl?.substringBeforeLast("#")
-            val startFragment = chapter.url.substringAfter("#", "").takeIf { it.isNotEmpty() }
-            val endFragment = chapter.nextUrl?.substringAfter("#", "")?.takeIf { it.isNotEmpty() }
-
-            val elements = org.jsoup.select.Elements()
-            // Use href index map for O(1) start lookup instead of linear scan
-            val startIdx = hrefIndexFor(uri)?.get(targetHref) ?: contents.indexOfFirst { it.href == targetHref }
-            if (startIdx < 0) {
-                val preview = contents.take(8).map { it.href }
-                AppLog.warn(
-                    "EpubParser",
-                    "readChapter MISS target='$targetHref' chapterUrl='${chapter.url}' " +
-                        "contents.size=${contents.size} preview=$preview",
-                )
-                return@withEpubBook ""
-            }
-            AppLog.info(
-                "EpubParser",
-                "readChapter FOUND target='$targetHref' startIdx=$startIdx nextHref='$nextHref' " +
-                    "startFrag='$startFragment' endFrag='$endFragment'",
-            )
-
-            elements.add(parseBody(contents[startIdx], startFragment, endFragment.takeIf { contents[startIdx].href == nextHref }))
-            if (nextHref == null || contents[startIdx].href != nextHref) {
-                for (i in (startIdx + 1) until contents.size) {
-                    val res = contents[i]
-                    if (nextHref != null && res.href == nextHref) {
-                        if (endFragment != null) elements.add(parseBody(res, null, endFragment))
-                        break
-                    }
-                    elements.add(parseBody(res, null, null))
-                }
-            }
-            processContent(elements, context, uri, targetHref, book)
-        } ?: ""
+        // L1.5 桥接：内部走自研 streaming（epub-core + visitor chain），最后 flatten
+        // 成 String 喂给当前 reader 字符串排版层。对外签名不变，渲染层 / 4 个翻页动画
+        // / 其他 format 全部零影响。me.ag2s parseBody + sanitizeAndRewriteImages +
+        // formatKeepImg 老链在 readChapter 路径下线（preCacheChapters 老路径暂留）。
+        val structured = readChapterStructured(context, uri, chapter)
+        val content = if (structured.isEmpty()) "" else structured.flattenToString()
 
         if (content.isNotEmpty()) writeCachedChapter(context, uri, cacheKey, content)
         return content
@@ -1305,9 +1276,13 @@ object EpubParser {
             return cachedFile
         }
 
-        val bytes = book.resourceByZipName(coverHref)
+        // epub-core Metadata.coverHref 实际填的是 OPF 相对路径（"Images/cover.jpg"），
+        // 文档写的是 ZIP 绝对路径其实不准。先用 resource() 走 PathUtil.resolve 拼 OPF 前缀；
+        // 若仍 miss（个别 EPUB coverHref 真填的是 ZIP 绝对路径如 "OEBPS/Images/cover.jpg"），
+        // 兜底再走 resourceByZipName。
+        val bytes = book.resource(coverHref) ?: book.resourceByZipName(coverHref)
         if (bytes == null) {
-            AppLog.warn("EpubParser", "extractCover zip miss coverHref=$coverHref")
+            AppLog.warn("EpubParser", "extractCover miss coverHref=$coverHref (both opf-rel and zip-abs)")
             return null
         }
         cacheDir.mkdirs()
@@ -1675,11 +1650,12 @@ object EpubParser {
             "preCacheChapters start: around=$aroundIndex window=[$start..${end - 1}]" +
                 " total=${chapters.size} uncached=${uncached.size}",
         )
-        withEpubBook(context, uri) { book ->
-            for (ch in uncached) {
-                val content = readChapterFromBook(book, ch, context, uri)
-                if (content.isNotEmpty()) writeCachedChapter(context, uri, ch.url, content)
-            }
+        // L1.5：直接调主入口 readChapter，内部走 streaming + 写 cache。
+        // 老 readChapterFromBook + withEpubBook(me.ag2s) 路径在 preCache 也下线 —— 不再写
+        // 老 formatKeepImg 格式到新 v5 cache，避免格式漂移。readChapter 自带 cache hit check，
+        // 对已 cached 章节 short-circuit。
+        for (ch in uncached) {
+            readChapter(context, uri, ch)
         }
         AppLog.info(
             "EpubParser",
