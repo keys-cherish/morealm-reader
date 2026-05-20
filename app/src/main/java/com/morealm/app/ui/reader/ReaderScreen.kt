@@ -850,6 +850,8 @@ fun ReaderScreen(
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
                 bgColorArgb = readerBg.toArgb(),
                 restoreToken = renderedChapter.restoreToken,
+                onChapterProgressLive = { _, prog -> viewModel.updateScrollProgress(prog) },
+                onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
                 infoBar = ScrollCanvasInfoBarConfig(
                     chaptersSize = chapters.size,
                     textColor = readerFg,
