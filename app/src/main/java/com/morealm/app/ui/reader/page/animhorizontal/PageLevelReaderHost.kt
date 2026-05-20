@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -242,6 +243,7 @@ fun PageLevelReaderHost(
             titleMode = titleMode,
             titleAlign = titleAlign,
             textFullJustify = textFullJustify,
+            pageLevelMode = true,
         )
     }
 
@@ -418,8 +420,12 @@ fun PageLevelReaderHost(
 
     // ── zone tap → 各 Renderer 自身动画 commit（Legado PageDelegate 模型）──
     // SLIDE/COVER Renderer 通过 turnCtrl 注入 animateAndCommit lambda；NONE 不注册 → fallback 瞬切。
+    // currentAnimJob 串行化连点：新 tap 启动前 cancelAndJoin 前一个 → 前一次 finally 立即
+    // commit 翻页（pageFactory.moveToNext + reset offset），再 launch 新动画。视觉等价 Legado
+    // abortAnim()+fillPage：连点 N 次翻 N 页不丢。
     val turnCtrl = remember { PageTurnAnimController() }
     val tapScope = rememberCoroutineScope()
+    var currentAnimJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     // ── 选区 / 长按 / tap-on-highlight 状态（P4.4 接入）──
     // 共享在 Host 层（Legado ReadView 模型）：长按检测 + 选区状态 + 高亮 action 弹窗
@@ -493,13 +499,23 @@ fun PageLevelReaderHost(
                         when {
                             offset.x < w * 0.33f -> {
                                 val animate = turnCtrl.animateToPrev
-                                if (animate != null) tapScope.launch { animate() }
-                                else core.pageFactory.moveToPrev()
+                                if (animate != null) {
+                                    val prev = currentAnimJob
+                                    currentAnimJob = tapScope.launch {
+                                        prev?.cancelAndJoin()
+                                        animate()
+                                    }
+                                } else core.pageFactory.moveToPrev()
                             }
                             offset.x > w * 0.67f -> {
                                 val animate = turnCtrl.animateToNext
-                                if (animate != null) tapScope.launch { animate() }
-                                else core.pageFactory.moveToNext()
+                                if (animate != null) {
+                                    val prev = currentAnimJob
+                                    currentAnimJob = tapScope.launch {
+                                        prev?.cancelAndJoin()
+                                        animate()
+                                    }
+                                } else core.pageFactory.moveToNext()
                             }
                             else -> onTapCenter()
                         }
