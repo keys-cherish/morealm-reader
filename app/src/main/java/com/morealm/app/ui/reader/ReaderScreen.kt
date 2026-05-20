@@ -850,6 +850,9 @@ fun ReaderScreen(
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
                 bgColorArgb = readerBg.toArgb(),
                 restoreToken = renderedChapter.restoreToken,
+                initialChapterPosition = renderedChapter.initialChapterPosition,
+                initialProgress = renderedChapter.initialProgress,
+                onProgressRestored = { viewModel.clearNavigateDirection() },
                 onChapterProgressLive = { _, prog -> viewModel.updateScrollProgress(prog) },
                 onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
                 infoBar = ScrollCanvasInfoBarConfig(
