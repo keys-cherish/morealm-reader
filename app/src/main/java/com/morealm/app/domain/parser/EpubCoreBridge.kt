@@ -27,20 +27,89 @@ object EpubCoreBridge {
 
     private const val TAG = "EpubCoreBridge"
     private const val TMP_DIR = "epub-core-tmp"
+    private const val CACHE_CAPACITY = 3
+
+    // LRU cache for opened EpubBook instances. accessOrder = true → 最近用的留下，
+    // 超过 capacity 的 eldest 被 close 释放。LinkedHashMap 自身非线程安全，所有访问
+    // 包 synchronized(lock)。漫画并发读图片场景下减少 ZIP 重开开销（mmap + OPF 解析）。
+    private val cache: LinkedHashMap<String, EpubBook> =
+        object : LinkedHashMap<String, EpubBook>(CACHE_CAPACITY, 0.75f, true) {
+            override fun removeEldestEntry(eldest: Map.Entry<String, EpubBook>): Boolean {
+                if (size > CACHE_CAPACITY) {
+                    runCatching { eldest.value.close() }
+                    return true
+                }
+                return false
+            }
+        }
+    private val lock = Any()
 
     /**
      * 用 epub-core 打开 [uri] 指向的 EPUB，在 [block] 内访问 [EpubBook]。
-     * book 在 block 结束（含异常）后自动 close。返回 block 的结果，或 null 当打开失败。
+     *
+     * - file:// URI（Phase A 后的新书 / 已迁移老书）→ 命中 LRU cache，零开销复用；
+     *   未命中则 [EpubBook.open] 后加入 cache，未来阅读 / 漫画图片读取共享同实例。
+     * - content:// URI（未迁移老书）→ 每次复制到 tmp + open + use.close，**不入 cache**
+     *   （tmp 文件可能被 mmap 引用，乱删会出错；走单次路径绕开）。
+     *
+     * block 异常被吞掉返回 null；底层 IO 错误（open 失败 / 解析 OPF 失败）也返回 null。
      */
     fun <R> withCoreBook(context: Context, uri: Uri, block: (EpubBook) -> R?): R? {
         val resolved = resolvePath(context, uri) ?: return null
+        val key = resolved.file.absolutePath
+        // content:// 临时文件不入 cache，单次 open + use.close
+        if (resolved.isTmp) {
+            return try {
+                EpubBook.open(key).use { book -> block(book) }
+            } catch (t: Throwable) {
+                AppLog.error(TAG, "tmp-open failed uri=$uri: ${t.message}", t)
+                null
+            } finally {
+                resolved.file.delete()
+            }
+        }
+        val book = obtainCached(key) ?: return null
         return try {
-            EpubBook.open(resolved.file.absolutePath).use { book -> block(book) }
+            block(book)
         } catch (t: Throwable) {
-            AppLog.error(TAG, "open failed uri=$uri path=${resolved.file.absolutePath}: ${t.message}", t)
+            AppLog.error(TAG, "block failed uri=$uri path=$key: ${t.message}", t)
             null
-        } finally {
-            if (resolved.isTmp) resolved.file.delete()
+        }
+    }
+
+    /** 关闭 [uri] 对应的 cache entry（如果存在）。caller 在书被删除 / 替换时调用。 */
+    fun invalidate(context: Context, uri: Uri) {
+        val resolved = resolvePath(context, uri) ?: return
+        if (resolved.isTmp) {
+            resolved.file.delete()
+            return
+        }
+        synchronized(lock) {
+            cache.remove(resolved.file.absolutePath)?.let { runCatching { it.close() } }
+        }
+    }
+
+    private fun obtainCached(key: String): EpubBook? {
+        synchronized(lock) {
+            val hit = cache[key]
+            if (hit != null) return hit
+        }
+        // open 在 lock 外，避免 IO 期间阻塞其他 cache 读
+        val opened = try {
+            EpubBook.open(key)
+        } catch (t: Throwable) {
+            AppLog.error(TAG, "open failed path=$key: ${t.message}", t)
+            return null
+        }
+        synchronized(lock) {
+            // double-check：lock 外另一线程可能已经把同 key open 加进 cache
+            val racing = cache[key]
+            if (racing != null) {
+                runCatching { opened.close() }
+                return racing
+            }
+            cache[key] = opened
+            return opened
         }
     }
 
