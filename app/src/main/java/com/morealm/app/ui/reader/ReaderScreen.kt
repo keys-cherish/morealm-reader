@@ -638,6 +638,7 @@ fun ReaderScreen(
                 } else {
                     com.morealm.app.domain.render.ReadingDirection.VERTICAL_RL
                 },
+                bgImageUri = readerBgImage,
             )
         } else if (pageTurnMode == PageTurnMode.SCROLL && hasReaderTarget) {
             // SCROLL 模式专用 V2 Canvas 引擎（独立排版 + 三块面板 + pixelOffset）。
