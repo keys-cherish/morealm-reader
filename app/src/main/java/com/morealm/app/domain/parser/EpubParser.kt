@@ -45,10 +45,10 @@ object EpubParser {
     // 共用 cache 文件 → 第二个 navPoint 起永远返回首次内容（用户报"无论跳哪章都显示首章"
     // 的根因，2026-05-18）。v4 起 cache key 用 chapter.url 完整 url 含 fragment，
     // 旧 v3 cache 全部失效，第一次打开重新解析。
-    // v8 = epub-core hotfix（percent-decoded href fallback）。v7 cache 里某些
-    // 章节 url 含 %20 / %E4%B8%AD 等 percent-encoded path 时被解析成「本章暂无内容」
-    // 占位字符串，bump 让重新解析。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v8"
+    // v9 = LocalBookParser.isEmptyChapter 阈值放宽（< 8 → < 1）。之前某 EPUB toc
+    // 嵌套人物名 "样本人物"3 char 被误判 empty 兜底；现允许任意 trim 后非空内容
+    // 通过。v8 cache 内某些 chapter 已被错存为占位字符串，bump 失效。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v9"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
