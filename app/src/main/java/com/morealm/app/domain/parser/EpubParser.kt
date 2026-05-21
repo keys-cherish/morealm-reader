@@ -48,7 +48,10 @@ object EpubParser {
     // v9 = LocalBookParser.isEmptyChapter 阈值放宽（< 8 → < 1）。之前某 EPUB toc
     // 嵌套人物名 "样本人物"3 char 被误判 empty 兜底；现允许任意 trim 后非空内容
     // 通过。v8 cache 内某些 chapter 已被错存为占位字符串，bump 失效。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v10"
+    // v11：P3-5b Phase 3 上线后，v10 缓存可能是仅 Phase 3a flatten 生效但 Phase 3b 解码未上的
+    // 局部构建产物（markers 进 cache 但 ChapterProvider 不会解码）。bump 强制重新 flatten +
+    // 同步走到 Phase 3b 解码路径。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v11"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
