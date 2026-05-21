@@ -320,6 +320,13 @@ private fun drawBlockStyleDecoration(
     val bs = line.blockStyle
     if (bs === BlockStyle.EMPTY) return
     if (line.columns.isEmpty()) return
+    com.morealm.app.core.log.AppLog.info(
+        "P3-5b/Diag",
+        "drawBlockStyleDecoration FIRE bg=${bs.backgroundColor?.toString(16)} " +
+            "borderColor=${bs.borderColor?.toString(16)} bs=${bs.borderStyle} " +
+            "bw=${bs.borderWidthPx} br=${bs.borderRadiusPx} " +
+            "linePos=${lineTop}..$lineBottom",
+    )
 
     // 计算内容水平范围：所有 column 的最左 start ~ 最右 end
     var leftX = Float.MAX_VALUE
