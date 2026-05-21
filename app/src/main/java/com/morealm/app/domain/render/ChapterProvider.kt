@@ -249,12 +249,25 @@ class ChapterProvider(
         // P3-5b Phase 3 修复：content 含 BLOCK_STYLE_MARKER 时强制走 parseHtmlParagraphs
         // 让 marker 被解码。原 isHtml 仅检测 `<`/`<p>`/`<div>`/`<img>` 在 EPUB Heading 首块
         // 时 content 首字符是中文（如"简介"）→ isHtml=false → 走 else 分支跳过 marker decode。
+        val hasMarker = content.contains(StructuredChapterContent.BLOCK_STYLE_MARKER)
         val isHtml = content.trimStart().let {
             it.startsWith("<") && (it.contains("<p") || it.contains("<div") || it.contains("<img"))
-        } || content.contains(StructuredChapterContent.BLOCK_STYLE_MARKER)
+        } || hasMarker
+        com.morealm.app.core.log.AppLog.info(
+            "P3-5b/Diag",
+            "layoutInternal ENTER title='$title' contentLen=${content.length} " +
+                "hasMarker=$hasMarker isHtml=$isHtml " +
+                "head60='${content.take(60).replace("\n", "\\n")}'",
+        )
         val rawParagraphs = if (isHtml) parseHtmlParagraphs(content) else {
             content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
         }
+        val styledCount = rawParagraphs.count { it.blockStyle !== BlockStyle.EMPTY }
+        com.morealm.app.core.log.AppLog.info(
+            "P3-5b/Diag",
+            "layoutInternal AFTER-PARSE title='$title' paragraphs=${rawParagraphs.size} " +
+                "withBlockStyle=$styledCount",
+        )
         // EPUB 章首常有正文级 h1-h6 章节标题段（如《某 EPUB》的
         // `<h2 class="head1">第一章</h2><h2 class="head">惊蛰</h2>`）。ChapterProvider
         // 下面会用 chapter.title 自画一份「chapter num 小字 + 主标题大字 + 装饰横线」
@@ -1121,6 +1134,24 @@ class ChapterProvider(
             .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
             .replace("&nbsp;", " ").replace("&quot;", "\"")
         val cleaned = text.replace(nonImgTagRegex, "")
+        // P3-5b Phase 3 diag\uff1aparseHtmlParagraphs \u5165\u53e3 + \u542b marker \u7684\u884c\u660e\u7ec6
+        val markerLines = cleaned.lines().filter {
+            it.contains("__MOREALM_BLOCK_STYLE__")
+        }
+        com.morealm.app.core.log.AppLog.info(
+            "P3-5b/Diag",
+            "parseHtmlParagraphs ENTER totalLines=${cleaned.lines().size} markerLines=${markerLines.size}",
+        )
+        for ((idx, ml) in markerLines.withIndex()) {
+            val tt = ml.trim { it.code <= 0x20 || it == '\u3000' }
+            com.morealm.app.core.log.AppLog.info(
+                "P3-5b/Diag",
+                "  [$idx] startsWithBSM=${tt.startsWith(StructuredChapterContent.BLOCK_STYLE_MARKER)} " +
+                    "startsWithCTM=${tt.startsWith(chapterTitleMarker)} " +
+                    "len=${tt.length} head80='${tt.take(80)}' " +
+                    "chars0to5=[${tt.take(5).map { it.code.toString(16) }.joinToString(",")}]",
+            )
+        }
         return cleaned.lines().mapNotNull { line ->
             val trimmed = line.trim { it.code <= 0x20 || it == '\u3000' }
             when {
@@ -1143,6 +1174,10 @@ class ChapterProvider(
                     // P3-5b Phase 3b\uff1aBlockStyle inline marker
                     // \u683c\u5f0f\uff1a__MOREALM_BLOCK_STYLE__<payload>__/MOREALM_BLOCK_STYLE__<text>
                     val endIdx = trimmed.indexOf(StructuredChapterContent.BLOCK_STYLE_END)
+                    com.morealm.app.core.log.AppLog.info(
+                        "P3-5b/Diag",
+                        "BSM branch HIT endIdx=$endIdx head80='${trimmed.take(80)}'",
+                    )
                     if (endIdx < 0) {
                         // Malformed \u2014\u2014 \u5f53\u4f5c\u7eaf\u6587\u672c\u515c\u5e95\uff08\u53bb\u6389\u9996\u90e8 marker \u6b8b\u7559\uff09
                         normalizeParagraph(
@@ -1156,6 +1191,14 @@ class ChapterProvider(
                             endIdx + StructuredChapterContent.BLOCK_STYLE_END.length,
                         )
                         val blockStyle = StructuredChapterContent.decodeBlockStyle(payload)
+                        com.morealm.app.core.log.AppLog.info(
+                            "P3-5b/Diag",
+                            "  payload='$payload' bodyText='${bodyText.take(40)}' " +
+                                "bs=bg=${blockStyle.backgroundColor?.toString(16)} " +
+                                "borderColor=${blockStyle.borderColor?.toString(16)} " +
+                                "borderStyle=${blockStyle.borderStyle} " +
+                                "bw=${blockStyle.borderWidthPx} br=${blockStyle.borderRadiusPx}",
+                        )
                         normalizeParagraph(bodyText)?.let { txt ->
                             LayoutParagraph(txt, blockStyle = blockStyle)
                         }
