@@ -198,6 +198,13 @@ fun PagePaneCanvas(
                 // c-co-lan1 蓝色。优先级：用户高亮 (textColorByCp) > paragraph textColor > paint 默认
                 val paragraphColor = line.blockStyle.textColor
                 if (paragraphColor != null) paint.color = paragraphColor
+                // P3-5b Step 2b：text-shadow（c-shadow-* 的彩色描边光晕）
+                val ts = line.blockStyle.textShadow
+                if (ts != null) {
+                    // blur=0 时 Paint.setShadowLayer 不画 shadow；CSS 锐影用 0.5 兜底
+                    val r = if (ts.blurRadius > 0f) ts.blurRadius else 0.5f
+                    paint.setShadowLayer(r, ts.offsetX, ts.offsetY, ts.color)
+                }
                 for (col in line.columns) {
                     val overrideColor = textColorByCp[col.chapterPosition]
                     if (overrideColor != null) {
@@ -208,8 +215,9 @@ fun PagePaneCanvas(
                         nc.drawText(col.charData, col.start, baselineY, paint)
                     }
                 }
-                // 还原 paint —— 避免段落色污染下一 line 共享 paint
+                // 还原 paint —— 避免段落色 / shadow 污染下一 line 共享 paint
                 if (paragraphColor != null) paint.color = defaultColor
+                if (ts != null) paint.clearShadowLayer()
             }
 
             // ─── 层 3：下划线 ───

@@ -48,9 +48,9 @@ object EpubParser {
     // v9 = LocalBookParser.isEmptyChapter 阈值放宽（< 8 → < 1）。之前某 EPUB toc
     // 嵌套人物名 "样本人物"3 char 被误判 empty 兜底；现允许任意 trim 后非空内容
     // 通过。v8 cache 内某些 chapter 已被错存为占位字符串，bump 失效。
-    // v13：P3-5b Step 2a 白底白字防御 —— effectiveStyleFor 改为 bg 非空才染 textColor
-    // 避免 `<div class="co-bai">` 整段白字在 cream bg 上不可见。cache 内容 fc 字段会减少。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v13"
+    // v14：P3-5b Step 2b text-shadow 解析 + ts=<argb>,<dx>,<dy>,<blur> 编码进 marker。
+    // cache 旧版本没这字段；bump 强制重 flatten 让 c-shadow-* 类生效。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v14"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
