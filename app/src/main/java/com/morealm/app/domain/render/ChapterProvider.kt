@@ -12,6 +12,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import com.morealm.app.core.text.AppPattern
+import com.morealm.epub.compat.BlockStyle
+import com.morealm.epub.compat.StructuredChapterContent
 import kotlin.math.roundToInt
 
 /**
@@ -350,6 +352,7 @@ class ChapterProvider(
                     isTitle = true,
                     isChapterNum = paragraph.isChapterNum,
                     forceLeftTitle = true,
+                    blockStyle = paragraph.blockStyle,
                 )
                 absStartX = r.first
                 durY = r.second
@@ -380,6 +383,7 @@ class ChapterProvider(
                             absStartX, durY, textBefore, textPages, stringBuilder,
                             contentPaint, contentPaintTextHeight, contentPaintFontMetrics,
                             floatArray, isFirstLine = start == 0,
+                            blockStyle = paragraph.blockStyle,
                         )
                         absStartX = r.first; durY = r.second
                     }
@@ -398,6 +402,7 @@ class ChapterProvider(
                             absStartX, durY, remaining, textPages, stringBuilder,
                             contentPaint, contentPaintTextHeight, contentPaintFontMetrics,
                             floatArray, isFirstLine = start == 0,
+                            blockStyle = paragraph.blockStyle,
                         )
                         absStartX = r.first; durY = r.second
                     }
@@ -407,6 +412,7 @@ class ChapterProvider(
                     absStartX, durY, para, textPages, stringBuilder,
                     contentPaint, contentPaintTextHeight, contentPaintFontMetrics,
                     floatArray,
+                    blockStyle = paragraph.blockStyle,
                 )
                 absStartX = r.first; durY = r.second
             }
@@ -772,6 +778,8 @@ class ChapterProvider(
         isVolumeTitle: Boolean = false,
         isChapterNum: Boolean = false,
         forceLeftTitle: Boolean = false,
+        /** P3-5b Phase 3：paragraph 携带的 CSS box 装饰，复制到本次产出的每个 TextLine */
+        blockStyle: BlockStyle = BlockStyle.EMPTY,
     ): Pair<Int, Float> {
         var absStartX = x
         val widthsArray = allocateFloatArray(text.length, floatArray)
@@ -809,7 +817,7 @@ class ChapterProvider(
         }
 
         for (lineIndex in 0 until layout.lineCount) {
-            val textLine = TextLine(isTitle = isTitle, isChapterNum = isChapterNum)
+            val textLine = TextLine(isTitle = isTitle, isChapterNum = isChapterNum, blockStyle = blockStyle)
             if (durY + textHeight > visibleHeight) {
                 val textPage = textPages.last()
                 if (doublePage && absStartX < viewWidth / 2) {
@@ -1111,22 +1119,45 @@ class ChapterProvider(
         val cleaned = text.replace(nonImgTagRegex, "")
         return cleaned.lines().mapNotNull { line ->
             val trimmed = line.trim { it.code <= 0x20 || it == '\u3000' }
-            if (trimmed.startsWith(chapterTitleMarker)) {
-                val markedTitle = trimmed.removePrefix(chapterTitleMarker).trim()
-                val isChapterNum = markedTitle.startsWith(chapterNumMarker)
-                val isChapterSubTitle = markedTitle.startsWith(chapterSubMarker)
-                val title = markedTitle
-                    .removePrefix(chapterNumMarker)
-                    .removePrefix(chapterSubMarker)
-                    .trim()
-                if (title.isEmpty()) null else LayoutParagraph(
-                    title,
-                    isChapterTitle = true,
-                    isChapterNum = isChapterNum,
-                    isChapterSubTitle = isChapterSubTitle,
-                )
-            } else {
-                normalizeParagraph(line)?.let(::LayoutParagraph)
+            when {
+                trimmed.startsWith(chapterTitleMarker) -> {
+                    val markedTitle = trimmed.removePrefix(chapterTitleMarker).trim()
+                    val isChapterNum = markedTitle.startsWith(chapterNumMarker)
+                    val isChapterSubTitle = markedTitle.startsWith(chapterSubMarker)
+                    val title = markedTitle
+                        .removePrefix(chapterNumMarker)
+                        .removePrefix(chapterSubMarker)
+                        .trim()
+                    if (title.isEmpty()) null else LayoutParagraph(
+                        title,
+                        isChapterTitle = true,
+                        isChapterNum = isChapterNum,
+                        isChapterSubTitle = isChapterSubTitle,
+                    )
+                }
+                trimmed.startsWith(StructuredChapterContent.BLOCK_STYLE_MARKER) -> {
+                    // P3-5b Phase 3b\uff1aBlockStyle inline marker
+                    // \u683c\u5f0f\uff1a__MOREALM_BLOCK_STYLE__<payload>__/MOREALM_BLOCK_STYLE__<text>
+                    val endIdx = trimmed.indexOf(StructuredChapterContent.BLOCK_STYLE_END)
+                    if (endIdx < 0) {
+                        // Malformed \u2014\u2014 \u5f53\u4f5c\u7eaf\u6587\u672c\u515c\u5e95\uff08\u53bb\u6389\u9996\u90e8 marker \u6b8b\u7559\uff09
+                        normalizeParagraph(
+                            trimmed.removePrefix(StructuredChapterContent.BLOCK_STYLE_MARKER),
+                        )?.let(::LayoutParagraph)
+                    } else {
+                        val payload = trimmed.substring(
+                            StructuredChapterContent.BLOCK_STYLE_MARKER.length, endIdx,
+                        )
+                        val bodyText = trimmed.substring(
+                            endIdx + StructuredChapterContent.BLOCK_STYLE_END.length,
+                        )
+                        val blockStyle = StructuredChapterContent.decodeBlockStyle(payload)
+                        normalizeParagraph(bodyText)?.let { txt ->
+                            LayoutParagraph(txt, blockStyle = blockStyle)
+                        }
+                    }
+                }
+                else -> normalizeParagraph(line)?.let(::LayoutParagraph)
             }
         }
     }
@@ -1195,6 +1226,12 @@ class ChapterProvider(
         val isChapterTitle: Boolean = false,
         val isChapterNum: Boolean = false,
         val isChapterSubTitle: Boolean = false,
+        /**
+         * **P3-5b Phase 3**：CSS box 装饰（圆角背景 / 边框）。由 [parseHtmlParagraphs]
+         * 处理 `__MOREALM_BLOCK_STYLE__` inline marker 后填，[setTypeText] 创建 TextLine
+         * 时复制到 [TextLine.blockStyle]。
+         */
+        val blockStyle: BlockStyle = BlockStyle.EMPTY,
     )
 
     /**
