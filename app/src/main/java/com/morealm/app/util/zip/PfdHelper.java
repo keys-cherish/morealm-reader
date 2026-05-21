@@ -1,6 +1,6 @@
-package me.ag2s.base;
+package com.morealm.app.util.zip;
 
-import static me.ag2s.base.ThrowableUtils.rethrowAsIOException;
+import static com.morealm.app.util.zip.ThrowableUtils.rethrowAsIOException;
 
 import android.os.ParcelFileDescriptor;
 import android.system.ErrnoException;

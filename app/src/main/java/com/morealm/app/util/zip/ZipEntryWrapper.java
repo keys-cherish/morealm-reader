@@ -1,4 +1,4 @@
-package me.ag2s.epublib.util.zip;
+package com.morealm.app.util.zip;
 
 import androidx.annotation.NonNull;
 
