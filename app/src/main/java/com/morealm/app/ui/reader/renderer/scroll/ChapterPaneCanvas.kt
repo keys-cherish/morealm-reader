@@ -251,7 +251,8 @@ fun ChapterPaneCanvas(
                         paint.setShadowLayer(r, ts.offsetX, ts.offsetY, ts.color)
                     }
                     for (col in line.columns) {
-                        val overrideColor = textColorByCp[col.chapterPosition]
+                        // 优先级：用户高亮 > col.colorArgb（CSS char-level） > 段落 paragraphColor > paint 默认
+                        val overrideColor = textColorByCp[col.chapterPosition] ?: col.colorArgb
                         if (overrideColor != null) {
                             paint.color = overrideColor
                             nc.drawText(col.charData, col.start, baselineY, paint)

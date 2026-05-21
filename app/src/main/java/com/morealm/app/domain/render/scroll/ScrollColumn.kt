@@ -46,6 +46,13 @@ data class ScrollColumn(
      *    严格 1:1（M1.4 实施时严格遵循）。
      */
     val chapterPosition: Int,
+    /**
+     * **P3-5b Step 2c char-level color**：本字符的 CSS color 覆盖（来自 `<span class="w-co1">字</span>`
+     * 这种字符级颜色）。null = 用 line/paint 默认色。
+     *
+     * 渲染优先级：用户高亮 textColorByCp > col.colorArgb > line.blockStyle.textColor > paint 默认
+     */
+    val colorArgb: Int? = null,
 ) {
     val width: Float get() = end - start
 }

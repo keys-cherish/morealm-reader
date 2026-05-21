@@ -208,6 +208,13 @@ class ScrollLayoutEngine(
         // 入参 + 所有调用方的级联改动）。EMPTY = 无装饰（章首块 / 正常段默认）。
         var currentBlockStyle: com.morealm.epub.compat.BlockStyle = com.morealm.epub.compat.BlockStyle.EMPTY
 
+        // P3-5b Step 2c char-level color：当前 paragraph 的字符级颜色数组（per code-point）。
+        // 解码自 flattenToString 内嵌的 SPAN_COLOR_START..END marker。null = 本段无字符级
+        // 颜色覆盖；非 null 时按 (chapterPositionCounter - paragraphCpStart) 索引拿到该字符
+        // 的 ARGB 颜色（0 = 用 paint 默认色）。
+        var currentParaCharColors: IntArray? = null
+        var currentParaCpStart: Int = 0
+
         fun emitLine(
             lineColumns: List<ScrollColumn>,
             lineText: String,
@@ -460,10 +467,19 @@ class ScrollLayoutEngine(
                 paragraphRaw
             }
 
+            // P3-5b Step 2c char-level color：解码 ScrollContent.SPAN_COLOR_* 内联 marker
+            // 拿到「干净文本 + 每字符颜色数组」。剥掉 marker 后用 cleanText 进行布局，
+            // emitOneLine 内按 (chapterPositionCounter - paragraphCpStart) 查 colors[relIdx]
+            // 给每个 ScrollColumn 上色。
+            val (cleanedText, colorPerCp) = parseCharColors(paragraphText)
+            currentParaCharColors = colorPerCp
+            currentParaCpStart = chapterPositionCounter
+            val processedText = cleanedText
+
             // ── 空段处理（用户决策 2026-05-17）──
             // 输出空 ScrollLine（columns 空 + text 空 + 高 = contentLineHeight），并占 1 cp。
             // 用户选中空段 = 选中那 1 个 cp；视觉上空段表现为「一行空白」。
-            if (paragraphText.isEmpty()) {
+            if (processedText.isEmpty()) {
                 val emptyCp = chapterPositionCounter
                 emitLine(
                     lineColumns = emptyList(),
@@ -495,14 +511,21 @@ class ScrollLayoutEngine(
                 val cols = ArrayList<ScrollColumn>(chars.size)
                 val sb = StringBuilder()
                 var x = startX
+                val colors = currentParaCharColors  // local snapshot
+                val paraStartCp = currentParaCpStart
                 for (i in chars.indices) {
                     val w = widths[i]
+                    // P3-5b Step 2c：本字符在 paragraph 内的相对索引 → colorPerCp[relIdx]
+                    // colorArgb=0 = paint 默认色（无 char-level 覆盖）
+                    val relIdx = chapterPositionCounter - paraStartCp
+                    val charColor = colors?.getOrNull(relIdx)?.takeIf { it != 0 }
                     cols.add(
                         ScrollColumn(
                             charData = chars[i],
                             start = x,
                             end = x + w,
                             chapterPosition = chapterPositionCounter,
+                            colorArgb = charColor,
                         ),
                     )
                     sb.append(chars[i])
@@ -626,14 +649,17 @@ class ScrollLayoutEngine(
 
             // 段内 img 拆分：识别 `<img src="...">` 把段拆为 [text1, img1, text2, ...]
             // 顺序 emit。img 占整行，前后 chunk 不共享行（chunk 独立 emit）。
-            val imgMatches = imgRegex.findAll(paragraphText).toList()
+            // 注意：Step 2c char-level color 用 processedText 而非 paragraphText，避免
+            // SPAN_COLOR_* 控制字符干扰 img 正则。混合 img+文本段会让颜色 index 偏移
+            // （img 也吃 1 cp），暂可接受 —— 纯文本段是常态（标题页用 img+文本极少）。
+            val imgMatches = imgRegex.findAll(processedText).toList()
             if (imgMatches.isEmpty()) {
-                emitTextChunk(paragraphText, isFirstChunkOfPara = true)
+                emitTextChunk(processedText, isFirstChunkOfPara = true)
             } else {
                 var cursor = 0
                 var isFirstChunk = true
                 for (m in imgMatches) {
-                    val before = paragraphText.substring(cursor, m.range.first)
+                    val before = processedText.substring(cursor, m.range.first)
                     if (before.isNotEmpty()) {
                         emitTextChunk(before, isFirstChunkOfPara = isFirstChunk)
                         isFirstChunk = false
@@ -646,8 +672,8 @@ class ScrollLayoutEngine(
                     isFirstChunk = false  // img 后续 chunk 不是段首
                     cursor = m.range.last + 1
                 }
-                if (cursor < paragraphText.length) {
-                    val tail = paragraphText.substring(cursor)
+                if (cursor < processedText.length) {
+                    val tail = processedText.substring(cursor)
                     if (tail.isNotEmpty()) emitTextChunk(tail, isFirstChunkOfPara = isFirstChunk)
                 }
             }
@@ -941,6 +967,69 @@ class ScrollLayoutEngine(
             return if (rest.isNotEmpty()) num to rest else null to trimmed
         }
         return null to trimmed
+    }
+
+    /**
+     * **P3-5b Step 2c**：把 flattenToString 内联的 SPAN_COLOR marker 解析为
+     * `(cleanText, perCpColor: IntArray?)`。
+     *
+     * 输入语义（与 epub-compat [com.morealm.epub.compat.StructuredChapterContent.richTextToBody] 配对）：
+     *  - `<argbHex8><text>` 三段
+     *  - 等于 SPAN_COLOR_START (SOH 0x01)
+     *  - 等于 SPAN_MARKER_DELIM (STX 0x02)
+     *  - 等于 SPAN_COLOR_END (ETX 0x03)
+     *  - hex 总长 8 ARGB
+     *
+     * 返回的 cleanText 跟 [com.morealm.app.domain.render.TextMeasure.measureTextSplit] 一致按
+     * code point 切；colorPerCp 长度 == cleanText 的 code-point 数（surrogate pair 合并 1 项）。
+     * 无任何 color span 时返回 (text, null) 零开销。
+     */
+    private fun parseCharColors(text: String): Pair<String, IntArray?> {
+        if (text.isEmpty() || !text.contains('')) return text to null
+        val sb = StringBuilder(text.length)
+        val colors = ArrayList<Int>(text.length)
+        var curColor = 0  // 0 = 用 paint 默认色（无字符级覆盖）
+        var hasAny = false
+        var i = 0
+        val n = text.length
+        while (i < n) {
+            val c = text[i]
+            // SPAN_COLOR_START (SOH) followed by 8 hex chars + STX
+            if (c == '' && i + 9 < n && text[i + 9] == '') {
+                val hex = text.substring(i + 1, i + 9)
+                val argb = runCatching { hex.toUInt(16).toInt() }.getOrNull()
+                if (argb != null) {
+                    curColor = argb
+                    hasAny = true
+                    i += 10  // skip SOH + 8 hex + STX
+                    continue
+                }
+            }
+            // SPAN_COLOR_END (ETX) → 重置颜色
+            if (c == '') {
+                curColor = 0
+                i++
+                continue
+            }
+            // Surrogate pair → 1 code-point，2 UTF-16 chars
+            if (c.isHighSurrogate() && i + 1 < n && text[i + 1].isLowSurrogate()) {
+                sb.append(c)
+                sb.append(text[i + 1])
+                colors.add(curColor)
+                i += 2
+                continue
+            }
+            // 普通字符
+            sb.append(c)
+            colors.add(curColor)
+            i++
+        }
+        val cleanText = sb.toString()
+        return if (hasAny) {
+            cleanText to IntArray(colors.size) { colors[it] }
+        } else {
+            cleanText to null
+        }
     }
 
     companion object {
