@@ -51,7 +51,10 @@ object EpubParser {
     // v15：P3-5b Step 2c text-align + text-indent 解析 + ta=/ti= 编码。还修
     // ChapterBlockBuilder effectiveBlockStyle 改为逐层 merge，让 kuang1+p.center 的
     // bg/border + textAlign 共存（之前 lastOrNull 让 p.center 整套覆盖 div.kuang1 装饰）。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v15"
+    // v16：P3-5b Step 2c char-level color：flattenToString 多色 RichText 用 SOH/STX/ETX
+    // 控制字符内嵌 per-span color marker。bump 强制重 flatten 让「为美好的」多色 cover 字
+    // 在每个字符位置生效。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v16"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
