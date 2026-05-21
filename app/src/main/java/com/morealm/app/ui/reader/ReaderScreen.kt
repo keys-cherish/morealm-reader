@@ -961,7 +961,7 @@ fun ReaderScreen(
             // 调用，不再让外层 ReaderScreen 整体 recompose。CanvasRenderer 自身的
             // stable check 会进一步把更新缩窄到 readAloudChapterPosition 一个参数。
             ReadAloudPositionScope(viewModel.tts.ttsChapterPosition) { ttsChapterPosition ->
-            com.morealm.app.ui.reader.renderer.CanvasRenderer(
+            com.morealm.app.ui.reader.renderer.Reader(
                 content = displayContent,
                 chapterTitle = chapters.getOrNull(currentIndex)?.displayTitle(book) ?: renderedChapter.title,
                 chapterIndex = renderedChapter.index,
