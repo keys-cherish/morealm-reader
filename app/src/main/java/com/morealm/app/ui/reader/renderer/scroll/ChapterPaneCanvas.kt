@@ -14,7 +14,9 @@ import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.render.scroll.ScrollChapterLayout
 import com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec
+import com.morealm.app.domain.render.scroll.ScrollLine
 import com.morealm.app.domain.render.scroll.findColumnAt
+import com.morealm.epub.compat.BlockStyle
 
 /**
  * 单章 Canvas 子树 —— [ScrollCanvasRenderer] 三块面板的子组件。
@@ -190,6 +192,8 @@ fun ChapterPaneCanvas(
                 // 视口剔除：page 完全在 viewport 之上 / 之下 → 整页 skip
                 if (pageBottom < viewportTop || pageTop > viewportBottom) continue
                 for (line in page.lines) {
+                    // P3-5b Phase 3：CSS box 装饰（圆角背景 / 边框）必须画在文字 / 图片之前
+                    drawScrollLineBlockStyle(nc, line, pageTop, chapter.paddingLeft.toFloat())
                     if (line.isImage) {
                         // ── 图片段（V1 PageContentDrawer.drawImageColumn 等价路径）──
                         // V2 image line：columns 空，imageSrc 非空，lineHeight = imgHeight
@@ -284,6 +288,89 @@ fun ChapterPaneCanvas(
  * 用 findColumnAt 一次定位到 hit.page+line，避免嵌套 for 循环。
  * 复杂度：O(bookmarks × pages) — pages 数远小于 lines。
  */
+/**
+ * **P3-5b Phase 3**：把 [ScrollLine.blockStyle] 的 CSS box 装饰画在 line 内容包围盒上。
+ *
+ * 在 ChapterPaneCanvas line loop **最先**调用 —— 必须先于文字 / 图片绘制，否则会被覆盖。
+ *
+ * 几何：取 line 所有 columns 最左 start / 最右 end 算水平范围；垂直用 pageTop + line.lineTop
+ * / lineBottom。无 columns（空段 / 图片段）取章节左 padding 到 viewWidth - padding 作为
+ * 包围盒（让 background-color 覆盖全宽）。BlockStyle.EMPTY 零开销早退。
+ *
+ * DOUBLE border 用 CSS 标准画法（外圈 + 内圈各占 1/3 strokeWidth，间隙 1/3）。
+ */
+private fun drawScrollLineBlockStyle(
+    canvas: android.graphics.Canvas,
+    line: ScrollLine,
+    pageTop: Float,
+    paddingLeft: Float,
+) {
+    val bs = line.blockStyle
+    if (bs === BlockStyle.EMPTY) return
+
+    // 水平范围：columns 非空时按 columns extent，否则用全宽（含空段 / 图片段 BlockStyle 兜底）
+    val leftX: Float
+    val rightX: Float
+    if (line.columns.isNotEmpty()) {
+        var minL = Float.MAX_VALUE
+        var maxR = 0f
+        for (col in line.columns) {
+            if (col.start < minL) minL = col.start
+            if (col.end > maxR) maxR = col.end
+        }
+        leftX = minL
+        rightX = maxR
+    } else {
+        // 兜底：图片段 / 空段 也尊重装饰 —— 用左 padding 到右 padding
+        leftX = paddingLeft
+        rightX = paddingLeft  // bound check below
+    }
+    if (leftX >= rightX) return
+
+    val lineTop = pageTop + line.lineTop
+    val lineBottom = pageTop + line.lineBottom
+    val halfBorder = bs.borderWidthPx / 2f
+    val rectLeft = leftX - bs.paddingLeftPx - halfBorder
+    val rectTop = lineTop - bs.paddingTopPx - halfBorder
+    val rectRight = rightX + bs.paddingRightPx + halfBorder
+    val rectBottom = lineBottom + bs.paddingBottomPx + halfBorder
+    val r = bs.borderRadiusPx
+    val paint = Paint().apply { isAntiAlias = true }
+
+    bs.backgroundColor?.let { bgArgb ->
+        paint.style = Paint.Style.FILL
+        paint.color = bgArgb
+        canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
+    }
+
+    val bc = bs.borderColor
+    if (bc != null && bs.borderWidthPx > 0f) {
+        paint.style = Paint.Style.STROKE
+        paint.color = bc
+        when (bs.borderStyle) {
+            BlockStyle.BorderStyle.DOUBLE -> {
+                val third = bs.borderWidthPx / 3f
+                paint.strokeWidth = third
+                canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
+                val innerOff = 2f * third
+                val innerR = (r - innerOff).coerceAtLeast(0f)
+                canvas.drawRoundRect(
+                    rectLeft + innerOff, rectTop + innerOff,
+                    rectRight - innerOff, rectBottom - innerOff,
+                    innerR, innerR, paint,
+                )
+            }
+            BlockStyle.BorderStyle.SOLID,
+            BlockStyle.BorderStyle.DASHED,
+            BlockStyle.BorderStyle.DOTTED,
+            -> {
+                paint.strokeWidth = bs.borderWidthPx
+                canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
+            }
+        }
+    }
+}
+
 private fun drawBookmarkTriangles(
     canvas: android.graphics.Canvas,
     chapter: ScrollChapterLayout,

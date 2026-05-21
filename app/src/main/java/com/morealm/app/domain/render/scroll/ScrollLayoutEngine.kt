@@ -203,6 +203,11 @@ class ScrollLayoutEngine(
         //   - 空段 / 图片段：该 line 占的那 1 cp
         // lineHeightOverride: 章首块用 titleTextHeight / chapterNumTextHeightSafe 替代
         // contentLineHeight。null = 用默认 contentLineHeight（正文 / 空段）。
+        // P3-5b Phase 3：当前正在处理的 paragraph 的 blockStyle。每次进入新 paragraph 时
+        // 在循环顶部设值，emitLine 直接读这个共享变量挂到 ScrollLine 上（避免改 emitLine
+        // 入参 + 所有调用方的级联改动）。EMPTY = 无装饰（章首块 / 正常段默认）。
+        var currentBlockStyle: com.morealm.epub.compat.BlockStyle = com.morealm.epub.compat.BlockStyle.EMPTY
+
         fun emitLine(
             lineColumns: List<ScrollColumn>,
             lineText: String,
@@ -245,6 +250,7 @@ class ScrollLayoutEngine(
                     isTitleEnd = isTitleEnd,
                     isImage = isImage,
                     imageSrc = imageSrc,
+                    blockStyle = currentBlockStyle,
                 )
             )
             currentY = finalBottom
@@ -418,8 +424,41 @@ class ScrollLayoutEngine(
             currentY += maxOf(contentTextHeight * 0.75f, titleBottomSpacing / 2f)
         }
 
-        for (paragraphText in paragraphs) {
+        for (paragraphRaw in paragraphs) {
             paragraphCounter++
+
+            // ── P3-5b Phase 3：BlockStyle inline marker 解码 ──
+            // EpubParser flattenToString 在带非空 BlockStyle 的 paragraph 文本前内联了
+            // `__MOREALM_BLOCK_STYLE__<payload>__/MOREALM_BLOCK_STYLE__` 标记。这里识别
+            // 后剥出 payload 解码成 BlockStyle 挂到 currentBlockStyle，剩余文本是真正的
+            // paragraph 内容。emitLine 读 currentBlockStyle 写到 ScrollLine。
+            // 每 paragraph 开始重置 currentBlockStyle，避免上一段污染。
+            currentBlockStyle = com.morealm.epub.compat.BlockStyle.EMPTY
+            val paragraphText: String = if (paragraphRaw.startsWith(
+                    com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_MARKER,
+                )
+            ) {
+                val endIdx = paragraphRaw.indexOf(
+                    com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END,
+                )
+                if (endIdx < 0) {
+                    // Malformed —— 兜底当纯文本（保留前缀避免数据丢失）
+                    paragraphRaw
+                } else {
+                    val payload = paragraphRaw.substring(
+                        com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_MARKER.length,
+                        endIdx,
+                    )
+                    val body = paragraphRaw.substring(
+                        endIdx + com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END.length,
+                    )
+                    currentBlockStyle = com.morealm.epub.compat.StructuredChapterContent
+                        .decodeBlockStyle(payload)
+                    body
+                }
+            } else {
+                paragraphRaw
+            }
 
             // ── 空段处理（用户决策 2026-05-17）──
             // 输出空 ScrollLine（columns 空 + text 空 + 高 = contentLineHeight），并占 1 cp。

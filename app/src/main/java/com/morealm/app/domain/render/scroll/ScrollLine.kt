@@ -1,5 +1,7 @@
 package com.morealm.app.domain.render.scroll
 
+import com.morealm.epub.compat.BlockStyle
+
 /**
  * 单行排版结果 —— [ScrollPage] 的子结构。
  *
@@ -75,6 +77,17 @@ data class ScrollLine(
     val firstChapterPos: Int,
     /** 见 [firstChapterPos]。 */
     val lastChapterPos: Int,
+    /**
+     * **P3-5b Phase 3**：所在 paragraph 的 CSS box 装饰（圆角背景 / 边框）。
+     *
+     * 由 [ScrollLayoutEngine] 解析 EPUB content 里的 `__MOREALM_BLOCK_STYLE__`
+     * inline marker 后从段落透传到所有 emit 出的 line。同一 paragraph 内每条 line
+     * 共享同一份 BlockStyle。EMPTY = 无装饰（默认）。
+     *
+     * 渲染时由 ChapterPaneCanvas 在该行 columns 包围盒前画 `drawRoundRect`（背景
+     * fill + 边框 stroke）。
+     */
+    val blockStyle: BlockStyle = BlockStyle.EMPTY,
 ) {
     val height: Float get() = lineBottom - lineTop
 
