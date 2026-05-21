@@ -6,9 +6,9 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.core.log.AppLog
-import com.morealm.app.domain.parser.epub.ChapterBlock
-import com.morealm.app.domain.parser.epub.StructuredChapterContent
-import com.morealm.app.domain.parser.epub.streaming.StreamingChapterReader
+import com.morealm.epub.compat.ChapterBlock
+import com.morealm.epub.compat.ChapterReader
+import com.morealm.epub.compat.StructuredChapterContent
 import org.jsoup.Jsoup
 import java.io.File
 import java.io.FileOutputStream
@@ -684,7 +684,7 @@ object EpubParser {
             val coverLookup: () -> String? = {
                 extractCoverFromCoreBook(context, uri, book)?.let { "file://${it.absolutePath}" }
             }
-            StreamingChapterReader.read(book, chapter, imgLookup, coverLookup)
+            ChapterReader.read(book, chapter.url, chapter.nextUrl, imgLookup, coverLookup)
         }
         if (result == null) {
             AppLog.warn("EpubParser", "readChapterStructured withCoreBook returned null (book open failed)")
