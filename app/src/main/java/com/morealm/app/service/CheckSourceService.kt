@@ -106,6 +106,17 @@ class CheckSourceService : Service() {
             // 用 startService 触发 onStartCommand，避免在 service 已 stop 后 stopService 找不到目标
             context.startService(intent)
         }
+
+        /**
+         * 用户已"处理完"上一轮结果（关弹窗 / 删完失效书源 / 主动重置）后调，把
+         * Service.state + Service.results 清零。companion 是 static，VM 重订阅时
+         * 不会再拿到 Done 状态触发"弹删除询问对话框"。修复用户报的 "退出书源界面
+         * 再进入还是会有 N 个待删除书源"。
+         */
+        fun clear() {
+            _state.value = State.Idle
+            _results.value = emptyMap()
+        }
     }
 
     @Inject lateinit var sourceDao: BookSourceDao
@@ -142,7 +153,10 @@ class CheckSourceService : Service() {
             }
             ACTION_STOP -> {
                 checkJob?.cancel()
+                // 取消 = 丢弃本轮：清结果 + state，否则 UI 仍能看到半截校验产生的
+                // "失效书源待删除"列表（用户报的 bug：校验到一半取消，仍弹删除询问）。
                 _state.value = State.Idle
+                _results.value = emptyMap()
                 stopSelf()
             }
         }
@@ -167,7 +181,9 @@ class CheckSourceService : Service() {
                 }
 
                 var doneCount = 0
-                CheckSource.checkAll(sources, concurrency = 4) { _, result ->
+                // 并发 12：1000 源 × 15s 平均 ÷ 12 ≈ 21 分钟（原 4 并发 ≈ 60 分钟）。
+                // 网络-bound，OkHttp 全局连接池能撑 64 并发，12 安全且 3x 提速。
+                CheckSource.checkAll(sources, concurrency = 12) { _, result ->
                     // onResult 在子协程里被调，每完成一源触发一次。
                     doneCount++
                     _results.update { it + (result.sourceUrl to result) }
