@@ -246,9 +246,12 @@ class ChapterProvider(
         }
 
         // Parse content into paragraphs
+        // P3-5b Phase 3 修复：content 含 BLOCK_STYLE_MARKER 时强制走 parseHtmlParagraphs
+        // 让 marker 被解码。原 isHtml 仅检测 `<`/`<p>`/`<div>`/`<img>` 在 EPUB Heading 首块
+        // 时 content 首字符是中文（如"简介"）→ isHtml=false → 走 else 分支跳过 marker decode。
         val isHtml = content.trimStart().let {
             it.startsWith("<") && (it.contains("<p") || it.contains("<div") || it.contains("<img"))
-        }
+        } || content.contains(StructuredChapterContent.BLOCK_STYLE_MARKER)
         val rawParagraphs = if (isHtml) parseHtmlParagraphs(content) else {
             content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
         }
@@ -520,9 +523,10 @@ class ChapterProvider(
         }
 
         // ── 解析段落 ──（与横排共享 parseHtmlParagraphs / normalizeParagraph） ──
+        // P3-5b Phase 3 修复同步：BLOCK_STYLE_MARKER 存在时强制走 parseHtmlParagraphs（详 L249 注释）
         val isHtml = content.trimStart().let {
             it.startsWith("<") && (it.contains("<p") || it.contains("<div") || it.contains("<img"))
-        }
+        } || content.contains(StructuredChapterContent.BLOCK_STYLE_MARKER)
         val rawParagraphs = if (isHtml) parseHtmlParagraphs(content) else {
             content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
         }
@@ -1117,24 +1121,8 @@ class ChapterProvider(
             .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
             .replace("&nbsp;", " ").replace("&quot;", "\"")
         val cleaned = text.replace(nonImgTagRegex, "")
-        // P3-5b Phase 3b diag\uff1aparseHtmlParagraphs \u5165\u53e3 + \u7b2c\u4e00\u884c\u9884\u89c8\uff0c\u9a8c\u8bc1\u8c03\u7528\u94fe\u547d\u4e2d
-        com.morealm.app.core.log.AppLog.info(
-            "P3-5b/BlockStyle",
-            "parseHtmlParagraphs ENTER cleanedLen=${cleaned.length} " +
-                "firstLine='${cleaned.lineSequence().firstOrNull()?.take(80)?.replace("\n", "\\n")}'",
-        )
         return cleaned.lines().mapNotNull { line ->
             val trimmed = line.trim { it.code <= 0x20 || it == '\u3000' }
-            // P3-5b Phase 3b diag\uff1a\u4ec5\u8bb0 markers \u884c\uff1b\u6b63\u6587\u884c\u592a\u591a\u4e0d\u6253
-            if (trimmed.startsWith(StructuredChapterContent.BLOCK_STYLE_MARKER) ||
-                trimmed.contains("__MOREALM_BLOCK_STYLE__")
-            ) {
-                com.morealm.app.core.log.AppLog.info(
-                    "P3-5b/BlockStyle",
-                    "LINE marker detected startsWith=${trimmed.startsWith(StructuredChapterContent.BLOCK_STYLE_MARKER)} " +
-                        "preview='${trimmed.take(120)}'",
-                )
-            }
             when {
                 trimmed.startsWith(chapterTitleMarker) -> {
                     val markedTitle = trimmed.removePrefix(chapterTitleMarker).trim()
