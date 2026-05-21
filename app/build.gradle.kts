@@ -72,6 +72,9 @@ android {
         // QQ 群号注入到 BuildConfig.QQ_GROUP_ID。
         // 注意 escape：BuildConfig 字符串字面量要包含双引号，外层 Kotlin 字符串再 escape 一次。
         buildConfigField("String", "QQ_GROUP_ID", "\"${qqGroupId}\"")
+
+        // androidTest（Compose UI test）—— P3-2 引入；默认 AndroidJUnit4Runner
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -241,8 +244,16 @@ dependencies {
     // Archive — 7z/rar/tar support beyond java.util.zip
     implementation("me.zhanghai.android.libarchive:library:1.1.6")
 
-    // Testing
+    // Testing (jvmTest / Robolectric)
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation(libs.coroutines.test)
+
+    // Compose UI test (androidTest) —— P3-2 引入，验证 4 翻页动画手势行为不依赖
+    // 真实渲染数据。需要 emulator / 真机跑。
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
