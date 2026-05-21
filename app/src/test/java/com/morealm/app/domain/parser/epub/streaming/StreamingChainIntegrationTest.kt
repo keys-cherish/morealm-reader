@@ -1,6 +1,10 @@
 package com.morealm.app.domain.parser.epub.streaming
 
-import com.morealm.app.domain.parser.epub.ChapterBlock
+import com.morealm.epub.compat.ChapterBlock
+import com.morealm.epub.compat.ChapterBlockBuilder
+import com.morealm.epub.compat.ChapterReader
+import com.morealm.epub.compat.FragmentSliceVisitor
+import com.morealm.epub.compat.ImgRewriteVisitor
 import com.morealm.epub.compat.RubyRewriteVisitor
 import com.morealm.epub.compat.SvgImageRewriteVisitor
 import com.morealm.epub.compat.TableMergeVisitor
