@@ -1,8 +1,8 @@
 
 
-package me.ag2s.epublib.util.zip;
+package com.morealm.app.util.zip;
 
-import static me.ag2s.base.PfdHelper.seek;
+import static com.morealm.app.util.zip.PfdHelper.seek;
 
 import android.os.ParcelFileDescriptor;
 
@@ -22,7 +22,7 @@ import java.util.zip.Inflater;
 import java.util.zip.InflaterInputStream;
 import java.util.zip.ZipOutputStream;
 
-import me.ag2s.base.PfdHelper;
+import com.morealm.app.util.zip.PfdHelper;
 
 /**
  * This class represents a Zip archive.  You can ask for the contained

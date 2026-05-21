@@ -516,12 +516,12 @@ object EpubParser {
      *    嵌套层级缩进
      *
      * **chapter.url 用 ZIP 绝对路径**（OPF dir 前缀 + epub-core item.href）—— 与
-     * 老 [buildChapterList] 输出的 me.ag2s Resource.href 格式保持一致，让现有
-     * [readChapter] / [readChapterFromBook] 老路径继续 work。原因：me.ag2s
+     * 老 [buildChapterList] 输出的 legacy upstream lib Resource.href 格式保持一致，让现有
+     * [readChapter] / [readChapterFromBook] 老路径继续 work。原因：legacy upstream lib
      * 的 `PackageDocumentReader.fixHrefs` 被注释掉了（不裁 ZIP 前缀），所以
      * Resource.href = "OEBPS/Text/cover.xhtml"；而 epub-core Chapter.href =
      * "Text/cover.xhtml"（OPF 相对，标准 EPUB 行为）。两者直接平移会让老路径
-     * 失配。统一用 ZIP 绝对路径绕开 me.ag2s 这个特性差异。
+     * 失配。统一用 ZIP 绝对路径绕开 legacy upstream lib 这个特性差异。
      */
     private fun buildChapterListViaCore(
         bookId: String,
@@ -624,9 +624,9 @@ object EpubParser {
 
     /**
      * 把 OPF 相对 href（epub-core item.href / toc src）拼成 ZIP 绝对路径。
-     * 跟 me.ag2s 老路径的 Resource.href 格式对齐（OPF 在子目录时前缀 = OPF dir）。
+     * 跟 legacy upstream lib 老路径的 Resource.href 格式对齐（OPF 在子目录时前缀 = OPF dir）。
      *
-     * 不做 ".." normalize —— me.ag2s 现状也是直接拼接，保持 byte-for-byte 一致。
+     * 不做 ".." normalize —— legacy upstream lib 现状也是直接拼接，保持 byte-for-byte 一致。
      * fragment（"#xxx"）原样保留在末尾。
      */
     private fun toZipAbsHref(opfDir: String, href: String): String =
@@ -656,7 +656,7 @@ object EpubParser {
 
         // L1.5 桥接：内部走自研 streaming（epub-core + visitor chain），最后 flatten
         // 成 String 喂给当前 reader 字符串排版层。对外签名不变，渲染层 / 4 个翻页动画
-        // / 其他 format 全部零影响。me.ag2s parseBody + sanitizeAndRewriteImages +
+        // / 其他 format 全部零影响。legacy upstream lib parseBody + sanitizeAndRewriteImages +
         // formatKeepImg 老链在 readChapter 路径下线（preCacheChapters 老路径暂留）。
         val structured = readChapterStructured(context, uri, chapter)
         val content = if (structured.isEmpty()) "" else structured.flattenToString()
@@ -953,7 +953,7 @@ object EpubParser {
                 " total=${chapters.size} uncached=${uncached.size}",
         )
         // L1.5：直接调主入口 readChapter，内部走 streaming + 写 cache。
-        // 老 readChapterFromBook + withEpubBook(me.ag2s) 路径在 preCache 也下线 —— 不再写
+        // 老 readChapterFromBook + withEpubBook(legacy upstream lib) 路径在 preCache 也下线 —— 不再写
         // 老 formatKeepImg 格式到新 v5 cache，避免格式漂移。readChapter 自带 cache hit check，
         // 对已 cached 章节 short-circuit。
         for (ch in uncached) {

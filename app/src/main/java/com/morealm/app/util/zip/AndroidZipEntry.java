@@ -1,7 +1,7 @@
 
 
 
-package me.ag2s.epublib.util.zip;
+package com.morealm.app.util.zip;
 
 import java.util.Calendar;
 import java.util.Date;

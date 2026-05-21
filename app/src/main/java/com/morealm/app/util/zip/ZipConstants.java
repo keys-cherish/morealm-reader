@@ -1,6 +1,6 @@
 
 
-package me.ag2s.epublib.util.zip;
+package com.morealm.app.util.zip;
 
 interface ZipConstants {
     /* The local file header */

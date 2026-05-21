@@ -64,7 +64,7 @@ object StreamingChapterReader {
         }
 
         // chapter.url 是 ZIP 绝对路径（D.4 buildChapterListViaCore 输出的 toZipAbsHref
-        // 与 me.ag2s Resource.href 对齐），但 epub-core spine.items[].href 是 OPF 相对路径。
+        // 与 legacy upstream lib Resource.href 对齐），但 epub-core spine.items[].href 是 OPF 相对路径。
         // 在 spine 查找前先 strip OPF dir 前缀，否则 indexOfFirst 永不匹配。
         val opfDir = book.opfPath.substringBeforeLast('/', "")
         val targetHref = stripOpfDir(opfDir, rawTargetHref)
