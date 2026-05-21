@@ -101,6 +101,12 @@ fun PagePaneCanvas(
             nc.save()
             nc.translate(chapterPaddingLeft.toFloat(), 0f)
 
+            // ─── 层 0：P3-5b Phase 3 块装饰（圆角背景 / 边框） ───
+            // 最底层 —— 用户高亮 / 选区 / 搜索高亮 / 文字都画在装饰之上
+            for (line in page.lines) {
+                drawScrollLineBlockStyle(nc, line, pageTop = 0f, fallbackLeft = 0f, fallbackRight = visibleWidthF)
+            }
+
             // ─── 层 1：背景高亮 rect ───
             for (spec in bgSpecs) {
                 bgFillPaint.color = spec.argb
