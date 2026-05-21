@@ -60,14 +60,14 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Renderer 暴露给 Host 的「按当前动画 commit 翻页」句柄。
+ * Transition 暴露给 Host 的「按当前动画 commit 翻页」句柄。
  *
- * SLIDE / COVER 各自的 [SlidePageRenderer] / [CoverPageRenderer] 在 DisposableEffect
+ * SLIDE / COVER 各自的 [SlidePageTransition] / [CoverPageTransition] 在 DisposableEffect
  * 内把自身的 animateAndCommit 注入到 [animateToNext] / [animateToPrev]；
  * Host 的 zone tap（左/右 1/3 点击）走 controller，从而触发各自的平移/覆盖动画，
  * 而不是直接调 [com.morealm.app.domain.render.scroll.ScrollPageFactory.moveToPrev]/[moveToNext] 瞬切。
  *
- * NONE Renderer 不注册 controller，Host 自动 fallback 到 moveToPrev/Next 瞬切（NONE 语义本身就无动画）。
+ * NONE Transition 不注册 controller，Host 自动 fallback 到 moveToPrev/Next 瞬切（NONE 语义本身就无动画）。
  */
 class PageTurnAnimController {
     var animateToNext: (suspend () -> Unit)? = null
@@ -81,13 +81,13 @@ class PageTurnAnimController {
  *
  * - **共享** (本 Host)：page-level state/factory (走 [rememberPageLevelCore]) + engine
  *   + paint 派生 + 长按选区 + 手势接收 + InfoBar + 进度上报 + TTS 跟随
- * - **独立** (各 Renderer)：动画绘制 + drag 偏移 + fling settle
+ * - **独立** (各 Transition)：动画绘制 + drag 偏移 + fling settle
  *
  * 与 [com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderHost] 的关系：
  * 后者专属 SCROLL（垂直滚动），本 Host 服务横向翻页。两个 Host **不互相调用**，
  * 共享只通过 [rememberPageLevelCore] helper。SCROLL 文件名实统一不被混用。
  *
- * P2 阶段（2026-05-20）：骨架版本，只接 NONE Renderer；COVER / SLIDE 后续阶段补。
+ * P2 阶段（2026-05-20）：骨架版本，只接 NONE Transition；COVER / SLIDE 后续阶段补。
  * 选区 / TTS / InfoBar / 进度上报 / restoreToken JUMP P3 接入 ReaderScreen 时
  * 再依次补全（按"独立 Host 自管"原则）。
  */
@@ -205,7 +205,7 @@ fun PageLevelReaderHost(
     // safe area + InfoBar 占位（infoBar != null 时正文 padding 给 InfoBar 让位避免遮挡）
     val density = androidx.compose.ui.platform.LocalDensity.current
     // page-level 模式 InfoBar 让位高度：48dp 足够装一行 fontSize 10sp + battery icon
-    // (Row centered)；之前 64dp 是 CanvasRenderer 时代的设计，page-level 浪费 16dp。
+    // (Row centered)；之前 64dp 是 CanvasTransition 时代的设计，page-level 浪费 16dp。
     val infoBarHeightDp = 48.dp
     val infoBarHeightPx = with(density) { infoBarHeightDp.toPx() }.toInt()
     val statusBarPx = with(density) {
@@ -424,8 +424,8 @@ fun PageLevelReaderHost(
             .map { it.chapterPos }
     }
 
-    // ── zone tap → 各 Renderer 自身动画 commit（Legado PageDelegate 模型）──
-    // SLIDE/COVER Renderer 通过 turnCtrl 注入 animateAndCommit lambda；NONE 不注册 → fallback 瞬切。
+    // ── zone tap → 各 Transition 自身动画 commit（Legado PageDelegate 模型）──
+    // SLIDE/COVER Transition 通过 turnCtrl 注入 animateAndCommit lambda；NONE 不注册 → fallback 瞬切。
     // currentAnimJob 串行化连点：新 tap 启动前 cancelAndJoin 前一个 → 前一次 finally 立即
     // commit 翻页（pageFactory.moveToNext + reset offset），再 launch 新动画。视觉等价 Legado
     // abortAnim()+fillPage：连点 N 次翻 N 页不丢。
@@ -435,7 +435,7 @@ fun PageLevelReaderHost(
 
     // ── 选区 / 长按 / tap-on-highlight 状态（P4.4 接入）──
     // 共享在 Host 层（Legado ReadView 模型）：长按检测 + 选区状态 + 高亮 action 弹窗
-    // 都在 Host，所有 Renderer (NONE/SLIDE/COVER) 共享。Renderer 不再自己接 pointerInput。
+    // 都在 Host，所有 Transition (NONE/SLIDE/COVER) 共享。Transition 不再自己接 pointerInput。
     var selection by remember { mutableStateOf(ScrollSelectionState.Empty) }
     var highlightActionTarget by remember(core.state.currentChapterIndex) {
         mutableStateOf<com.morealm.app.domain.entity.Highlight?>(null)
@@ -458,7 +458,7 @@ fun PageLevelReaderHost(
             .fillMaxSize()
             .background(androidx.compose.ui.graphics.Color(bgColorArgb))
             // Host 共享层 tap + 长按（NONE 模式 zone tap 也在这；SLIDE/COVER 后续接入时
-            // drag 在 Renderer 内自管，tap 仍由本层处理）。
+            // drag 在 Transition 内自管，tap 仍由本层处理）。
             .pointerInput(animType, selection.isActive, highlightActionTarget != null, chapterHighlightsRaw) {
                 detectTapGestures(
                     onTap = { offset ->
@@ -494,7 +494,7 @@ fun PageLevelReaderHost(
                         }
                         // 优先级 4: zone tap 翻页（所有横向 page-level 模式）。
                         // NONE / COVER / SLIDE 都通过 Host 共享层 zone tap 翻页（瞬切语义）。
-                        // drag 期间的动画由各 Renderer 内部 own (settle-to-edge)。
+                        // drag 期间的动画由各 Transition 内部 own (settle-to-edge)。
                         val w = size.width.toFloat()
                         val zone = when {
                             offset.x < w * 0.33f -> "L"
@@ -563,10 +563,10 @@ fun PageLevelReaderHost(
         if (currentLayout != null) {
             val selectionChapterIndex = if (selection.isActive) selection.chapterIndex else -1
             val selectionCpRange = if (selection.isActive) selection.cpRange else IntRange.EMPTY
-            // dispatch 到具体 Renderer（独立 own 自己的动画 + drag；不再接 pointerInput tap）
+            // dispatch 到具体 Transition（独立 own 自己的动画 + drag；不再接 pointerInput tap）
             when (animType) {
                 PageAnimType.NONE -> {
-                    NonePageRenderer(
+                    NonePageTransition(
                         state = core.state,
                         pageFactory = core.pageFactory,
                         backgroundColor = androidx.compose.ui.graphics.Color(bgColorArgb),
@@ -585,7 +585,7 @@ fun PageLevelReaderHost(
                     )
                 }
                 PageAnimType.SLIDE -> {
-                    SlidePageRenderer(
+                    SlidePageTransition(
                         state = core.state,
                         pageFactory = core.pageFactory,
                         backgroundColor = androidx.compose.ui.graphics.Color(bgColorArgb),
@@ -609,7 +609,7 @@ fun PageLevelReaderHost(
                     )
                 }
                 PageAnimType.COVER -> {
-                    CoverPageRenderer(
+                    CoverPageTransition(
                         state = core.state,
                         pageFactory = core.pageFactory,
                         backgroundColor = androidx.compose.ui.graphics.Color(bgColorArgb),
@@ -633,7 +633,7 @@ fun PageLevelReaderHost(
                     )
                 }
                 else -> {
-                    NonePageRenderer(
+                    NonePageTransition(
                         state = core.state,
                         pageFactory = core.pageFactory,
                         backgroundColor = androidx.compose.ui.graphics.Color(bgColorArgb),
