@@ -54,7 +54,11 @@ object EpubParser {
     // v16：P3-5b Step 2c char-level color：flattenToString 多色 RichText 用 SOH/STX/ETX
     // 控制字符内嵌 per-span color marker。bump 强制重 flatten 让「为美好的」多色 cover 字
     // 在每个字符位置生效。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v16"
+    // v17：P0 fix — TableMergeVisitor 之前吞掉 table 内 `<span>` 的 onOpen/onClose 让
+    // cascade 跑不到 table 内字符上 → 所有 span isPlain → emit Paragraph 而非 RichText →
+    // cache 里 0 marker（用户 21:10 实测 sample='为美好的\n<img...' 验证）。修了 visitor 后
+    // 还得 bump 让 v16 失效重新生成，否则 cache hit 永远拿到老 string。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v17"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
