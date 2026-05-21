@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.viewinterop.AndroidView
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.ui.reader.page.PageBitmapProvider
 import com.morealm.app.ui.reader.renderer.PageInfoOverlaySpec
 import com.morealm.app.ui.reader.renderer.ReaderPageDirection
 import com.morealm.app.ui.reader.renderer.SimulationReadView
@@ -82,6 +83,24 @@ private data class SimulationIdleKey(
 )
 
 /**
+ * **P3-3d**：外部 [PageBitmapProvider] 路径下 [SimulationReadView.setIdleBitmap]
+ * 用的内容签名 —— 比 [SimulationIdleKey] 简单得多，因为外部 provider 自己负责
+ * 内容版本管理（content 变了应该返回新 instance，让 [providerId] 变）。
+ *
+ *  - [providerId] = `System.identityHashCode(provider)`：caller 在内容变更时
+ *    （如主题切、字号变、章节切）应该 remember 出新 provider 实例 → identity 不同
+ *    → dedupe 失效 → 重新调用 [PageBitmapProvider.bitmapAt]。这是契约一部分。
+ *  - [displayPage]：跨页时 dedupe key 自然失效，触发新一页 bitmap render。
+ *  - [w]/[h]：视图尺寸变化（系统栏切换 / 分屏）必须重渲染。
+ */
+private data class SimulationExternalIdleKey(
+    val providerId: Int,
+    val displayPage: Int,
+    val w: Int,
+    val h: Int,
+)
+
+/**
  * 仿真翻页主入口。Compose 层不写自己的手势 / 动画 —— 全部委托给 View。
  *
  * 单层结构：[SimulationReadView] 自己处理 idle 显示和翻页动画两态，避免
@@ -121,6 +140,28 @@ internal fun SimulationPager(
      */
     simulationViewRef: androidx.compose.runtime.MutableState<com.morealm.app.ui.reader.renderer.SimulationReadView?>? = null,
     @Suppress("UNUSED_PARAMETER") pageContent: @Composable (Int) -> Unit,
+    /**
+     * **P3-3d**：动画↔渲染契约线适配 —— 跟 SLIDE / COVER / VERTICAL_SLIDE 接同一个
+     * [PageBitmapProvider] 接口。
+     *
+     * non-null：[view.bitmapProvider]（触摸期 setBitmaps）和 [setIdleBitmap]（空闲帧）
+     * 两条 bitmap 路径都改走外部 provider：
+     *   - `view.bitmapProvider(relPos, w, h)` → `bitmapProvider.bitmapAt(displayPage + relPos, w, h)`
+     *   - 空闲帧 → `bitmapProvider.bitmapAt(displayPage, w, h)`
+     *
+     * 此时 [SimulationParams] 里的 `titlePaint` / `contentPaint` / `chapterHighlights` /
+     * `bgBitmap` 等渲染字段**不再被消费**（caller 仍可挂着，作为 fallback 路径冗余
+     * 数据；不冲突）。`canTurn` / `onFillPage` / `onPageChanged` / `onTapCenter` /
+     * `onLongPress` / `isSelectionActive` / `onDismissPopup` 等交互回调仍生效。
+     *
+     * null：维持现有 [renderPageToBitmap]-based 路径（参数即 [SimulationParams]），
+     * 零行为变化。
+     *
+     * **调用方契约**：caller 在外部 provider 内容变化时（主题切、字号变、章节切）
+     * 应该 remember 出新 provider 实例，让 [System.identityHashCode] 不同 → dedupe
+     * 失效 → 重渲染。详见 [SimulationExternalIdleKey].
+     */
+    bitmapProvider: PageBitmapProvider? = null,
 ) {
     val scope = rememberCoroutineScope()
     val pages = params.pages
@@ -226,45 +267,67 @@ internal fun SimulationPager(
             view.bgMeanColor = params.bgMeanColor
             view.canTurnNext = { params.canTurn(displayPage, ReaderPageDirection.NEXT) }
             view.canTurnPrev = { params.canTurn(displayPage, ReaderPageDirection.PREV) }
-            view.bitmapProvider = { relativePos, w, h ->
-                val page = params.pageForTurn(displayPage, relativePos)
-                // Diagnostic [3c] — fires when SimulationReadView 的 setBitmaps()
-                // (触摸开始) 调用 provider(relPos)。关注点：切换瞬间如果触发了
-                // setBitmaps（不应该，因为切换不带触摸），看这条日志的
-                // displayPage / relativePos 即可定位渲染了哪一页。
-                // displayPage=1 + relativePos=-1 = page index 0 = 首页。
-                AppLog.debug(
-                    "PageTurnFlicker",
-                    "[3c] bitmapProvider INVOKED relativePos=$relativePos" +
-                        " displayPage=$displayPage targetIdx=${displayPage + relativePos}" +
-                        " pageId=${page?.let { System.identityHashCode(it) } ?: "null"}" +
-                        " viewWxH=${w}x$h",
-                )
-                if (page != null && w > 0 && h > 0) {
-                    try {
-                        val pageStart = page.chapterPosition
-                        val pageEnd = pageStart + page.lines.sumOf { it.charSize }
-                        val pageHighlights = if (params.chapterHighlights.isEmpty()) emptyList() else
-                            params.chapterHighlights.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
-                        val pageTextColor = if (params.chapterTextColorSpans.isEmpty()) emptyList() else
-                            params.chapterTextColorSpans.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
-                        val pageUnderlines = if (params.chapterUnderlines.isEmpty()) emptyList() else
-                            params.chapterUnderlines.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
-                        renderPageToBitmap(
-                            w, h, params.bgColor, page,
-                            params.titlePaint, params.contentPaint,
-                            chapterNumPaint = params.chapterNumPaint,
-                            reuseBitmap = null, bgBitmap = params.bgBitmap,
-                            pageInfoOverlay = params.pageInfoOverlay,
-                            highlights = pageHighlights,
-                            textColorSpans = pageTextColor,
-                            underlines = pageUnderlines,
-                        )
-                    } catch (e: OutOfMemoryError) {
-                        AppLog.error("Simulation", "bitmap OOM w=${w} h=${h}", e)
-                        null
-                    }
-                } else null
+            view.bitmapProvider = if (bitmapProvider != null) {
+                // P3-3d: 外部 provider 路径。displayPage + relativePos 直接打给
+                // 外部 provider，跳过 params.pageForTurn / renderPageToBitmap。
+                // 外部对越界自己返回 null，与 setBitmaps 上游的 null 兼容。
+                { relativePos, w, h ->
+                    val targetIdx = displayPage + relativePos
+                    AppLog.debug(
+                        "PageTurnFlicker",
+                        "[3c.ext] bitmapProvider INVOKED via external relativePos=$relativePos" +
+                            " displayPage=$displayPage targetIdx=$targetIdx viewWxH=${w}x$h",
+                    )
+                    if (w > 0 && h > 0) {
+                        try {
+                            bitmapProvider.bitmapAt(targetIdx, w, h)
+                        } catch (e: OutOfMemoryError) {
+                            AppLog.error("Simulation", "external bitmap OOM w=${w} h=${h}", e)
+                            null
+                        }
+                    } else null
+                }
+            } else {
+                { relativePos, w, h ->
+                    val page = params.pageForTurn(displayPage, relativePos)
+                    // Diagnostic [3c] — fires when SimulationReadView 的 setBitmaps()
+                    // (触摸开始) 调用 provider(relPos)。关注点：切换瞬间如果触发了
+                    // setBitmaps（不应该，因为切换不带触摸），看这条日志的
+                    // displayPage / relativePos 即可定位渲染了哪一页。
+                    // displayPage=1 + relativePos=-1 = page index 0 = 首页。
+                    AppLog.debug(
+                        "PageTurnFlicker",
+                        "[3c] bitmapProvider INVOKED relativePos=$relativePos" +
+                            " displayPage=$displayPage targetIdx=${displayPage + relativePos}" +
+                            " pageId=${page?.let { System.identityHashCode(it) } ?: "null"}" +
+                            " viewWxH=${w}x$h",
+                    )
+                    if (page != null && w > 0 && h > 0) {
+                        try {
+                            val pageStart = page.chapterPosition
+                            val pageEnd = pageStart + page.lines.sumOf { it.charSize }
+                            val pageHighlights = if (params.chapterHighlights.isEmpty()) emptyList() else
+                                params.chapterHighlights.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
+                            val pageTextColor = if (params.chapterTextColorSpans.isEmpty()) emptyList() else
+                                params.chapterTextColorSpans.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
+                            val pageUnderlines = if (params.chapterUnderlines.isEmpty()) emptyList() else
+                                params.chapterUnderlines.filter { it.startChapterPos < pageEnd && it.endChapterPos > pageStart }
+                            renderPageToBitmap(
+                                w, h, params.bgColor, page,
+                                params.titlePaint, params.contentPaint,
+                                chapterNumPaint = params.chapterNumPaint,
+                                reuseBitmap = null, bgBitmap = params.bgBitmap,
+                                pageInfoOverlay = params.pageInfoOverlay,
+                                highlights = pageHighlights,
+                                textColorSpans = pageTextColor,
+                                underlines = pageUnderlines,
+                            )
+                        } catch (e: OutOfMemoryError) {
+                            AppLog.error("Simulation", "bitmap OOM w=${w} h=${h}", e)
+                            null
+                        }
+                    } else null
+                }
             }
             view.onTapCenter = { params.onTapCenter() }
             view.onLongPress = { x, y -> params.onLongPress?.invoke(Offset(x, y)) }
@@ -301,9 +364,39 @@ internal fun SimulationPager(
                     params.onPageChanged(safePage)
                 }
             }
-            // Render idle bitmap with correct theme background color
+            // Render idle bitmap. P3-3d 起按 bitmapProvider 是否 non-null 二分路径。
             val w = view.width
             val h = view.height
+            if (bitmapProvider != null) {
+                // P3-3d external path：dedupe key 简化为 (providerId, displayPage, w, h)，
+                // 内容版本管理交给外部 provider 自己（caller 改主题/字号时 remember 新
+                // provider 实例 → providerId 变 → dedupe 失效 → 重渲染）。
+                // 完全跳过 legacy 路径的 SimulationIdleKey + renderPageToBitmap +
+                // canRender (pages.indices check) —— 那些是 params-driven 兜底，外部
+                // provider 不需要。
+                if (w > 0 && h > 0) {
+                    val extKey = SimulationExternalIdleKey(
+                        providerId = System.identityHashCode(bitmapProvider),
+                        displayPage = displayPage,
+                        w = w, h = h,
+                    )
+                    AppLog.debug(
+                        "PageTurnFlicker",
+                        "[3a.ext] setIdleBitmap CALLED via external displayPage=$displayPage" +
+                            " viewWxH=${w}x$h providerId=${System.identityHashCode(bitmapProvider)}",
+                    )
+                    view.setIdleBitmap(key = extKey) {
+                        try {
+                            bitmapProvider.bitmapAt(displayPage, w, h)
+                        } catch (e: OutOfMemoryError) {
+                            AppLog.error("Simulation", "external idle bitmap OOM w=${w} h=${h}", e)
+                            null
+                        }
+                    }
+                }
+                return@AndroidView
+            }
+            // ↓ legacy path（bitmapProvider == null）保持原样
             // ─── 模式切换闪烁防御 ─────────────────────────────────────
             // 在 prelayout 流式产页阶段（pages.size 还没追上 displayPage），
             // params.pageForTurn(displayPage, 0) 会落入 PageFactory 的 fallback

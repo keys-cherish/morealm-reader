@@ -186,6 +186,7 @@ fun AnimatedPageReader(
                     modifier = modifier,
                     simulationViewRef = simulationViewRef,
                     pageContent = pageContent,
+                    bitmapProvider = bitmapProvider,
                 )
             } else {
                 // Diagnostic [3w] — simulationParams==null fallback. simulationParams
