@@ -139,8 +139,22 @@ fun AnimatedPageReader(
      */
     simulationViewRef: androidx.compose.runtime.MutableState<com.morealm.app.ui.reader.renderer.SimulationReadView?>? = null,
     onPageSettled: (Int) -> Unit = {},
+    /**
+     * **P3-3a**：动画 ↔ 渲染契约线入口（详见 [com.morealm.app.ui.reader.page.PageBitmapProvider]）。
+     *
+     * 当前阶段**仅签名扩展**，参数传入但**还没消费** —— 4 个 Pager 仍走 [pageContent]
+     * Composable 路径。P3-3b 新增 BitmapPageContent Composable；P3-3c 让 4 个 Pager
+     * 在 `bitmapProvider != null` 时走 BitmapPageContent，否则保持现 pageContent 兜底。
+     *
+     * 默认 `null` = 现有 caller 完全不受影响（pageContent 路径）。
+     */
+    bitmapProvider: com.morealm.app.ui.reader.page.PageBitmapProvider? = null,
     pageContent: @Composable (Int) -> Unit,
 ) {
+    // P3-3a 占位：bitmapProvider 仅 hold 引用避免 unused-parameter 告警，
+    // 不影响 4 Pager 内部 dispatch。P3-3c 后此引用会进 BitmapPageContent 消费。
+    @Suppress("UNUSED_VARIABLE")
+    val p3BitmapProviderRef = bitmapProvider
     when (animType) {
         PageAnimType.SLIDE -> SlidePager(pagerState, modifier, onPageSettled, pageContent)
         PageAnimType.SLIDE_VERTICAL -> VerticalSlidePager(pagerState, modifier, onPageSettled, pageContent)
