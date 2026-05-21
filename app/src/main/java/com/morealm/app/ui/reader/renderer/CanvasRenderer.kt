@@ -2165,6 +2165,19 @@ fun CanvasRenderer(
             // 内 page 取值用 pageFactory.unifiedPageAt；其他模式保持单章。
             val unifiedCurStart = if (isUnifiedPagingMode) pageFactory.unifiedCurStartIndex else 0
             val unifiedCurEnd = if (isUnifiedPagingMode) pageFactory.unifiedCurEndIndex else 0
+            // P3-5a NONE 接入：仅 NONE 模式走 RichPageBitmapProvider + BitmapPageContent
+            // bitmap 路径，临时失去选区 / cursor / autoPage overlay（最小 POC 验证 bitmap
+            // 渲染管线）。SLIDE / COVER / SIMULATION / SLIDE_VERTICAL 都保持原 pageContent
+            // 路径不变。
+            val noneBitmapProvider = if (pageAnimType == PageAnimType.NONE) {
+                com.morealm.app.ui.reader.page.rememberRichPageBitmapProvider(
+                    pages = pages,
+                    chapterHighlights = highlightSpans,
+                    chapterTextColorSpans = textColorSpans,
+                    chapterUnderlines = underlineSpans,
+                    pageInfoOverlay = pageInfoOverlaySpec,
+                )
+            } else null
             AnimatedPageReader(
                 pagerState = pagerState,
                 animType = pageAnimType,
@@ -2172,6 +2185,7 @@ fun CanvasRenderer(
                 simulationParams = simulationParams,
                 simulationDisplayPage = computedSimDisplayPage,
                 simulationViewRef = simulationViewRef,
+                bitmapProvider = noneBitmapProvider,
                 onPageSettled = { settledPage ->
                     AppLog.debug(
                         "PageTurnFlicker",

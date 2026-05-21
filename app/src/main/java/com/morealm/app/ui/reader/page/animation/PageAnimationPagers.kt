@@ -221,7 +221,15 @@ fun AnimatedPageReader(
                 modifier = modifier.fillMaxSize(),
                 userScrollEnabled = false,
             ) { pageIndex ->
-                pageContent(pageIndex)
+                // P3-5a NONE 接入：bitmapProvider != null 时改走 BitmapPageContent
+                // （bitmap 静态文字 + 主题 paint）。pageContent 路径保留兜底兼容，
+                // caller 不传 bitmapProvider 时回到 PageContentBox（含选区 / cursor /
+                // autoPage overlay）旧行为。
+                if (bitmapProvider != null) {
+                    com.morealm.app.ui.reader.page.BitmapPageContent(bitmapProvider, pageIndex)
+                } else {
+                    pageContent(pageIndex)
+                }
             }
         }
     }
