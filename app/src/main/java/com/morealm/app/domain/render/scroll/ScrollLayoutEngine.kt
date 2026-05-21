@@ -475,6 +475,15 @@ class ScrollLayoutEngine(
             currentParaCharColors = colorPerCp
             currentParaCpStart = chapterPositionCounter
             val processedText = cleanedText
+            // P3-5b Step 2c diag：仅当原 paragraphText 含 SOH 时才打 log（多色段稀有）
+            if (paragraphText.contains('')) {
+                com.morealm.app.core.log.AppLog.info(
+                    "P3-5b/CharColor",
+                    "paragraph has SOH markers rawLen=${paragraphText.length} " +
+                        "cleanLen=${cleanedText.length} colorsSize=${colorPerCp?.size} " +
+                        "rawHead40='${paragraphText.take(40).map { if (it.code < 0x20) "\\x%02x".format(it.code) else it.toString() }.joinToString("")}'",
+                )
+            }
 
             // ── 空段处理（用户决策 2026-05-17）──
             // 输出空 ScrollLine（columns 空 + text 空 + 高 = contentLineHeight），并占 1 cp。

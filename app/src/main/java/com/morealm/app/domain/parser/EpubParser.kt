@@ -667,6 +667,21 @@ object EpubParser {
         val structured = readChapterStructured(context, uri, chapter)
         val content = if (structured.isEmpty()) "" else structured.flattenToString()
 
+        // P3-5b Step 2c diag：标题/cover 等多色 RichText 章 flatten 后应该含 SOH(0x01) marker
+        val hasSpanMarker = content.contains('')
+        if (hasSpanMarker) {
+            com.morealm.app.core.log.AppLog.info(
+                "P3-5b/CharColor",
+                "EpubParser writing cache w/ SPAN_COLOR markers chapter='${chapter.title}' len=${content.length}",
+            )
+        } else {
+            AppLog.debug(
+                "P3-5b/CharColor",
+                "EpubParser flatten NO span markers chapter='${chapter.title}' len=${content.length} " +
+                    "blocks=${structured.blocks.size}",
+            )
+        }
+
         if (content.isNotEmpty()) writeCachedChapter(context, uri, cacheKey, content)
         return content
     }

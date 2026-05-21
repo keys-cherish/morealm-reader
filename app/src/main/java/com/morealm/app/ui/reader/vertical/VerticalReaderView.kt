@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -155,8 +156,14 @@ fun VerticalReaderView(
      * [ReadingDirection.VERTICAL_LR] 章标在左 / 翻页 LTR。其他枚举值视为 RL（兜底）。
      */
     direction: ReadingDirection = ReadingDirection.VERTICAL_RL,
+    /**
+     * 阅读区背景图 uri；空 = 纯色背景。来自 ReaderScreen 的 readerBgImage。
+     * 修复 2026-05-21：之前竖排路径完全没接收此字段 → 用户设的 bgImage 在竖排模式下不生效。
+     */
+    bgImageUri: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val density = LocalDensity.current
     val fontSizePx = with(density) { fontSize.sp.toPx() }
     val padLeftPx = with(density) { paddingLeft.dp.toPx().toInt() }
@@ -197,6 +204,25 @@ fun VerticalReaderView(
     ) {
         BoxWithSizePx { widthPx, heightPx ->
             if (widthPx == 0 || heightPx == 0) return@BoxWithSizePx
+
+            // 背景图（与横排 ScrollCanvasReaderHost.bgImageUri 同款）：BgImageManager LRU
+            // 取 bitmap 然后 Compose Image fillBounds 铺底。空字符串 / null = 纯色背景兜底。
+            val bgEntry = remember(bgImageUri, widthPx, heightPx) {
+                if (!bgImageUri.isNullOrEmpty() && widthPx > 0 && heightPx > 0) {
+                    com.morealm.app.domain.render.BgImageManager.getBgBitmap(
+                        context, bgImageUri, widthPx, heightPx,
+                    )
+                } else null
+            }
+            val bgBitmap = bgEntry?.bitmap
+            if (bgBitmap != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = bgBitmap.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                )
+            }
 
             // ── ChapterProvider ──
             // 每次 size / paint / content / direction 变化时重建。竖排版 layout 算法
