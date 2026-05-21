@@ -192,16 +192,24 @@ fun PagePaneCanvas(
                     }
                 }
                 val baselineY = line.lineTop + ascent
+                // P3-5b Step 2a：段落统一字体色 —— RichText 所有 span 共享同色时
+                // (`<span class="c-co-lan1">[ 角色 A [</span>` 之类) flattenToString 已经把
+                // 颜色合并到 blockStyle.textColor，这里读出来当 paint 默认色，让角色 A 4 字带
+                // c-co-lan1 蓝色。优先级：用户高亮 (textColorByCp) > paragraph textColor > paint 默认
+                val paragraphColor = line.blockStyle.textColor
+                if (paragraphColor != null) paint.color = paragraphColor
                 for (col in line.columns) {
                     val overrideColor = textColorByCp[col.chapterPosition]
                     if (overrideColor != null) {
                         paint.color = overrideColor
                         nc.drawText(col.charData, col.start, baselineY, paint)
-                        paint.color = defaultColor
+                        paint.color = paragraphColor ?: defaultColor
                     } else {
                         nc.drawText(col.charData, col.start, baselineY, paint)
                     }
                 }
+                // 还原 paint —— 避免段落色污染下一 line 共享 paint
+                if (paragraphColor != null) paint.color = defaultColor
             }
 
             // ─── 层 3：下划线 ───
