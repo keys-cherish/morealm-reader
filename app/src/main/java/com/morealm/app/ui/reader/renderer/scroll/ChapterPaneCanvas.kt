@@ -244,6 +244,12 @@ fun ChapterPaneCanvas(
                     // P3-5b Step 2a：段落统一字体色（同 PagePaneCanvas 同位逻辑）
                     val paragraphColor = line.blockStyle.textColor
                     if (paragraphColor != null) paint.color = paragraphColor
+                    // P3-5b Step 2b：text-shadow（c-shadow-* 彩色描边光晕，详 PagePaneCanvas 同位）
+                    val ts = line.blockStyle.textShadow
+                    if (ts != null) {
+                        val r = if (ts.blurRadius > 0f) ts.blurRadius else 0.5f
+                        paint.setShadowLayer(r, ts.offsetX, ts.offsetY, ts.color)
+                    }
                     for (col in line.columns) {
                         val overrideColor = textColorByCp[col.chapterPosition]
                         if (overrideColor != null) {
@@ -255,6 +261,7 @@ fun ChapterPaneCanvas(
                         }
                     }
                     if (paragraphColor != null) paint.color = defaultColor
+                    if (ts != null) paint.clearShadowLayer()
                 }
                 // pageOffsetY 已在循环顶累加（move 到顶为视口剔除提前）
             }
