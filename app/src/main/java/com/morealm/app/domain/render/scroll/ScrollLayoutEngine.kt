@@ -545,11 +545,15 @@ class ScrollLayoutEngine(
                 if (chars.isEmpty()) return
 
                 if (useZhLayout) {
+                    // P3-5b Step 2c：CSS text-indent 覆盖默认 paragraphIndent；text-align 覆盖默认左对齐
+                    val cssIndentPx = currentBlockStyle.textIndentPx
+                    val effectiveFirstLineIndent = if (cssIndentPx > 0f) cssIndentPx else indentWidth
+                    val cssAlign = currentBlockStyle.textAlign
                     // 修复用户反馈"首行缩进太大"：之前 indentSize=0 让 ZhLayout 按完整 visibleWidth
                     // 切行，但 emitOneLine 又把首行 startX = indentWidth → 实际可用宽 = visibleWidth -
                     // indentWidth，首行字数过多 → exceed 强力压缩 → 视觉感受"缩进很大字间距窄"。
                     // 修：传 paragraphIndent.length 让 ZhLayout 知道首行少 indentSize 个字位置。
-                    val indentSize = if (isFirstChunkOfPara) paragraphIndent.length else 0
+                    val indentSize = if (isFirstChunkOfPara && cssAlign != com.morealm.epub.compat.BlockStyle.TextAlign.CENTER) paragraphIndent.length else 0
                     val layout = ZhLayout(textChunk, contentPaint, visibleWidth, chars, widths, indentSize)
                     for (lineIndex in 0 until layout.lineCount) {
                         // ZhLayout.lineStart/lineEnd 是 UTF-16 char index（基于 text.length），
@@ -564,9 +568,17 @@ class ScrollLayoutEngine(
                         if (lineChars.isEmpty()) continue
                         val isFirstLine = isFirstChunkOfPara && lineIndex == 0
                         val isLastLine = lineIndex == layout.lineCount - 1
-                        val startX = if (isFirstLine) indentWidth else 0f
-                        val availableWidth = visibleWidth - startX
                         val desiredWidth = lineWidths.sum()
+                        // P3-5b Step 2c：startX 计算按 CSS text-align
+                        val startX: Float = when (cssAlign) {
+                            com.morealm.epub.compat.BlockStyle.TextAlign.CENTER ->
+                                ((visibleWidth - desiredWidth) / 2f).coerceAtLeast(0f)
+                            com.morealm.epub.compat.BlockStyle.TextAlign.RIGHT ->
+                                (visibleWidth - desiredWidth).coerceAtLeast(0f)
+                            // LEFT / JUSTIFY / null —— 沿用旧默认（首行 indent 兜底）
+                            else -> if (isFirstLine) effectiveFirstLineIndent else 0f
+                        }
+                        val availableWidth = visibleWidth - startX
                         val residualWidth = availableWidth - desiredWidth
                         // Justify 条件（与旧 addCharsToLineMiddle 同款）：
                         //   - 非末行
@@ -574,7 +586,10 @@ class ScrollLayoutEngine(
                         //   - 余宽 ≤ availableWidth × 0.25（防止过散行；如最后短句不该 justify）
                         //   - 行宽 ≥ availableWidth × 0.65（防止极短行被强行拉宽，视觉不自然）
                         //   - chars.size > 1（单字符无间隙可分）
+                        // CENTER / RIGHT 时不 justify（视觉冲突）
                         val shouldJustify = textFullJustify && !isLastLine &&
+                            cssAlign != com.morealm.epub.compat.BlockStyle.TextAlign.CENTER &&
+                            cssAlign != com.morealm.epub.compat.BlockStyle.TextAlign.RIGHT &&
                             residualWidth > 0f && residualWidth <= availableWidth * 0.25f &&
                             desiredWidth >= availableWidth * 0.65f && lineChars.size > 1
                         val gap = if (shouldJustify) residualWidth / (lineChars.size - 1) else 0f
