@@ -48,7 +48,7 @@ object EpubParser {
     // v9 = LocalBookParser.isEmptyChapter 阈值放宽（< 8 → < 1）。之前某 EPUB toc
     // 嵌套人物名 "样本人物"3 char 被误判 empty 兜底；现允许任意 trim 后非空内容
     // 通过。v8 cache 内某些 chapter 已被错存为占位字符串，bump 失效。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v9"
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v10"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
@@ -699,7 +699,13 @@ object EpubParser {
             val coverLookup: () -> String? = {
                 extractCoverFromCoreBook(context, uri, book)?.let { "file://${it.absolutePath}" }
             }
-            ChapterReader.read(book, chapter.url, chapter.nextUrl, imgLookup, coverLookup)
+            // P3-5b Phase 2b：切到 tree-based readTree —— 走 Chapter.parse() + 全 CSS cascade
+            // （class / id selectors / inline / @media），把 BlockStyle / StyledSpan 真实
+            // 数据填到 StructuredChapterContent。flattenToString 暂仍丢富数据，等 Phase 3
+            // ChapterProvider 接 layoutFromBlocks 才能让 kuang1 装饰可见。
+            // rootFontSizePx=16f 固定值：BlockStyle 单位是"设计像素"，渲染层后续按用户
+            // 字号倍率缩放。这样 cache 不因用户改字号失效。
+            ChapterReader.readTree(book, chapter.url, chapter.nextUrl, imgLookup, coverLookup, rootFontSizePx = 16f)
         }
         if (result == null) {
             AppLog.warn("EpubParser", "readChapterStructured withCoreBook returned null (book open failed)")
