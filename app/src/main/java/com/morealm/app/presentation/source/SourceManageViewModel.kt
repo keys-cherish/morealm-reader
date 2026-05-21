@@ -581,9 +581,10 @@ class BookSourceManageViewModel @Inject constructor(
 
     fun dismissInvalidResultsDialog() {
         _isInvalidResultsDialogVisible.value = false
-        // 重置 Service 状态 —— 否则 StateFlow 对新订阅者重发 Done 状态，下次重进
-        // 书源管理界面会触发 collect 块重弹同一个对话框（StateFlow 语义）。
-        CheckSourceService.clear()
+        // 仅把 Service.state 标记 Idle（不清结果）—— 否则 StateFlow 对新订阅者重发
+        // Done 状态，下次重进书源管理界面会触发 collect 块重弹同一个对话框（StateFlow
+        // 语义）。失效书源数据保留在 _results 让 UI 仍能展示，用户稍后还能批量删。
+        CheckSourceService.markStateIdle()
     }
 
     /**

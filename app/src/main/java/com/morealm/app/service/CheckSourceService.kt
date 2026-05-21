@@ -108,10 +108,18 @@ class CheckSourceService : Service() {
         }
 
         /**
-         * 用户已"处理完"上一轮结果（关弹窗 / 删完失效书源 / 主动重置）后调，把
-         * Service.state + Service.results 清零。companion 是 static，VM 重订阅时
-         * 不会再拿到 Done 状态触发"弹删除询问对话框"。修复用户报的 "退出书源界面
-         * 再进入还是会有 N 个待删除书源"。
+         * 把 state 标记为 Idle 但**保留 _results** —— 用户关掉弹窗时调，让 StateFlow
+         * 对新订阅者重发的 Done 状态不会再触发"弹失效列表对话框"，但失效书源数据
+         * 仍在 _results 里可供 UI 角标 / 列表展示。
+         */
+        fun markStateIdle() {
+            _state.value = State.Idle
+        }
+
+        /**
+         * 状态 + 结果一并归零。用户**删完**失效书源（不再需要这份数据）时调；或
+         * 真的要从头开始时主动重置。companion 是 static，调用后 VM 重订阅拿到的
+         * 是空状态。
          */
         fun clear() {
             _state.value = State.Idle
@@ -153,10 +161,11 @@ class CheckSourceService : Service() {
             }
             ACTION_STOP -> {
                 checkJob?.cancel()
-                // 取消 = 丢弃本轮：清结果 + state，否则 UI 仍能看到半截校验产生的
-                // "失效书源待删除"列表（用户报的 bug：校验到一半取消，仍弹删除询问）。
+                // 取消时**保留 _results** —— 用户决策 2026-05-21：半截校验结果有用
+                // （用户可决定是否删已确认的失效源）。仅 state→Idle 让 UI 停 spinner。
+                // 关弹窗 / 删完源时 ViewModel 会显式调 clear() 把 _results 清掉，
+                // 防止重进界面重弹 dialog。
                 _state.value = State.Idle
-                _results.value = emptyMap()
                 stopSelf()
             }
         }
