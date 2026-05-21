@@ -504,6 +504,15 @@ fun PageLevelReaderHost(
                         com.morealm.app.core.log.AppLog.info("PageLvlHost", "DIAG onTap zone=$zone animType=$animType x=${offset.x} w=$w")
                         when {
                             offset.x < w * 0.33f -> {
+                                // 边界保护：全书首章首页 hasPrev=false 时不触发动画
+                                // （否则 COVER 等动画白动一次还是停在原位，视觉"持续弹动画"困扰）
+                                if (!core.pageFactory.hasPrev()) {
+                                    com.morealm.app.core.log.AppLog.info(
+                                        "PageLvlHost",
+                                        "PREV tap at boundary (hasPrev=false), skip animation",
+                                    )
+                                    return@detectTapGestures
+                                }
                                 val animate = turnCtrl.animateToPrev
                                 if (animate != null) {
                                     val prev = currentAnimJob
@@ -514,6 +523,14 @@ fun PageLevelReaderHost(
                                 } else core.pageFactory.moveToPrev()
                             }
                             offset.x > w * 0.67f -> {
+                                // 边界保护：全书末章末页 hasNext=false 时不触发动画
+                                if (!core.pageFactory.hasNext()) {
+                                    com.morealm.app.core.log.AppLog.info(
+                                        "PageLvlHost",
+                                        "NEXT tap at boundary (hasNext=false), skip animation",
+                                    )
+                                    return@detectTapGestures
+                                }
                                 val animate = turnCtrl.animateToNext
                                 if (animate != null) {
                                     val prev = currentAnimJob
