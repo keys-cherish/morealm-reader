@@ -32,10 +32,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * 覆盖翻页（COVER）独立 Renderer —— V2 page-level 横向 cover 版本。
+ * 覆盖翻页（COVER）独立 Transition —— V2 page-level 横向 cover 版本。
  *
- * 按 Legado PageDelegate 模型：Renderer 只 own drag + 动画绘制 + fling，
- * tap/长按/选区由 [PageLevelReaderHost] 共享层处理（Renderer 不接 pointerInput tap）。
+ * 按 Legado PageDelegate 模型：Transition 只 own drag + 动画绘制 + fling，
+ * tap/长按/选区由 [PageLevelReaderHost] 共享层处理（Transition 不接 pointerInput tap）。
  *
  * ## 与 SLIDE 的差别
  *
@@ -49,7 +49,7 @@ import kotlinx.coroutines.launch
  * pageOffset 解释：0 = cur 完全显示；+viewportW = next 完全覆盖；-viewportW = prev 完全覆盖。
  */
 @Composable
-fun CoverPageRenderer(
+fun CoverPageTransition(
     state: ScrollCanvasReaderState,
     pageFactory: ScrollPageFactory,
     backgroundColor: Color,
@@ -116,7 +116,7 @@ fun CoverPageRenderer(
         }
     }
 
-    // Host zone tap 注入：走本 Renderer 的 animateAndCommit 让 zone tap 也有覆盖动画。
+    // Host zone tap 注入：走本 Transition 的 animateAndCommit 让 zone tap 也有覆盖动画。
     DisposableEffect(turnCtrl) {
         turnCtrl?.animateToNext = {
             val viewportW = viewportWidthPx.toFloat()
@@ -139,7 +139,7 @@ fun CoverPageRenderer(
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(
                     onDragStart = {
-                        com.morealm.app.core.log.AppLog.info("CoverRenderer", "DIAG onDragStart viewportW=$viewportWidthPx pageOffset=${state.pageOffset}")
+                        com.morealm.app.core.log.AppLog.info("CoverTransition", "DIAG onDragStart viewportW=$viewportWidthPx pageOffset=${state.pageOffset}")
                         diagDragMoves = 0
                         flingJob?.cancel()
                         flingJob = null
@@ -147,7 +147,7 @@ fun CoverPageRenderer(
                     },
                     onHorizontalDrag = { change, dragAmount ->
                         if (diagDragMoves < 3) {
-                            com.morealm.app.core.log.AppLog.info("CoverRenderer", "DIAG onHorizontalDrag #$diagDragMoves dx=$dragAmount off=${state.pageOffset}")
+                            com.morealm.app.core.log.AppLog.info("CoverTransition", "DIAG onHorizontalDrag #$diagDragMoves dx=$dragAmount off=${state.pageOffset}")
                         }
                         diagDragMoves++
                         velocityTracker.addPosition(change.uptimeMillis, change.position)
@@ -165,7 +165,7 @@ fun CoverPageRenderer(
                     },
                     onDragEnd = {
                         val flingVelocity = velocityTracker.calculateVelocity().x
-                        com.morealm.app.core.log.AppLog.info("CoverRenderer", "DIAG onDragEnd moves=$diagDragMoves off=${state.pageOffset} vel=$flingVelocity")
+                        com.morealm.app.core.log.AppLog.info("CoverTransition", "DIAG onDragEnd moves=$diagDragMoves off=${state.pageOffset} vel=$flingVelocity")
                         flingJob?.cancel()
                         flingJob = scope.launch {
                             try {
@@ -296,7 +296,7 @@ fun CoverPageRenderer(
             )
         },
     ) { measurables, constraints ->
-        check(measurables.size == 3) { "CoverPageRenderer expects 3 measurables (cur/next/prev)" }
+        check(measurables.size == 3) { "CoverPageTransition expects 3 measurables (cur/next/prev)" }
         val viewWidth = constraints.maxWidth
         val viewHeight = constraints.maxHeight
         val pageConstraints = Constraints.fixed(width = viewWidth, height = viewHeight.coerceAtLeast(1))

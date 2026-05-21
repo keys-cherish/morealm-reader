@@ -30,10 +30,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * 平移翻页（SLIDE）独立 Renderer —— V2 page-level 横向 Renderer。
+ * 平移翻页（SLIDE）独立 Transition —— V2 page-level 横向 Transition。
  *
- * 按 Legado PageDelegate 模型：Renderer 只 own **drag + animation 翻页**，
- * tap/长按/选区由 [PageLevelReaderHost] 共享层处理（Renderer 不接 pointerInput tap）。
+ * 按 Legado PageDelegate 模型：Transition 只 own **drag + animation 翻页**，
+ * tap/长按/选区由 [PageLevelReaderHost] 共享层处理（Transition 不接 pointerInput tap）。
  *
  * - 手势：detectHorizontalDragGestures + settle-to-edge fling（无 animateDecay 卡半空 bug）
  * - placement：3 个 PagePaneCanvas 横向排列（cur / next / nextPlus）
@@ -42,7 +42,7 @@ import kotlinx.coroutines.launch
  * pageOffset 解释：state.pageOffset 在 SLIDE 模式表 X 方向 px（[0, viewportW]）。
  */
 @Composable
-fun SlidePageRenderer(
+fun SlidePageTransition(
     state: ScrollCanvasReaderState,
     pageFactory: ScrollPageFactory,
     backgroundColor: Color,
@@ -109,7 +109,7 @@ fun SlidePageRenderer(
         }
     }
 
-    // Host zone tap 注入：走本 Renderer 的 animateAndCommit 让 zone tap 也有平移动画。
+    // Host zone tap 注入：走本 Transition 的 animateAndCommit 让 zone tap 也有平移动画。
     DisposableEffect(turnCtrl) {
         turnCtrl?.animateToNext = {
             val viewportW = viewportWidthPx.toFloat()
@@ -132,7 +132,7 @@ fun SlidePageRenderer(
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(
                     onDragStart = {
-                        com.morealm.app.core.log.AppLog.info("SlideRenderer", "DIAG onDragStart viewportW=$viewportWidthPx pageOffset=${state.pageOffset}")
+                        com.morealm.app.core.log.AppLog.info("SlideTransition", "DIAG onDragStart viewportW=$viewportWidthPx pageOffset=${state.pageOffset}")
                         diagDragMoves = 0
                         flingJob?.cancel()
                         flingJob = null
@@ -140,7 +140,7 @@ fun SlidePageRenderer(
                     },
                     onHorizontalDrag = { change, dragAmount ->
                         if (diagDragMoves < 3) {
-                            com.morealm.app.core.log.AppLog.info("SlideRenderer", "DIAG onHorizontalDrag #$diagDragMoves dx=$dragAmount off=${state.pageOffset}")
+                            com.morealm.app.core.log.AppLog.info("SlideTransition", "DIAG onHorizontalDrag #$diagDragMoves dx=$dragAmount off=${state.pageOffset}")
                         }
                         diagDragMoves++
                         velocityTracker.addPosition(change.uptimeMillis, change.position)
@@ -159,7 +159,7 @@ fun SlidePageRenderer(
                     },
                     onDragEnd = {
                         val flingVelocity = velocityTracker.calculateVelocity().x
-                        com.morealm.app.core.log.AppLog.info("SlideRenderer", "DIAG onDragEnd moves=$diagDragMoves off=${state.pageOffset} vel=$flingVelocity")
+                        com.morealm.app.core.log.AppLog.info("SlideTransition", "DIAG onDragEnd moves=$diagDragMoves off=${state.pageOffset} vel=$flingVelocity")
                         flingJob?.cancel()
                         flingJob = scope.launch {
                             try {
@@ -246,7 +246,7 @@ fun SlidePageRenderer(
             )
         },
     ) { measurables, constraints ->
-        check(measurables.size == 3) { "SlidePageRenderer expects 3 measurables (cur/next/nextPlus)" }
+        check(measurables.size == 3) { "SlidePageTransition expects 3 measurables (cur/next/nextPlus)" }
         val viewWidth = constraints.maxWidth
         val viewHeight = constraints.maxHeight
         val pageConstraints = Constraints.fixed(width = viewWidth, height = viewHeight.coerceAtLeast(1))

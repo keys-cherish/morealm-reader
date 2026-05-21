@@ -12,21 +12,21 @@ import com.morealm.app.ui.reader.renderer.scroll.PagePaneCanvas
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
 
 /**
- * 无动画翻页 Renderer —— 最简的 page-level 横向 Renderer。
+ * 无动画翻页 Transition —— 最简的 page-level 横向 Transition。
  *
  * Legado 对应 [外部开源阅读器实现]：
  * onDraw 直接画 currentPage，nextPageByAnim / prevPageByAnim 内部 `readView.fillPage`
  * 瞬切。**没有 fling / drag 偏移动画**。
  *
- * MoRealm 实现策略：本 Renderer 只**画当前 page**，翻页交互（zone tap 触发
+ * MoRealm 实现策略：本 Transition 只**画当前 page**，翻页交互（zone tap 触发
  * pageFactory.moveToPrev/Next）在 [PageLevelReaderHost] 共享层处理。
  *
  * @param state V2 page-level state（共享）
  * @param pageFactory page 序列管理器（共享）
- * @param backgroundColor 阅读背景色（PagePaneCanvas 不画自己背景，由本 Renderer 加 Modifier.background）
+ * @param backgroundColor 阅读背景色（PagePaneCanvas 不画自己背景，由本 Transition 加 Modifier.background）
  */
 @Composable
-fun NonePageRenderer(
+fun NonePageTransition(
     state: ScrollCanvasReaderState,
     pageFactory: ScrollPageFactory,
     backgroundColor: Color,
