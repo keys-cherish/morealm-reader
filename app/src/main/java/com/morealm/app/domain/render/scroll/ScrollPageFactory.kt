@@ -97,9 +97,12 @@ class ScrollPageFactory(
     val prevPage: ScrollPage
         get() {
             val ch = dataSource.currentChapter ?: return EMPTY_PAGE
-            // 章内还有上一 page
+            // 章内还有上一 page —— 加 getOrElse 防 layout 重排后 pageIndex 越界
+            // （cache 版本 bump 后同章新 layout 行数不同 + 老 progress restore 出来的
+            // pageIndex 可能超过新 pages.size，触发 IOOB）。失败兜底 EMPTY_PAGE
+            // 让 reader 不 crash，下一次手势会触发 progress 自我修正。
             if (pageIndex > 0) {
-                return ch.pages[pageIndex - 1]
+                return ch.pages.getOrElse(pageIndex - 1) { EMPTY_PAGE }
             }
             // 章首 → 跨章取 prevChapter.pages.last
             val prev = dataSource.prevChapter ?: return EMPTY_PAGE

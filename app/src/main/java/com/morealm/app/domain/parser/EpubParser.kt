@@ -45,10 +45,10 @@ object EpubParser {
     // 共用 cache 文件 → 第二个 navPoint 起永远返回首次内容（用户报"无论跳哪章都显示首章"
     // 的根因，2026-05-18）。v4 起 cache key 用 chapter.url 完整 url 含 fragment，
     // 旧 v3 cache 全部失效，第一次打开重新解析。
-    // v7 = P2.2 ChapterBlockBuilder 重写（inline style cascade + RichText 输出）。
-    // v6 cache 是 P1 plain Paragraph 输出，flattenToString 字符串可能跟 P2.2 输出
-    // 有 CJK boundary 空格 / inline em strong 处理细节差异。bump 让所有书重新解析。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v7"
+    // v8 = epub-core hotfix（percent-decoded href fallback）。v7 cache 里某些
+    // 章节 url 含 %20 / %E4%B8%AD 等 percent-encoded path 时被解析成「本章暂无内容」
+    // 占位字符串，bump 让重新解析。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v8"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
@@ -677,7 +677,22 @@ object EpubParser {
         }
 
         val result = EpubCoreBridge.withCoreBook(context, uri) { book ->
-            AppLog.info("EpubParser", "readChapterStructured book opened spine=${book.spine.size} cover=${book.metadata.coverHref ?: "null"}")
+            val opfDir = book.opfPath.substringBeforeLast('/', "")
+            val rawTarget = chapter.url.substringBeforeLast("#")
+            val opfRelTarget = if (opfDir.isNotEmpty() && rawTarget.startsWith("$opfDir/")) {
+                rawTarget.removePrefix("$opfDir/")
+            } else rawTarget
+            val spineMatch = book.spine.items.indexOfFirst { it.href == opfRelTarget }
+            AppLog.info(
+                "EpubParser",
+                "readChapterStructured book opened spine.size=${book.spine.size} " +
+                    "opfDir='$opfDir' opfRelTarget='$opfRelTarget' spineMatch=$spineMatch " +
+                    "cover=${book.metadata.coverHref ?: "null"}",
+            )
+            if (spineMatch < 0) {
+                val preview = book.spine.items.take(8).map { it.href }
+                AppLog.warn("EpubParser", "spine MISS for '$opfRelTarget'; first 8 spine hrefs=$preview")
+            }
             val imgLookup: (String) -> String? = { src ->
                 extractImageFromCoreBook(context, uri, src, book)?.let { "file://${it.absolutePath}" }
             }
@@ -690,6 +705,11 @@ object EpubParser {
             AppLog.warn("EpubParser", "readChapterStructured withCoreBook returned null (book open failed)")
             return StructuredChapterContent(emptyList())
         }
+        AppLog.info(
+            "EpubParser",
+            "readChapterStructured done title='${chapter.title}' blocks=${result.blocks.size} " +
+                "isEmpty=${result.isEmpty()} totalChars=${result.totalChars}",
+        )
         return result
     }
 
