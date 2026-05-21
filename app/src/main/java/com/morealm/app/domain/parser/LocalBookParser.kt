@@ -88,7 +88,18 @@ object LocalBookParser {
         }
     }
 
-    private fun String.isEmptyChapter(): Boolean = this.trim().isEmpty()
+    private fun String.isEmptyChapter(): Boolean {
+        val t = this.trim()
+        if (t.isEmpty()) return true
+        if (this.contains("<img", ignoreCase = true)) return false
+        // < 8 字符兜底为「本章暂无内容」占位。
+        //
+        // 历史争议：某 EPUB人物志 toc 嵌套结构里"样本人物"3 字符章节会被误判 → 占位。
+        // 但**某 EPUB人物志的设计就是只有人物名 + 没正文**（人物章节 = 标题页 ↔ 真正
+        // 章节在 spine 后续），所以让用户看到「本章暂无内容」占位反而比看到「3 字符
+        // 占整页」更直观知道为什么空。保留 < 8 阈值。
+        return t.length < 8
+    }
 
     // ── TXT ──────────────────────────────────────────────
 
