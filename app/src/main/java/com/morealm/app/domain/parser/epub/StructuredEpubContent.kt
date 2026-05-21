@@ -59,7 +59,7 @@ sealed interface ChapterBlock {
 /**
  * 一章正文的结构化内容。
  *
- * 通过 [com.morealm.app.domain.parser.epub.EpubHtmlStructurer.structuredFromBody] 构造，
+ * 通过 [com.morealm.app.domain.parser.epub.streaming.StreamingChapterReader] 构造，
  * 由排版层（Step 3 起，[com.morealm.app.domain.render.ChapterProvider]）消费。
  */
 data class StructuredChapterContent(val blocks: List<ChapterBlock>) {

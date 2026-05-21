@@ -4,18 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.os.ParcelFileDescriptor
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.parser.epub.ChapterBlock
-import com.morealm.app.domain.parser.epub.EpubHtmlStructurer
 import com.morealm.app.domain.parser.epub.StructuredChapterContent
 import com.morealm.app.domain.parser.epub.streaming.StreamingChapterReader
-import me.ag2s.epublib.domain.EpubBook
-import me.ag2s.epublib.domain.Resource
-import me.ag2s.epublib.domain.TOCReference
-import me.ag2s.epublib.epub.EpubReader
-import me.ag2s.epublib.util.zip.AndroidZipFile
 import org.jsoup.Jsoup
 import java.io.File
 import java.io.FileOutputStream
@@ -69,32 +62,6 @@ object EpubParser {
         """<img[^>]*\s(?:data-src|src)\s*=\s*['"]([^'">]+)['"][^>]*>|<img[^>]*\sdata-[^=>]*=\s*['"]([^'">]*)['"][^>]*>""",
         RegexOption.IGNORE_CASE,
     )
-
-    fun extractMetadataAndCover(context: Context, uri: Uri): EpubImportResult {
-        return withEpubBook(context, uri) { book ->
-            val meta = book.metadata
-            val metadata = EpubMetadata(
-                title = meta.firstTitle.orEmpty(),
-                author = meta.authors.firstOrNull()?.toString()
-                    ?.replace("^, |, $".toRegex(), "").orEmpty(),
-                description = meta.descriptions.firstOrNull()?.let {
-                    if (it.contains('<')) Jsoup.parse(it).text() else it
-                }.orEmpty(),
-                subject = runCatching {
-                    // dc:subject is a list of free-text genre/category tags. Join non-blank
-                    // entries so a book with multiple subjects (玄幻 + 修真) feeds all signals
-                    // into the auto-grouping classifier.
-                    meta.subjects?.filter { it.isNotBlank() }?.joinToString(",").orEmpty()
-                }.getOrDefault(""),
-            )
-            val coverPath = extractCoverFromBook(context, uri, book)
-            EpubImportResult(metadata, coverPath)
-        } ?: EpubImportResult()
-    }
-
-    fun extractCover(context: Context, uri: Uri): String? {
-        return withEpubBook(context, uri) { book -> extractCoverFromBook(context, uri, book) }
-    }
 
     /**
      * 导入阶段一次性提取所有元数据 + cover + isComic。
@@ -255,46 +222,7 @@ object EpubParser {
      * 50MB 漫画 EPUB 整个调用通常 < 200ms。
      */
     fun detectIsComic(context: Context, uri: Uri): Boolean {
-        return withEpubBook(context, uri) { book -> isComicByResources(book) } ?: false
-    }
-
-    private fun isComicByResources(book: EpubBook): Boolean {
-        // ── Level 1: EPUB3 规范元数据降维打击 (O(1) OPF 解析) ──
-        //
-        // 漫画 EPUB 自己会在 OPF 里声明，命中任一直接 100% 判 Comic：
-        //   - `<meta property="rendition:layout">pre-paginated</meta>` → 固定布局
-        //   - `<dc:type>comic | manga | graphic novel</dc:type>` → 类型标记
-        val opf = readOpfHints(book)
-        if (opf.renditionLayout == "pre-paginated") {
-            AppLog.info("EpubParser", "detectIsComic → Comic (OPF rendition:layout=pre-paginated)")
-            return true
-        }
-        if (opf.dcType.orEmpty().let { "comic" in it || "manga" in it || "graphic novel" in it }) {
-            AppLog.info("EpubParser", "detectIsComic → Comic (OPF dc:type=${opf.dcType})")
-            return true
-        }
-
-        // ── Level 2: OPF 结构指纹 (野生自制 EPUB 不写规范字段) ──
-        //
-        // 统计 N_img / N_html / Size_html_total 三个数 → 结构指纹判定。完全不依赖
-        // 任何语言关键词，纯靠打包工具留下的「数量 + 字节」指纹。详见
-        // [classifyByStructure] 三道指纹定义。
-        val all = book.resources?.getAll() ?: return false
-        if (all.isEmpty()) return false
-        var nImg = 0
-        var nHtml = 0
-        var htmlTotalBytes = 0L
-        for (res in all) {
-            val mt = res.mediaType?.toString().orEmpty()
-            when {
-                mt.startsWith("image/") -> nImg++
-                isDocumentMediaType(mt) -> {
-                    nHtml++
-                    htmlTotalBytes += res.size.coerceAtLeast(0L)
-                }
-            }
-        }
-        return classifyByStructure(nHtml, nImg, htmlTotalBytes)
+        return EpubCoreBridge.withCoreBook(context, uri) { book -> isComicViaCore(book) } ?: false
     }
 
     /**
@@ -355,96 +283,6 @@ object EpubParser {
         )
         return false
     }
-
-    /** OPF 规范元数据"探针"。读 OPF 字节用正则提取关键字段，无 XML 依赖。 */
-    private data class OpfHints(
-        val renditionLayout: String?,    // "pre-paginated" / "reflowable" / null
-        val pageProgression: String?,    // "rtl" / "ltr" / null
-        val dcType: String?,             // "comic" / "manga" / "graphic novel" / null
-        val title: String?,              // dc:title
-        val publisher: String?,          // dc:publisher
-        val subjects: List<String>,      // dc:subject (可多个)
-        val primaryWritingMode: String?, // <meta name="primary-writing-mode" content="vertical-rl"> (Calibre 日轻小说)
-        val coverImageHref: String?,     // EPUB3 <item properties="cover-image" href="..."> (epublib 不识别此字段)
-    )
-
-    private fun readOpfHints(book: EpubBook): OpfHints {
-        val empty = OpfHints(null, null, null, null, null, emptyList(), null, null)
-        return try {
-            // OPF mediaType 标准为 "application/oebps-package+xml"
-            val opfRes = book.resources?.getAll()?.firstOrNull {
-                (it.mediaType?.toString().orEmpty()) == "application/oebps-package+xml"
-            } ?: return empty
-            val xml = String(opfRes.data, charset)
-            OpfHints(
-                renditionLayout = renditionLayoutRegex.find(xml)?.groupValues?.getOrNull(1)?.trim()?.lowercase()?.takeIf { it.isNotBlank() },
-                pageProgression = pageProgRegex.find(xml)?.groupValues?.getOrNull(1)?.trim()?.lowercase()?.takeIf { it.isNotBlank() },
-                dcType = dcTypeRegex.find(xml)?.groupValues?.getOrNull(1)?.trim()?.lowercase()?.takeIf { it.isNotBlank() },
-                title = dcTitleRegex.find(xml)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() },
-                publisher = dcPublisherRegex.find(xml)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() },
-                subjects = dcSubjectRegex.findAll(xml).map { it.groupValues[1].trim() }.filter { it.isNotBlank() }.toList(),
-                primaryWritingMode = primaryWritingModeRegex.find(xml)?.groupValues?.getOrNull(1)?.trim()?.lowercase()?.takeIf { it.isNotBlank() },
-                coverImageHref = findCoverImageHrefInOpf(xml),
-            )
-        } catch (e: Exception) {
-            AppLog.warn("EpubParser", "readOpfHints failed: ${e.message}")
-            empty
-        }
-    }
-
-    /**
-     * 解析 OPF 找 EPUB3 `<item properties="cover-image" href="...">`。
-     * 属性顺序不固定，所以两步法：先抓所有 `<item ...>` 标签，再筛 properties 含
-     * `cover-image` 的项提取 href。比单条复杂 regex 鲁棒。
-     */
-    private fun findCoverImageHrefInOpf(xml: String): String? {
-        for (match in opfItemRegex.findAll(xml)) {
-            val attrs = match.groupValues[1]
-            if (!coverImagePropertyRegex.containsMatchIn(attrs)) continue
-            val href = hrefAttrRegex.find(attrs)?.groupValues?.getOrNull(1)
-            if (!href.isNullOrBlank()) return href
-        }
-        return null
-    }
-
-    private val opfItemRegex = Regex("""<item\b([^>]*)>""", RegexOption.IGNORE_CASE)
-    private val coverImagePropertyRegex = Regex(
-        """properties\s*=\s*["'][^"']*\bcover-image\b[^"']*["']""",
-        RegexOption.IGNORE_CASE,
-    )
-    private val hrefAttrRegex = Regex(
-        """\bhref\s*=\s*["']([^"']+)["']""",
-        RegexOption.IGNORE_CASE,
-    )
-
-    private val renditionLayoutRegex = Regex(
-        """<meta\s+[^>]*property\s*=\s*["']rendition:layout["'][^>]*>\s*([^<]+?)\s*</meta>""",
-        RegexOption.IGNORE_CASE,
-    )
-    private val pageProgRegex = Regex(
-        """<spine\b[^>]*\bpage-progression-direction\s*=\s*["']([^"']+)["']""",
-        RegexOption.IGNORE_CASE,
-    )
-    private val dcTypeRegex = Regex(
-        """<dc:type\b[^>]*>\s*([^<]+?)\s*</dc:type>""",
-        RegexOption.IGNORE_CASE,
-    )
-    private val dcTitleRegex = Regex(
-        """<dc:title\b[^>]*>\s*([^<]+?)\s*</dc:title>""",
-        RegexOption.IGNORE_CASE,
-    )
-    private val dcPublisherRegex = Regex(
-        """<dc:publisher\b[^>]*>\s*([^<]+?)\s*</dc:publisher>""",
-        RegexOption.IGNORE_CASE,
-    )
-    private val dcSubjectRegex = Regex(
-        """<dc:subject\b[^>]*>\s*([^<]+?)\s*</dc:subject>""",
-        RegexOption.IGNORE_CASE,
-    )
-    private val primaryWritingModeRegex = Regex(
-        """<meta\s+[^>]*name\s*=\s*["']primary-writing-mode["'][^>]*content\s*=\s*["']([^"']+)["']""",
-        RegexOption.IGNORE_CASE,
-    )
 
     /**
      * Pure function：按 (mediaType, size) 列表判定是否漫画。internal 兼容旧单测，
@@ -530,48 +368,49 @@ object EpubParser {
      * [MobiResourceLoader] 一致策略；同一进程同一文件命中同一 hash → registry 反查 OK。
      */
     fun activateComicImages(context: Context, uri: Uri): Pair<String, List<String>>? {
-        return withEpubBook(context, uri) { book ->
-            val hrefs = collectImageHrefsBySpine(book)
-            if (hrefs.isEmpty()) return@withEpubBook null
+        return EpubCoreBridge.withCoreBook(context, uri) { book ->
+            val hrefs = collectImageHrefsBySpineViaCore(book)
+            if (hrefs.isEmpty()) return@withCoreBook null
             val hash = uri.toString().hashCode().toString()
             AppLog.info("EpubParser", "activateComicImages hash=$hash images=${hrefs.size}")
             hash to hrefs
         }
     }
 
-    private fun collectImageHrefsBySpine(book: EpubBook): List<String> {
-        val all = book.resources?.getAll() ?: return emptyList()
-
-        // ── Fast path：manifest 中 mediaType image 资源按 href 字典序 ──
-        //
-        // 漫画 EPUB 文件名通常是 p0001.jpg / image_0001.jpg / 0001.jpeg —— 字典序基本
-        // 等于阅读序。跳过 spine xhtml parse（200 章 × ZIP IO + Jsoup ≈ 5-30s）让
-        // activate 从 ~15s 降到 < 100ms。这是 ComicReader 黑屏（其实是 loading 转圈
-        // 卡几十秒）的真正修法。
-        //
-        // trade-off：字典序对**非数字命名**的 EPUB 顺序可能错（罕见，主要是命名不
-        // 规整的欧美漫）。出现误排再加 spine xhtml parse 校正层。
-        val byMediaType = all
-            .filter { (it.mediaType?.toString().orEmpty()).startsWith("image/") }
+    /**
+     * 用 epub-core 数据源收集漫画图片 href（字典序）。算法与老 [collectImageHrefsBySpine]
+     * 等价：先按 manifest mediaType image 字典序排序（漫画文件名 p0001 / 0001 字典序 ≈
+     * 阅读序），mediaType 异常时按扩展名兜底，最后是 spine xhtml parse 兜底。
+     *
+     * 输出 href 是 OPF 相对路径，下游 [readResourceBytes] (D.3 epub-core) 用 book.resource(href)
+     * 取字节。
+     */
+    private fun collectImageHrefsBySpineViaCore(book: com.morealm.epub.EpubBook): List<String> {
+        // Fast path：manifest mediaType image 字典序
+        val byMediaType = book.opfPackage.manifest
+            .asSequence()
+            .filter { it.mediaType.startsWith("image/") }
             .map { it.href }
+            .toList()
         if (byMediaType.isNotEmpty()) return byMediaType.sorted()
 
-        // ── Fallback 1：mediaType 异常（少数老压制把图片标成 application/octet-stream）──
-        // 按扩展名识别，依然字典序。
-        val byExt = all
+        // Fallback 1：按扩展名识别（少数老压制 mediaType=application/octet-stream）
+        val byExt = book.opfPackage.manifest
+            .asSequence()
             .map { it.href }
             .filter { it.matches(imageExtRegex) }
+            .toList()
         if (byExt.isNotEmpty()) return byExt.sorted()
 
-        // ── Fallback 2：最后兜底，原 spine xhtml parse 路径（慢但 100% 准） ──
+        // Fallback 2：spine xhtml parse 兜底（慢但准）
         val seen = LinkedHashSet<String>()
-        val spineRefs = book.spine?.spineReferences ?: emptyList()
-        for (sref in spineRefs) {
-            val res = sref.resource ?: continue
-            val mt = res.mediaType?.toString().orEmpty()
+        for (chapter in book.spine.items) {
+            val mtype = book.opfPackage.byId[chapter.id]?.mediaType.orEmpty()
             when {
-                mt.startsWith("image/") -> seen.add(res.href)
-                "xhtml" in mt || mt.endsWith("/html") -> appendImageHrefsFromXhtml(res, seen)
+                mtype.startsWith("image/") -> seen.add(chapter.href)
+                "xhtml" in mtype || mtype.endsWith("/html") -> {
+                    appendImageHrefsFromXhtmlBytes(chapter.href, chapter.bytes(), seen)
+                }
             }
         }
         return seen.toList()
@@ -579,23 +418,26 @@ object EpubParser {
 
     private val imageExtRegex = Regex(".*\\.(?:jpg|jpeg|png|webp|gif|bmp)$", RegexOption.IGNORE_CASE)
 
-    private fun appendImageHrefsFromXhtml(res: Resource, out: LinkedHashSet<String>) {
+    private fun appendImageHrefsFromXhtmlBytes(
+        baseHref: String,
+        bytes: ByteArray,
+        out: LinkedHashSet<String>,
+    ) {
         try {
-            val body = String(res.data, charset)
+            val body = bytes.decodeToString()
             val doc = Jsoup.parse(body)
             for (img in doc.select("img")) {
                 val src = img.attr("src").ifEmpty { img.attr("xlink:href") }
                 if (src.isBlank()) continue
-                out.add(resolveRelativeHref(res.href, src))
+                out.add(resolveRelativeHref(baseHref, src))
             }
-            // 兼容 SVG-wrapped image（许多日漫 EPUB 把封面/分章页用 svg image 包）
             for (svgImage in doc.select("svg image")) {
                 val href = svgImage.attr("xlink:href").ifEmpty { svgImage.attr("href") }
                 if (href.isBlank()) continue
-                out.add(resolveRelativeHref(res.href, href))
+                out.add(resolveRelativeHref(baseHref, href))
             }
         } catch (e: Exception) {
-            AppLog.warn("EpubParser", "appendImageHrefs failed on ${res.href}: ${e.message}")
+            AppLog.warn("EpubParser", "appendImageHrefs failed on $baseHref: ${e.message}")
         }
     }
 
@@ -626,109 +468,6 @@ object EpubParser {
      */
     private const val MAX_COVER_WIDTH = 600
     private const val COVER_JPEG_QUALITY = 85
-
-    private fun extractCoverFromBook(context: Context, uri: Uri, book: EpubBook): String? {
-        // book.coverImage 来自 OPF `<meta name="cover" content="...">` 显式声明。
-        // 大量漫画 EPUB（特别是日漫扫描版）缺这个 meta，coverImage 直接返回 null ——
-        // 退到 spine 头几项第一张 img（最常见就是封面页）；再不行 fallback 到 manifest
-        // 首个 image/* 资源。比「书架上一律灰底无封面」体验好得多。
-        val coverImage = book.coverImage ?: findFallbackCoverResource(book) ?: return null
-        val cacheDir = File(context.cacheDir, "epub_covers/${uri.hashCode()}")
-        val file = File(cacheDir, "cover.jpg")
-        if (file.exists()) return file.absolutePath
-        return try {
-            cacheDir.mkdirs()
-            // 拿原字节 —— LazyResource.data 触发一次 ZIP entry 读，但比两次 inputStream 便宜
-            val bytes = coverImage.data ?: return null
-            decodeAndWriteScaledCover(bytes, file)
-        } catch (oom: OutOfMemoryError) {
-            AppLog.warn("EpubParser", "Cover OOM: ${oom.message}")
-            System.gc()
-            null
-        } catch (e: Exception) {
-            AppLog.warn("EpubParser", "Cover extraction failed: ${e.message}")
-            null
-        }
-    }
-
-    /**
-     * `book.coverImage` 为 null 时的多级回退：
-     *
-     * 1. **OPF `properties="cover-image"`** (EPUB3 规范) —— epublib 只识别 EPUB2
-     *    的 `<meta name="cover">` 和 `<reference type="cover">`，EPUB3 用 manifest
-     *    item properties 声明的封面被它漏识别。这里自己解析 OPF 补上。
-     *    用户实测：「哈利波特与魔法石」EPUB3 命中此分支。
-     *
-     * 2. **spine 前 [SPINE_COVER_SCAN_LIMIT] 项 + 文件名启发式** —— spine 首项常是
-     *    `titlepage.xhtml` / `cover.xhtml`，其中第一张 img 是封面。但有些 EPUB 首项
-     *    是「制作说明 / 水印页」（用户截图见过），所以仅匹配文件名含 cover/title 的
-     *    spine 项取其内嵌图，避免拿到水印页。
-     *
-     * 3. **manifest 中任一 image** —— 最后兜底，顺序不稳。
-     */
-    private fun findFallbackCoverResource(book: EpubBook): Resource? {
-        val opf = readOpfHints(book)
-
-        // ── 1. OPF properties="cover-image" (EPUB3 规范) ──
-        opf.coverImageHref?.let { rawHref ->
-            // href 通常是相对 OPF 的路径；epublib 的 resources 索引 key 是 manifest href
-            val candidates = listOf(
-                rawHref,
-                runCatching { URLDecoder.decode(rawHref, "UTF-8") }.getOrNull().orEmpty(),
-                rawHref.substringAfter('/'),  // 去掉可能的 "OEBPS/" 前缀
-            ).filter { it.isNotBlank() }.distinct()
-            for (h in candidates) {
-                val res = book.resources?.getByHref(h)
-                if (res != null) {
-                    AppLog.info("EpubParser", "Cover via OPF cover-image properties: $h")
-                    return res
-                }
-            }
-        }
-
-        // ── 2. spine 前几项 (仅文件名含 cover/title 的 xhtml 才取其内嵌图) ──
-        val spineRefs = book.spine?.spineReferences.orEmpty()
-        for (sref in spineRefs.take(SPINE_COVER_SCAN_LIMIT)) {
-            val res = sref.resource ?: continue
-            val mt = res.mediaType?.toString().orEmpty()
-            when {
-                mt.startsWith("image/") -> return res
-                "xhtml" in mt || mt.endsWith("/html") -> {
-                    val lowerHref = res.href.lowercase()
-                    val isLikelyCoverPage = "cover" in lowerHref || "title" in lowerHref
-                    if (!isLikelyCoverPage) continue  // 跳过非封面页 (如制作说明/水印页)
-                    val img = firstImageHrefInXhtml(res) ?: continue
-                    val target = book.resources?.getByHref(img)
-                        ?: book.resources?.getByHref(URLDecoder.decode(img, "UTF-8"))
-                    if (target != null) {
-                        AppLog.info("EpubParser", "Cover via spine page name match: ${res.href}")
-                        return target
-                    }
-                }
-            }
-        }
-
-        // ── 3. manifest 中任一 image (兜底) ──
-        val all = book.resources?.getAll() ?: return null
-        return all.firstOrNull { (it.mediaType?.toString().orEmpty()).startsWith("image/") }?.also {
-            AppLog.info("EpubParser", "Cover fallback to manifest first image: ${it.href}")
-        }
-    }
-
-    private fun firstImageHrefInXhtml(xhtmlRes: Resource): String? {
-        return try {
-            val body = String(xhtmlRes.data, charset)
-            val doc = Jsoup.parse(body)
-            val raw = doc.select("img").firstOrNull()?.attr("src")?.takeIf { it.isNotBlank() }
-                ?: doc.select("svg image").firstOrNull()?.let {
-                    it.attr("xlink:href").ifEmpty { it.attr("href") }
-                }?.takeIf { it.isNotBlank() }
-                ?: return null
-            resolveRelativeHref(xhtmlRes.href, raw)
-        } catch (_: Exception) {
-            null
-        }
-    }
 
     private const val SPINE_COVER_SCAN_LIMIT = 3
 
@@ -902,125 +641,6 @@ object EpubParser {
         }
     }
 
-    private fun buildChapterList(bookId: String, book: EpubBook): List<BookChapter> {
-        val chapters = mutableListOf<BookChapter>()
-        val refs = book.tableOfContents?.tocReferences
-
-        if (refs.isNullOrEmpty()) {
-            // No TOC — fall back to spine
-            book.spine?.spineReferences?.forEachIndexed { i, spineRef ->
-                val res = spineRef.resource ?: return@forEachIndexed
-                val title = res.title?.takeIf { it.isNotBlank() }
-                    ?: tryExtractTitle(res)
-                    ?: if (i == 0) "封面" else "第${i + 1}章"
-                chapters.add(BookChapter(
-                    id = "${bookId}_$i", bookId = bookId, index = i,
-                    title = title, url = res.href,
-                ))
-            }
-        } else {
-            // Parse first pages before TOC
-            parseFirstPages(bookId, book, refs, chapters)
-            // Parse TOC recursively
-            parseTocRefs(bookId, refs, chapters)
-            // Re-index
-            chapters.forEachIndexed { i, ch ->
-                chapters[i] = ch.copy(id = "${bookId}_$i", index = i)
-            }
-        }
-
-        // Link chapters: each stores the next chapter's URL for content boundary detection
-        for (i in 0 until chapters.size - 1) {
-            chapters[i] = chapters[i].copy(nextUrl = chapters[i + 1].url)
-        }
-        return chapters
-    }
-
-    private fun parseFirstPages(
-        bookId: String, book: EpubBook,
-        refs: List<TOCReference>, chapters: MutableList<BookChapter>,
-    ) {
-        val contents = book.contents ?: return
-        val firstRef = refs.firstOrNull { it.resource != null } ?: return
-        val firstHref = firstRef.completeHref.substringBeforeLast("#")
-        for (res in contents) {
-            if (!res.mediaType.toString().contains("htm")) continue
-            if (res.href == firstHref) break
-            val title = res.title?.takeIf { it.isNotBlank() } ?: tryExtractTitle(res) ?: "--卷首--"
-            chapters.add(BookChapter(
-                id = "", bookId = bookId, index = 0, title = title, url = res.href,
-            ))
-        }
-    }
-
-    private fun parseTocRefs(
-        bookId: String, refs: List<TOCReference>, chapters: MutableList<BookChapter>,
-    ) {
-        // ── 父+子 navPoint 去重 ──
-        //
-        // EPUB TOC 常见结构：
-        //   <navPoint title="第三章 新的起飞" src="ch3.xhtml#sec_3">
-        //     <navPoint title="第三章" src="ch3.xhtml#sec_3"/>
-        //     <navPoint title="新的起飞" src="ch3.xhtml#sec_3a"/>
-        //   </navPoint>
-        // 老逻辑递归把 3 个全 add → 用户目录看到「第三章 新的起飞 / 第三章 / 新的起飞」
-        // 三条并列（截图 12 报告的 bug）。
-        //
-        // 修法：按 completeHref（含 fragment）去重，重复时**保留 title 最长**的那条 ——
-        // 通常父 navPoint title 是「第三章 新的起飞」（最完整描述），子是单独词组。
-        // 全局 map 跨整个递归共享，确保所有层级一起去重。
-        //
-        // ── 父+子语义保留（嵌套层级缩进） ──
-        //
-        // 大型 EPUB 常用嵌套 navPoint 表达「卷-章」、「分册-人物-描述」等层级，例如《某 EPUB》：
-        //   <navPoint title="某 EPUB人物志" src="juese.xhtml">
-        //     <navPoint title="样本人物" src="part0.xhtml"/>
-        //     <navPoint title="宁姚"   src="part1.xhtml"/>
-        //   </navPoint>
-        // 各 href 不同 → 不会被上面的去重折叠 → 子节点全部平铺成同级 → 用户失去父子语义。
-        //
-        // 与 PDF outline 缩进策略一致：title 前加 `"  ".repeat(depth)` 字面缩进，
-        // depth ≤ 6 防过头。零 schema 改动。
-        val seenByHref = HashMap<String, Int>() // href → index in chapters
-        fun addOrMerge(title: String, href: String) {
-            val existingIdx = seenByHref[href]
-            if (existingIdx != null) {
-                val ex = chapters[existingIdx]
-                if (title.length > ex.title.length) {
-                    chapters[existingIdx] = ex.copy(title = title.ifBlank { ex.title })
-                }
-            } else {
-                seenByHref[href] = chapters.size
-                chapters.add(
-                    BookChapter(
-                        id = "", bookId = bookId, index = 0,
-                        title = title.ifBlank { "未命名章节" },
-                        url = href,
-                    )
-                )
-            }
-        }
-        fun recurse(rs: List<TOCReference>, depth: Int) {
-            val prefix = "  ".repeat(depth.coerceAtMost(6))
-            for (ref in rs) {
-                if (ref.resource != null) {
-                    val rawTitle = ref.title.orEmpty()
-                    val withIndent = if (rawTitle.isBlank()) rawTitle else prefix + rawTitle
-                    addOrMerge(withIndent, ref.completeHref)
-                }
-                if (!ref.children.isNullOrEmpty()) recurse(ref.children, depth + 1)
-            }
-        }
-        recurse(refs, depth = 0)
-    }
-
-    private fun tryExtractTitle(res: Resource): String? {
-        return try {
-            val doc = Jsoup.parse(String(res.data, charset))
-            doc.select("title").text().takeIf { it.isNotBlank() }
-        } catch (_: Exception) { null }
-    }
-
     // ── Chapter content ──────────────────────────────────
 
     fun readChapter(context: Context, uri: Uri, chapter: BookChapter): String {
@@ -1044,150 +664,8 @@ object EpubParser {
         if (content.isNotEmpty()) writeCachedChapter(context, uri, cacheKey, content)
         return content
     }
-    // ── Body parsing & image rewriting ─────────────────
+    // ── Structured chapter parsing (streaming via epub-core) ─────────────
 
-    private fun parseBody(res: Resource, startFragment: String?, endFragment: String?): org.jsoup.nodes.Element {
-        if (isCoverPage(res.href)) {
-            return Jsoup.parseBodyFragment("<img src=\"$COVER_IMAGE_SENTINEL\" $COVER_IMAGE_MARKER=\"true\" />").body()
-        }
-
-        var body = Jsoup.parse(String(res.data, charset)).body()
-        body.select("script, style").remove()
-
-        // Convert SVG <image> to <img> (many Japanese EPUBs wrap cover in SVG)
-        body.select("image").forEach { el ->
-            el.tagName("img")
-            val href = el.attr("xlink:href").ifEmpty { el.attr("href") }
-            if (href.isNotEmpty()) el.attr("src", href)
-        }
-        // Convert SVG-wrapped images: extract <img> from <svg> containers
-        body.select("svg").forEach { svg ->
-            val img = svg.selectFirst("img")
-            if (img != null) {
-                svg.replaceWith(img)
-                return@forEach
-            }
-            // 没 img 的 SVG 通常是注释 / 批注 / 章节装饰之类的内联图标 ——
-            // 「制作说明」EPUB 把「注」「批」用 SVG 圆圈+text 画成小徽标。
-            // 之前的 outerHtml + HtmlFormatter.notImgHtmlRegex 会剥掉 svg/text
-            // 标签但**保留 text 内的文字**，结果「注」「批」字独立成段渲染成
-            // 屏幕级超大字（图2 bug）。
-            //
-            // 修法：SVG 里有 <text> → 替换成方括号包裹的小文字（[注] / [批]），
-            // 让 reader 能展现「这里是注释徽标」语义但不破坏 layout；
-            // SVG 里啥文本都没（纯几何 path 图标）→ 整个移除，避免空 SVG 漏出。
-            //
-            // 后续 Phase 2 可改成专用 footnote token + Compose 层弹窗交互（图3 友商效果）。
-            val texts = svg.select("text")
-            if (texts.isNotEmpty()) {
-                val joined = texts.joinToString("") { it.text() }.trim()
-                if (joined.isNotBlank()) {
-                    val short = joined.take(4)  // 限长 4 字符够覆盖 注/批/作/序 这种
-                    svg.replaceWith(
-                        org.jsoup.nodes.TextNode("[$short]"),
-                    )
-                    return@forEach
-                }
-            }
-            svg.remove()
-        }
-        // Resolve relative image paths
-        body.select("img").forEach { img ->
-            val src = img.attr("src").trim()
-            if (src.isNotEmpty()) {
-                try {
-                    val resolved = URLDecoder.decode(URI(res.href).resolve(src).toString(), "UTF-8")
-                    img.attr("src", resolved)
-                } catch (_: Exception) {}
-            }
-        }
-
-        AppLog.debug("EpubParser", "parseBody href=${res.href} imgs=${body.select("img").size} html=${body.outerHtml().take(300)}")
-
-        // ── Fragment 切割（DOM walk，替代脆弱的字符串切割） ──
-        //
-        // 老实现用 body.outerHtml() + substringBefore/After 来切 fragment 边界：
-        //   - 拿 startFragment 元素的 outerHtml 第一行作为 anchor 字符串
-        //   - 在整个 body html 中找该字符串切前/后
-        // 问题：当 anchor 字符串不唯一（同 class/同标签前缀多次出现），或者元素本身
-        // 没有换行（一行内 inline），切割会**错位或完全失败**。失败时整段 html
-        // 原样返回 → 同一 xhtml 内有多个 fragment 章节时，**每个都显示整文相同内容**
-        // —— 用户截图 13/14 报告「同一章不同节都是同一内容 + 反复加载」的根因。
-        //
-        // 新实现：基于 body 的直接子节点边界，按 DOM 文档顺序裁切：
-        //   1. 把 fragment id 元素往上 climb 到 body 的直接子节点（"anchor child"）
-        //   2. 收集 [startAnchor .. endAnchor) 之间的子节点，深拷贝到新 body
-        //   3. fragment 没找到时保守返回整 body（不报错）—— 个别 EPUB 把 anchor 放在
-        //      <a name="..."> 而不是 id，与 getElementById 不匹配，宁可显示重复内容
-        //      也好过显示空白
-        return sliceBodyByFragments(body, startFragment, endFragment)
-    }
-
-    /**
-     * 按 fragment id 裁切 body 的子节点范围。详见 [parseBody] 的注释。
-     */
-    private fun sliceBodyByFragments(
-        body: org.jsoup.nodes.Element,
-        startFragment: String?,
-        endFragment: String?,
-    ): org.jsoup.nodes.Element {
-        if (startFragment.isNullOrBlank() && endFragment.isNullOrBlank()) return body
-        val startEl = startFragment?.takeIf { it.isNotBlank() }?.let { body.getElementById(it) }
-        val endEl = endFragment?.takeIf { it.isNotBlank() && it != startFragment }
-            ?.let { body.getElementById(it) }
-        // 两个 fragment 都解析失败 → 保守返回整 body
-        if (startEl == null && endEl == null && (startFragment != null || endFragment != null)) {
-            return body
-        }
-        val startAnchor = startEl?.let { ancestorChildOf(body, it) }
-        val endAnchor = endEl?.let { ancestorChildOf(body, it) }
-        val newBody = org.jsoup.nodes.Element("body")
-        // copy body 上的 class / lang 等属性，避免下游 CSS 失配
-        for (attr in body.attributes()) newBody.attr(attr.key, attr.value)
-
-        var include = (startAnchor == null)
-        for (child in body.children()) {
-            if (!include && child === startAnchor) include = true
-            if (include && child === endAnchor) break
-            if (include) newBody.appendChild(child.clone())
-        }
-        // 如果 newBody 是空的（startAnchor 在树深处但 climb 没找到合法子节点），
-        // 回退到 body 整段；避免章节渲染成空白。
-        return if (newBody.children().isEmpty()) body else newBody
-    }
-
-    /** 把 [el] 沿 parent 链 climb 到 [body] 的直接子节点；找不到返回 null。 */
-    private fun ancestorChildOf(
-        body: org.jsoup.nodes.Element,
-        el: org.jsoup.nodes.Element,
-    ): org.jsoup.nodes.Element? {
-        var cur: org.jsoup.nodes.Element? = el
-        while (cur != null && cur.parent() !== body) cur = cur.parent()
-        return cur
-    }
-
-    private fun processContent(
-        elements: org.jsoup.select.Elements,
-        context: Context, uri: Uri, chapterHref: String,
-        book: me.ag2s.epublib.domain.EpubBook? = null,
-    ): String {
-        sanitizeAndRewriteImages(elements, context, uri, chapterHref, book)
-        return formatKeepImg(elements.outerHtml())
-    }
-
-    /**
-     * 新「自解析 HTML」路径 —— 输出结构化 [StructuredChapterContent]（段落 / 标题 / 图片），
-     * 不再走 [formatKeepImg] 那套把 `<p>` / `<h1>` 全压成 `\n` 丢失语义的纯文本路径。
-     *
-     * 与 [readChapter] 共享 [parseBody] + [sanitizeAndRewriteImages] 前置流水（href 解析、
-     * SVG 转 img、ruby 注音内联、img 路径改写到 `file://` 缓存），只在最后一步**叉路**：
-     * 老路径 → `formatKeepImg(elements.outerHtml())`；新路径 → 结构化遍历输出 [ChapterBlock]。
-     *
-     * **不复用 [readCachedChapter] / [writeCachedChapter] 的纯文本磁盘缓存** —— 那条缓存
-     * 的格式是 [formatKeepImg] 的产物（HTML 标签已剥光只剩文本 + `<img>`），无法反推
-     * 段落 / 标题语义。本方法走纯解析（每次 jsoup 走一遍），如未来出性能瓶颈可单独
-     * 加结构化缓存（序列化 [StructuredChapterContent] 到磁盘）。
-     */
     fun readChapterStructured(
         context: Context, uri: Uri, chapter: BookChapter,
     ): StructuredChapterContent {
@@ -1289,142 +767,6 @@ object EpubParser {
         writeImageCompressed(bytes, cachedFile)
         AppLog.debug("EpubParser", "extractCover ok $coverHref ${bytes.size}B")
         return cachedFile
-    }
-
-    /**
-     * DOM 净化 + 图片资源解析（共用 helper） —— [processContent] 和 [readChapterStructured]
-     * 都依赖这套预处理：
-     *
-     *   1. 移除 `<title>` / `display:none` 节点（不展示给读者）
-     *   2. Ruby 注音内联化：`<ruby>八奈見<rt>やなみ</rt></ruby>` → `八奈見（やなみ）`
-     *      （Phase 1 简化方案；Phase 2 会升级为上方小字 ruby 渲染。详见保留的旧实现注释）
-     *   3. 同一章重复 cover img 去重（多 OPF item 都标了 cover 的极端 case）
-     *   4. `<img src>` 改写为 `file://` 绝对路径，指向 epub_chapters_v3 缓存里抽出的图片
-     *
-     * 该方法**原地修改** [elements]（jsoup DOM 是可变树）。调用方拿到的 elements 状态
-     * 已经净化完毕，可以直接走老路径 outerHtml 或新路径 [EpubHtmlStructurer]。
-     */
-    private fun sanitizeAndRewriteImages(
-        elements: org.jsoup.select.Elements,
-        context: Context, uri: Uri, chapterHref: String,
-        book: me.ag2s.epublib.domain.EpubBook? = null,
-    ) {
-        elements.select("title").remove()
-        elements.select("[style*=display:none]").remove()
-        // ── 振假名 Phase 1：保留 rt 文字（之前直接 select("rp, rt").remove() 把读音
-        //    一律删掉，日文 EPUB 用户看不到「八奈見(やなみ)」这种 ふりがな 注音）。
-        //
-        //    Ruby DOM 结构有多种：
-        //      <ruby>八奈見<rt>やなみ</rt></ruby>
-        //      <ruby><rb>八奈見</rb><rt>やなみ</rt></ruby>
-        //      <ruby>八<rt>や</rt>奈<rt>な</rt>見<rt>み</rt></ruby>  ← 字符级拆分
-        //    通用算法：先把所有 rt 文字 join 起来，再把 rp（括号占位符 () ）删掉避免
-        //    双层括号，剩下的 ruby 内容就是「底字」。底字 + 全角括号 + rt = 内联输出。
-        //
-        //    Phase 2 PageLayout 会识别 (?<base>..)(?<rt>..) 这种内联标记并升级为
-        //    上方 ruby 小字渲染（参考图1 静读天下日文）。Phase 1 先让 ruby 文字
-        //    至少出现，比之前完全不显示强。
-        elements.select("ruby").forEach { ruby ->
-            ruby.select("rp").remove()
-            val rts = ruby.select("rt").joinToString("") { it.text() }
-            ruby.select("rt").remove()
-            val baseText = ruby.text()  // 剩下的全部就是底字（去掉 rt/rp 后）
-            val joined = if (rts.isNotBlank() && baseText.isNotBlank()) {
-                "$baseText（$rts）"
-            } else {
-                baseText
-            }
-            ruby.replaceWith(org.jsoup.nodes.TextNode(joined))
-        }
-        // 兜底：游离的 rp/rt（不在 ruby 内的孤儿节点）依然移除
-        elements.select("rp, rt").remove()
-        elements.select("img[$COVER_IMAGE_MARKER]").forEachIndexed { i, img ->
-            if (i > 0) img.remove()
-        }
-        val imgEls = elements.select("img")
-        val imgT0 = System.currentTimeMillis()
-        AppLog.debug("EpubParser",
-            "sanitizeAndRewriteImages href=$chapterHref imgs=${imgEls.size} availMem=${availMb()}MB")
-        imgEls.forEach { img ->
-            val src = img.attr("src")
-            if (src.isBlank()) return@forEach
-            val cached = extractImageFromBook(context, uri, src, book)
-            if (cached != null) {
-                img.attr("src", "file://${cached.absolutePath}")
-            } else {
-                img.removeAttr("src")
-            }
-            img.removeAttr("style"); img.removeAttr("width"); img.removeAttr("height"); img.removeAttr(COVER_IMAGE_MARKER)
-        }
-        AppLog.debug("EpubParser",
-            "sanitizeAndRewriteImages href=$chapterHref imgs done in ${System.currentTimeMillis() - imgT0}ms availMem=${availMb()}MB")
-    }
-
-    private fun formatKeepImg(html: String?): String {
-        html ?: return ""
-        val keepImgHtml = formatHtml(html, notImgHtmlRegex)
-        val builder = StringBuilder(keepImgHtml.length)
-        var appendPos = 0
-        for (match in formatImageRegex.findAll(keepImgHtml)) {
-            builder.append(keepImgHtml, appendPos, match.range.first)
-            val src = match.groups[1]?.value ?: match.groups[2]?.value.orEmpty()
-            if (src.isNotBlank()) {
-                builder.append("<img src=\"").append(src).append("\">")
-            }
-            appendPos = match.range.last + 1
-        }
-        if (appendPos < keepImgHtml.length) {
-            builder.append(keepImgHtml, appendPos, keepImgHtml.length)
-        }
-        return builder.toString()
-    }
-
-    private fun formatHtml(html: String?, otherRegex: Regex): String {
-        html ?: return ""
-        val text = html
-            .replace(commentRegex, "")
-            .replace(nbspRegex, " ")
-            .replace(espRegex, " ")
-            .replace(noPrintRegex, "")
-            .replace(blockOpenHtmlRegex, "")
-            .replace(blockCloseHtmlRegex, "\n")
-            .replace(otherRegex, "")
-            .lines()
-            .joinToString("\n") { line -> line.trim() }
-            .trim()
-        return mergeVerticalTextRuns(text)
-    }
-
-    private fun mergeVerticalTextRuns(text: String): String {
-        val lines = text.lines()
-        val result = ArrayList<String>(lines.size)
-        val run = ArrayList<String>()
-
-        fun flushRun() {
-            if (run.size >= 3) {
-                result.add(run.joinToString("") { it.trim() })
-            } else {
-                result.addAll(run)
-            }
-            run.clear()
-        }
-
-        for (line in lines) {
-            val trimmed = line.trim()
-            if (isSingleDisplayCharLine(trimmed)) {
-                run.add(trimmed)
-            } else {
-                flushRun()
-                result.add(line)
-            }
-        }
-        flushRun()
-        return result.joinToString("\n").trim()
-    }
-
-    private fun isSingleDisplayCharLine(line: String): Boolean {
-        if (line.isBlank() || line.startsWith("<img", ignoreCase = true)) return false
-        return line.codePointCount(0, line.length) == 1
     }
 
     // ── Image extraction (reuses book instance when available) ──
@@ -1535,46 +877,6 @@ object EpubParser {
         return (rt.maxMemory() - rt.totalMemory() + rt.freeMemory()) / 1024 / 1024
     }
 
-    private fun extractImageFromBook(
-        context: Context, epubUri: Uri, imagePath: String,
-        book: me.ag2s.epublib.domain.EpubBook? = null,
-    ): File? {
-        val normalized = imagePath.replace('\\', '/')
-        val cacheDir = File(context.cacheDir, "epub_images/${epubUri.hashCode()}")
-        val cachedFile = File(cacheDir, normalized.replace('/', '_'))
-        if (cachedFile.exists()) return cachedFile
-
-        if (normalized == COVER_IMAGE_SENTINEL && book?.coverImage != null) {
-            cacheDir.mkdirs()
-            writeImageCompressed(book.coverImage.data, cachedFile)
-            return cachedFile
-        }
-
-        // Try from provided book instance first (fast, no re-open)
-        if (book != null) {
-            val resource = book.resources?.getByHref(normalized)
-                ?: book.resources?.getByHref(java.net.URLDecoder.decode(normalized, "UTF-8"))
-            if (resource != null) {
-                cacheDir.mkdirs()
-                writeImageCompressed(resource.data, cachedFile)
-                return cachedFile
-            }
-        }
-
-        // Fallback: open a new book instance
-        return withEpubBook(context, epubUri) { b ->
-            if (normalized == COVER_IMAGE_SENTINEL && b.coverImage != null) {
-                cacheDir.mkdirs()
-                writeImageCompressed(b.coverImage.data, cachedFile)
-                return@withEpubBook cachedFile
-            }
-            val res = b.resources?.getByHref(normalized)
-                ?: b.resources?.getByHref(java.net.URLDecoder.decode(normalized, "UTF-8"))
-            if (res != null) { cacheDir.mkdirs(); writeImageCompressed(res.data, cachedFile); cachedFile }
-            else null
-        }
-    }
-
     private fun isCoverPage(href: String): Boolean {
         val normalized = href.lowercase()
         return normalized.contains("titlepage.xhtml") || normalized.contains("cover")
@@ -1663,147 +965,8 @@ object EpubParser {
         )
     }
 
-    private fun readChapterFromBook(
-        book: EpubBook, chapter: BookChapter, context: Context, uri: Uri,
-    ): String {
-        val targetHref = chapter.url.substringBeforeLast("#")
-        val contents = book.contents ?: return ""
-        val nextHref = chapter.nextUrl?.substringBeforeLast("#")
-        val startFragment = chapter.url.substringAfter("#", "").takeIf { it.isNotEmpty() }
-        val endFragment = chapter.nextUrl?.substringAfter("#", "")?.takeIf { it.isNotEmpty() }
-        val elements = org.jsoup.select.Elements()
-        var found = false
-        for (res in contents) {
-            if (!found) {
-                if (res.href != targetHref) continue
-                found = true
-                elements.add(parseBody(res, startFragment, endFragment.takeIf { res.href == nextHref }))
-                if (nextHref != null && res.href == nextHref) break
-                continue
-            }
-            if (nextHref == null || res.href != nextHref) {
-                elements.add(parseBody(res, null, null))
-            } else {
-                if (endFragment != null) elements.add(parseBody(res, null, endFragment))
-                break
-            }
-        }
-        if (!found) {
-            val preview = contents.take(8).map { it.href }
-            AppLog.warn(
-                "EpubParser",
-                "readChapterFromBook MISS target='$targetHref' chapterUrl='${chapter.url}' " +
-                    "contents.size=${contents.size} preview=$preview",
-            )
-        } else {
-            AppLog.info(
-                "EpubParser",
-                "readChapterFromBook FOUND target='$targetHref' elements=${elements.size}",
-            )
-        }
-        return processContent(elements, context, uri, targetHref, book)
-    }
-
-    // ── Per-URI EpubBook 缓存 + 锁（替代原单例 cachedBook + @Synchronized 大锁） ──
-    //
-    // 原架构：单一 cachedBook + 整个 EpubParser 全局 @Synchronized → 两本 EPUB 并发时
-    // 必然串行；第二本进来 invalidate 第一本 PFD，互相挡到死锁式黑屏（已复现）。
-    //
-    // 新架构：cache[uriStr] → BookCache，locks[uriStr] → Any() 各自一把锁。不同 uri
-    // 真并发；同一 uri 串行（保护 cachedBook / PFD 一致性）。LRU 限 [MAX_CACHED_BOOKS]
-    // 本，按 atime evict，PFD 一并 close。EBADF retry 路径保留（cache 被 evict /
-    // releaseCache 后用户仍持有 stale book reference 的边界情况）。
-
-    private const val MAX_CACHED_BOOKS = 3
-
-    private class BookCache(
-        val pfd: ParcelFileDescriptor,
-        val book: EpubBook,
-        val hrefIndexMap: Map<String, Int>?,
-        @Volatile var atime: Long = System.currentTimeMillis(),
-    )
-
-    private val cache = java.util.concurrent.ConcurrentHashMap<String, BookCache>()
-    private val locks = java.util.concurrent.ConcurrentHashMap<String, Any>()
-
-    private fun lockFor(uriStr: String): Any = locks.computeIfAbsent(uriStr) { Any() }
-
-    private fun hrefIndexFor(uri: Uri): Map<String, Int>? = cache[uri.toString()]?.hrefIndexMap
-
-    private fun <T> withEpubBook(context: Context, uri: Uri, block: (EpubBook) -> T): T? =
-        withEpubBookInternal(context, uri, block, retried = false)
-
-    private fun <T> withEpubBookInternal(
-        context: Context, uri: Uri, block: (EpubBook) -> T, retried: Boolean,
-    ): T? {
-        val uriStr = uri.toString()
-        val lock = lockFor(uriStr)
-        return synchronized(lock) {
-            val bookCache = cache[uriStr] ?: openFreshBook(context, uri)?.also { fresh ->
-                cache[uriStr] = fresh
-                evictIfOver(except = uriStr)
-            } ?: return@synchronized null
-
-            bookCache.atime = System.currentTimeMillis()
-            try {
-                block(bookCache.book)
-            } catch (e: Exception) {
-                val msg = e.message ?: ""
-                // EBADF = stale file descriptor。可能因 releaseCache 关 PFD、或 LRU evict
-                // 后 stale book 引用被使用。invalidate 当前 uri + 再尝试一次（kotlin
-                // synchronized 用 Java monitor 可重入，递归 acquire OK）。
-                if (!retried && (msg.contains("EBADF") || msg.contains("Bad file descriptor"))) {
-                    AppLog.warn("EpubParser", "Stale fd for $uriStr, retrying once")
-                    invalidateCache(uriStr)
-                    withEpubBookInternal(context, uri, block, retried = true)
-                } else {
-                    AppLog.error("EpubParser", "EpubBook op failed $uriStr: ${e.message}")
-                    null
-                }
-            }
-        }
-    }
-
-    private fun openFreshBook(context: Context, uri: Uri): BookCache? {
-        return try {
-            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
-            val zipFile = AndroidZipFile(pfd, uri.lastPathSegment ?: "book.epub")
-            val newBook = EpubReader().readEpubLazy(zipFile, "utf-8")
-            val hrefIndex = newBook.contents?.mapIndexed { i, res -> res.href to i }?.toMap()
-            BookCache(pfd = pfd, book = newBook, hrefIndexMap = hrefIndex)
-        } catch (e: Exception) {
-            AppLog.error("EpubParser", "Failed to open EPUB: ${e.message}")
-            null
-        }
-    }
-
-    /**
-     * 把当前 uri 的 cache 失效（关 PFD）。已持有锁的 caller 调用。其他线程持 stale
-     * book 引用会在下次 IO 时 EBADF，由各自 withEpubBook 的 retry 路径吸收。
-     */
-    private fun invalidateCache(uriStr: String) {
-        cache.remove(uriStr)?.let { try { it.pfd.close() } catch (_: Exception) {} }
-    }
-
-    /**
-     * LRU eviction：cache.size 超过 [MAX_CACHED_BOOKS] 时，删除最旧的（按 atime），
-     * `except` 通常是刚刚 put 的当前 uri 避免自删。竞态接受：被删的 PFD 可能正被
-     * 其他线程用，对方下次 IO 拿 EBADF 走 retry 重开，功能正确仅多一次 IO。
-     */
-    private fun evictIfOver(except: String) {
-        if (cache.size <= MAX_CACHED_BOOKS) return
-        val eldest = cache.entries
-            .filter { it.key != except }
-            .minByOrNull { it.value.atime } ?: return
-        cache.remove(eldest.key)?.let { try { it.pfd.close() } catch (_: Exception) {} }
-        AppLog.info("EpubParser", "Evicted LRU cache: ${eldest.key.takeLast(60)}")
-    }
-
-    /** Release all cached books (call when reader closes globally). */
+    /** Release all cached EpubCoreBridge books (call when reader closes globally). */
     fun releaseCache() {
-        val snapshot = cache.values.toList()
-        cache.clear()
-        locks.clear()
-        snapshot.forEach { try { it.pfd.close() } catch (_: Exception) {} }
+        EpubCoreBridge.closeAll()
     }
 }

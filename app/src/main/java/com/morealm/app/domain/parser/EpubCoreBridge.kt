@@ -77,6 +77,14 @@ object EpubCoreBridge {
         }
     }
 
+    /** 关闭并移除所有 cache entry。reader 退出 / 内存压力时调用。 */
+    fun closeAll() {
+        synchronized(lock) {
+            for (entry in cache.values) runCatching { entry.close() }
+            cache.clear()
+        }
+    }
+
     /** 关闭 [uri] 对应的 cache entry（如果存在）。caller 在书被删除 / 替换时调用。 */
     fun invalidate(context: Context, uri: Uri) {
         val resolved = resolvePath(context, uri) ?: return
