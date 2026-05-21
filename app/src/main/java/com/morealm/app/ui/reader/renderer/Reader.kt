@@ -94,7 +94,7 @@ private const val RESTORE_MAX_RETRIES = 8
  * - Long-press context menu
  */
 @Composable
-fun CanvasRenderer(
+fun Reader(
     content: String,
     chapterTitle: String,
     chapterIndex: Int = 0,
