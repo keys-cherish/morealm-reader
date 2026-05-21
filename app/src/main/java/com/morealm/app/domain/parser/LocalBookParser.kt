@@ -2,6 +2,7 @@ package com.morealm.app.domain.parser
 
 import android.content.Context
 import android.net.Uri
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.TxtTocRule
@@ -69,10 +70,17 @@ object LocalBookParser {
             BookFormat.UMD -> UmdParser.readChapter(context, uri, chapter)
             else -> ""
         }
+        val empty = raw.isEmptyChapter()
+        AppLog.info(
+            "ChapterRaw",
+            "format=$format title='${chapter.title}' rawLen=${raw.length} empty=$empty " +
+                "sample='${raw.take(40).replace("\n", "\\n")}'",
+        )
         // 空章节兜底：解析失败 / 真分隔页 / NCX 链接断了等情况，给用户清晰提示，
-        // 而不是显示一片空白让人以为 reader 卡死。判定：trim 后字符串长度 < 8
-        // 且不含 <img>（保护漫画/插图章节，它们文本极少但有图）。
-        if (raw.isEmptyChapter()) {
+        // 而不是显示一片空白让人以为 reader 卡死。仅 trim 后**完全为空**时兜底；
+        // 单字符 / 短文本（如某 EPUB toc 嵌套人物名"样本人物"3 字符）保留显示，避免
+        // 误判为「本章暂无内容」。
+        if (empty) {
             "（本章暂无内容）\n\n该章节可能是分隔页、版权页或源文件解析未拿到正文。" +
                 "如多个章节都空白，请尝试重新导入文件或换源。"
         } else {
@@ -80,12 +88,7 @@ object LocalBookParser {
         }
     }
 
-    private fun String.isEmptyChapter(): Boolean {
-        val t = this.trim()
-        if (t.isEmpty()) return true
-        if (this.contains("<img", ignoreCase = true)) return false
-        return t.length < 8
-    }
+    private fun String.isEmptyChapter(): Boolean = this.trim().isEmpty()
 
     // ── TXT ──────────────────────────────────────────────
 
