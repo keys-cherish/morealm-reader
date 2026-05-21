@@ -72,9 +72,18 @@ class ChapterBlockBuilderTest {
     }
 
     @Test
-    fun `inline tags accumulate text into one paragraph`() {
+    fun `inline em strong produce styled spans (P2_2)`() {
         val blocks = parse("<p>Hello <em>brave</em> <strong>new</strong> world.</p>")
-        assertEquals(listOf(ChapterBlock.Paragraph("Hello brave new world.")), blocks)
+        // P2.2 升级：em/strong 产 italic/bold styled span → emit RichText
+        val rich = blocks.single() as ChapterBlock.RichText
+        // 完整文本拼起来不丢
+        assertEquals("Hello brave new world.", rich.spans.joinToString("") { it.text })
+        // italic span 仅含 "brave"
+        val italicText = rich.spans.filter { it.italic }.joinToString("") { it.text }
+        assertEquals("brave", italicText)
+        // bold span 仅含 "new"
+        val boldText = rich.spans.filter { it.weight == 700 }.joinToString("") { it.text }
+        assertEquals("new", boldText)
     }
 
     @Test

@@ -45,10 +45,10 @@ object EpubParser {
     // 共用 cache 文件 → 第二个 navPoint 起永远返回首次内容（用户报"无论跳哪章都显示首章"
     // 的根因，2026-05-18）。v4 起 cache key 用 chapter.url 完整 url 含 fragment，
     // 旧 v3 cache 全部失效，第一次打开重新解析。
-    // v6 = streaming 修复轮 2（strip OPF dir + cover short-circuit 移除 + TableMerge
-    // forwardImages + extractCover book.resource 兜底）。v5 cache 写入时的 streaming
-    // 仍 spine miss / cover miss，留下脏内容。每次 streaming 逻辑改动必须 bump 版本号。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v6"
+    // v7 = P2.2 ChapterBlockBuilder 重写（inline style cascade + RichText 输出）。
+    // v6 cache 是 P1 plain Paragraph 输出，flattenToString 字符串可能跟 P2.2 输出
+    // 有 CJK boundary 空格 / inline em strong 处理细节差异。bump 让所有书重新解析。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v7"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
