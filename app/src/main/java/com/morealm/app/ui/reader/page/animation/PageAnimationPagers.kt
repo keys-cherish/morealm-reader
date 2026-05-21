@@ -140,25 +140,43 @@ fun AnimatedPageReader(
     simulationViewRef: androidx.compose.runtime.MutableState<com.morealm.app.ui.reader.renderer.SimulationReadView?>? = null,
     onPageSettled: (Int) -> Unit = {},
     /**
-     * **P3-3a**：动画 ↔ 渲染契约线入口（详见 [com.morealm.app.ui.reader.page.PageBitmapProvider]）。
+     * **P3-3a/3c**：动画 ↔ 渲染契约线入口（详见 [com.morealm.app.ui.reader.page.PageBitmapProvider]）。
      *
-     * 当前阶段**仅签名扩展**，参数传入但**还没消费** —— 4 个 Pager 仍走 [pageContent]
-     * Composable 路径。P3-3b 新增 BitmapPageContent Composable；P3-3c 让 4 个 Pager
-     * 在 `bitmapProvider != null` 时走 BitmapPageContent，否则保持现 pageContent 兜底。
+     * P3-3c 起：SLIDE / SLIDE_VERTICAL / COVER 三种动画在 `bitmapProvider != null`
+     * 时改走 [com.morealm.app.ui.reader.page.BitmapPageContent]（异步 load bitmap +
+     * Image），否则保持现 [pageContent] 兜底。SIMULATION 暂时不接（它有自己一套
+     * bitmap pipeline 由 [SimulationParams.pageForTurn] + `renderPageToBitmap` 驱动），
+     * P3-3d 单独适配。
      *
-     * 默认 `null` = 现有 caller 完全不受影响（pageContent 路径）。
+     * 默认 `null` = 现有 caller 完全不受影响（pageContent 路径）。当前
+     * `CanvasRenderer` / `VerticalReaderView` 都不传，零行为变化；P3-5 起 caller
+     * 才会传真正的 [com.morealm.app.ui.reader.page.PageBitmapProvider] 实现。
      */
     bitmapProvider: com.morealm.app.ui.reader.page.PageBitmapProvider? = null,
     pageContent: @Composable (Int) -> Unit,
 ) {
-    // P3-3a 占位：bitmapProvider 仅 hold 引用避免 unused-parameter 告警，
-    // 不影响 4 Pager 内部 dispatch。P3-3c 后此引用会进 BitmapPageContent 消费。
-    @Suppress("UNUSED_VARIABLE")
-    val p3BitmapProviderRef = bitmapProvider
     when (animType) {
-        PageAnimType.SLIDE -> SlidePager(pagerState, modifier, onPageSettled, pageContent)
-        PageAnimType.SLIDE_VERTICAL -> VerticalSlidePager(pagerState, modifier, onPageSettled, pageContent)
-        PageAnimType.COVER -> CoverPager(pagerState, modifier, onPageSettled, pageContent)
+        PageAnimType.SLIDE -> SlidePager(
+            pagerState = pagerState,
+            modifier = modifier,
+            onPageSettled = onPageSettled,
+            pageContent = pageContent,
+            bitmapProvider = bitmapProvider,
+        )
+        PageAnimType.SLIDE_VERTICAL -> VerticalSlidePager(
+            pagerState = pagerState,
+            modifier = modifier,
+            onPageSettled = onPageSettled,
+            pageContent = pageContent,
+            bitmapProvider = bitmapProvider,
+        )
+        PageAnimType.COVER -> CoverPager(
+            pagerState = pagerState,
+            modifier = modifier,
+            onPageSettled = onPageSettled,
+            pageContent = pageContent,
+            bitmapProvider = bitmapProvider,
+        )
         PageAnimType.SIMULATION -> {
             if (simulationParams != null) {
                 SimulationPager(

@@ -9,6 +9,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import com.morealm.app.ui.reader.page.BitmapPageContent
+import com.morealm.app.ui.reader.page.PageBitmapProvider
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -65,6 +67,13 @@ internal fun SlidePager(
      * 直接处理拖动 —— 否则用户只能 tap 翻页。
      */
     userScrollEnabled: Boolean = false,
+    /**
+     * **P3-3c**：动画↔渲染契约线。非 null 时本 pager 用 [BitmapPageContent] 渲染
+     * 每页（异步 load bitmap + Image），跳过 [pageContent] Composable 路径；为 null
+     * 时维持旧 [pageContent] 行为。当前 caller (CanvasRenderer / VerticalReaderView)
+     * 都不传，默认走老路径，零行为变化。P3-5 起 caller 才会传真正的 provider。
+     */
+    bitmapProvider: PageBitmapProvider? = null,
 ) {
     // rememberUpdatedState：LaunchedEffect 的 key 只有 pagerState（共享永不变），
     // 跨章时 effect 不重启；闭包里直接 collect(onPageSettled) 会冻在旧 lambda ——
@@ -87,7 +96,11 @@ internal fun SlidePager(
     ) { pageIndex ->
         // Default HorizontalPager already does slide — both pages move together.
         // 这正好等价 Legado SlidePageDelegate 的行为。
-        pageContent(pageIndex)
+        if (bitmapProvider != null) {
+            BitmapPageContent(bitmapProvider, pageIndex)
+        } else {
+            pageContent(pageIndex)
+        }
     }
 }
 
@@ -102,6 +115,10 @@ internal fun VerticalSlidePager(
     modifier: Modifier = Modifier,
     onPageSettled: (Int) -> Unit = {},
     pageContent: @Composable (Int) -> Unit,
+    /**
+     * **P3-3c**：同 [SlidePager.bitmapProvider]。非 null 时改走 [BitmapPageContent]。
+     */
+    bitmapProvider: PageBitmapProvider? = null,
 ) {
     val currentOnPageSettled = rememberUpdatedState(onPageSettled)
     LaunchedEffect(pagerState) {
@@ -117,6 +134,10 @@ internal fun VerticalSlidePager(
         modifier = modifier.fillMaxSize(),
         userScrollEnabled = false,
     ) { pageIndex ->
-        pageContent(pageIndex)
+        if (bitmapProvider != null) {
+            BitmapPageContent(bitmapProvider, pageIndex)
+        } else {
+            pageContent(pageIndex)
+        }
     }
 }
