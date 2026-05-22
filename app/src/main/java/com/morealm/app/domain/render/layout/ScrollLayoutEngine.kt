@@ -656,8 +656,30 @@ class ScrollLayoutEngine(
             // isFirstChunkOfPara=true → 段首 chunk 的首行用 indentWidth 起；续行 / 后续 chunk = 0 起。
             fun emitTextChunk(textChunk: String, isFirstChunkOfPara: Boolean) {
                 if (textChunk.isEmpty()) return
-                val (chars, widths) = contentTextMeasure.measureTextSplit(textChunk)
+                val (chars, rawWidths) = contentTextMeasure.measureTextSplit(textChunk)
                 if (chars.isEmpty()) return
+
+                // **A4c+ 字体跨页修**：把 sizeScale 反映到 widths 让 ZhLayout 按真实缩放后
+                // 宽度算行打断。否则 em30 大字按基础字号算「10 字一行」，emit 时实际占 25
+                // 字宽 → 末尾字 x 坐标超出 visibleWidth → 字符跨页。
+                //
+                // chunk 内字符 i 对应 paragraph cp = chunkStartCp + i - paraStartCp。
+                // currentParaSizeScales 跟 chars (code-point split) 1:1 对齐（parseInlineMarkers
+                // 在 surrogate pair 时 sizes.add 1 次），所以可直接按 i 索引。
+                val sizeScalesSnap = currentParaSizeScales
+                val chunkStartCp = chapterPositionCounter
+                val paraStartCp = currentParaCpStart
+                val widths: ArrayList<Float> = if (sizeScalesSnap != null) {
+                    val scaled = ArrayList<Float>(rawWidths.size)
+                    val baseOffset = chunkStartCp - paraStartCp
+                    for (i in rawWidths.indices) {
+                        val scale = sizeScalesSnap.getOrNull(baseOffset + i) ?: 1f
+                        scaled.add(if (scale != 1f) rawWidths[i] * scale else rawWidths[i])
+                    }
+                    scaled
+                } else {
+                    rawWidths
+                }
 
                 if (useZhLayout) {
                     // P3-5b Step 2c：CSS text-indent 覆盖默认 paragraphIndent；text-align 覆盖默认左对齐
