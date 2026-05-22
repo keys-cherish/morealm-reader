@@ -320,10 +320,7 @@ private fun drawByAtoms(
     for (atom in atoms) {
         when (atom) {
             is com.morealm.app.domain.render.layout.TextRun -> {
-                val scale = if (atom is com.morealm.app.domain.render.layout.TextRun) {
-                    // A4c 起 TextRun 加 sizeScale 字段后激活；当前 atom 无 sizeScale 字段固定 1f
-                    1f
-                } else 1f
+                val scale = atom.sizeScale
                 if (scale != 1f) basePaint.textSize = baseSize * scale
                 val origColor = basePaint.color
                 if (atom.colorArgb != null) basePaint.color = atom.colorArgb

@@ -68,7 +68,11 @@ object EpubParser {
     // 首插画）全被缩成 1.5 字宽（用户 2026-05-22 反馈：cover 变小、chibi 头像消失）。
     // 移除 P 触发条件后 `<p><img/></p>` 单图段恢复 block；段内文字+图混排（paraBuf 非空）
     // 仍走 inline 分支。bump 让 v18 误判 cache 失效重写。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v19"
+    // v20：A4c sizeScale 通路 — flattenToString 编码 VT/FF/SO sizeScale marker（嵌套
+    // 在 SOH/STX/ETX color 内）+ ScrollLayoutEngine.parseInlineMarkers 解析 → emit atoms
+    // 路径携带 sizeScale → drawByAtoms 缩放 paint.textSize。让 SampleLN `em25/em30/em35`
+    // 标题大字号生效。bump 让 v19 cache 失效重 flatten 出新 marker。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v20"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)

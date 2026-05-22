@@ -355,10 +355,14 @@ private fun drawAtomsRow(
     for (atom in atoms) {
         when (atom) {
             is com.morealm.app.domain.render.layout.TextRun -> {
+                val baseSize = basePaint.textSize
+                val scale = atom.sizeScale
+                if (scale != 1f) basePaint.textSize = baseSize * scale
                 val origColor = basePaint.color
                 if (atom.colorArgb != null) basePaint.color = atom.colorArgb
                 canvas.drawText(atom.text, x, baselineY, basePaint)
                 if (atom.colorArgb != null) basePaint.color = origColor
+                if (scale != 1f) basePaint.textSize = baseSize
                 x += atom.width
             }
             is com.morealm.app.domain.render.layout.InlineImage -> {
