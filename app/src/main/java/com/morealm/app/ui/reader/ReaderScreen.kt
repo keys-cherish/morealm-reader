@@ -659,7 +659,10 @@ fun ReaderScreen(
                     // 用 fetchAndPrepareChapter 统一入口：内部自动 isWebBook 分流
                     // web/local + applyReplaceRules + ChineseConverter，与旧引擎完全等价。
                     // 修复用户反馈：V2 直接调 loadWebChapterContent 让本地 EPUB 拿不到内容。
-                    val content = viewModel.chapter.fetchAndPrepareChapter(idx) ?: return@loadFn null
+                    // **D1.b**：传 visibleWidth (viewWidth - paddingH*2) 让 EPUB % margin 解析按
+                    // 真实可排版宽算（某 EPUB `table.vol-title { margin: 20% 0 0 auto }`）。
+                    val cbwPx = (viewWidthPx - paddingHPx * 2).coerceAtLeast(0)
+                    val content = viewModel.chapter.fetchAndPrepareChapter(idx, cbwPx) ?: return@loadFn null
                     ScrollChapterContent(
                         chapterIndex = idx,
                         title = chap.title,
@@ -826,7 +829,9 @@ fun ReaderScreen(
                 animType = pageAnim.toPageAnimType(),
                 loadChapterContent = loadFn@{ idx ->
                     val chap = chapters.getOrNull(idx) ?: return@loadFn null
-                    val content = viewModel.chapter.fetchAndPrepareChapter(idx) ?: return@loadFn null
+                    // **D1.b**：见 ScrollCanvasReaderHost 同位注释
+                    val cbwPx = (viewWidthPx - paddingHPx * 2).coerceAtLeast(0)
+                    val content = viewModel.chapter.fetchAndPrepareChapter(idx, cbwPx) ?: return@loadFn null
                     com.morealm.app.domain.reader.scroll.ScrollChapterContent(
                         chapterIndex = idx,
                         title = chap.title,

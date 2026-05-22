@@ -60,10 +60,13 @@ object LocalBookParser {
         uri: Uri,
         format: BookFormat,
         chapter: BookChapter,
+        // **D1.b**：EPUB % margin 解析参考宽（host 传 ScrollLayoutEngine.visibleWidth 一致值）。
+        // 0 = 旧路径 / 非 EPUB / search 等 — % margin fallback 0；不影响其他 format。
+        epubContainingBlockWidthPx: Int = 0,
     ): String = withContext(Dispatchers.IO) {
         val raw = when (format) {
             BookFormat.TXT -> readTxtChapter(context, uri, chapter)
-            BookFormat.EPUB -> EpubParser.readChapter(context, uri, chapter)
+            BookFormat.EPUB -> EpubParser.readChapter(context, uri, chapter, epubContainingBlockWidthPx)
             BookFormat.MOBI, BookFormat.AZW3 -> MobiParser.readChapter(context, uri, chapter)
             BookFormat.PDF -> PdfParser.readChapter(context, uri, chapter)
             BookFormat.CBZ -> CbzParser.readChapter(context, uri, chapter)

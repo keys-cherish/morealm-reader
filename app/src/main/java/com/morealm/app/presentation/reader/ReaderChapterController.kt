@@ -643,10 +643,14 @@ class ReaderChapterController(
                 }
 
                 if (book.format == com.morealm.app.domain.entity.BookFormat.EPUB) {
+                    // **D1.b 已知**：reader 未 mount → cbw 未知 → preCacheChapters 内部 skip。
+                    // host fetchAndPrepareChapter 真值 cbw 走 on-demand 解析。TODO(D2)：把
+                    // ScrollLayoutEngine.visibleWidth 通过 viewModel 写回 controller，让 ReaderScreen
+                    // mount 后触发 preCacheChapters(cbw=visibleWidth)，恢复预热语义。
                     scope.launch(Dispatchers.IO) {
                         try {
                             com.morealm.app.domain.parser.EpubParser.preCacheChapters(context, uri, mapped)
-                            AppLog.info("Chapter", "EPUB chapters pre-cached")
+                            AppLog.info("Chapter", "EPUB pre-cache skipped until reader width is known (D1.b)")
                         } catch (e: Exception) {
                             AppLog.warn("Chapter", "EPUB pre-cache failed", e)
                         }
@@ -1019,6 +1023,9 @@ class ReaderChapterController(
         val chapters = _chapters.value
         val uri = Uri.parse(localPath)
 
+        // **D1.b 已知**：EPUB 路径 cbw 不通到这里 → preCacheChapters 内部 skip（默认 cbw=0）。
+        // CBZ 不依赖 cbw 正常工作。TODO(D2)：通过 viewModel 把 reader visibleWidth 写回
+        // controller 字段，传给 EpubParser.preCacheChapters(..., cbw=visibleWidth) 恢复预热。
         scope.launch(Dispatchers.IO) {
             try {
                 when (format) {
@@ -1028,7 +1035,11 @@ class ReaderChapterController(
                         com.morealm.app.domain.parser.CbzParser.preCacheImages(context, uri, chapters, currentIndex)
                     else -> {}
                 }
-                AppLog.debug("Chapter", "Re-triggered pre-cache around chapter $currentIndex")
+                if (format == com.morealm.app.domain.entity.BookFormat.EPUB) {
+                    AppLog.debug("Chapter", "EPUB pre-cache around $currentIndex skipped (cbw unknown, D1.b TODO)")
+                } else {
+                    AppLog.debug("Chapter", "Re-triggered pre-cache around chapter $currentIndex")
+                }
             } catch (e: Exception) {
                 AppLog.warn("Chapter", "Pre-cache re-trigger failed", e)
             }
@@ -1414,7 +1425,12 @@ class ReaderChapterController(
      *
      * @param index 目标章节索引
      */
-    suspend fun fetchAndPrepareChapter(index: Int): String? {
+    suspend fun fetchAndPrepareChapter(
+        index: Int,
+        // **D1.b**：EPUB % margin 解析参考宽（host UI 计算 visibleWidth 后传入）。
+        // 0 = 旧入口（默认值兼容）/ 非 EPUB / 不接 % margin。详 LocalBookParser.readChapter。
+        epubContainingBlockWidthPx: Int = 0,
+    ): String? {
         val chapterList = _chapters.value
         if (index !in chapterList.indices) return null
         val book = _book.value ?: return null
@@ -1425,7 +1441,10 @@ class ReaderChapterController(
                     loadWebChapterContent(book, chapter, index)
                 } else {
                     val localPath = book.localPath ?: return@withContext null
-                    LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapter)
+                    LocalBookParser.readChapter(
+                        context, Uri.parse(localPath), book.format, chapter,
+                        epubContainingBlockWidthPx = epubContainingBlockWidthPx,
+                    )
                 }
                 val replaced = applyReplaceRules(raw)
                 com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())

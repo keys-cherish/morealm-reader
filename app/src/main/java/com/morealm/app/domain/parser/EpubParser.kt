@@ -95,7 +95,14 @@ object EpubParser {
     // vol-text 子段都画白底矩形（payload `bg=ffffffff`）。修：body push blockStyleStack 时
     // 清掉 bg/border/padding/margin 字段，仅保留文字属性（textColor/textAlign/textShadow 等）
     // 让子段继承。bump 让 v24 已固化的"含 body bg 透传" cache 失效。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v25"
+    // v26：D1.b — % 单位 margin 解析接 containing block width。host (ReaderScreen) 传
+    // visibleWidth = viewWidth - paddingHorizontal*2 → ReaderChapterController.fetchAndPrepareChapter
+    // → LocalBookParser.readChapter → EpubParser.readChapter → ChapterReader.readTree →
+    // ChapterBlockBuilder → CssBlockStyleParser.parse。% margin 按 cbwPx 真值算（某 EPUB
+    // `table.vol-title { margin: 20% 0 0 auto }` 之前 fallback 0 让 vol-title 紧贴章首）。
+    // chapterCacheFile 加 `__cbw${cbw}` 后缀避免不同 viewport 共享同一 cache（横竖屏切换）。
+    // bump 让 v25 已固化的"无 % margin" cache 失效。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v26"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
@@ -690,12 +697,21 @@ object EpubParser {
 
     // ── Chapter content ──────────────────────────────────
 
-    fun readChapter(context: Context, uri: Uri, chapter: BookChapter): String {
+    fun readChapter(
+        context: Context,
+        uri: Uri,
+        chapter: BookChapter,
+        // **D1.b**：containing block width (px)，% margin 解析参考宽。host UI 应传
+        // ScrollLayoutEngine.visibleWidth 一致值（viewWidth - paddingH*2）。0 = 旧路径
+        // (search/TTS/Simulation) 不接 % margin 也能用，cache 分开避免相互污染。
+        containingBlockWidthPx: Int = 0,
+    ): String {
         val targetHref = chapter.url.substringBeforeLast("#")
         if (targetHref.isEmpty()) return ""
         // cache key 用 chapter.url 完整 url（含 fragment）—— 同 xhtml 多 navPoint 时
         // #fragment 决定截取范围，纯 targetHref 当 key 会让所有 navPoint 共享同一缓存。
-        val cacheKey = chapter.url
+        // **D1.b**：cbw 不同时 cache 分开（横竖屏切换 / 不同字体大小不重用）。
+        val cacheKey = "${chapter.url}__cbw${containingBlockWidthPx}"
 
         // Check disk cache
         val cached = readCachedChapter(context, uri, cacheKey)
@@ -705,7 +721,7 @@ object EpubParser {
         // 成 String 喂给当前 reader 字符串排版层。对外签名不变，渲染层 / 4 个翻页动画
         // / 其他 format 全部零影响。legacy upstream lib parseBody + sanitizeAndRewriteImages +
         // formatKeepImg 老链在 readChapter 路径下线（preCacheChapters 老路径暂留）。
-        val structured = readChapterStructured(context, uri, chapter)
+        val structured = readChapterStructured(context, uri, chapter, containingBlockWidthPx)
         val content = if (structured.isEmpty()) "" else structured.flattenToString()
 
         // P3-5b Step 2c diag：标题/cover 等多色 RichText 章 flatten 后应该含 SOH(0x01) marker
@@ -729,7 +745,11 @@ object EpubParser {
     // ── Structured chapter parsing (streaming via epub-core) ─────────────
 
     fun readChapterStructured(
-        context: Context, uri: Uri, chapter: BookChapter,
+        context: Context,
+        uri: Uri,
+        chapter: BookChapter,
+        // D1.b：% margin 解析参考宽（详 [readChapter]）
+        containingBlockWidthPx: Int = 0,
     ): StructuredChapterContent {
         val targetHref = chapter.url.substringBeforeLast("#")
         AppLog.info("EpubParser", "readChapterStructured enter uri=$uri title=${chapter.title} url=${chapter.url}")
@@ -767,7 +787,15 @@ object EpubParser {
             // ChapterProvider 接 layoutFromBlocks 才能让 kuang1 装饰可见。
             // rootFontSizePx=16f 固定值：BlockStyle 单位是"设计像素"，渲染层后续按用户
             // 字号倍率缩放。这样 cache 不因用户改字号失效。
-            ChapterReader.readTree(book, chapter.url, chapter.nextUrl, imgLookup, coverLookup, rootFontSizePx = 16f)
+            ChapterReader.readTree(
+                book = book,
+                chapterUrl = chapter.url,
+                nextChapterUrl = chapter.nextUrl,
+                imgLookup = imgLookup,
+                coverLookup = coverLookup,
+                rootFontSizePx = 16f,
+                containingBlockWidthPx = containingBlockWidthPx.toFloat(),
+            )
         }
         if (result == null) {
             AppLog.warn("EpubParser", "readChapterStructured withCoreBook returned null (book open failed)")
@@ -1044,27 +1072,45 @@ object EpubParser {
      *   旧：[aroundIndex-5, aroundIndex+20] = 26 章 → 漫画 EPUB 预热全部
      *   新：[aroundIndex-1, aroundIndex+3] = 5 章 → 漫画 EPUB 只热当前 + 后 3 章
      */
-    fun preCacheChapters(context: Context, uri: Uri, chapters: List<BookChapter>, aroundIndex: Int = 0) {
+    fun preCacheChapters(
+        context: Context,
+        uri: Uri,
+        chapters: List<BookChapter>,
+        aroundIndex: Int = 0,
+        // **D1.b**：containing block width (px)，与 host fetchAndPrepareChapter 一致。
+        // 0 = caller 不知道 cbw（如 ReaderChapterController.loadChapters 启动时 reader 还
+        // 没 mount）→ 直接跳过预解析（写 cache 的 key 会跟 host 读路径不匹配，预解析白做
+        // 反而占 EpubCoreBridge 锁让 host 第一次翻章等几秒，详 D1.b 装机测复现 SHIFT-NEXT-FAIL）。
+        containingBlockWidthPx: Int = 0,
+    ) {
+        if (containingBlockWidthPx <= 0) {
+            AppLog.info(
+                "EpubParser",
+                "preCacheChapters skipped (cbw=0, write would orphan; host fetchAndPrepareChapter 走 on-demand)",
+            )
+            return
+        }
         val start = (aroundIndex - 1).coerceAtLeast(0)
         val end = (aroundIndex + 4).coerceAtMost(chapters.size)
         val nearby = chapters.subList(start, end)
         val uncached = nearby.filter { ch ->
-            // cache key 与 readChapter 对齐：完整 chapter.url 含 fragment。
-            ch.url.isNotEmpty() && !chapterCacheFile(context, uri, ch.url).exists()
+            // cache key 与 readChapter 对齐：完整 chapter.url + __cbw${cbw} 后缀
+            ch.url.isNotEmpty() &&
+                !chapterCacheFile(context, uri, "${ch.url}__cbw${containingBlockWidthPx}").exists()
         }
         if (uncached.isEmpty()) return
         val t0 = System.currentTimeMillis()
         AppLog.info(
             "EpubParser",
-            "preCacheChapters start: around=$aroundIndex window=[$start..${end - 1}]" +
-                " total=${chapters.size} uncached=${uncached.size}",
+            "preCacheChapters start: around=$aroundIndex cbw=$containingBlockWidthPx" +
+                " window=[$start..${end - 1}] total=${chapters.size} uncached=${uncached.size}",
         )
         // L1.5：直接调主入口 readChapter，内部走 streaming + 写 cache。
         // 老 readChapterFromBook + withEpubBook(legacy upstream lib) 路径在 preCache 也下线 —— 不再写
         // 老 formatKeepImg 格式到新 v5 cache，避免格式漂移。readChapter 自带 cache hit check，
         // 对已 cached 章节 short-circuit。
         for (ch in uncached) {
-            readChapter(context, uri, ch)
+            readChapter(context, uri, ch, containingBlockWidthPx)
         }
         AppLog.info(
             "EpubParser",
