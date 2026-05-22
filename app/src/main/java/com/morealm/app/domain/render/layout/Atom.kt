@@ -84,6 +84,18 @@ sealed interface Atom {
 data class TextRun(
     val text: String,
     val colorArgb: Int? = null,
+    /**
+     * **A4c**：字号缩放倍率（相对 paint 默认 textSize）。1f = 跟段落默认字号一致，
+     * 2.5f = `em25` (font-size:250%)，3f = `em30`，等等。
+     *
+     * 来源：epub-compat 端 cascade CSS `font-size` 解析后存于 TextSpan.sizeScale，
+     * flattenToString 编码为 inline marker → ScrollLayoutEngine.parseInlineMarkers
+     * 解析 → emit 到 TextRun.sizeScale。
+     *
+     * Renderer 用法：`paint.textSize = basePaint.textSize * sizeScale`，1f 时零开销
+     * 跳过 paint 修改。
+     */
+    val sizeScale: Float = 1f,
     override val width: Float,
     override val height: Float,
     override val baseline: Float,

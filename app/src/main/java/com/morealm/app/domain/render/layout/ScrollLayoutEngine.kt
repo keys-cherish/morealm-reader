@@ -249,6 +249,10 @@ class ScrollLayoutEngine(
         // 字符位置填 src，其他位置 null。emitOneLine 看 imageSrcPerCp[relIdx] 非 null →
         // ScrollColumn.inlineImageSrc = src + width 替换为 inline image fit 宽度。
         var currentParaImageSrcs: Array<String?>? = null
+        // A4c：当前 paragraph 的字符级 sizeScale 数组（per code-point）。null = 全 1f
+        // （无 em25/em30 之类的字号变化）；非 null 触发 emit 切到 atoms 路径，width 跟
+        // sizeScale 联动（measureTextSplit 后再乘 sizeScale）。
+        var currentParaSizeScales: FloatArray? = null
         var currentParaCpStart: Int = 0
 
         fun emitLine(
@@ -263,6 +267,7 @@ class ScrollLayoutEngine(
             isImage: Boolean = false,
             imageSrc: String? = null,
             lineHeightOverride: Float? = null,
+            atoms: List<Atom>? = null,
         ) {
             val effectiveLineHeight = lineHeightOverride ?: contentLineHeight
             val proposedTop = currentY
@@ -294,6 +299,7 @@ class ScrollLayoutEngine(
                     isImage = isImage,
                     imageSrc = imageSrc,
                     blockStyle = currentBlockStyle,
+                    atoms = atoms,
                 )
             )
             currentY = finalBottom
@@ -512,6 +518,7 @@ class ScrollLayoutEngine(
             val colorPerCp = parsed.colorPerCp
             currentParaCharColors = colorPerCp
             currentParaImageSrcs = parsed.imageSrcPerCp
+            currentParaSizeScales = parsed.sizeScalePerCp
             currentParaCpStart = chapterPositionCounter
             val processedText = cleanedText
             // P3-5b Step 2c diag：仅当原 paragraphText 含 SOH 时才打 log（多色段稀有）
@@ -561,16 +568,26 @@ class ScrollLayoutEngine(
                 var x = startX
                 val colors = currentParaCharColors  // local snapshot
                 val imageSrcs = currentParaImageSrcs  // A4b local snapshot
+                val sizeScales = currentParaSizeScales  // A4c local snapshot
                 val paraStartCp = currentParaCpStart
                 // A4b：inline image 占位 fit 宽度（最简策略：行高 1.5 倍宽，让图占 ~1.5 字宽
                 // 视觉协调）。height = contentLineHeight 由 emitLine 行高决定。A5+ 重构成
                 // Atom 时改成按 ScrollImageDimensionsResolver 算原图比例。
                 val inlineImageWidth = contentLineHeight * 1.5f
+                // A4c：仅当本段有 sizeScale 变化或 inline image 时走 atoms 路径 (line.atoms != null)
+                val emitAtoms = sizeScales != null || imageSrcs != null
+                val atomList = if (emitAtoms) ArrayList<Atom>(chars.size) else null
                 for (i in chars.indices) {
                     val relIdx = chapterPositionCounter - paraStartCp
                     val charColor = colors?.getOrNull(relIdx)?.takeIf { it != 0 }
                     val inlineSrc = imageSrcs?.getOrNull(relIdx)
-                    val w = if (inlineSrc != null) inlineImageWidth else widths[i]
+                    val sizeScale = sizeScales?.getOrNull(relIdx) ?: 1f
+                    // A4c：sizeScale 缩放字符宽度（图片例外仍走 inlineImageWidth）
+                    val w = when {
+                        inlineSrc != null -> inlineImageWidth
+                        sizeScale != 1f -> widths[i] * sizeScale
+                        else -> widths[i]
+                    }
                     cols.add(
                         ScrollColumn(
                             charData = chars[i],
@@ -581,6 +598,23 @@ class ScrollLayoutEngine(
                             inlineImageSrc = inlineSrc,
                         ),
                     )
+                    // A4c：构造 atom（每 char 1 个，A6 优化时再合并同 styling 区段）
+                    if (atomList != null) {
+                        atomList.add(
+                            if (inlineSrc != null) {
+                                InlineImage(src = inlineSrc, width = w, height = contentLineHeight)
+                            } else {
+                                TextRun(
+                                    text = chars[i],
+                                    colorArgb = charColor,
+                                    sizeScale = sizeScale,
+                                    width = w,
+                                    height = contentLineHeight,
+                                    baseline = contentLineHeight * 0.8f,
+                                )
+                            },
+                        )
+                    }
                     sb.append(chars[i])
                     chapterPositionCounter++
                     x += w + (if (i < chars.lastIndex) gap else 0f)
@@ -609,6 +643,7 @@ class ScrollLayoutEngine(
                     paragraphNum = paragraphCounter,
                     firstChapterPos = cols.first().chapterPosition,
                     lastChapterPos = cols.last().chapterPosition,
+                    atoms = atomList,
                 )
             }
 
@@ -1054,22 +1089,26 @@ class ScrollLayoutEngine(
      * 跟之前一样；perCpImageSrc 在 U+FFFC 位置填 src，其他位置 null。
      */
     private fun parseInlineMarkers(text: String): InlineMarkersResult {
-        if (text.isEmpty()) return InlineMarkersResult(text, null, null)
+        if (text.isEmpty()) return InlineMarkersResult(text, null, null, null)
         val hasColor = text.contains('')
         val hasImage = text.contains('')
-        if (!hasColor && !hasImage) return InlineMarkersResult(text, null, null)
+        val hasSize = text.contains('')
+        if (!hasColor && !hasImage && !hasSize) return InlineMarkersResult(text, null, null, null)
 
         val sb = StringBuilder(text.length)
         val colors = ArrayList<Int>(text.length)
         val images = ArrayList<String?>(text.length)
+        val sizes = ArrayList<Float>(text.length)
         var curColor = 0
+        var curSize = 1f
         var hasAnyColor = false
         var hasAnyImage = false
+        var hasAnySize = false
         var i = 0
         val n = text.length
         while (i < n) {
             val c = text[i]
-            // SPAN_COLOR_START (SOH 0x01) <argbHex8> STX → set curColor
+            // SPAN_COLOR_START (SOH 0x01) <argbHex8> STX -> set curColor
             if (c == '' && i + 9 < n && text[i + 9] == '') {
                 val hex = text.substring(i + 1, i + 9)
                 val argb = runCatching { hex.toUInt(16).toInt() }.getOrNull()
@@ -1080,9 +1119,31 @@ class ScrollLayoutEngine(
                     continue
                 }
             }
-            // SPAN_COLOR_END (ETX 0x03) → 重置颜色
+            // SPAN_COLOR_END (ETX 0x03)
             if (c == '') {
                 curColor = 0
+                i++
+                continue
+            }
+            // SIZE_START (VT 0x0B) <intHundreds> FF -> set curSize
+            if (c == '') {
+                val delimIdx = text.indexOf('', i + 1)
+                if (delimIdx > 0) {
+                    val sizeStr = text.substring(i + 1, delimIdx)
+                    val sz = sizeStr.toIntOrNull()
+                    if (sz != null && sz > 0) {
+                        curSize = sz / 100f
+                        hasAnySize = true
+                        i = delimIdx + 1
+                        continue
+                    }
+                }
+                i++
+                continue
+            }
+            // SIZE_END (SO 0x0E)
+            if (c == '') {
+                curSize = 1f
                 i++
                 continue
             }
@@ -1095,27 +1156,28 @@ class ScrollLayoutEngine(
                     sb.append(placeholder)
                     colors.add(curColor)
                     images.add(src)
+                    sizes.add(curSize)
                     hasAnyImage = true
                     i = delimIdx + 3
                     continue
                 }
-                // 格式错误：当成普通控制字符跳过
                 i++
                 continue
             }
-            // Surrogate pair → 1 code-point，2 UTF-16 chars
+            // Surrogate pair
             if (c.isHighSurrogate() && i + 1 < n && text[i + 1].isLowSurrogate()) {
                 sb.append(c)
                 sb.append(text[i + 1])
                 colors.add(curColor)
                 images.add(null)
+                sizes.add(curSize)
                 i += 2
                 continue
             }
-            // 普通字符
             sb.append(c)
             colors.add(curColor)
             images.add(null)
+            sizes.add(curSize)
             i++
         }
         val cleanText = sb.toString()
@@ -1123,6 +1185,7 @@ class ScrollLayoutEngine(
             cleanText = cleanText,
             colorPerCp = if (hasAnyColor) IntArray(colors.size) { colors[it] } else null,
             imageSrcPerCp = if (hasAnyImage) Array(images.size) { images[it] } else null,
+            sizeScalePerCp = if (hasAnySize) FloatArray(sizes.size) { sizes[it] } else null,
         )
     }
 
@@ -1133,6 +1196,7 @@ class ScrollLayoutEngine(
         val cleanText: String,
         val colorPerCp: IntArray?,
         val imageSrcPerCp: Array<String?>?,
+        val sizeScalePerCp: FloatArray?,
     )
 
     companion object {
