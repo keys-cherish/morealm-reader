@@ -88,6 +88,22 @@ data class ScrollLine(
      * fill + 边框 stroke）。
      */
     val blockStyle: BlockStyle = BlockStyle.EMPTY,
+    /**
+     * **A5 atoms 骨架**（前进性双轨）：行级 [Atom] 列表，承载新排版路径的渲染数据
+     * （含 sizeScale / color / inlineImageSrc 等富 styling）。
+     *
+     * **互斥分发**：
+     *  - `atoms != null` → 新路径：Renderer 走 `drawByAtoms` 按 atom 序绘制
+     *  - `atoms == null`（默认） → 旧路径：Renderer 走 column 字符级绘制（现行行为）
+     *
+     * **不**做「双填」：同一 ScrollLine 要么走 atoms 要么走 columns，无数据同步成本。
+     * 后续 emit 入口逐步切到 atoms 路径，columns 字段使用面收缩，最终（A6）整体下线
+     * [ScrollColumn] 时直接删除 columns + atoms 改成非空字段。
+     *
+     * **当前阶段（A5 骨架）**：所有 emit 仍走 columns 路径，本字段永远 null。Renderer
+     * 已 ready 分发逻辑 + drawByAtoms 实现，等 A4c 起 emit 时填 atoms 触发新路径。
+     */
+    val atoms: List<Atom>? = null,
 ) {
     val height: Float get() = lineBottom - lineTop
 

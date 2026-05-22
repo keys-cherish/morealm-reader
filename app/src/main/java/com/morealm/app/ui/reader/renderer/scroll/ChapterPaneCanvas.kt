@@ -250,6 +250,15 @@ fun ChapterPaneCanvas(
                         val r = if (ts.blurRadius > 0f) ts.blurRadius else 0.5f
                         paint.setShadowLayer(r, ts.offsetX, ts.offsetY, ts.color)
                     }
+                    // A5 atoms 骨架：line.atoms 非 null 走新路径 (drawAtomsRow)。当前 emit 仍走
+                    // columns，atoms 永远 null —— 分发函数 dead code 等 A4c 起填 atoms。
+                    val lineAtoms = line.atoms
+                    if (lineAtoms != null) {
+                        drawAtomsRow(nc, lineAtoms, line, paint, baselineY, pageOffsetY)
+                        if (paragraphColor != null) paint.color = defaultColor
+                        if (ts != null) paint.clearShadowLayer()
+                        continue
+                    }
                     for (col in line.columns) {
                         // A4b：inline image 占位列（charData = U+FFFC）→ ImageCache + drawBitmap
                         if (col.inlineImageSrc != null) {
@@ -324,6 +333,55 @@ fun ChapterPaneCanvas(
  * 用 findColumnAt 一次定位到 hit.page+line，避免嵌套 for 循环。
  * 复杂度：O(bookmarks × pages) — pages 数远小于 lines。
  */
+/**
+ * **A5 atoms 骨架**（前进性双轨）：[ScrollLine.atoms] 非 null 时由本函数渲染一行 atoms。
+ *
+ * 当前阶段（A5 骨架）：所有 emit 仍走 columns 路径，line.atoms 永远 null，本函数
+ * 暂时是 dead code。A4c 起 emit 真填 atoms 时立即激活。
+ *
+ * 跟 PagePaneCanvas.drawByAtoms 的差异：本函数承载 chapter-level pageOffsetY 偏移
+ * （ChapterPaneCanvas 是 SCROLL 模式整章渲染，每条 line 的 lineTop 是 page-relative，
+ * 需要加上 pageOffsetY 拿到 chapter-relative y 坐标）。
+ */
+private fun drawAtomsRow(
+    canvas: android.graphics.Canvas,
+    atoms: List<com.morealm.app.domain.render.layout.Atom>,
+    line: com.morealm.app.domain.render.layout.ScrollLine,
+    basePaint: android.text.TextPaint,
+    baselineY: Float,
+    pageOffsetY: Float,
+) {
+    var x = 0f
+    for (atom in atoms) {
+        when (atom) {
+            is com.morealm.app.domain.render.layout.TextRun -> {
+                val origColor = basePaint.color
+                if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                canvas.drawText(atom.text, x, baselineY, basePaint)
+                if (atom.colorArgb != null) basePaint.color = origColor
+                x += atom.width
+            }
+            is com.morealm.app.domain.render.layout.InlineImage -> {
+                val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
+                if (bmp != null) {
+                    val slotH = line.lineBottom - line.lineTop
+                    val scale = minOf(atom.width / bmp.width, slotH / bmp.height)
+                    val drawW = bmp.width * scale
+                    val drawH = bmp.height * scale
+                    val offX = x + (atom.width - drawW) / 2f
+                    val offY = pageOffsetY + line.lineTop + (slotH - drawH) / 2f
+                    canvas.drawBitmap(
+                        bmp, null,
+                        android.graphics.RectF(offX, offY, offX + drawW, offY + drawH),
+                        null,
+                    )
+                }
+                x += atom.width
+            }
+        }
+    }
+}
+
 private fun drawBookmarkTriangles(
     canvas: android.graphics.Canvas,
     chapter: ScrollChapterLayout,
