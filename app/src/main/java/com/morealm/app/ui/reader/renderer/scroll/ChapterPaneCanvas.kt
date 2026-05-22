@@ -250,11 +250,14 @@ fun ChapterPaneCanvas(
                         val r = if (ts.blurRadius > 0f) ts.blurRadius else 0.5f
                         paint.setShadowLayer(r, ts.offsetX, ts.offsetY, ts.color)
                     }
-                    // A5 atoms 骨架：line.atoms 非 null 走新路径 (drawAtomsRow)。当前 emit 仍走
-                    // columns，atoms 永远 null —— 分发函数 dead code 等 A4c 起填 atoms。
+                    // A5 atoms 骨架：line.atoms 非 null 走新路径 (drawAtomsRow)。
                     val lineAtoms = line.atoms
                     if (lineAtoms != null) {
-                        drawAtomsRow(nc, lineAtoms, line, paint, baselineY, pageOffsetY)
+                        drawAtomsRow(
+                            nc, lineAtoms, line, paint, baselineY, pageOffsetY,
+                            textColorByCp = textColorByCp,
+                            defaultColor = defaultColor,
+                        )
                         if (paragraphColor != null) paint.color = defaultColor
                         if (ts != null) paint.clearShadowLayer()
                         continue
@@ -350,18 +353,38 @@ private fun drawAtomsRow(
     basePaint: android.text.TextPaint,
     baselineY: Float,
     pageOffsetY: Float,
+    textColorByCp: Map<Int, Int> = emptyMap(),
+    defaultColor: Int = basePaint.color,
 ) {
     var x = 0f
+    var atomStartCp = line.firstChapterPos  // A5 Step 2：atom 起始 cp 用于 textColorByCp 查询
     for (atom in atoms) {
         when (atom) {
             is com.morealm.app.domain.render.layout.TextRun -> {
                 val baseSize = basePaint.textSize
                 val scale = atom.sizeScale
                 if (scale != 1f) basePaint.textSize = baseSize * scale
-                val origColor = basePaint.color
-                if (atom.colorArgb != null) basePaint.color = atom.colorArgb
-                canvas.drawText(atom.text, x, baselineY, basePaint)
-                if (atom.colorArgb != null) basePaint.color = origColor
+                val hasOverride = if (textColorByCp.isNotEmpty()) {
+                    (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
+                } else false
+                if (hasOverride) {
+                    var cx = x
+                    val baseColor = atom.colorArgb ?: defaultColor
+                    for (ci in atom.text.indices) {
+                        val cp = atomStartCp + ci
+                        val color = textColorByCp[cp] ?: baseColor
+                        basePaint.color = color
+                        val ch = atom.text[ci].toString()
+                        canvas.drawText(ch, cx, baselineY, basePaint)
+                        cx += basePaint.measureText(ch)
+                    }
+                    basePaint.color = defaultColor
+                } else {
+                    val origColor = basePaint.color
+                    if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                    canvas.drawText(atom.text, x, baselineY, basePaint)
+                    if (atom.colorArgb != null) basePaint.color = origColor
+                }
                 if (scale != 1f) basePaint.textSize = baseSize
                 x += atom.width
             }
@@ -383,6 +406,7 @@ private fun drawAtomsRow(
                 x += atom.width
             }
         }
+        atomStartCp += atom.cpCount
     }
 }
 

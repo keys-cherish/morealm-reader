@@ -578,8 +578,11 @@ class ScrollLayoutEngine(
                 // 视觉协调）。height = contentLineHeight 由 emitLine 行高决定。A5+ 重构成
                 // Atom 时改成按 ScrollImageDimensionsResolver 算原图比例。
                 val inlineImageWidth = contentLineHeight * 1.5f
-                // A4c：仅当本段有 sizeScale 变化或 inline image 时走 atoms 路径 (line.atoms != null)
-                val emitAtoms = sizeScales != null || imageSrcs != null
+                // A5 Step 1：扩展 atoms 路径触发条件加 colors（含 char-color marker 的段也走
+                // atoms），让 atoms 路径覆盖率从 ~10% (仅 sizeScale/image) 涨到 ~50% (含 color)。
+                // drawByAtoms 已支持 TextRun.colorArgb，无需改渲染端。
+                // 普通正文（无任何 marker）继续走 columns 路径，零行为变化。
+                val emitAtoms = sizeScales != null || imageSrcs != null || colors != null
                 val atomList = if (emitAtoms) ArrayList<Atom>(chars.size) else null
                 for (i in chars.indices) {
                     val relIdx = chapterPositionCounter - paraStartCp
