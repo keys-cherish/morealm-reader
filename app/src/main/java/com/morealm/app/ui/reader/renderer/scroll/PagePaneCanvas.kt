@@ -316,7 +316,10 @@ private fun drawByAtoms(
     defaultColor: Int,
     textColorByCp: Map<Int, Int> = emptyMap(),
 ) {
-    var x = 0f
+    // **bugfix 2026-05-22**：用 line.columns[0].start 作初始 x（emit 阶段算的对齐起点，
+    // 含 CSS text-align center/right 居中偏移）。之前 var x = 0f 让 atoms 路径无视
+    // startX，CENTER 段（如某 EPUB h2.head「惊蛰」）退化成 left-aligned。
+    var x = line.columns.firstOrNull()?.start ?: 0f
     val baseSize = basePaint.textSize
     var atomStartCp = line.firstChapterPos  // A5 Step 2：atom 起始 cp 用于 textColorByCp 查询
     for (atom in atoms) {
