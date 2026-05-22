@@ -29,20 +29,37 @@ object EpubCoreBridge {
     private const val TMP_DIR = "epub-core-tmp"
     private const val CACHE_CAPACITY = 3
 
-    // LRU cache for opened EpubBook instances. accessOrder = true → 最近用的留下，
-    // 超过 capacity 的 eldest 被 close 释放。LinkedHashMap 自身非线程安全，所有访问
-    // 包 synchronized(lock)。漫画并发读图片场景下减少 ZIP 重开开销（mmap + OPF 解析）。
-    private val cache: LinkedHashMap<String, EpubBook> =
-        object : LinkedHashMap<String, EpubBook>(CACHE_CAPACITY, 0.75f, true) {
-            override fun removeEldestEntry(eldest: Map.Entry<String, EpubBook>): Boolean {
+    /**
+     * LRU cache entry —— 同时存 [EpubBook] 实例和（content:// 路径下的）tmp file，
+     * evict 时 close book + delete tmp（防止 cacheDir 增长无界）。
+     *
+     * **D1.b bugfix**：content:// 路径之前每次 withCoreBook 都 copyToTmp + open + close
+     * （单次模式），某 EPUB这种 ~10MB EPUB + 474 章 spine 每次开销 ~7-10s。host 翻章
+     * cache MISS 时多个 worker 同时触发 → 并发争 IO → SHIFT-NEXT-FAIL 卡死。修：
+     * content:// 也走 LRU cache，cache key 用 uri.toString() 让 caller 共享同一 book。
+     */
+    private data class Entry(val book: EpubBook, val tmpFile: File?)
+
+    private val cache: LinkedHashMap<String, Entry> =
+        object : LinkedHashMap<String, Entry>(CACHE_CAPACITY, 0.75f, true) {
+            override fun removeEldestEntry(eldest: Map.Entry<String, Entry>): Boolean {
                 if (size > CACHE_CAPACITY) {
-                    runCatching { eldest.value.close() }
+                    runCatching { eldest.value.book.close() }
+                    eldest.value.tmpFile?.let { runCatching { it.delete() } }
                     return true
                 }
                 return false
             }
         }
     private val lock = Any()
+
+    /**
+     * Per-URI inflight lock —— 同一 URI 多 caller 同时 cache MISS 时让 opener 串行（其他
+     * caller 等结果后从 cache 直读）。否则某 EPUB场景多个 worker 都会触发 copyToTmp + open
+     * （~7-10s 每次） → IO 资源耗尽 + 重复开销让翻章卡死。entry 永不清，每本书 1 个
+     * 微小对象，开销可忽略。
+     */
+    private val inflightLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
 
     /**
      * 用 epub-core 打开 [uri] 指向的 EPUB，在 [block] 内访问 [EpubBook]。
@@ -55,24 +72,26 @@ object EpubCoreBridge {
      * block 异常被吞掉返回 null；底层 IO 错误（open 失败 / 解析 OPF 失败）也返回 null。
      */
     fun <R> withCoreBook(context: Context, uri: Uri, block: (EpubBook) -> R?): R? {
-        val resolved = resolvePath(context, uri) ?: return null
-        val key = resolved.file.absolutePath
-        // content:// 临时文件不入 cache，单次 open + use.close
-        if (resolved.isTmp) {
-            return try {
-                EpubBook.open(key).use { book -> block(book) }
+        // **D1.b bugfix**：cache key 用 uri.toString() 让 file:// / content:// 共享同语义。
+        // 同 caller 重复 withCoreBook 同 URI 时复用同一 EpubBook 实例，避免 content:// 重复
+        // copyToTmp + open（每次 5-10s）→ 多 worker 并发互争 IO 让翻章卡死。
+        val cacheKey = uri.toString()
+        val book = obtainCached(cacheKey) {
+            // miss path：file:// → 直接拿 path；content:// → copyToTmp。返回 (book, tmpFile?)
+            val resolved = resolvePath(context, uri) ?: return@obtainCached null
+            try {
+                val opened = EpubBook.open(resolved.file.absolutePath)
+                Entry(opened, if (resolved.isTmp) resolved.file else null)
             } catch (t: Throwable) {
-                AppLog.error(TAG, "tmp-open failed uri=$uri: ${t.message}", t)
+                AppLog.error(TAG, "open failed uri=$uri: ${t.message}", t)
+                if (resolved.isTmp) resolved.file.delete()
                 null
-            } finally {
-                resolved.file.delete()
             }
-        }
-        val book = obtainCached(key) ?: return null
+        } ?: return null
         return try {
             block(book)
         } catch (t: Throwable) {
-            AppLog.error(TAG, "block failed uri=$uri path=$key: ${t.message}", t)
+            AppLog.error(TAG, "block failed uri=$uri: ${t.message}", t)
             null
         }
     }
@@ -80,44 +99,48 @@ object EpubCoreBridge {
     /** 关闭并移除所有 cache entry。reader 退出 / 内存压力时调用。 */
     fun closeAll() {
         synchronized(lock) {
-            for (entry in cache.values) runCatching { entry.close() }
+            for (entry in cache.values) {
+                runCatching { entry.book.close() }
+                entry.tmpFile?.let { runCatching { it.delete() } }
+            }
             cache.clear()
         }
     }
 
     /** 关闭 [uri] 对应的 cache entry（如果存在）。caller 在书被删除 / 替换时调用。 */
     fun invalidate(context: Context, uri: Uri) {
-        val resolved = resolvePath(context, uri) ?: return
-        if (resolved.isTmp) {
-            resolved.file.delete()
-            return
-        }
         synchronized(lock) {
-            cache.remove(resolved.file.absolutePath)?.let { runCatching { it.close() } }
+            cache.remove(uri.toString())?.let {
+                runCatching { it.book.close() }
+                it.tmpFile?.let { f -> runCatching { f.delete() } }
+            }
         }
     }
 
-    private fun obtainCached(key: String): EpubBook? {
+    /**
+     * Cache-aware obtain：命中直接复用，未命中调 [opener] 实际打开（IO 在 lock 外）后入 cache。
+     * lock 外 race 时由 double-check 处理。
+     */
+    private fun obtainCached(key: String, opener: () -> Entry?): EpubBook? {
+        // Fast path：cache 已命中直接返回，无锁竞争
         synchronized(lock) {
             val hit = cache[key]
-            if (hit != null) return hit
+            if (hit != null) return hit.book
         }
-        // open 在 lock 外，避免 IO 期间阻塞其他 cache 读
-        val opened = try {
-            EpubBook.open(key)
-        } catch (t: Throwable) {
-            AppLog.error(TAG, "open failed path=$key: ${t.message}", t)
-            return null
-        }
-        synchronized(lock) {
-            // double-check：lock 外另一线程可能已经把同 key open 加进 cache
-            val racing = cache[key]
-            if (racing != null) {
-                runCatching { opened.close() }
-                return racing
+        // Slow path：per-URI 串行 open，避免多 worker 同时 copyToTmp 重复 IO
+        val keyLock = inflightLocks.computeIfAbsent(key) { Any() }
+        synchronized(keyLock) {
+            // 进锁后再查 cache —— 前一个 inflight caller 可能刚 open 完
+            synchronized(lock) {
+                val hit2 = cache[key]
+                if (hit2 != null) return hit2.book
             }
-            cache[key] = opened
-            return opened
+            // open / copyToTmp 在 keyLock 内但 lock 外 —— 同 URI 串行，不同 URI 并行
+            val opened = opener() ?: return null
+            synchronized(lock) {
+                cache[key] = opened
+                return opened.book
+            }
         }
     }
 
