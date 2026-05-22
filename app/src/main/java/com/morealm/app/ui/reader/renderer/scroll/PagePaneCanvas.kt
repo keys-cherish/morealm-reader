@@ -205,6 +205,15 @@ fun PagePaneCanvas(
                     val r = if (ts.blurRadius > 0f) ts.blurRadius else 0.5f
                     paint.setShadowLayer(r, ts.offsetX, ts.offsetY, ts.color)
                 }
+                // A5 atoms 骨架：line.atoms 非 null 走新路径 (drawByAtoms)，否则走旧 column 路径。
+                // 当前阶段 emit 仍走 column，atoms 永远 null —— 分发函数 dead code 等 A4c 起填 atoms。
+                val lineAtoms = line.atoms
+                if (lineAtoms != null) {
+                    drawByAtoms(nc, lineAtoms, line, paint, baselineY, defaultColor)
+                    if (paragraphColor != null) paint.color = defaultColor
+                    if (ts != null) paint.clearShadowLayer()
+                    continue
+                }
                 for (col in line.columns) {
                     // A4b：inline image 占位列（charData = U+FFFC）→ 调 ImageCache + drawBitmap
                     // 替代 drawText。bitmap 缓存命中是 O(1)，未命中第一次解码会阻塞但走 LRU 后续 free。
@@ -280,6 +289,66 @@ fun PagePaneCanvas(
             }
 
             nc.restore()
+        }
+    }
+}
+
+/**
+ * **A5 atoms 骨架**（前进性双轨）：[ScrollLine.atoms] 非 null 时由本函数渲染一行 atoms。
+ *
+ * 当前阶段（A5 骨架）：所有 emit 仍走 columns 路径，line.atoms 永远 null，本函数
+ * 暂时是 dead code。A4c 起 emit 真填 atoms 时立即激活。
+ *
+ * 跟旧 column 渲染逻辑的差异：
+ *  - **TextRun.color** 是直接覆写值（不再走 textColorByCp / col.colorArgb 优先级链）—— atom
+ *    模型把所有 styling 显式表达在 atom 字段里，无需再分层 fallback
+ *  - **TextRun.sizeScale** 缩放 paint.textSize 渲染（A4c 起接入字号通路 = em25/em30 大字）
+ *  - **InlineImage** 直接拿 src + width/height fit 渲染（不再读 column.inlineImageSrc）
+ *
+ * 用户高亮的 textColorByCp 在 atoms 路径**暂未实现**（A4c+ 实测后再补）。
+ */
+private fun drawByAtoms(
+    canvas: android.graphics.Canvas,
+    atoms: List<com.morealm.app.domain.render.layout.Atom>,
+    line: com.morealm.app.domain.render.layout.ScrollLine,
+    basePaint: android.text.TextPaint,
+    baselineY: Float,
+    defaultColor: Int,
+) {
+    var x = 0f
+    val baseSize = basePaint.textSize
+    for (atom in atoms) {
+        when (atom) {
+            is com.morealm.app.domain.render.layout.TextRun -> {
+                val scale = if (atom is com.morealm.app.domain.render.layout.TextRun) {
+                    // A4c 起 TextRun 加 sizeScale 字段后激活；当前 atom 无 sizeScale 字段固定 1f
+                    1f
+                } else 1f
+                if (scale != 1f) basePaint.textSize = baseSize * scale
+                val origColor = basePaint.color
+                if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                canvas.drawText(atom.text, x, baselineY, basePaint)
+                if (atom.colorArgb != null) basePaint.color = origColor
+                if (scale != 1f) basePaint.textSize = baseSize
+                x += atom.width
+            }
+            is com.morealm.app.domain.render.layout.InlineImage -> {
+                val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
+                if (bmp != null) {
+                    val slotH = line.lineBottom - line.lineTop
+                    val scale = minOf(atom.width / bmp.width, slotH / bmp.height)
+                    val drawW = bmp.width * scale
+                    val drawH = bmp.height * scale
+                    val offX = x + (atom.width - drawW) / 2f
+                    val offY = line.lineTop + (slotH - drawH) / 2f
+                    canvas.drawBitmap(
+                        bmp, null,
+                        android.graphics.RectF(offX, offY, offX + drawW, offY + drawH),
+                        null,
+                    )
+                }
+                x += atom.width
+            }
         }
     }
 }
