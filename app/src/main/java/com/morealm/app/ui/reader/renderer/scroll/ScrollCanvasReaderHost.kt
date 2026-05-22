@@ -35,10 +35,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.geometry.Offset
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
-import com.morealm.app.domain.render.scroll.ScrollLayoutEngine
-import com.morealm.app.domain.render.scroll.extractText
-import com.morealm.app.domain.render.scroll.findColumnAt
-import com.morealm.app.domain.render.scroll.findColumnByPixel
+import com.morealm.app.domain.render.layout.ScrollLayoutEngine
+import com.morealm.app.domain.render.layout.extractText
+import com.morealm.app.domain.render.layout.findColumnAt
+import com.morealm.app.domain.render.layout.findColumnByPixel
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.SelectionToolbar
 import com.morealm.app.ui.reader.renderer.drawBgBitmap
@@ -415,7 +415,7 @@ fun ScrollCanvasReaderHost(
         val page = pageFactory.curPage
         if (page.chapterIndex < 0) return@derivedStateOf emptyList()
         val chFiltered = chapterHighlightsRaw.filter { it.chapterIndex == page.chapterIndex }
-        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+        com.morealm.app.domain.render.layout.ScrollHighlightProjector.projectForPage(
             page, state.currentChapter?.viewWidth ?: 1080, chFiltered,
         )
     }
@@ -426,7 +426,7 @@ fun ScrollCanvasReaderHost(
         val viewW = if (page.chapterIndex == state.currentChapter?.chapterIndex) {
             state.currentChapter?.viewWidth
         } else state.nextChapter?.viewWidth
-        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+        com.morealm.app.domain.render.layout.ScrollHighlightProjector.projectForPage(
             page, viewW ?: 1080, chFiltered,
         )
     }
@@ -437,7 +437,7 @@ fun ScrollCanvasReaderHost(
         val viewW = if (page.chapterIndex == state.currentChapter?.chapterIndex) {
             state.currentChapter?.viewWidth
         } else state.nextChapter?.viewWidth
-        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+        com.morealm.app.domain.render.layout.ScrollHighlightProjector.projectForPage(
             page, viewW ?: 1080, chFiltered,
         )
     }

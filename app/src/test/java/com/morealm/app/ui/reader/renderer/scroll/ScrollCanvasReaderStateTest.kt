@@ -1,7 +1,7 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
-import com.morealm.app.domain.render.scroll.ScrollChapterLayout
-import com.morealm.app.domain.render.scroll.ScrollPage
+import com.morealm.app.domain.render.layout.ScrollChapterLayout
+import com.morealm.app.domain.render.layout.ScrollPage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -157,7 +157,7 @@ class ScrollCanvasReaderStateTest {
 
     @Test
     fun `state acts as ScrollChapterDataSource - factory can consume it`() {
-        val ds: com.morealm.app.domain.render.scroll.ScrollChapterDataSource = ScrollCanvasReaderState()
+        val ds: com.morealm.app.domain.render.layout.ScrollChapterDataSource = ScrollCanvasReaderState()
         // 编译通过即证明实现接口；运行时调用接口方法验证基础语义
         assertNull(ds.currentChapter)
         assertFalse(ds.hasPrevChapter())

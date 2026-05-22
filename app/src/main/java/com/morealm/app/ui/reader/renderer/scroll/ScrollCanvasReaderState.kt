@@ -5,8 +5,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.morealm.app.domain.render.scroll.ScrollChapterDataSource
-import com.morealm.app.domain.render.scroll.ScrollChapterLayout
+import com.morealm.app.domain.render.layout.ScrollChapterDataSource
+import com.morealm.app.domain.render.layout.ScrollChapterLayout
 
 /**
  * 滚动 Canvas 阅读器持久状态 —— Host 持有，UI Composable 观察。
@@ -71,7 +71,7 @@ class ScrollCanvasReaderState(
     var pageOffset: Float by mutableFloatStateOf(initialPageOffset)
 
     /**
-     * 跨章向后 swap —— [com.morealm.app.domain.render.scroll.ScrollPageFactory]
+     * 跨章向后 swap —— [com.morealm.app.domain.render.layout.ScrollPageFactory]
      * chapterShiftCallback(+1) 时调用。
      *
      * 时序契约：Factory 已先把 pageIndex 重设为 0（新章 page 0），再调本方法；

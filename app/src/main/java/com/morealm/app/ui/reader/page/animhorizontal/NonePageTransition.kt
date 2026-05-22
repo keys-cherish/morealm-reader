@@ -6,8 +6,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec
-import com.morealm.app.domain.render.scroll.ScrollPageFactory
+import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
+import com.morealm.app.domain.render.layout.ScrollPageFactory
 import com.morealm.app.ui.reader.renderer.scroll.PagePaneCanvas
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
 

@@ -3,7 +3,7 @@ package com.morealm.app.ui.reader.renderer.scroll
 /**
  * page-level 滚动 delta 应用 —— Phase 4+ 唯一路径（旧 chapter-level applyScrollDelta
  * 已删除，原 137 行的 D 方案 allowSwap 守门 + DIAG 探针 + chapter swap 同步逻辑
- * 全部由 [com.morealm.app.domain.render.scroll.ScrollPageFactory] 接管）。
+ * 全部由 [com.morealm.app.domain.render.layout.ScrollPageFactory] 接管）。
  *
  * 抽出纯函数便于单测 —— 不依赖 Compose UI。由 [ScrollCanvasRenderer] 的
  * detectVerticalDragGestures + AnimationState.animateDecay 内逐帧调用。
@@ -14,7 +14,7 @@ package com.morealm.app.ui.reader.renderer.scroll
  *
  * 与 chapter-level 旧路径的关键差异：
  * - swap 粒度从 chapter 降到 **page**（约 1800px / 1 viewport）
- * - 跨章不由本函数直接处理；由 [com.morealm.app.domain.render.scroll.ScrollPageFactory]
+ * - 跨章不由本函数直接处理；由 [com.morealm.app.domain.render.layout.ScrollPageFactory]
  *   的 moveToNext / moveToPrev 内部通过 chapterShiftCallback 触发
  *   [ScrollCanvasReaderState.swapToNext] / [ScrollCanvasReaderState.swapToPrev]
  * - **单次调用最多跨 1 page**（用户决策 2026-05-19）：
@@ -43,7 +43,7 @@ package com.morealm.app.ui.reader.renderer.scroll
  */
 internal fun applyPageScrollDelta(
     state: ScrollCanvasReaderState,
-    factory: com.morealm.app.domain.render.scroll.ScrollPageFactory,
+    factory: com.morealm.app.domain.render.layout.ScrollPageFactory,
     delta: Float,
 ): Float {
     val curPageH = factory.curPage.height

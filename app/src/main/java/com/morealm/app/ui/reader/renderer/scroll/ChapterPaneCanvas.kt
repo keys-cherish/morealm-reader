@@ -12,10 +12,10 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
-import com.morealm.app.domain.render.scroll.ScrollChapterLayout
-import com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec
-import com.morealm.app.domain.render.scroll.ScrollLine
-import com.morealm.app.domain.render.scroll.findColumnAt
+import com.morealm.app.domain.render.layout.ScrollChapterLayout
+import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
+import com.morealm.app.domain.render.layout.ScrollLine
+import com.morealm.app.domain.render.layout.findColumnAt
 import com.morealm.epub.compat.BlockStyle
 
 /**
@@ -34,7 +34,7 @@ import com.morealm.epub.compat.BlockStyle
  * 当前 paint hardcoded；M2.7 接入 ReaderStyle / 主题切换时替换为 ViewModel 注入。
  *
  * @param chapter 整章已排版结果
- * @param highlightSpecs 高亮 spec 列表（由 [com.morealm.app.domain.render.scroll.ScrollHighlightProjector]
+ * @param highlightSpecs 高亮 spec 列表（由 [com.morealm.app.domain.render.layout.ScrollHighlightProjector]
  *                       投影得到）；该章不含高亮传 emptyList
  * @param viewportTop 当前 viewport 上界（相对章顶 y）—— M2.7 视口剔除用
  * @param viewportBottom 当前 viewport 下界（相对章顶 y）—— M2.7 视口剔除用
@@ -43,7 +43,7 @@ import com.morealm.epub.compat.BlockStyle
 fun ChapterPaneCanvas(
     chapter: ScrollChapterLayout,
     /**
-     * 正文 paint —— 必须与排版时 [com.morealm.app.domain.render.scroll.ScrollLayoutEngine]
+     * 正文 paint —— 必须与排版时 [com.morealm.app.domain.render.layout.ScrollLayoutEngine]
      * 使用的 contentPaint 是同一份（同 fontSize / typeface / letterSpacing / bold），
      * 否则字符宽度与 ScrollColumn.start/end 错位，画出来的字会偏移甚至吃字。
      */

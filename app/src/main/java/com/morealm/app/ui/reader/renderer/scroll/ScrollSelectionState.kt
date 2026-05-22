@@ -5,7 +5,7 @@ package com.morealm.app.ui.reader.renderer.scroll
  *
  * 用 chapter position（cp）而非 ScrollColumn 引用持端点：
  * 1. **章节 swap 安全**：cur swap 到 next 章时旧 column 引用失效；持 cp 在新章节排版结果里
- *    重新反查（[com.morealm.app.domain.render.scroll.ScrollLayoutEngine.findColumnAt]）即可。
+ *    重新反查（[com.morealm.app.domain.render.layout.ScrollLayoutEngine.findColumnAt]）即可。
  * 2. **DB 持久化对齐**：选区"高亮"动作直接把 startCp/endCp 落库到 Highlight，与
  *    [com.morealm.app.domain.entity.Highlight.startChapterPos] 1:1 对应。
  *
