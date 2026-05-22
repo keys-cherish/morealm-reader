@@ -127,7 +127,7 @@ class StreamingChainIntegrationTest {
         val blocks = parseChain("<div><h2>Sec</h2><p>body</p></div>")
         assertEquals(
             listOf(
-                ChapterBlock.Heading(2, "Sec"),
+                ChapterBlock.Heading(2, listOf(com.morealm.epub.compat.TextSpan("Sec"))),
                 ChapterBlock.Paragraph("body"),
             ),
             blocks,
