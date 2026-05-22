@@ -104,6 +104,21 @@ data class ScrollLine(
      * 已 ready 分发逻辑 + drawByAtoms 实现，等 A4c 起 emit 时填 atoms 触发新路径。
      */
     val atoms: List<Atom>? = null,
+    /**
+     * **H1+H2**：本行所在 paragraph 的 heading 级别（1..6，0 = 非 heading 正文）。
+     *
+     * 来源：epub-compat 端 `<h1>..<h6>` emit `ChapterBlock.Heading(level=...)` →
+     * flattenToString 编码 BEL+digit+BS 前缀 marker → ScrollLayoutEngine.parseInlineMarkers
+     * 检测段首 marker 剥掉 + 提取 level 数字 → emit line 时透传到本字段。
+     *
+     * H3 渲染时用：
+     *   level > 0 → 选 titlePaint（大字号）+ 加 heading 段间距
+     *   level == 0 → contentPaint（正文）
+     *
+     * **当前阶段（H1+H2 数据通路）**：字段就位但渲染端暂不区分（仍按普通段处理），等
+     * H3 commit 接入 titlePaint 选择 + 段间距。
+     */
+    val headingLevel: Int = 0,
 ) {
     val height: Float get() = lineBottom - lineTop
 

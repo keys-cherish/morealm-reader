@@ -127,7 +127,7 @@ class FragmentSliceVisitorTest {
             "<p>before</p><h2 id=\"s\">section</h2><p>body</p>",
         )
         assertEquals(
-            listOf(ChapterBlock.Heading(2, "section"), ChapterBlock.Paragraph("body")),
+            listOf(ChapterBlock.Heading(2, listOf(com.morealm.epub.compat.TextSpan("section"))), ChapterBlock.Paragraph("body")),
             blocks,
         )
     }

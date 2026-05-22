@@ -77,7 +77,11 @@ object EpubParser {
     // header marker → ScrollLayoutEngine.layoutChapter strip + 提取 src 写到 ScrollChapterLayout
     // .chapterBgImageSrc 字段。让某 EPUB / 仙侠类章节级背景图能透传到 reader。bump 让 v20
     // cache 失效重 flatten 出 chapter bg marker。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v21"
+    // v22：H1+H2 Heading styling — Heading.text → spans (List<RichSpan>) 保留 heading
+    // 内嵌 span 颜色/字号（某 EPUB .head1 内 .txtu/.txtu2 红绿）。flattenToString 加
+    // heading-level prefix marker <level> + spans 走 richTextToBody。bump 让
+    // v21 cache 失效重 flatten 出 heading marker + spans styling。H3 commit 接渲染对齐。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v22"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)

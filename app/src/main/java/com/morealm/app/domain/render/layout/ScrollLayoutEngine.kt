@@ -257,6 +257,9 @@ class ScrollLayoutEngine(
         // （无 em25/em30 之类的字号变化）；非 null 触发 emit 切到 atoms 路径，width 跟
         // sizeScale 联动（measureTextSplit 后再乘 sizeScale）。
         var currentParaSizeScales: FloatArray? = null
+        // H1+H2：当前 paragraph 是否为 heading 段（1..6，0 = 非 heading 正文）。
+        // emit line 时透传到 ScrollLine.headingLevel，让 H3 渲染识别 + 用 titlePaint 大字。
+        var currentParaHeadingLevel: Int = 0
         var currentParaCpStart: Int = 0
 
         fun emitLine(
@@ -272,6 +275,7 @@ class ScrollLayoutEngine(
             imageSrc: String? = null,
             lineHeightOverride: Float? = null,
             atoms: List<Atom>? = null,
+            headingLevel: Int = 0,
         ) {
             val effectiveLineHeight = lineHeightOverride ?: contentLineHeight
             val proposedTop = currentY
@@ -304,6 +308,7 @@ class ScrollLayoutEngine(
                     imageSrc = imageSrc,
                     blockStyle = currentBlockStyle,
                     atoms = atoms,
+                    headingLevel = headingLevel,
                 )
             )
             currentY = finalBottom
@@ -523,6 +528,7 @@ class ScrollLayoutEngine(
             currentParaCharColors = colorPerCp
             currentParaImageSrcs = parsed.imageSrcPerCp
             currentParaSizeScales = parsed.sizeScalePerCp
+            currentParaHeadingLevel = parsed.headingLevel
             currentParaCpStart = chapterPositionCounter
             val processedText = cleanedText
             // P3-5b Step 2c diag：仅当原 paragraphText 含 SOH 时才打 log（多色段稀有）
@@ -651,6 +657,7 @@ class ScrollLayoutEngine(
                     firstChapterPos = cols.first().chapterPosition,
                     lastChapterPos = cols.last().chapterPosition,
                     atoms = atomList,
+                    headingLevel = currentParaHeadingLevel,
                 )
             }
 
@@ -1144,28 +1151,41 @@ class ScrollLayoutEngine(
      * 跟之前一样；perCpImageSrc 在 U+FFFC 位置填 src，其他位置 null。
      */
     private fun parseInlineMarkers(text: String): InlineMarkersResult {
-        if (text.isEmpty()) return InlineMarkersResult(text, null, null, null)
-        val hasColor = text.contains('')
-        val hasImage = text.contains('')
-        val hasSize = text.contains('')
-        if (!hasColor && !hasImage && !hasSize) return InlineMarkersResult(text, null, null, null)
+        if (text.isEmpty()) return InlineMarkersResult(text, null, null, null, 0)
+        // H1+H2 heading-level marker strip: BEL<digit>BS prefix
+        var workText = text
+        var parsedHeadingLevel = 0
+        if (workText.startsWith('\u0007') && workText.length >= 3) {
+            val bsIdx = workText.indexOf('\u0008', 1)
+            if (bsIdx in 2..3) {
+                val levelStr = workText.substring(1, bsIdx)
+                val parsed = levelStr.toIntOrNull()
+                if (parsed != null && parsed in 1..6) {
+                    parsedHeadingLevel = parsed
+                    workText = workText.substring(bsIdx + 1)
+                }
+            }
+        }
+        val hasColor = workText.contains('\u0001')
+        val hasImage = workText.contains('\u0004')
+        val hasSize = workText.contains('\u000B')
+        if (!hasColor && !hasImage && !hasSize) return InlineMarkersResult(workText, null, null, null, parsedHeadingLevel)
 
-        val sb = StringBuilder(text.length)
-        val colors = ArrayList<Int>(text.length)
-        val images = ArrayList<String?>(text.length)
-        val sizes = ArrayList<Float>(text.length)
+        val sb = StringBuilder(workText.length)
+        val colors = ArrayList<Int>(workText.length)
+        val images = ArrayList<String?>(workText.length)
+        val sizes = ArrayList<Float>(workText.length)
         var curColor = 0
         var curSize = 1f
         var hasAnyColor = false
         var hasAnyImage = false
         var hasAnySize = false
         var i = 0
-        val n = text.length
+        val n = workText.length
         while (i < n) {
-            val c = text[i]
-            // SPAN_COLOR_START (SOH 0x01) <argbHex8> STX -> set curColor
-            if (c == '' && i + 9 < n && text[i + 9] == '') {
-                val hex = text.substring(i + 1, i + 9)
+            val c = workText[i]
+            if (c == '\u0001' && i + 9 < n && workText[i + 9] == '\u0002') {
+                val hex = workText.substring(i + 1, i + 9)
                 val argb = runCatching { hex.toUInt(16).toInt() }.getOrNull()
                 if (argb != null) {
                     curColor = argb
@@ -1174,17 +1194,15 @@ class ScrollLayoutEngine(
                     continue
                 }
             }
-            // SPAN_COLOR_END (ETX 0x03)
-            if (c == '') {
+            if (c == '\u0003') {
                 curColor = 0
                 i++
                 continue
             }
-            // SIZE_START (VT 0x0B) <intHundreds> FF -> set curSize
-            if (c == '') {
-                val delimIdx = text.indexOf('', i + 1)
+            if (c == '\u000B') {
+                val delimIdx = workText.indexOf('\u000C', i + 1)
                 if (delimIdx > 0) {
-                    val sizeStr = text.substring(i + 1, delimIdx)
+                    val sizeStr = workText.substring(i + 1, delimIdx)
                     val sz = sizeStr.toIntOrNull()
                     if (sz != null && sz > 0) {
                         curSize = sz / 100f
@@ -1196,18 +1214,16 @@ class ScrollLayoutEngine(
                 i++
                 continue
             }
-            // SIZE_END (SO 0x0E)
-            if (c == '') {
+            if (c == '\u000E') {
                 curSize = 1f
                 i++
                 continue
             }
-            // INLINE_IMG_START (EOT 0x04) <src> INLINE_IMG_DELIM (ENQ 0x05) <U+FFFC> INLINE_IMG_END (ACK 0x06)
-            if (c == '') {
-                val delimIdx = text.indexOf('', i + 1)
-                if (delimIdx > 0 && delimIdx + 2 < n && text[delimIdx + 2] == '') {
-                    val src = text.substring(i + 1, delimIdx)
-                    val placeholder = text[delimIdx + 1]
+            if (c == '\u0004') {
+                val delimIdx = workText.indexOf('\u0005', i + 1)
+                if (delimIdx > 0 && delimIdx + 2 < n && workText[delimIdx + 2] == '\u0006') {
+                    val src = workText.substring(i + 1, delimIdx)
+                    val placeholder = workText[delimIdx + 1]
                     sb.append(placeholder)
                     colors.add(curColor)
                     images.add(src)
@@ -1219,10 +1235,9 @@ class ScrollLayoutEngine(
                 i++
                 continue
             }
-            // Surrogate pair
-            if (c.isHighSurrogate() && i + 1 < n && text[i + 1].isLowSurrogate()) {
+            if (c.isHighSurrogate() && i + 1 < n && workText[i + 1].isLowSurrogate()) {
                 sb.append(c)
-                sb.append(text[i + 1])
+                sb.append(workText[i + 1])
                 colors.add(curColor)
                 images.add(null)
                 sizes.add(curSize)
@@ -1241,6 +1256,7 @@ class ScrollLayoutEngine(
             colorPerCp = if (hasAnyColor) IntArray(colors.size) { colors[it] } else null,
             imageSrcPerCp = if (hasAnyImage) Array(images.size) { images[it] } else null,
             sizeScalePerCp = if (hasAnySize) FloatArray(sizes.size) { sizes[it] } else null,
+            headingLevel = parsedHeadingLevel,
         )
     }
 
@@ -1252,6 +1268,7 @@ class ScrollLayoutEngine(
         val colorPerCp: IntArray?,
         val imageSrcPerCp: Array<String?>?,
         val sizeScalePerCp: FloatArray?,
+        val headingLevel: Int,
     )
 
     companion object {
