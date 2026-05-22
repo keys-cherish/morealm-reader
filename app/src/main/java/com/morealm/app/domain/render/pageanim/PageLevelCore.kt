@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -151,7 +152,20 @@ fun rememberPageLevelCore(
         }
     }
 
-    // curChapter 即时加载（首次进 reader / 外部跳章后必须立即有内容可显示）
+    // curChapter 即时加载（首次进 reader / 外部跳章后必须立即有内容可显示）+
+    // **待办 2 根因修**：cur layout ready 瞬间立即并行 launch prev/next preload，
+    // 替代旧的 LaunchedEffect debounce(300L) 预加载链路。
+    //
+    // 旧链路问题：cur idx 变化 → debounce 300ms → load prev/next，某 EPUB SCROLL 短章
+    // (totalHeight=868 < view=1848) user 滚一下就到 cur 末，next 还没 ready 就 SHIFT-NEXT-FAIL
+    // 卡 buffer（实测 11:23 / 11:57 / 12:10 日志现场）。
+    //
+    // 新链路：cur layout ready 瞬间立即触发 prev/next，节省 300ms debounce + cur layout
+    // 跟 prev/next 加载在时间上重叠（cur ready 时 user 通常还在看第一屏）。
+    //
+    // 并行 launch：prev/next 加载相互独立，无依赖关系 → 并行启动比 sequential 快一倍。
+    // LaunchedEffect 在 state.currentChapterIndex 或 engine 变化时自动 cancel 旧的子
+    // launch（user fling 跨多章时不堆积，新章节立即重 trigger）。
     LaunchedEffect(state.currentChapterIndex, engine) {
         val curIdx = state.currentChapterIndex
         if (state.currentChapter?.chapterIndex != curIdx) {
@@ -165,22 +179,20 @@ fun rememberPageLevelCore(
                 AppLog.warn("PageLevelCore", "cur NULL idx=$curIdx")
             }
         }
-    }
-
-    // prevNext 延迟预加载（debounce 300ms，章边界反复拖不触发）
-    LaunchedEffect(engine) {
-        snapshotFlow { state.currentChapterIndex }
-            .debounce(300L)
-            .collect { curIdx ->
-                if (curIdx > 0 && state.prevChapter?.chapterIndex != curIdx - 1) {
-                    val layout = loadAndLayout(curIdx - 1)
-                    if (state.currentChapterIndex == curIdx) state.prevChapter = layout
-                }
-                if (curIdx < state.chapterCount - 1 && state.nextChapter?.chapterIndex != curIdx + 1) {
-                    val layout = loadAndLayout(curIdx + 1)
-                    if (state.currentChapterIndex == curIdx) state.nextChapter = layout
-                }
+        // cur layout 已经 ready（无论是本 effect 刚加载完，还是之前已 cache），立即
+        // 触发 prev/next 预加载。冗余 check `chapterIndex != curIdx + 1` 避免重复加载。
+        launch {
+            if (curIdx > 0 && state.prevChapter?.chapterIndex != curIdx - 1) {
+                val prev = loadAndLayout(curIdx - 1)
+                if (state.currentChapterIndex == curIdx) state.prevChapter = prev
             }
+        }
+        launch {
+            if (curIdx < state.chapterCount - 1 && state.nextChapter?.chapterIndex != curIdx + 1) {
+                val next = loadAndLayout(curIdx + 1)
+                if (state.currentChapterIndex == curIdx) state.nextChapter = next
+            }
+        }
     }
 
     return remember(state, pageFactory) { PageLevelCoreHandle(state, pageFactory) }
