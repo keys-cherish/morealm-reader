@@ -27,8 +27,8 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
-import com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec
-import com.morealm.app.domain.render.scroll.ScrollPageFactory
+import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
+import com.morealm.app.domain.render.layout.ScrollPageFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch

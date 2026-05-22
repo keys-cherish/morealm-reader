@@ -34,10 +34,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
-import com.morealm.app.domain.render.scroll.ScrollLayoutEngine
-import com.morealm.app.domain.render.scroll.extractText
-import com.morealm.app.domain.render.scroll.findColumnAt
-import com.morealm.app.domain.render.scroll.findColumnByPixel
+import com.morealm.app.domain.render.layout.ScrollLayoutEngine
+import com.morealm.app.domain.render.layout.extractText
+import com.morealm.app.domain.render.layout.findColumnAt
+import com.morealm.app.domain.render.layout.findColumnByPixel
 import com.morealm.app.ui.reader.page.animation.PageAnimType
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.SelectionToolbar
@@ -65,7 +65,7 @@ import java.util.Locale
  * SLIDE / COVER 各自的 [SlidePageTransition] / [CoverPageTransition] 在 DisposableEffect
  * 内把自身的 animateAndCommit 注入到 [animateToNext] / [animateToPrev]；
  * Host 的 zone tap（左/右 1/3 点击）走 controller，从而触发各自的平移/覆盖动画，
- * 而不是直接调 [com.morealm.app.domain.render.scroll.ScrollPageFactory.moveToPrev]/[moveToNext] 瞬切。
+ * 而不是直接调 [com.morealm.app.domain.render.layout.ScrollPageFactory.moveToPrev]/[moveToNext] 瞬切。
  *
  * NONE Transition 不注册 controller，Host 自动 fallback 到 moveToPrev/Next 瞬切（NONE 语义本身就无动画）。
  */
@@ -349,7 +349,7 @@ fun PageLevelReaderHost(
         val page = core.pageFactory.curPage
         if (page.chapterIndex < 0) return@derivedStateOf emptyList()
         val chFiltered = chapterHighlightsRaw.filter { it.chapterIndex == page.chapterIndex }
-        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+        com.morealm.app.domain.render.layout.ScrollHighlightProjector.projectForPage(
             page,
             core.state.currentChapter?.viewWidth ?: 1080,
             chFiltered,
@@ -373,7 +373,7 @@ fun PageLevelReaderHost(
         val viewW = if (page.chapterIndex == core.state.currentChapter?.chapterIndex) {
             core.state.currentChapter?.viewWidth
         } else core.state.nextChapter?.viewWidth
-        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+        com.morealm.app.domain.render.layout.ScrollHighlightProjector.projectForPage(
             page, viewW ?: 1080, chFiltered,
         )
     }
@@ -384,7 +384,7 @@ fun PageLevelReaderHost(
         val viewW = if (page.chapterIndex == core.state.currentChapter?.chapterIndex) {
             core.state.currentChapter?.viewWidth
         } else core.state.nextChapter?.viewWidth
-        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+        com.morealm.app.domain.render.layout.ScrollHighlightProjector.projectForPage(
             page, viewW ?: 1080, chFiltered,
         )
     }
@@ -395,7 +395,7 @@ fun PageLevelReaderHost(
         val viewW = if (page.chapterIndex == core.state.currentChapter?.chapterIndex) {
             core.state.currentChapter?.viewWidth
         } else core.state.prevChapter?.viewWidth
-        com.morealm.app.domain.render.scroll.ScrollHighlightProjector.projectForPage(
+        com.morealm.app.domain.render.layout.ScrollHighlightProjector.projectForPage(
             page, viewW ?: 1080, chFiltered,
         )
     }

@@ -4,10 +4,36 @@ package com.morealm.app.domain.render.layout
  * 一行内的最小可定位单元 —— [TextRun]（一段同 styling 的字符）或 [InlineImage]
  * （行内图片）。
  *
- * **现状对比（P3-5b Phase 3 起步）**：当前 [ScrollLine] 整行级承载图片
- * （[ScrollLine.isImage] + 空 columns），同一行内不能 text + image 混排。SampleLN
- * 封面那种 chibi 小图夹在标题字之间、章首大字旁配饰图等场景做不到。Atom 把"行内
- * token"抽出来：一行 = List<Atom>，TextRun 跟 InlineImage 可以**任意交错**。
+ * ## CP 契约（A3-A6 推进时不可破坏）
+ *
+ * 这些 invariant 跟 DB 中存储的 Highlight / Bookmark / ReadProgress / TTS / Search
+ * 锚点 1:1 对应，破坏任何一条都会让旧数据反查失败、用户保存的高亮和书签错位。
+ * [com.morealm.app.domain.render.layout.AtomCpContractTest] 强制断言每条。
+ *
+ *  1. **cp 计数等价于旧 chapterPositionCounter**：一段 atoms 的 cpCount 之和必须
+ *     等于旧 [ScrollLayoutEngine.layoutChapter] 对该段累计的 chapterPosition 增量。
+ *     即 `atoms.sumOf { it.cpCount } == legacyChapterPosDelta`。
+ *
+ *  2. **[TextRun.cpCount] = `text.length`（UTF-16 char count，含 surrogate pair）**：
+ *     跟 ZhLayout 的 `lineStart / lineEnd` char index 同口径；emoji surrogate pair
+ *     算 2 cp（跟 `String.length` 严格对齐，跟 [ScrollColumn] 字符级 emit 一致）。
+ *
+ *  3. **[InlineImage.cpCount] = 1**：与现 [ScrollLayoutEngine.emitImage] `return
+ *     startCp + 1` 严格对齐。A4 实现 inline image 时**必须**用 U+FFFC（OBJECT
+ *     REPLACEMENT CHARACTER）做占位字符 —— BMP 内 1 char unit，跟「图片 1 cp」对齐，
+ *     且 ZhLayout / libunibreak 不会跨它打断行（A4 引入时由 contract test 第 4 条
+ *     验证）。
+ *
+ *  4. **DB 列名 `startChapterPos / endChapterPos / chapterPosition` 永久 stable**：
+ *     不论 A6 清理多深，列名 / Entity 字段名不动（DB schema 不能跟代码命名一起改，
+ *     破坏 = 全用户高亮书签丢）。
+ *
+ * ## 现状对比（P3-5b Phase 3 起步）
+ *
+ * 当前 [ScrollLine] 整行级承载图片（[ScrollLine.isImage] + 空 columns），同一行内
+ * 不能 text + image 混排。SampleLN 封面那种 chibi 小图夹在标题字之间、章首大字旁
+ * 配饰图等场景做不到。Atom 把"行内 token"抽出来：一行 = List<Atom>，TextRun 跟
+ * InlineImage 可以**任意交错**。
  *
  * **与 [ScrollColumn] 的层级**：
  *  - ScrollColumn = **字符级**（1 char ↔ 1 column）—— 现行排版数据模型

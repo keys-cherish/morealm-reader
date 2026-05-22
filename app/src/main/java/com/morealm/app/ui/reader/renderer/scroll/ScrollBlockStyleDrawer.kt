@@ -2,7 +2,7 @@ package com.morealm.app.ui.reader.renderer.scroll
 
 import android.graphics.Canvas
 import android.graphics.Paint
-import com.morealm.app.domain.render.scroll.ScrollLine
+import com.morealm.app.domain.render.layout.ScrollLine
 import com.morealm.epub.compat.BlockStyle
 
 /**

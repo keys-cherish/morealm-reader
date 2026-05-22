@@ -8,9 +8,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
-import com.morealm.app.domain.render.scroll.ScrollChapterLayout
-import com.morealm.app.domain.render.scroll.ScrollLayoutEngine
-import com.morealm.app.domain.render.scroll.ScrollPageFactory
+import com.morealm.app.domain.render.layout.ScrollChapterLayout
+import com.morealm.app.domain.render.layout.ScrollLayoutEngine
+import com.morealm.app.domain.render.layout.ScrollPageFactory
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers

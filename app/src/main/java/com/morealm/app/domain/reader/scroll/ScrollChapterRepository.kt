@@ -20,7 +20,7 @@ interface ScrollChapterRepository {
      *
      * 实现负责：网络下载 / 缓存命中 / contentProcessor 处理 / 章节文本替换等。
      * 排版（→ ScrollChapterLayout）由调用方持有的
-     * [com.morealm.app.domain.render.scroll.ScrollLayoutEngine] 完成。
+     * [com.morealm.app.domain.render.layout.ScrollLayoutEngine] 完成。
      *
      * @param chapterIndex 章 idx（全书 0-based）
      * @return [ScrollChapterContent]；越界 / 加载失败返 null（调用方自行处理 retry / UI 兜底）
@@ -34,7 +34,7 @@ interface ScrollChapterRepository {
 /**
  * 章节原始内容（未排版）—— [ScrollChapterRepository.loadChapterContent] 返回值。
  *
- * 不直接持 [com.morealm.app.domain.render.scroll.ScrollChapterLayout]：layout 依赖
+ * 不直接持 [com.morealm.app.domain.render.layout.ScrollChapterLayout]：layout 依赖
  * 渲染参数（viewWidth/paint 等），由 UI 层在拿到 content 后调用 ScrollLayoutEngine
  * 排版得到。Repository 只关心"内容从哪来"，不关心"怎么显示"。
  */
