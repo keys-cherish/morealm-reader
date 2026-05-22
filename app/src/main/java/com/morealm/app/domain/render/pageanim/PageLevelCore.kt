@@ -12,13 +12,17 @@ import com.morealm.app.domain.render.layout.ScrollChapterLayout
 import com.morealm.app.domain.render.layout.ScrollLayoutEngine
 import com.morealm.app.domain.render.layout.ScrollPageFactory
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
+import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * page-level 阅读器各 Host 共享 core —— Legado ReadView + TextPageFactory 模型在
@@ -136,19 +140,49 @@ fun rememberPageLevelCore(
         if (state.nextChapter?.styleSignature != sig) state.nextChapter = null
     }
 
+    // **Commit X idempotent guard** —— loadAndLayout 并发去重：同 chapter idx 多 caller
+    // 同时请求时，第一个跑 + 其余 join 已 inflight 的 Deferred。修复 chapter idx 重复
+    // layoutChapter 3 次阻塞 worker → next chapter 排队 → SHIFT-NEXT-FAIL 卡死。
+    //
+    // 防御性修复（不查 root cause）；真正根因是 LaunchedEffect / Compose recomposition
+    // 触发 cur/prev/next 重复加载请求。TODO(A5)：A5 measure/layout 重构时把
+    // recomposition root cause 一并修（LaunchedEffect key 设计 / derivedStateOf / coroutine
+    // cancellation 任一），跟 next 预加载真根因 + ScrollLine.alignment 重构同窗口。
+    val inflightLayout = remember { ConcurrentHashMap<Int, Deferred<ScrollChapterLayout?>>() }
+    val coroScope = rememberCoroutineScope()
+
     // 章节加载 helper
     suspend fun loadAndLayout(idx: Int): ScrollChapterLayout? {
-        return try {
-            val content = withContext(Dispatchers.IO) { loadChapterContent(idx) } ?: return null
-            AppLog.info("PageLevelCore", "  loaded idx=$idx contentLen=${content.content.length}")
-            withContext(Dispatchers.Default) {
-                engine.layoutChapter(content.chapterIndex, content.title, content.content)
+        inflightLayout[idx]?.let { existing ->
+            AppLog.info("PageLevelCore", "[IDEMPOTENT] chapter=$idx join existing inflight Deferred")
+            return try {
+                existing.await()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            AppLog.warn("PageLevelCore", "loadAndLayout FAILED idx=$idx: ${e.message}", e)
-            null
+        }
+        val deferred = coroScope.async(Dispatchers.IO) {
+            try {
+                val content = loadChapterContent(idx) ?: return@async null
+                AppLog.info("PageLevelCore", "  loaded idx=$idx contentLen=${content.content.length}")
+                withContext(Dispatchers.Default) {
+                    engine.layoutChapter(content.chapterIndex, content.title, content.content)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                AppLog.warn("PageLevelCore", "loadAndLayout FAILED idx=$idx: ${e.message}", e)
+                null
+            }
+        }
+        inflightLayout[idx] = deferred
+        return try {
+            deferred.await()
+        } finally {
+            // race-safe：deferred 完成后 remove，下次 caller 拿不到 → 重新启动新 Deferred
+            inflightLayout.remove(idx, deferred)
         }
     }
 
