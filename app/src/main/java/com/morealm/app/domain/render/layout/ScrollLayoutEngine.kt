@@ -806,8 +806,11 @@ class ScrollLayoutEngine(
             // 保证跨引擎 DB 高亮 chapterPos 兼容）
             chapterPositionCounter++
 
+            // **H3**：heading 段加大段间距（CSS h2.head margin 2em 近似），区分章首
+            // 大字标题跟正文。non-heading 段保持原 paragraphSpacing。
+            val spacing = if (currentParaHeadingLevel > 0) paragraphSpacingPx * 3 else paragraphSpacingPx
             // 段间空白：纯累加，不补跨页（方案 1 强硬纠正）
-            currentY += paragraphSpacingPx
+            currentY += spacing
         }
 
         if (currentPageLines.isNotEmpty()) {
