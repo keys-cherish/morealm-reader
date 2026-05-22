@@ -1550,13 +1550,97 @@ class ScrollLayoutEngine(
             val widthStr = cellBody.substring(0, widthEnd)
             val content = cellBody.substring(widthEnd + TABLE_MARKER_TD_W_END.length)
             val widthPx = if (widthStr.isEmpty()) null else widthStr.toFloatOrNull()
-            // 还原 U+0010 → \n 后 split 当 multi-paragraph
+            // **D2.a Commit 2c bugfix**: restore U+0010 -> newline, split, then strip
+            // inner markers (BLOCK_STYLE / SPAN_COLOR / SIZE / INLINE_IMG / HEADING_LEVEL)
+            // so layoutCellLines sees clean CJK text. Char-level color/size deferred to D2.b.
             val restored = content.replace('\u0010', '\n')
-            val paras = restored.split('\n').filter { it.isNotEmpty() }
+            val paras = restored.split('\n')
+                .map { stripInnerMarkersForCell(it) }
+                .filter { it.isNotEmpty() }
             cells.add(ParsedTableCell(widthPx, paras))
             i = cellEnd + TABLE_MARKER_TD_END.length
         }
         return ParsedTableRow(cells)
+    }
+
+    /**
+     * **D2.a Commit 2c**: strip cell content inner markers so layoutCellLines sees clean text.
+     * Drops BLOCK_STYLE_MARKER block + control chars used by SPAN_COLOR/SIZE/INLINE_IMG/HEADING.
+     * Char-level color/size for cells deferred to D2.b (will decode into colorPerCp arrays).
+     */
+    private fun stripInnerMarkersForCell(raw: String): String {
+        if (raw.isEmpty()) return raw
+        var s = raw
+        // strip BLOCK_STYLE_MARKER...BLOCK_STYLE_END (string markers)
+        while (true) {
+            val a = s.indexOf(com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_MARKER)
+            if (a < 0) break
+            val b = s.indexOf(com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END, a)
+            if (b < 0) break
+            s = s.substring(0, a) + s.substring(b + com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END.length)
+        }
+        // strip HEADING_LEVEL_START + 1 digit + HEADING_LEVEL_END (BEL + digit + BS)
+        // drop all control chars used by SPAN_COLOR/SIZE/INLINE_IMG markers + heading marker.
+        // Control char ranges: 0x01..0x08, 0x0B..0x0E (keep 0x09 tab, 0x0A newline, 0x0D CR)
+        val sb = StringBuilder(s.length)
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            val cc = c.code
+            if (cc in 0x01..0x08 || cc in 0x0B..0x0E) {
+                // marker control char: skip + skip following marker payload (color hex / sizeScale int).
+                // SPAN_COLOR  <argbHex8>  ; SIZE  <intHundreds> ; INLINE_IMG  <src> 
+                // simplification: skip until next non-marker char that is not also a marker payload (digit/hex/letter).
+                // For SPAN_COLOR/SIZE the payload is hex digits (0-9 a-f) until the END marker (/).
+                // We strip everything up to the next CJK / whitespace / ASCII letter that isn't hex.
+                // Safer: skip the marker char itself; the END marker (/) will be hit next iteration.
+                // Issue: payload chars (hex 0-9a-fA-F or sizeScale digits) remain in CJK text.
+                // Use targeted strip: handle pairs explicitly.
+                when (cc) {
+                    0x01 -> {
+                        // SPAN_COLOR_START + 8 hex + SPAN_MARKER_DELIM(0x02), skip 1 + 8 + 1
+                        val argbEnd = if (i + 10 <= s.length && s[i + 9].code == 0x02) i + 10 else i + 1
+                        i = argbEnd
+                        continue
+                    }
+                    0x0B -> {
+                        // SIZE_START + intHundreds + SIZE_DELIM(0x0C), digits variable len
+                        var j = i + 1
+                        while (j < s.length && s[j].isDigit()) j++
+                        if (j < s.length && s[j].code == 0x0C) j++
+                        i = j
+                        continue
+                    }
+                    0x04 -> {
+                        // INLINE_IMG_START + src + INLINE_IMG_DELIM(0x05), variable len src
+                        var j = i + 1
+                        while (j < s.length && s[j].code != 0x05) j++
+                        if (j < s.length) j++ // skip DELIM
+                        // skip placeholder U+FFFC + END marker(0x06)
+                        if (j < s.length && s[j] == '\ufffc') j++
+                        if (j < s.length && s[j].code == 0x06) j++
+                        i = j
+                        continue
+                    }
+                    0x07 -> {
+                        // HEADING_LEVEL_START + digit + HEADING_LEVEL_END(0x08)
+                        var j = i + 1
+                        while (j < s.length && s[j].isDigit()) j++
+                        if (j < s.length && s[j].code == 0x08) j++
+                        i = j
+                        continue
+                    }
+                    else -> {
+                        // standalone end markers ( STX,  ETX,  ENQ,  ACK,  BS, 0x0C FF, 0x0E SO)
+                        i++
+                        continue
+                    }
+                }
+            }
+            sb.append(c)
+            i++
+        }
+        return sb.toString()
     }
 
     companion object {
