@@ -472,13 +472,25 @@ fun ScrollCanvasReaderHost(
     // ── 电池 / 时间维护（与 CanvasRenderer line 380-389 同款）──
     val context = LocalContext.current
 
-    // ── 背景图加载（V1 CanvasRenderer line 1525-1532 同款逻辑）──
+    // ── 背景图加载（V1 CanvasRenderer line 1525-1532 同款逻辑 + C3 chapter bg 优先级）──
     // BgImageManager LRU 缓存（最多 3 张：day/night/blur），同 uri 同尺寸命中。
-    val bgEntry = remember(bgImageUri, viewWidth, viewHeight) {
-        if (bgImageUri.isNotEmpty() && viewWidth > 0 && viewHeight > 0) {
-            com.morealm.app.domain.render.BgImageManager.getBgBitmap(
-                context, bgImageUri, viewWidth, viewHeight,
+    // 优先级链：当前章节 EPUB body 背景图 (chapterBgImageSrc) > 阅读器全局 (bgImageUri) > 纯色
+    val chapterBgSrc = state.currentChapter?.chapterBgImageSrc
+    val effectiveBgUri = chapterBgSrc?.takeIf { it.isNotEmpty() } ?: bgImageUri
+    val bgEntry = remember(effectiveBgUri, viewWidth, viewHeight) {
+        if (effectiveBgUri.isNotEmpty() && viewWidth > 0 && viewHeight > 0) {
+            val t0 = System.currentTimeMillis()
+            val entry = com.morealm.app.domain.render.BgImageManager.getBgBitmap(
+                context, effectiveBgUri, viewWidth, viewHeight,
             )
+            val dt = System.currentTimeMillis() - t0
+            com.morealm.app.core.log.AppLog.info(
+                "ScrollHost/Bg",
+                "load bg src='${effectiveBgUri.take(80)}' viewW=$viewWidth viewH=$viewHeight " +
+                    "cost=${dt}ms result=${if (entry?.bitmap != null) "OK (${entry.bitmap.width}x${entry.bitmap.height})" else "NULL"} " +
+                    "chapterLevel=${chapterBgSrc != null}",
+            )
+            entry
         } else null
     }
     val bgBitmap = bgEntry?.bitmap

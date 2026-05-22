@@ -21,7 +21,13 @@ import kotlin.math.roundToInt
  */
 object BgImageManager {
 
-    private const val CACHE_SIZE = 3 // at most 3 bg bitmaps (day, night, blur variant)
+    // C3 chapter bg image：某 EPUB这种章节级 EPUB bg image 不同章用不同图（back03/back05/p4
+    // /qmp0000 等十余张），3 张 cache 远不够 → LRU 反复 evict → 切章时 main thread 同步
+    // 解码 100-300ms → 滚动卡死（user 2026-05-22 实测 idx 12→1 连续切章累积阻塞）。
+    // 16 张覆盖某 EPUB常用 bg image 集合 + 用户全局 day/night/blur variant。
+    // 内存代价：1080x1848 ARGB_8888 = 8MB/张，16 张 = ~128MB。BgImageManager.onTrimMemory
+    // 在系统内存紧张时 evict 一半，最坏情况 64MB 占用，可接受。
+    private const val CACHE_SIZE = 16
 
     private val cache = object : LruCache<String, BgEntry>(CACHE_SIZE) {
         override fun entryRemoved(

@@ -174,12 +174,16 @@ class ScrollLayoutEngine(
         content: String,
         omitChapterTitleBlock: Boolean = false,
     ): ScrollChapterLayout {
+        // **C1/C2 chapter bg image marker strip**：检查 content 头部是否携带
+        // __MOREALM_CH_BG__<src>__/MOREALM_CH_BG__ 前缀 → 剥掉 + 提取 src 存到 layout
+        // 字段。本步骤在段切分前必须做，否则 marker 会被当作首段文本占 cp。
+        val (cleanedContent, chapterBgSrc) = stripChapterBgMarker(content)
         // 段切分语义（精确对齐持久化坐标语义）：
         //   - 按 `\n` 拆，段末 `\r` 去除（容忍 CRLF）
         //   - 空段（连续 `\n\n` 之间的空字符串）**保留**：产生空 ScrollLine（columns 空、
         //     高 = contentLineHeight）+ chapterPosition += 1（用户决策 2026-05-17：
         //     空段占 1 个 cp，与原文 \n 位置 1:1 对齐）
-        val rawParagraphs = content.split('\n').map { it.trimEnd('\r') }
+        val rawParagraphs = cleanedContent.split('\n').map { it.trimEnd('\r') }
 
         // ── 重复标题去重（V1 ChapterProvider.stripDuplicateTitleSegments + isSameChapterTitle 等价）──
         // 书源书籍 / EPUB 常常把章名重复写在正文开头，与自画 title 块同框 → 用户看到两次。
@@ -823,7 +827,9 @@ class ScrollLayoutEngine(
             "ScrollLayoutEngine",
             "layoutChapter idx=$chapterIndex viewWidth=$viewWidth padding=L${paddingLeft}/R${paddingRight} " +
                 "visibleWidth=$visibleWidth maxColumnEnd=$maxColumnEnd " +
-                "overflow=${maxColumnEnd > visibleWidth} pages=${pages.size} totalHeight=$totalHeight",
+                "overflow=${maxColumnEnd > visibleWidth} pages=${pages.size} totalHeight=$totalHeight " +
+                "contentLen=${cleanedContent.length} totalChars=$chapterPositionCounter " +
+                "chapterBgImage=${chapterBgSrc != null}",
         )
 
         return ScrollChapterLayout(
@@ -837,7 +843,31 @@ class ScrollLayoutEngine(
             paddingBottom = paddingBottom,
             styleSignature = computeStyleSignature(),
             totalCharCount = chapterPositionCounter,
+            chapterBgImageSrc = chapterBgSrc,
         )
+    }
+
+    /**
+     * **C1/C2**：检查 content 是否以 `__MOREALM_CH_BG__<src>__/MOREALM_CH_BG__` 开头
+     * 的 chapter bg marker。是 → 返回 (剥掉 marker 的 cleanedContent, src)；否 → 返回
+     * (content, null)。
+     *
+     * marker 后紧随 \n（flattenToString 内 `if (sb.isNotEmpty()) sb.append('\n')` 触发），
+     * 需要一并剥掉避免产生首段空段误占 1 cp（破坏旧 highlight 数据反查）。
+     */
+    private fun stripChapterBgMarker(content: String): Pair<String, String?> {
+        val marker = com.morealm.epub.compat.StructuredChapterContent.CHAPTER_BG_MARKER
+        val end = com.morealm.epub.compat.StructuredChapterContent.CHAPTER_BG_END
+        if (!content.startsWith(marker)) return content to null
+        val endIdx = content.indexOf(end, marker.length)
+        if (endIdx < 0) {
+            AppLog.warn("ScrollLayoutEngine", "stripChapterBgMarker: marker open but no close, content head='${content.take(60)}'")
+            return content to null
+        }
+        val src = content.substring(marker.length, endIdx)
+        val cleaned = content.substring(endIdx + end.length).removePrefix("\n")
+        AppLog.info("ScrollLayoutEngine/BG", "stripped chapter bg src='${src.take(80)}' cleanedLen=${cleaned.length} originalLen=${content.length}")
+        return cleaned to src.takeIf { it.isNotEmpty() }
     }
 
     /**
