@@ -113,7 +113,14 @@ object EpubParser {
     // ChapterBlockBuilder TABLE 识别 bug 期写入的（流式 visitor 没产 TABLE onOpen 事件 /
     // 类似）。强制 v27→v28 失效，让用户重新解析时打 D2a/Table writeCache 日志（含
     // tableCount / hasTblMarker 检测）确认根因。视觉影响：所有章节首次重解析一次。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v28"
+    // v29：D2.a Commit 2c 真根因修 — TableMergeVisitor 默认把所有 <table> merge 成单段
+    // paragraph 吞掉 onOpen TABLE 事件，ChapterBlockBuilder 看不到 table 元素 → Table
+    // block 永远 emit=0。加 class-based opt-out：`<table class="vol-title">` 等数据表
+    // 透传到 delegate 让 ChapterBlock.Table 真 emit。SampleLN BookName 多 sibling table
+    // 拼标题字 merge 行为保留（class 不含 vol-title 关键字）不破坏视觉。
+    // v28 cache 失效让 chapter-1.xhtml 重 flatten 拿到 __MOREALM_TBL__ marker。
+    // 单测 SampleEpubVolTitleTableTest 验证 emit Table OK。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v29"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
