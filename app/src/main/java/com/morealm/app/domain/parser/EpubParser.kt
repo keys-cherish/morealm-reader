@@ -72,7 +72,12 @@ object EpubParser {
     // 在 SOH/STX/ETX color 内）+ ScrollLayoutEngine.parseInlineMarkers 解析 → emit atoms
     // 路径携带 sizeScale → drawByAtoms 缩放 paint.textSize。让 SampleLN `em25/em30/em35`
     // 标题大字号生效。bump 让 v19 cache 失效重 flatten 出新 marker。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v20"
+    // v21：C1/C2 chapter bg image 通路 — epub-compat 解析 `<body class="qmpN">` cascade
+    // background-image → flattenToString 加 __MOREALM_CH_BG__<src>__/MOREALM_CH_BG__
+    // header marker → ScrollLayoutEngine.layoutChapter strip + 提取 src 写到 ScrollChapterLayout
+    // .chapterBgImageSrc 字段。让某 EPUB / 仙侠类章节级背景图能透传到 reader。bump 让 v20
+    // cache 失效重 flatten 出 chapter bg marker。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v21"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)

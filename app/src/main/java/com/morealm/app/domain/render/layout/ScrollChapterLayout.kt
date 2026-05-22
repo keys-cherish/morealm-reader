@@ -58,6 +58,22 @@ data class ScrollChapterLayout(
      * 排版时的 paddingBottom（像素）—— 章末留白。三块面板拼接时与下章 paddingTop 重叠。
      */
     val paddingBottom: Int = 0,
+    /**
+     * **C1/C2 chapter background image** —— EPUB 章节级 body 背景图 src（已 resolve 的
+     * host-renderable URL，如 `file:///...`）。
+     *
+     * 来源：epub-compat 端解析 `<body class="qmpN">` cascade 拿到 `background-image:
+     * url(...)` → flattenToString 加 CHAPTER_BG_MARKER prefix → EpubParser cache →
+     * ScrollLayoutEngine.layoutChapter 内部 strip marker + 提取 src 填到本字段。
+     *
+     * Renderer 优先级链（C3 实施）：
+     *   chapterBgImageSrc != null → 章节级 EPUB 背景图
+     *   chapterBgImageSrc == null → 阅读器全局 bgImage 用户设置
+     *   全 null → 纯色 backgroundColor
+     *
+     * 典型场景：某 EPUB `body.qmp0000 { background-image: url(../Images/p4.jpg); }`。
+     */
+    val chapterBgImageSrc: String? = null,
 ) {
     /** 章是否为可见内容为空（所有 page.lines 都为空）。空章节渲染兜底"加载中"/"内容为空"占位。 */
     val isEmpty: Boolean
