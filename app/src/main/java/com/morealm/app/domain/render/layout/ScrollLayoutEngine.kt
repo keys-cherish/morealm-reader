@@ -529,7 +529,18 @@ class ScrollLayoutEngine(
             for (row in parsed.rows) {
                 if (row.cells.isEmpty()) continue
                 val cellLines: List<List<List<Pair<String, Float>>>> = row.cells.map { layoutCellLines(it) }
-                val cellWidths: List<Float> = row.cells.map { it.widthPx ?: 0f }
+                // **D2.a Commit 2d fix**：CSS spec — td.width 是最小宽度；实际 cell width =
+                // max(declared widthPx, actual content max line width)。某 EPUB td.width=1.2em
+                // ≈ 19.2px < CJK 字符 ~24-30px → 字符会溢出 + cellCursorX 累加用 19.2 让
+                // 相邻 cell 字符重叠（视觉看到两 cell 字符叠在一起）。修：cellWidths 取
+                // max(declared, content max)。
+                val cellWidths: List<Float> = row.cells.mapIndexed { idx, cell ->
+                    val declared = cell.widthPx ?: 0f
+                    val contentMax = cellLines[idx].maxOfOrNull { line ->
+                        line.sumOf { it.second.toDouble() }.toFloat()
+                    } ?: 0f
+                    maxOf(declared, contentMax)
+                }
                 val maxLines = cellLines.maxOfOrNull { it.size } ?: 0
                 if (maxLines == 0) continue
 
