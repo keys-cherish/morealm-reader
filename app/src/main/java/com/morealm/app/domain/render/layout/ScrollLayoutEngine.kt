@@ -626,15 +626,22 @@ class ScrollLayoutEngine(
                     )
                     currentBlockStyle = com.morealm.epub.compat.StructuredChapterContent
                         .decodeBlockStyle(payload)
-                    // **D1.a DIAG**：检查 marker payload 是否含 mt/mr/mb/ml + 解码后 marginXxx 值
-                    com.morealm.app.core.log.AppLog.info(
-                        "D1a/Margin",
-                        "para#$paragraphCounter payload='${payload.take(200)}' " +
-                            "mt=${currentBlockStyle.marginTopPx} mr=${currentBlockStyle.marginRightPx} " +
-                            "mb=${currentBlockStyle.marginBottomPx} ml=${currentBlockStyle.marginLeftPx} " +
-                            "ta=${currentBlockStyle.textAlign} ts=${currentBlockStyle.textShadow} " +
-                            "body40='${paragraphRaw.substring(endIdx + com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END.length).take(40)}'",
-                    )
+                    // **D1.a DIAG**：仅当 margin 非默认时打 log，减少正文章节噪声（D2a debug 时
+                    // log buffer 5000 行被普通段 margin 0.0 填满）。
+                    val anyMargin = currentBlockStyle.marginTopPx != 0f ||
+                        currentBlockStyle.marginBottomPx != 0f ||
+                        currentBlockStyle.marginLeftPx != 0f ||
+                        currentBlockStyle.marginRightPx != 0f
+                    if (anyMargin) {
+                        com.morealm.app.core.log.AppLog.info(
+                            "D1a/Margin",
+                            "para#$paragraphCounter payload='${payload.take(200)}' " +
+                                "mt=${currentBlockStyle.marginTopPx} mr=${currentBlockStyle.marginRightPx} " +
+                                "mb=${currentBlockStyle.marginBottomPx} ml=${currentBlockStyle.marginLeftPx} " +
+                                "ta=${currentBlockStyle.textAlign} ts=${currentBlockStyle.textShadow} " +
+                                "body40='${paragraphRaw.substring(endIdx + com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END.length).take(40)}'",
+                        )
+                    }
                     body
                 }
             } else {
@@ -648,6 +655,14 @@ class ScrollLayoutEngine(
             // （视觉会出 marker 文本，提示损坏数据，比直接吞段更安全）。
             if (paragraphText.contains(TABLE_MARKER_TBL_START)) {
                 val parsed = parseTableMarker(paragraphText)
+                com.morealm.app.core.log.AppLog.info(
+                    "D2a/Table",
+                    "para#$paragraphCounter TBL detected parsed=${parsed != null} " +
+                        "rows=${parsed?.rows?.size ?: 0} " +
+                        "cells=${parsed?.rows?.sumOf { it.cells.size } ?: 0} " +
+                        "ml=${currentBlockStyle.marginLeftPx} mr=${currentBlockStyle.marginRightPx} " +
+                        "head60='${paragraphText.take(60)}'",
+                )
                 if (parsed != null) {
                     layoutTable(parsed)
                     // table 段末间距：复用 paragraphSpacingPx（跟普通段一致）
