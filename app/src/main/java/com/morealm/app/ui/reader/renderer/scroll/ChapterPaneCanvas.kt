@@ -245,10 +245,21 @@ fun ChapterPaneCanvas(
                     val paragraphColor = line.blockStyle.textColor
                     if (paragraphColor != null) paint.color = paragraphColor
                     // P3-5b Step 2b：text-shadow（c-shadow-* 彩色描边光晕，详 PagePaneCanvas 同位）
+                    // **bugfix 2026-05-22**：blur < 1px 跳过 setShadowLayer（某 EPUB vol-text
+                    // 0.5px 锐影 Android setShadowLayer 渲染异常成大白底），详 PagePaneCanvas
                     val ts = line.blockStyle.textShadow
+                    val shadowApplied = ts != null && ts.blurRadius >= 1f
+                    if (shadowApplied) {
+                        paint.setShadowLayer(ts!!.blurRadius, ts.offsetX, ts.offsetY, ts.color)
+                    }
+                    // **D1.a DIAG**：仅当本行 line 有 textShadow 时打 log
                     if (ts != null) {
-                        val r = if (ts.blurRadius > 0f) ts.blurRadius else 0.5f
-                        paint.setShadowLayer(r, ts.offsetX, ts.offsetY, ts.color)
+                        com.morealm.app.core.log.AppLog.info(
+                            "D1a/Shadow",
+                            "ChapterPane ts blur=${ts.blurRadius} dx=${ts.offsetX} dy=${ts.offsetY} " +
+                                "color=0x${ts.color.toUInt().toString(16)} applied=$shadowApplied " +
+                                "lineText='${line.text.take(15)}'",
+                        )
                     }
                     // A5 atoms 骨架：line.atoms 非 null 走新路径 (drawAtomsRow)。
                     val lineAtoms = line.atoms
@@ -259,7 +270,7 @@ fun ChapterPaneCanvas(
                             defaultColor = defaultColor,
                         )
                         if (paragraphColor != null) paint.color = defaultColor
-                        if (ts != null) paint.clearShadowLayer()
+                        if (shadowApplied) paint.clearShadowLayer()
                         continue
                     }
                     for (col in line.columns) {
@@ -297,7 +308,7 @@ fun ChapterPaneCanvas(
                         }
                     }
                     if (paragraphColor != null) paint.color = defaultColor
-                    if (ts != null) paint.clearShadowLayer()
+                    if (shadowApplied) paint.clearShadowLayer()
                 }
                 // pageOffsetY 已在循环顶累加（move 到顶为视口剔除提前）
             }

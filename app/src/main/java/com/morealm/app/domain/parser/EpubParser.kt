@@ -81,7 +81,21 @@ object EpubParser {
     // 内嵌 span 颜色/字号（某 EPUB .head1 内 .txtu/.txtu2 红绿）。flattenToString 加
     // heading-level prefix marker <level> + spans 走 richTextToBody。bump 让
     // v21 cache 失效重 flatten 出 heading marker + spans styling。H3 commit 接渲染对齐。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v22"
+    // v23：D1.a margin 通路 — CssBlockStyleParser 加 margin-top/right/bottom/left 解析
+    // (auto=NaN, 负值, px/em/rem, % fallback 0)。BlockStyle 加 marginTopPx/Right/Bottom/LeftPx
+    // 字段。encodeBlockStyle/decodeBlockStyle 加 mt/mr/mb/ml 编码 key（AUTO 字面 +
+    // formatFloat 允许负值）。bump 让 v22 cache 失效重 flatten 出 margin keys；
+    // Commit 3 接 ScrollLayoutEngine 排版渲染 margin（含 auto 居中 + 负 margin 段重叠）。
+    // v24：修 ChapterBlockBuilder.mergeOnTop 没 merge margin 字段的 bug —— stack 从外到内
+    // merge 时 margin 永远归零（v23 cache 实测 payload 含 padding 不含 margin）。补 margin
+    // 字段 + overlay 显式判断（非 0f 或 NaN 即采用 overlay 整组）后 cascade 路径打通。
+    // bump 让 v23 已固化的"无 margin" cache 失效重 flatten。
+    // v25：修 body 的 box 装饰透传给子段的 bug —— CSS spec background-color/border 不继承，
+    // body.bg 是页面背景而非段背景。某 EPUB `body.head { background: #fff url(...) }` 之前让
+    // vol-text 子段都画白底矩形（payload `bg=ffffffff`）。修：body push blockStyleStack 时
+    // 清掉 bg/border/padding/margin 字段，仅保留文字属性（textColor/textAlign/textShadow 等）
+    // 让子段继承。bump 让 v24 已固化的"含 body bg 透传" cache 失效。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v25"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
@@ -971,12 +985,31 @@ object EpubParser {
 
     private fun readCachedChapter(context: Context, epubUri: Uri, path: String): String? {
         val f = chapterCacheFile(context, epubUri, path)
-        if (!f.exists()) return null
+        if (!f.exists()) {
+            // **D1.a DIAG**：cache miss → 后面会重新 flatten（理论命中新 marker）
+            com.morealm.app.core.log.AppLog.info(
+                "D1a/Cache", "MISS dir=$CHAPTER_CACHE_DIR path='$path' (will re-flatten)"
+            )
+            return null
+        }
         val text = f.readText()
         if (isStaleChapterCache(path, text)) {
             f.delete()
             return null
         }
+        // **D1.a DIAG**：cache hit → 检查含 marker + mt/mr/mb/ml key
+        val hasBlockMarker = text.contains("__MOREALM_BLOCK_STYLE__")
+        val hasMarginKey = text.contains("|mt=") || text.contains("|mr=") ||
+            text.contains("|mb=") || text.contains("|ml=") ||
+            text.contains("__mt=") || text.contains("__ml=") ||
+            // 单 key 场景：marker 后第一字段就是 mt/ml
+            text.contains("STYLE__mt=") || text.contains("STYLE__ml=") ||
+            text.contains("STYLE__mb=") || text.contains("STYLE__mr=")
+        com.morealm.app.core.log.AppLog.info(
+            "D1a/Cache",
+            "HIT dir=$CHAPTER_CACHE_DIR path='$path' len=${text.length} " +
+                "hasBlockMarker=$hasBlockMarker hasMarginKey=$hasMarginKey"
+        )
         return text
     }
 

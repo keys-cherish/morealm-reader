@@ -199,11 +199,27 @@ fun PagePaneCanvas(
                 val paragraphColor = line.blockStyle.textColor
                 if (paragraphColor != null) paint.color = paragraphColor
                 // P3-5b Step 2b：text-shadow（c-shadow-* 的彩色描边光晕）
+                // **bugfix 2026-05-22**：blur < 1px 跳过 setShadowLayer ——
+                // Android 在 radius < 1f 小数 blur 下渲染异常（截图显示整字宽度白色矩形覆盖
+                // 文字，根因 hardware-accelerated Canvas + setShadowLayer 小数边界）。
+                // 某 EPUB `text-shadow: 0.5px 0.5px 0 white` 这种"锐影"完美方案是 stroke 描边
+                // 二次 drawText（先 paint.style=STROKE strokeWidth=max(|dx|,|dy|) 描边色，
+                // 后正常字），但本次 D1.a margin scope 仅做防御：blur < 1 跳过不画。
+                // 视觉效果优化（参考实现也没画 0.5px 描边）。示例 LN B c-shadow-* `0 0 3px ...`
+                // blur=3 不受影响仍画彩色光晕。
                 val ts = line.blockStyle.textShadow
+                if (ts != null && ts.blurRadius >= 1f) {
+                    paint.setShadowLayer(ts.blurRadius, ts.offsetX, ts.offsetY, ts.color)
+                }
+                val shadowApplied = ts != null && ts.blurRadius >= 1f
+                // **D1.a DIAG**：仅当本行 line 有 textShadow 时打 log
                 if (ts != null) {
-                    // blur=0 时 Paint.setShadowLayer 不画 shadow；CSS 锐影用 0.5 兜底
-                    val r = if (ts.blurRadius > 0f) ts.blurRadius else 0.5f
-                    paint.setShadowLayer(r, ts.offsetX, ts.offsetY, ts.color)
+                    com.morealm.app.core.log.AppLog.info(
+                        "D1a/Shadow",
+                        "PagePane ts blur=${ts.blurRadius} dx=${ts.offsetX} dy=${ts.offsetY} " +
+                            "color=0x${ts.color.toUInt().toString(16)} applied=$shadowApplied " +
+                            "lineText='${line.text.take(15)}'",
+                    )
                 }
                 // A5 atoms 骨架：line.atoms 非 null 走新路径 (drawByAtoms)，否则走旧 column 路径。
                 // 当前阶段 emit 仍走 column，atoms 永远 null —— 分发函数 dead code 等 A4c 起填 atoms。
@@ -211,7 +227,7 @@ fun PagePaneCanvas(
                 if (lineAtoms != null) {
                     drawByAtoms(nc, lineAtoms, line, paint, baselineY, defaultColor, textColorByCp)
                     if (paragraphColor != null) paint.color = defaultColor
-                    if (ts != null) paint.clearShadowLayer()
+                    if (shadowApplied) paint.clearShadowLayer()
                     continue
                 }
                 for (col in line.columns) {
@@ -252,7 +268,7 @@ fun PagePaneCanvas(
                 }
                 // 还原 paint —— 避免段落色 / shadow 污染下一 line 共享 paint
                 if (paragraphColor != null) paint.color = defaultColor
-                if (ts != null) paint.clearShadowLayer()
+                if (shadowApplied) paint.clearShadowLayer()
             }
 
             // ─── 层 3：下划线 ───
