@@ -108,7 +108,12 @@ object EpubParser {
     // v26 soft launch，某 EPUB vol-title 仍横排但数据通路真过 marker）。Commit 2b 加真
     // layoutTable 算法仅改 renderer 不 bump cache。bump 让 v26 旧"平铺纯文本"cache 失效
     // 重 flatten 出 marker 结构，下次 Commit 2b 渲染层接管时 cache 复用。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v27"
+    // v28：DIAG bump — Commit 2a 装机测后 user 反馈"无变化"，cache HIT 显示
+    // hasTableMarker=false，但 epub-compat jar 有 TableScope 类。可能 v27 cache 是
+    // ChapterBlockBuilder TABLE 识别 bug 期写入的（流式 visitor 没产 TABLE onOpen 事件 /
+    // 类似）。强制 v27→v28 失效，让用户重新解析时打 D2a/Table writeCache 日志（含
+    // tableCount / hasTblMarker 检测）确认根因。视觉影响：所有章节首次重解析一次。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v28"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
@@ -729,6 +734,24 @@ object EpubParser {
         // formatKeepImg 老链在 readChapter 路径下线（preCacheChapters 老路径暂留）。
         val structured = readChapterStructured(context, uri, chapter, containingBlockWidthPx)
         val content = if (structured.isEmpty()) "" else structured.flattenToString()
+        // **D2.a Commit 2b DIAG**：写 cache 前看 blocks 中是否含 Table + flatten 后是否含 marker
+        run {
+            val blockTypes = structured.blocks.groupingBy { it::class.simpleName ?: "?" }.eachCount()
+            val tableCount = structured.blocks.count { it is com.morealm.epub.compat.ChapterBlock.Table }
+            val hasTblMarker = content.contains("__MOREALM_TBL__")
+            com.morealm.app.core.log.AppLog.info(
+                "D2a/Table",
+                "writeCache chapter='${chapter.title}' blocks=${structured.blocks.size} " +
+                    "types=$blockTypes tables=$tableCount hasTblMarker=$hasTblMarker " +
+                    "contentLen=${content.length}",
+            )
+            if (tableCount > 0 && !hasTblMarker) {
+                com.morealm.app.core.log.AppLog.warn(
+                    "D2a/Table",
+                    "BUG: blocks has Table but marker missing! head100='${content.take(100)}'",
+                )
+            }
+        }
 
         // P3-5b Step 2c diag：标题/cover 等多色 RichText 章 flatten 后应该含 SOH(0x01) marker
         val hasSpanMarker = content.contains('')
@@ -1039,11 +1062,20 @@ object EpubParser {
             // 单 key 场景：marker 后第一字段就是 mt/ml
             text.contains("STYLE__mt=") || text.contains("STYLE__ml=") ||
             text.contains("STYLE__mb=") || text.contains("STYLE__mr=")
+        val hasTableMarker = text.contains("__MOREALM_TBL__")
         com.morealm.app.core.log.AppLog.info(
             "D1a/Cache",
             "HIT dir=$CHAPTER_CACHE_DIR path='$path' len=${text.length} " +
-                "hasBlockMarker=$hasBlockMarker hasMarginKey=$hasMarginKey"
+                "hasBlockMarker=$hasBlockMarker hasMarginKey=$hasMarginKey " +
+                "hasTableMarker=$hasTableMarker",
         )
+        if (hasTableMarker) {
+            val tblIdx = text.indexOf("__MOREALM_TBL__")
+            com.morealm.app.core.log.AppLog.info(
+                "D2a/Table",
+                "cache TBL section sample='${text.substring(tblIdx, minOf(tblIdx + 300, text.length))}'",
+            )
+        }
         return text
     }
 
