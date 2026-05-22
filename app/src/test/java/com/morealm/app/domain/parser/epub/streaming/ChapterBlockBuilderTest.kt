@@ -39,12 +39,12 @@ class ChapterBlockBuilderTest {
         )
         assertEquals(
             listOf(
-                ChapterBlock.Heading(1, listOf(com.morealm.epub.compat.TextSpan("A"))),
-                ChapterBlock.Heading(2, listOf(com.morealm.epub.compat.TextSpan("B"))),
-                ChapterBlock.Heading(3, listOf(com.morealm.epub.compat.TextSpan("C"))),
-                ChapterBlock.Heading(4, listOf(com.morealm.epub.compat.TextSpan("D"))),
-                ChapterBlock.Heading(5, listOf(com.morealm.epub.compat.TextSpan("E"))),
-                ChapterBlock.Heading(6, listOf(com.morealm.epub.compat.TextSpan("F"))),
+                ChapterBlock.Heading(1, listOf(com.morealm.epub.compat.TextSpan("A", sizeScale = 1.6f, weight = 700))),
+                ChapterBlock.Heading(2, listOf(com.morealm.epub.compat.TextSpan("B", sizeScale = 1.3f, weight = 700))),
+                ChapterBlock.Heading(3, listOf(com.morealm.epub.compat.TextSpan("C", sizeScale = 1.15f, weight = 700))),
+                ChapterBlock.Heading(4, listOf(com.morealm.epub.compat.TextSpan("D", sizeScale = 1.1f, weight = 700))),
+                ChapterBlock.Heading(5, listOf(com.morealm.epub.compat.TextSpan("E", sizeScale = 1.05f, weight = 700))),
+                ChapterBlock.Heading(6, listOf(com.morealm.epub.compat.TextSpan("F", weight = 700))),
             ),
             blocks,
         )
