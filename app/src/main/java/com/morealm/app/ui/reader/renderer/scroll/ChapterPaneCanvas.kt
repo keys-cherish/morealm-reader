@@ -356,7 +356,9 @@ private fun drawAtomsRow(
     textColorByCp: Map<Int, Int> = emptyMap(),
     defaultColor: Int = basePaint.color,
 ) {
-    var x = 0f
+    // **bugfix 2026-05-22**：用 line.columns[0].start 作初始 x，让 atoms 路径 honor
+    // CSS text-align cascade 算出的居中偏移（见 PagePaneCanvas.drawByAtoms 同款修复）
+    var x = line.columns.firstOrNull()?.start ?: 0f
     var atomStartCp = line.firstChapterPos  // A5 Step 2：atom 起始 cp 用于 textColorByCp 查询
     for (atom in atoms) {
         when (atom) {
