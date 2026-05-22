@@ -58,7 +58,17 @@ object EpubParser {
     // cascade 跑不到 table 内字符上 → 所有 span isPlain → emit Paragraph 而非 RichText →
     // cache 里 0 marker（用户 21:10 实测 sample='为美好的\n<img...' 验证）。修了 visitor 后
     // 还得 bump 让 v16 失效重新生成，否则 cache hit 永远拿到老 string。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v17"
+    // v18：A4a inline image 模型 — RichSpan sealed 替代 StyledSpan，inline `<img>` 改 emit
+    // InlineImageSpan 不再切独立 block。flattenToString 输出新 EOT/ENQ/ACK marker + U+FFFC
+    // 占位（cache 里会出现 `<src>￼`）。bump 让 v17 cache 失效重写。
+    // 注意：A4a 单独 deploy 时 ScrollLayoutEngine 还没解析新 marker → inline image 临时
+    // 显示成 U+FFFC ▯ 占位字符；A4b 实现 marker 解析 + atom 排版后恢复。
+    // v19：A4b regression fix — isInlineImageContext() 之前把 TagId.P 当成 inline phrasing
+    // tag 误判 → EPUB 的 `<p><img/></p>` 标准 block-image 习惯（cover / 人物简介头像 / 章
+    // 首插画）全被缩成 1.5 字宽（用户 2026-05-22 反馈：cover 变小、chibi 头像消失）。
+    // 移除 P 触发条件后 `<p><img/></p>` 单图段恢复 block；段内文字+图混排（paraBuf 非空）
+    // 仍走 inline 分支。bump 让 v18 误判 cache 失效重写。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v19"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)

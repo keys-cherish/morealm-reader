@@ -80,13 +80,15 @@ class ChapterBlockBuilderTest {
         val blocks = parse("<p>Hello <em>brave</em> <strong>new</strong> world.</p>")
         // P2.2 升级：em/strong 产 italic/bold styled span → emit RichText
         val rich = blocks.single() as ChapterBlock.RichText
+        // A4a：spans 改成 List<RichSpan>，只看 TextSpan 段（无 InlineImageSpan 在此测试输入里）
+        val textSpans = rich.spans.filterIsInstance<com.morealm.epub.compat.TextSpan>()
         // 完整文本拼起来不丢
-        assertEquals("Hello brave new world.", rich.spans.joinToString("") { it.text })
+        assertEquals("Hello brave new world.", textSpans.joinToString("") { it.text })
         // italic span 仅含 "brave"
-        val italicText = rich.spans.filter { it.italic }.joinToString("") { it.text }
+        val italicText = textSpans.filter { it.italic }.joinToString("") { it.text }
         assertEquals("brave", italicText)
         // bold span 仅含 "new"
-        val boldText = rich.spans.filter { it.weight == 700 }.joinToString("") { it.text }
+        val boldText = textSpans.filter { it.weight == 700 }.joinToString("") { it.text }
         assertEquals("new", boldText)
     }
 

@@ -53,6 +53,21 @@ data class ScrollColumn(
      * 渲染优先级：用户高亮 textColorByCp > col.colorArgb > line.blockStyle.textColor > paint 默认
      */
     val colorArgb: Int? = null,
+    /**
+     * **A4b inline image 占位 column**：当本 column 的 [charData] = "￼"（OBJECT
+     * REPLACEMENT CHARACTER, U+FFFC）时，[inlineImageSrc] 持有图片 src（已 resolve 的
+     * file/http URL）。渲染层据此调 BitmapFactory 解码 + drawBitmap 替代 drawText。
+     *
+     * **过渡定位**：A4b 给 ScrollColumn 加字段是 god-struct 临时方案，便于 A4b 单文件
+     * commit ship inline image 渲染能力。A5+ 重构成 Atom 模型时随 ScrollColumn 一起删
+     * 此字段（InlineImageSpan 直接 emit 为 [Atom.InlineImage]，不再走 column 字符层）。
+     *
+     * null = 普通文字 column；非 null = inline image 占位 column（[charData] 应 = "￼"）。
+     */
+    val inlineImageSrc: String? = null,
 ) {
     val width: Float get() = end - start
+
+    /** A4b：本 column 是 inline image 占位。`charData == "￼"` 且 [inlineImageSrc] 非空 */
+    val isInlineImage: Boolean get() = inlineImageSrc != null
 }
