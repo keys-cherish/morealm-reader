@@ -163,6 +163,10 @@ fun rememberPageLevelCore(
                 null
             }
         }
+        // **关键 bugfix**：deferred 用 coroScope（Composable lifecycle）独立于 caller 的 launch
+        // —— caller 协程 cancel（LaunchedEffect 重启）时 deferred 仍跑，不应该 remove inflight。
+        // 改用 invokeOnCompletion 在 deferred 真完成时 remove；caller cancel 不动 map。
+        // 这样新 caller 来时仍能看见正在跑的 deferred + join 它（拿已跑结果或等结果）。
         val deferred = coroScope.async(Dispatchers.IO) {
             try {
                 val content = loadChapterContent(idx) ?: return@async null
@@ -178,11 +182,15 @@ fun rememberPageLevelCore(
             }
         }
         inflightLayout[idx] = deferred
+        deferred.invokeOnCompletion {
+            // race-safe remove：deferred 完成/失败/被取消都 remove（仅当 map 中仍是同一 deferred）
+            inflightLayout.remove(idx, deferred)
+        }
         return try {
             deferred.await()
-        } finally {
-            // race-safe：deferred 完成后 remove，下次 caller 拿不到 → 重新启动新 Deferred
-            inflightLayout.remove(idx, deferred)
+        } catch (e: CancellationException) {
+            // caller cancelled but deferred (coroScope-bound) may still complete and serve future joiners
+            throw e
         }
     }
 
