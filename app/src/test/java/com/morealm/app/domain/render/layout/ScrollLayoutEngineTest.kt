@@ -1027,4 +1027,29 @@ class ScrollLayoutEngineTest {
         // 空内容 → 1 空段 line → isEmpty=false（line 存在）
         assertFalse(layout.isEmpty)
     }
+
+    // ── A3 layoutAtoms stub 契约 ────────────────────────────────────────────
+
+    @Test
+    fun `layoutAtoms 行数与 layoutChapter 一一对应`() {
+        // A3 stub 契约：layoutAtoms 跟 layoutChapter 同输入 → 行一一对应
+        // （A5 Renderer 按 index 反查 ScrollLine 拿 lineTop / blockStyle 等元数据）
+        // CP 总和精算由 AtomCpContractTest 单独覆盖（contract test 不依赖 Robolectric）
+        val eng = engine()
+        val content = "第一段文字。\n第二段更长一些的文字内容。\n\n空段后还有内容。"
+        val legacy = eng.layoutChapter(chapterIndex = 0, title = "T", content = content, omitChapterTitleBlock = true)
+        val atomRows = eng.layoutAtoms(chapterIndex = 0, title = "T", content = content, omitChapterTitleBlock = true)
+
+        val legacyLineCount = legacy.pages.sumOf { it.lines.size }
+        assertEquals("layoutAtoms 行数必须等于 layoutChapter 总行数", legacyLineCount, atomRows.size)
+
+        // 总 atom cp <= totalCharCount（空段 / 图片占位 1 cp 由 line.firstChapterPos
+        // 间接持有，atoms 可为 empty list；ScrollLayoutEngine 内部还可能有段末 \n cp
+        // 不进任何 column —— 详见 ScrollColumn.kt:36-46 cp 递增规则）
+        val atomCpSum = atomRows.flatten().sumOf { it.cpCount }
+        assertTrue(
+            "atoms 总 cp ($atomCpSum) 应 <= totalCharCount (${legacy.totalCharCount})",
+            atomCpSum <= legacy.totalCharCount,
+        )
+    }
 }

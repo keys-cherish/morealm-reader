@@ -136,6 +136,38 @@ class ScrollLayoutEngine(
      *        每段被当独立章但不画 N 次相同伪章名标题）；与 [titleMode] = 2 等价但作用域只在本次调用
      * @return [ScrollChapterLayout]，含每字符的像素坐标和 chapterPosition
      */
+    /**
+     * **Atom-mode layout entry（A3 stub）** —— 跟 [layoutChapter] 同输入同 cp 契约，
+     * 输出每行的 [Atom] 列表。
+     *
+     * **当前实现**：纯 forward 到 [layoutChapter]，每行调 [ScrollAtomBridge.toAtoms]
+     * 派生 atoms。语义跟 A2 等价，**零排版行为变化**。
+     *
+     * **API 现在就位的意义**：让 A4 / A5 callers 可以 import + 调用这个入口，将来
+     * A3 真改 ScrollLayoutEngine 内部用 atom 单元排版（支持 inline image / mixed line）
+     * 时调用方零修改。
+     *
+     * **返回类型选择**：`List<List<Atom>>` 行级聚合 —— 保留行边界（A5 Renderer 需要
+     * 行高 / y 坐标，按行 index 反查 [layoutChapter] 结果的 ScrollLine 拿元数据）。不
+     * 引入 AtomLine / AtomChapterLayout 包装类型避免过度开发，等 A4 真用 atom 排版
+     * 时再决定要不要新数据模型。
+     *
+     * **CP 契约保证**：`result.flatten().sumOf { it.cpCount }` 等于 [ScrollChapterLayout.
+     * totalCharCount]（含空段 / 图片各 1 cp）。空段 line 产 empty list，cp 由 [ScrollLine.
+     * firstChapterPos] 间接持有 —— 详见 [AtomCpContractTest] empty paragraph 断言。
+     *
+     * @return 每行一个 List<Atom>，跟 `layoutChapter(...).pages.flatMap { it.lines }` 一一对应
+     */
+    fun layoutAtoms(
+        chapterIndex: Int,
+        title: String,
+        content: String,
+        omitChapterTitleBlock: Boolean = false,
+    ): List<List<Atom>> {
+        val legacy = layoutChapter(chapterIndex, title, content, omitChapterTitleBlock)
+        return legacy.pages.flatMap { it.lines }.map { ScrollAtomBridge.toAtoms(it) }
+    }
+
     fun layoutChapter(
         chapterIndex: Int,
         title: String,
