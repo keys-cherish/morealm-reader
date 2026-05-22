@@ -749,11 +749,12 @@ class ScrollLayoutEngine(
                         val isFirstLine = isFirstChunkOfPara && lineIndex == 0
                         val isLastLine = lineIndex == layout.lineCount - 1
                         val desiredWidth = lineWidths.sum()
-                        // D1.a margin: auto 检测 —— marginLeft AUTO && marginRight AUTO 表示
-                        // CSS 水平居中（某 EPUB .head { margin: 2em auto } / SampleLN .vol-title
-                        // { margin: auto }）。优先级高于 cssAlign：margin:auto 在 CSS 中是
-                        // 块居中的语义来源，text-align: center 是文字居中的语义来源，
-                        // 当二者并存时取 margin:auto（块整体居中），与浏览器一致。
+                        // D1.a margin: auto 检测 —— marginLeft AUTO && marginRight AUTO。
+                        // **bugfix 2026-05-22**：CSS spec 真值 —— margin: auto 仅当块有显式
+                        // width 时才居中；无 width 时 margin:auto 失效，text-align 才生效。
+                        // 某 EPUB h2.head1 是 `text-align: left; margin: 0 auto 0 auto` —— 应该
+                        // 走 text-align:left 而非 margin-center。让 cssAlign 优先于 marginCenter，
+                        // 仅当 cssAlign null（CSS 没显式 text-align）时 marginCenter 兜底。
                         val marginLeftAuto = currentBlockStyle.marginLeftPx.isNaN()
                         val marginRightAuto = currentBlockStyle.marginRightPx.isNaN()
                         val marginCenter = marginLeftAuto && marginRightAuto
@@ -763,13 +764,20 @@ class ScrollLayoutEngine(
                                        else currentBlockStyle.marginLeftPx
                         // P3-5b Step 2c：startX 计算按 CSS text-align + D1.a margin
                         val startX: Float = when {
-                            marginCenter ->
-                                ((visibleWidth - desiredWidth) / 2f).coerceAtLeast(0f)
                             cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.CENTER ->
                                 ((visibleWidth - desiredWidth) / 2f).coerceAtLeast(0f)
                             cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.RIGHT ->
                                 (visibleWidth - desiredWidth).coerceAtLeast(0f)
-                            // LEFT / JUSTIFY / null —— 沿用旧默认（首行 indent 兜底），叠加 mlIndent
+                            cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.LEFT ||
+                                cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.JUSTIFY -> {
+                                // 显式 LEFT/JUSTIFY：mlIndent 段缩进 + 段首 indent（heading 段不 indent）
+                                mlIndent + (if (isFirstLine && currentParaHeadingLevel == 0) effectiveFirstLineIndent else 0f)
+                            }
+                            // cssAlign null（CSS 没显式 text-align）→ marginCenter 兜底（某 EPUB惊蛰
+                            // h2.head 实际有 text-align:center 走上面分支；此分支留给纯 margin:auto
+                            // 居中场景如 table.vol-title）
+                            marginCenter -> ((visibleWidth - desiredWidth) / 2f).coerceAtLeast(0f)
+                            // 全空：沿用旧默认（首行 indent 兜底），叠加 mlIndent
                             else -> mlIndent + (if (isFirstLine) effectiveFirstLineIndent else 0f)
                         }
                         // **D1.a DIAG**：仅当本段有 margin 属性时打 log（避免每行噪声）
