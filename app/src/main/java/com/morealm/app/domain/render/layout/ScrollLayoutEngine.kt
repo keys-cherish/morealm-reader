@@ -245,6 +245,10 @@ class ScrollLayoutEngine(
         // 颜色覆盖；非 null 时按 (chapterPositionCounter - paragraphCpStart) 索引拿到该字符
         // 的 ARGB 颜色（0 = 用 paint 默认色）。
         var currentParaCharColors: IntArray? = null
+        // A4b：当前 paragraph 的字符级 inline image src 数组（per code-point）。U+FFFC 占位
+        // 字符位置填 src，其他位置 null。emitOneLine 看 imageSrcPerCp[relIdx] 非 null →
+        // ScrollColumn.inlineImageSrc = src + width 替换为 inline image fit 宽度。
+        var currentParaImageSrcs: Array<String?>? = null
         var currentParaCpStart: Int = 0
 
         fun emitLine(
@@ -499,12 +503,15 @@ class ScrollLayoutEngine(
                 paragraphRaw
             }
 
-            // P3-5b Step 2c char-level color：解码 ScrollContent.SPAN_COLOR_* 内联 marker
-            // 拿到「干净文本 + 每字符颜色数组」。剥掉 marker 后用 cleanText 进行布局，
-            // emitOneLine 内按 (chapterPositionCounter - paragraphCpStart) 查 colors[relIdx]
-            // 给每个 ScrollColumn 上色。
-            val (cleanedText, colorPerCp) = parseCharColors(paragraphText)
+            // P3-5b Step 2c char-level color + A4b inline image：解码 SPAN_COLOR_* / INLINE_IMG_*
+            // 内联 marker 拿到「干净文本 + 每字符颜色数组 + 每字符 inline image src 数组」。
+            // 剥掉 marker 后用 cleanText 进行布局，emitOneLine 按 (chapterPositionCounter -
+            // paragraphCpStart) 查 colors[relIdx] 上色 + imageSrcs[relIdx] 填 inlineImageSrc。
+            val parsed = parseInlineMarkers(paragraphText)
+            val cleanedText = parsed.cleanText
+            val colorPerCp = parsed.colorPerCp
             currentParaCharColors = colorPerCp
+            currentParaImageSrcs = parsed.imageSrcPerCp
             currentParaCpStart = chapterPositionCounter
             val processedText = cleanedText
             // P3-5b Step 2c diag：仅当原 paragraphText 含 SOH 时才打 log（多色段稀有）
@@ -553,13 +560,17 @@ class ScrollLayoutEngine(
                 val sb = StringBuilder()
                 var x = startX
                 val colors = currentParaCharColors  // local snapshot
+                val imageSrcs = currentParaImageSrcs  // A4b local snapshot
                 val paraStartCp = currentParaCpStart
+                // A4b：inline image 占位 fit 宽度（最简策略：行高 1.5 倍宽，让图占 ~1.5 字宽
+                // 视觉协调）。height = contentLineHeight 由 emitLine 行高决定。A5+ 重构成
+                // Atom 时改成按 ScrollImageDimensionsResolver 算原图比例。
+                val inlineImageWidth = contentLineHeight * 1.5f
                 for (i in chars.indices) {
-                    val w = widths[i]
-                    // P3-5b Step 2c：本字符在 paragraph 内的相对索引 → colorPerCp[relIdx]
-                    // colorArgb=0 = paint 默认色（无 char-level 覆盖）
                     val relIdx = chapterPositionCounter - paraStartCp
                     val charColor = colors?.getOrNull(relIdx)?.takeIf { it != 0 }
+                    val inlineSrc = imageSrcs?.getOrNull(relIdx)
+                    val w = if (inlineSrc != null) inlineImageWidth else widths[i]
                     cols.add(
                         ScrollColumn(
                             charData = chars[i],
@@ -567,6 +578,7 @@ class ScrollLayoutEngine(
                             end = x + w,
                             chapterPosition = chapterPositionCounter,
                             colorArgb = charColor,
+                            inlineImageSrc = inlineSrc,
                         ),
                     )
                     sb.append(chars[i])
@@ -1026,29 +1038,68 @@ class ScrollLayoutEngine(
      * 无任何 color span 时返回 (text, null) 零开销。
      */
     private fun parseCharColors(text: String): Pair<String, IntArray?> {
-        if (text.isEmpty() || !text.contains('')) return text to null
+        val parsed = parseInlineMarkers(text)
+        return parsed.cleanText to parsed.colorPerCp
+    }
+
+    /**
+     * **A4b 扩展**：parseCharColors 升级版，同时处理 SOH/STX/ETX char-level color
+     * marker + EOT/ENQ/ACK inline image marker。
+     *
+     * 输入语义：
+     *  - 旧 color marker：`SOH<argbHex8>STX<text>ETX`（U+0001 / U+0002 / U+0003）
+     *  - 新 image marker：`EOT<src>ENQ<U+FFFC>ACK`（U+0004 / U+0005 / U+0006）
+     *
+     * 输出：cleanText 去掉所有 marker（保留 U+FFFC 作 inline image 占位）；perCpColor
+     * 跟之前一样；perCpImageSrc 在 U+FFFC 位置填 src，其他位置 null。
+     */
+    private fun parseInlineMarkers(text: String): InlineMarkersResult {
+        if (text.isEmpty()) return InlineMarkersResult(text, null, null)
+        val hasColor = text.contains('')
+        val hasImage = text.contains('')
+        if (!hasColor && !hasImage) return InlineMarkersResult(text, null, null)
+
         val sb = StringBuilder(text.length)
         val colors = ArrayList<Int>(text.length)
-        var curColor = 0  // 0 = 用 paint 默认色（无字符级覆盖）
-        var hasAny = false
+        val images = ArrayList<String?>(text.length)
+        var curColor = 0
+        var hasAnyColor = false
+        var hasAnyImage = false
         var i = 0
         val n = text.length
         while (i < n) {
             val c = text[i]
-            // SPAN_COLOR_START (SOH) followed by 8 hex chars + STX
+            // SPAN_COLOR_START (SOH 0x01) <argbHex8> STX → set curColor
             if (c == '' && i + 9 < n && text[i + 9] == '') {
                 val hex = text.substring(i + 1, i + 9)
                 val argb = runCatching { hex.toUInt(16).toInt() }.getOrNull()
                 if (argb != null) {
                     curColor = argb
-                    hasAny = true
-                    i += 10  // skip SOH + 8 hex + STX
+                    hasAnyColor = true
+                    i += 10
                     continue
                 }
             }
-            // SPAN_COLOR_END (ETX) → 重置颜色
+            // SPAN_COLOR_END (ETX 0x03) → 重置颜色
             if (c == '') {
                 curColor = 0
+                i++
+                continue
+            }
+            // INLINE_IMG_START (EOT 0x04) <src> INLINE_IMG_DELIM (ENQ 0x05) <U+FFFC> INLINE_IMG_END (ACK 0x06)
+            if (c == '') {
+                val delimIdx = text.indexOf('', i + 1)
+                if (delimIdx > 0 && delimIdx + 2 < n && text[delimIdx + 2] == '') {
+                    val src = text.substring(i + 1, delimIdx)
+                    val placeholder = text[delimIdx + 1]
+                    sb.append(placeholder)
+                    colors.add(curColor)
+                    images.add(src)
+                    hasAnyImage = true
+                    i = delimIdx + 3
+                    continue
+                }
+                // 格式错误：当成普通控制字符跳过
                 i++
                 continue
             }
@@ -1057,21 +1108,32 @@ class ScrollLayoutEngine(
                 sb.append(c)
                 sb.append(text[i + 1])
                 colors.add(curColor)
+                images.add(null)
                 i += 2
                 continue
             }
             // 普通字符
             sb.append(c)
             colors.add(curColor)
+            images.add(null)
             i++
         }
         val cleanText = sb.toString()
-        return if (hasAny) {
-            cleanText to IntArray(colors.size) { colors[it] }
-        } else {
-            cleanText to null
-        }
+        return InlineMarkersResult(
+            cleanText = cleanText,
+            colorPerCp = if (hasAnyColor) IntArray(colors.size) { colors[it] } else null,
+            imageSrcPerCp = if (hasAnyImage) Array(images.size) { images[it] } else null,
+        )
     }
+
+    /**
+     * A4b：parseInlineMarkers 返回值。null 字段表示该 marker 不存在零开销。
+     */
+    private data class InlineMarkersResult(
+        val cleanText: String,
+        val colorPerCp: IntArray?,
+        val imageSrcPerCp: Array<String?>?,
+    )
 
     companion object {
         /**

@@ -251,6 +251,29 @@ fun ChapterPaneCanvas(
                         paint.setShadowLayer(r, ts.offsetX, ts.offsetY, ts.color)
                     }
                     for (col in line.columns) {
+                        // A4b：inline image 占位列（charData = U+FFFC）→ ImageCache + drawBitmap
+                        if (col.inlineImageSrc != null) {
+                            val bmp = com.morealm.app.domain.render.ImageCache.get(
+                                col.inlineImageSrc, (col.end - col.start).toInt(),
+                            )
+                            if (bmp != null) {
+                                val bmpW = bmp.width.toFloat()
+                                val bmpH = bmp.height.toFloat()
+                                val slotW = col.end - col.start
+                                val slotH = line.lineBottom - line.lineTop
+                                val scale = minOf(slotW / bmpW, slotH / bmpH)
+                                val drawW = bmpW * scale
+                                val drawH = bmpH * scale
+                                val offX = col.start + (slotW - drawW) / 2f
+                                val offY = pageOffsetY + line.lineTop + (slotH - drawH) / 2f
+                                nc.drawBitmap(
+                                    bmp, null,
+                                    android.graphics.RectF(offX, offY, offX + drawW, offY + drawH),
+                                    null,
+                                )
+                            }
+                            continue
+                        }
                         // 优先级：用户高亮 > col.colorArgb（CSS char-level） > 段落 paragraphColor > paint 默认
                         val overrideColor = textColorByCp[col.chapterPosition] ?: col.colorArgb
                         if (overrideColor != null) {
