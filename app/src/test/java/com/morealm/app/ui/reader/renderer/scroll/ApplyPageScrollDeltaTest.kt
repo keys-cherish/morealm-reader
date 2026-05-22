@@ -242,8 +242,11 @@ class ApplyPageScrollDeltaTest {
     }
 
     @Test
-    fun `next chapter loading (null) at chapter end - clamps no shift`() {
+    fun `next chapter loading (null) at chapter end - soft clamps with buffer`() {
         // 章 1 末页 + next=null + hasNextChapter true（章 2 加载中）
+        // **Soft fix B**：hasNext=true 且 next loading 时允许 pageOffset 越界
+        // BUFFER_NEXT_PX (200f)，让 user 感知等待而非卡死。next ready 后由 ReaderHost
+        // LaunchedEffect 自动 commit moveToNext。
         val (state, factory, shifts) = setup(
             currentIdx = 1,
             cur = mockChapter(1),
@@ -259,8 +262,10 @@ class ApplyPageScrollDeltaTest {
 
         applyPageScrollDelta(state, factory, delta = -500f)
 
-        assertEquals("next 未加载 → clamp 到 pageH", 1800f, state.pageOffset, 0.01f)
-        assertTrue("无 chapterShift（加载中不强行跨）", shifts.isEmpty())
+        // pageOffset 1700 - (-500) = 2200, 越界 (2200 > pageH 1800)，next loading 进 soft
+        // buffer 允许越界 200，coerce 到 max = pageH + 200 = 2000
+        assertEquals("next loading → soft clamp 到 pageH + BUFFER_NEXT_PX", 2000f, state.pageOffset, 0.01f)
+        assertTrue("无 chapterShift（加载中不强行跨，由 ReaderHost auto-snap 兜底）", shifts.isEmpty())
     }
 
     @Test

@@ -495,6 +495,37 @@ fun ScrollCanvasReaderHost(
     }
     val bgBitmap = bgEntry?.bitmap
 
+    // **Soft fix B**：SCROLL 短章节 next 加载追不上 user 滚动时的 auto-snap.
+    // 当 user 在 SHIFT-NEXT-FAIL 时 pageOffset 越过 curPageH（buffer 区），nextChapter
+    // 由异步加载从 null → non-null 时，自动 commit moveToNext 让 user 无缝跨章。
+    //
+    // **只**监听 state.nextChapter（mutableStateOf，next ready 时 emit）。不监听
+    // pageFactory.curPage 因为它非 reactive（pageFactory 不是 mutableStateOf 容器，
+    // pageIndex 才是），snapshotFlow 不会因为它变化 emit。读取 curPage.height 在
+    // collect 内部 snapshot 一次即可。
+    LaunchedEffect(state) {
+        snapshotFlow { state.nextChapter != null }
+            .collect { nextReady ->
+                if (!nextReady) return@collect
+                val curPageH = pageFactory.curPage.height
+                val offset = state.pageOffset
+                com.morealm.app.core.log.AppLog.info(
+                    "SwapDiag",
+                    "[AUTO-SNAP-CHECK] nextReady=true offset=$offset curPageH=$curPageH inBuffer=${offset >= curPageH}",
+                )
+                if (curPageH > 0f && offset >= curPageH) {
+                    if (pageFactory.moveToNext()) {
+                        val newOffset = (offset - curPageH).coerceAtLeast(0f)
+                        state.pageOffset = newOffset
+                        com.morealm.app.core.log.AppLog.info(
+                            "SwapDiag",
+                            "[AUTO-SNAP-NEXT] buffer→committed offset=$offset curPageH=$curPageH new=$newOffset",
+                        )
+                    }
+                }
+            }
+    }
+
     // ── TTS 段自动跟随（V1 LazyScrollRenderer line 348-382 同款）──
     // tts 推进到下一段 → 计算目标 cp 在 currentChapter 的 y 坐标 → 用
     // scrollableState.animateScrollBy 平滑滚到视口中心。目标段已在视口 / 不在当前章
