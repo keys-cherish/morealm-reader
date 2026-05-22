@@ -512,6 +512,15 @@ class ScrollLayoutEngine(
                     )
                     currentBlockStyle = com.morealm.epub.compat.StructuredChapterContent
                         .decodeBlockStyle(payload)
+                    // **D1.a DIAG**：检查 marker payload 是否含 mt/mr/mb/ml + 解码后 marginXxx 值
+                    com.morealm.app.core.log.AppLog.info(
+                        "D1a/Margin",
+                        "para#$paragraphCounter payload='${payload.take(200)}' " +
+                            "mt=${currentBlockStyle.marginTopPx} mr=${currentBlockStyle.marginRightPx} " +
+                            "mb=${currentBlockStyle.marginBottomPx} ml=${currentBlockStyle.marginLeftPx} " +
+                            "ta=${currentBlockStyle.textAlign} ts=${currentBlockStyle.textShadow} " +
+                            "body40='${paragraphRaw.substring(endIdx + com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END.length).take(40)}'",
+                    )
                     body
                 }
             } else {
@@ -531,6 +540,22 @@ class ScrollLayoutEngine(
             currentParaHeadingLevel = parsed.headingLevel
             currentParaCpStart = chapterPositionCounter
             val processedText = cleanedText
+
+            // ── D1.a margin-top（段前间距 / 段重叠）──
+            // CSS `margin-top: 2em` → 段前留白；`margin-top: -1em` → 段往上偏移（SampleLN
+            // 章首 table 重叠效果）。NaN = AUTO（垂直方向 CSS spec 等同 0，跳过）；0 = 未设置
+            // 或显式 0，沿用 paragraphSpacingPx 默认（不改 currentY）。
+            // 注：CSS margin collapse 简化 —— 不与上段 margin-bottom 取 max，纯累加（视觉
+            // 上 prev.mb + curr.mt 都生效，CSS spec 严格 max 留 D1.b 完善）。
+            val marginTopPx = currentBlockStyle.marginTopPx
+            if (!marginTopPx.isNaN() && marginTopPx != 0f) {
+                val beforeY = currentY
+                currentY += marginTopPx
+                com.morealm.app.core.log.AppLog.info(
+                    "D1a/Margin",
+                    "para#$paragraphCounter applied margin-top=$marginTopPx currentY=$beforeY → $currentY",
+                )
+            }
             // P3-5b Step 2c diag：仅当原 paragraphText 含 SOH 时才打 log（多色段稀有）
             if (paragraphText.contains('')) {
                 com.morealm.app.core.log.AppLog.info(
@@ -700,7 +725,15 @@ class ScrollLayoutEngine(
                     // 切行，但 emitOneLine 又把首行 startX = indentWidth → 实际可用宽 = visibleWidth -
                     // indentWidth，首行字数过多 → exceed 强力压缩 → 视觉感受"缩进很大字间距窄"。
                     // 修：传 paragraphIndent.length 让 ZhLayout 知道首行少 indentSize 个字位置。
-                    val indentSize = if (isFirstChunkOfPara && cssAlign != com.morealm.epub.compat.BlockStyle.TextAlign.CENTER) paragraphIndent.length else 0
+                    // D1.a：margin:auto 居中段不要给段首 indent（行打断按完整 visibleWidth）。
+                    // 居中检测下移到行循环内 cssAlign 上方需要 currentBlockStyle 可见 —— 这里
+                    // 用 isNaN() 直查同源字段，与下方循环 marginCenter 计算一致。
+                    val blockMarginAuto = currentBlockStyle.marginLeftPx.isNaN() &&
+                        currentBlockStyle.marginRightPx.isNaN()
+                    val indentSize = if (isFirstChunkOfPara &&
+                        cssAlign != com.morealm.epub.compat.BlockStyle.TextAlign.CENTER &&
+                        !blockMarginAuto
+                    ) paragraphIndent.length else 0
                     val layout = ZhLayout(textChunk, contentPaint, visibleWidth, chars, widths, indentSize)
                     for (lineIndex in 0 until layout.lineCount) {
                         // ZhLayout.lineStart/lineEnd 是 UTF-16 char index（基于 text.length），
@@ -716,14 +749,37 @@ class ScrollLayoutEngine(
                         val isFirstLine = isFirstChunkOfPara && lineIndex == 0
                         val isLastLine = lineIndex == layout.lineCount - 1
                         val desiredWidth = lineWidths.sum()
-                        // P3-5b Step 2c：startX 计算按 CSS text-align
-                        val startX: Float = when (cssAlign) {
-                            com.morealm.epub.compat.BlockStyle.TextAlign.CENTER ->
+                        // D1.a margin: auto 检测 —— marginLeft AUTO && marginRight AUTO 表示
+                        // CSS 水平居中（某 EPUB .head { margin: 2em auto } / SampleLN .vol-title
+                        // { margin: auto }）。优先级高于 cssAlign：margin:auto 在 CSS 中是
+                        // 块居中的语义来源，text-align: center 是文字居中的语义来源，
+                        // 当二者并存时取 margin:auto（块整体居中），与浏览器一致。
+                        val marginLeftAuto = currentBlockStyle.marginLeftPx.isNaN()
+                        val marginRightAuto = currentBlockStyle.marginRightPx.isNaN()
+                        val marginCenter = marginLeftAuto && marginRightAuto
+                        // D1.a margin-left 段缩进：marginLeft > 0 时段整体右移 marginLeftPx
+                        // （CSS 块级元素相对父容器的左偏移）。NaN/0 跳过。
+                        val mlIndent = if (marginLeftAuto || currentBlockStyle.marginLeftPx <= 0f) 0f
+                                       else currentBlockStyle.marginLeftPx
+                        // P3-5b Step 2c：startX 计算按 CSS text-align + D1.a margin
+                        val startX: Float = when {
+                            marginCenter ->
                                 ((visibleWidth - desiredWidth) / 2f).coerceAtLeast(0f)
-                            com.morealm.epub.compat.BlockStyle.TextAlign.RIGHT ->
+                            cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.CENTER ->
+                                ((visibleWidth - desiredWidth) / 2f).coerceAtLeast(0f)
+                            cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.RIGHT ->
                                 (visibleWidth - desiredWidth).coerceAtLeast(0f)
-                            // LEFT / JUSTIFY / null —— 沿用旧默认（首行 indent 兜底）
-                            else -> if (isFirstLine) effectiveFirstLineIndent else 0f
+                            // LEFT / JUSTIFY / null —— 沿用旧默认（首行 indent 兜底），叠加 mlIndent
+                            else -> mlIndent + (if (isFirstLine) effectiveFirstLineIndent else 0f)
+                        }
+                        // **D1.a DIAG**：仅当本段有 margin 属性时打 log（避免每行噪声）
+                        if (marginCenter || mlIndent > 0f) {
+                            com.morealm.app.core.log.AppLog.info(
+                                "D1a/Margin",
+                                "line emit marginCenter=$marginCenter mlIndent=$mlIndent " +
+                                    "desiredWidth=$desiredWidth visibleWidth=$visibleWidth startX=$startX " +
+                                    "lineText='${lineText.take(15)}'",
+                            )
                         }
                         val availableWidth = visibleWidth - startX
                         val residualWidth = availableWidth - desiredWidth
@@ -737,6 +793,7 @@ class ScrollLayoutEngine(
                         val shouldJustify = textFullJustify && !isLastLine &&
                             cssAlign != com.morealm.epub.compat.BlockStyle.TextAlign.CENTER &&
                             cssAlign != com.morealm.epub.compat.BlockStyle.TextAlign.RIGHT &&
+                            !marginCenter &&  // D1.a：margin:auto 居中段不 justify
                             residualWidth > 0f && residualWidth <= availableWidth * 0.25f &&
                             desiredWidth >= availableWidth * 0.65f && lineChars.size > 1
                         val gap = if (shouldJustify) residualWidth / (lineChars.size - 1) else 0f
@@ -806,10 +863,18 @@ class ScrollLayoutEngine(
             // 保证跨引擎 DB 高亮 chapterPos 兼容）
             chapterPositionCounter++
 
-            // **H3**：heading 段加大段间距（CSS h2.head margin 2em 近似），区分章首
-            // 大字标题跟正文。non-heading 段保持原 paragraphSpacing。
-            val spacing = if (currentParaHeadingLevel > 0) paragraphSpacingPx * 3 else paragraphSpacingPx
-            // 段间空白：纯累加，不补跨页（方案 1 强硬纠正）
+            // **H3 + D1.a margin-bottom**：段末间距三优先级 ——
+            //  1. CSS 显式 margin-bottom 非零且非 NaN → 用 CSS 值（允许负）；H3 默认被覆盖
+            //  2. heading 段（H1-H6）→ paragraphSpacingPx × 3（H3 章首大字与正文区分）
+            //  3. 正文 → paragraphSpacingPx（默认）
+            // NaN (AUTO) 在垂直方向等同 0（CSS spec），归入"未显式"走 default。
+            val marginBottomPx = currentBlockStyle.marginBottomPx
+            val spacing = when {
+                !marginBottomPx.isNaN() && marginBottomPx != 0f -> marginBottomPx
+                currentParaHeadingLevel > 0 -> paragraphSpacingPx * 3
+                else -> paragraphSpacingPx
+            }
+            // 段间空白：纯累加，不补跨页（方案 1 强硬纠正）。允许负值
             currentY += spacing
         }
 
