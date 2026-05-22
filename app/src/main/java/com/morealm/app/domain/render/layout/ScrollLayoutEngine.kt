@@ -198,12 +198,9 @@ class ScrollLayoutEngine(
         //      content[0]="第61章大明群星闪耀！（求票票~）思虑已定..."
         //      title 字符按顺序在段首出现，"~" 是装饰 → 剥掉 "第61章...票票）" 留 "思虑已定..."
         val normalizedTitle = normalizeTitleForCompare(title)
-        val titleStripped = stripTitleFromParagraphs(rawParagraphs, normalizedTitle)
-        // **D2.a Commit 2a stub layout**：含 __MOREALM_TBL__ marker 的 paragraph 展开成
-        // 多个 sub-paragraphs（剥 marker + 还原 →\n）让 table 内容平铺渲染。视觉
-        // 对齐 Commit 1 soft launch 行为（某 EPUB vol-title 仍横排），但数据通路真过 marker。
-        // Commit 2b 替换成真 layoutTable（cell.widthPx 触发 CJK 单字 wrap → 竖排）。
-        val paragraphs = expandTableMarkersStub(titleStripped)
+        val paragraphs = stripTitleFromParagraphs(rawParagraphs, normalizedTitle)
+        // **D2.a Commit 2b**: 含 __MOREALM_TBL__ marker 的 paragraph 由主循环 table 分支解析 ParsedTable + 调 layoutTable（cell.widthPx 切行 → CJK 1字/行竖排）。
+        // expandTableMarkersStub 展平 fallback 已下线
         val contentProvidesChapterTitle = false  // 保留自画 title 块；正文 title 已被 strip 掉
 
         val pages = mutableListOf<ScrollPage>()
@@ -487,6 +484,118 @@ class ScrollLayoutEngine(
             currentY += maxOf(contentTextHeight * 0.75f, titleBottomSpacing / 2f)
         }
 
+        // **D2.a Commit 2b** —— layoutCellLines：把 cell 内 paragraph 列表按 cell.widthPx
+        // 切成行，返回 List<List<(char, width)>>。某 EPUB vol-title td.widthPx=19.2 (1.2em)
+        // → CJK 字符 ~16-24 px 宽，一字一行 → 视觉竖排。
+        fun layoutCellLines(cell: ParsedTableCell): List<List<Pair<String, Float>>> {
+            val widthCap = cell.widthPx ?: visibleWidth.toFloat()
+            val out = ArrayList<List<Pair<String, Float>>>()
+            for (para in cell.contentParagraphs) {
+                val (chars, widths) = contentTextMeasure.measureTextSplit(para)
+                if (chars.isEmpty()) continue
+                var lineBuf = ArrayList<Pair<String, Float>>()
+                var lineW = 0f
+                for (i in chars.indices) {
+                    val w = widths[i]
+                    if (lineW + w > widthCap && lineBuf.isNotEmpty()) {
+                        out.add(lineBuf.toList())
+                        lineBuf = ArrayList()
+                        lineW = 0f
+                    }
+                    lineBuf.add(chars[i] to w)
+                    lineW += w
+                }
+                if (lineBuf.isNotEmpty()) out.add(lineBuf.toList())
+            }
+            return out
+        }
+
+        // **D2.a Commit 2b** —— layoutTable：emit table 所有行（cell.widthPx 切 + row 横排）。
+        //
+        // 算每个 cell 的行列表 → row 高度 = max(cell 行数) × lineHeight。每 cell 顶对齐
+        // （CSS vertical-align: top 简化）。逐行 emit：row 内的 line i 由所有 cell 在
+        // line i 的字符横排组成（cell 间用 cellWidth 偏移 startX）。
+        //
+        // table 整体水平对齐：CSS margin auto 检测 ——
+        //  - margin-left auto + margin-right 非 auto → table 整体右贴（某 EPUB vol-title
+        //    margin: 20% 0 0 auto 把 table 推到右边）
+        //  - margin-left 非 auto + margin-right auto → 左对齐
+        //  - 双 auto → 居中
+        //  - 都非 auto → 左对齐 (mlIndent 段缩进 + 0)
+        //
+        // 段内 chapterPositionCounter 累加：每字符 1 cp，每 row 末加 1 cp 虚换行（跟普通段
+        // 末 chapterPositionCounter++ 对齐）；空 cell line 走 emit 空行占 1 cp 避免坍塌。
+        fun layoutTable(parsed: ParsedTable) {
+            for (row in parsed.rows) {
+                if (row.cells.isEmpty()) continue
+                val cellLines: List<List<List<Pair<String, Float>>>> = row.cells.map { layoutCellLines(it) }
+                val cellWidths: List<Float> = row.cells.map { it.widthPx ?: 0f }
+                val maxLines = cellLines.maxOfOrNull { it.size } ?: 0
+                if (maxLines == 0) continue
+
+                // table 整体水平 offset（基于 currentBlockStyle margin auto 检测）
+                val totalWidth = cellWidths.sum()
+                val mlAuto = currentBlockStyle.marginLeftPx.isNaN()
+                val mrAuto = currentBlockStyle.marginRightPx.isNaN()
+                val tableXOffset = when {
+                    mlAuto && !mrAuto -> (visibleWidth - totalWidth).coerceAtLeast(0f)  // 右贴
+                    !mlAuto && mrAuto -> 0f  // 左贴
+                    mlAuto && mrAuto -> ((visibleWidth - totalWidth) / 2f).coerceAtLeast(0f)  // 居中
+                    else -> 0f
+                }
+
+                // 逐行 emit
+                for (lineIdx in 0 until maxLines) {
+                    val columns = ArrayList<ScrollColumn>()
+                    var cellCursorX = tableXOffset
+                    val sb = StringBuilder()
+                    for ((cIdx, _) in row.cells.withIndex()) {
+                        val cellW = cellWidths[cIdx]
+                        val cellLine = cellLines[cIdx].getOrNull(lineIdx)
+                        if (cellLine != null && cellLine.isNotEmpty()) {
+                            val lineW = cellLine.sumOf { it.second.toDouble() }.toFloat()
+                            // cell 内文字水平居中（某 EPUB td.vol-title-* text-align: center）
+                            var x = cellCursorX + ((cellW - lineW) / 2f).coerceAtLeast(0f)
+                            for ((ch, w) in cellLine) {
+                                columns.add(
+                                    ScrollColumn(
+                                        charData = ch,
+                                        start = x,
+                                        end = x + w,
+                                        chapterPosition = chapterPositionCounter,
+                                    ),
+                                )
+                                sb.append(ch)
+                                chapterPositionCounter++
+                                x += w
+                            }
+                        }
+                        cellCursorX += cellW
+                    }
+                    if (columns.isNotEmpty()) {
+                        emitLine(
+                            lineColumns = columns,
+                            lineText = sb.toString(),
+                            paragraphNum = paragraphCounter,
+                            firstChapterPos = columns.first().chapterPosition,
+                            lastChapterPos = columns.last().chapterPosition,
+                        )
+                    } else {
+                        val emptyCp = chapterPositionCounter++
+                        emitLine(
+                            lineColumns = emptyList(),
+                            lineText = "",
+                            paragraphNum = paragraphCounter,
+                            firstChapterPos = emptyCp,
+                            lastChapterPos = emptyCp,
+                        )
+                    }
+                }
+                // row 末隐式 \n cp 占 1 cp（跟普通段对齐）
+                chapterPositionCounter++
+            }
+        }
+
         for (paragraphRaw in paragraphs) {
             paragraphCounter++
 
@@ -530,6 +639,22 @@ class ScrollLayoutEngine(
                 }
             } else {
                 paragraphRaw
+            }
+
+            // **D2.a Commit 2b table 分支** —— body 含 __MOREALM_TBL__ marker → 解析
+            // ParsedTable 走 layoutTable。currentBlockStyle 已在 BLOCK_STYLE strip 时设置
+            // （table 自身的 margin/auto 等装饰）。layoutTable 调 emitLine 共享主 currentY /
+            // currentPageLines / chapterPositionCounter 状态。parse 失败兜底当普通段处理
+            // （视觉会出 marker 文本，提示损坏数据，比直接吞段更安全）。
+            if (paragraphText.contains(TABLE_MARKER_TBL_START)) {
+                val parsed = parseTableMarker(paragraphText)
+                if (parsed != null) {
+                    layoutTable(parsed)
+                    // table 段末间距：复用 paragraphSpacingPx（跟普通段一致）
+                    currentY += paragraphSpacingPx
+                    continue
+                }
+                // parse 失败 fallthrough（极少见 — encodeTable 总产合法 marker）
             }
 
             // P3-5b Step 2c char-level color + A4b inline image：解码 SPAN_COLOR_* / INLINE_IMG_*
@@ -1089,38 +1214,6 @@ class ScrollLayoutEngine(
         .replace(Regex("\\s+"), "")
         .trim()
 
-    /**
-     * **D2.a Commit 2a stub layout** —— 把含 `__MOREALM_TBL__` marker 的 paragraph 展开
-     * 成多个 sub-paragraphs：剥 table marker + 还原 cell-内 `` → `\n`，cell content
-     * 块间分隔按 `\n` 切平铺。
-     *
-     * 视觉对齐 Commit 1 soft launch：某 EPUB vol-title「少年起微末/第一册」仍横排（不竖排），
-     * 但数据通路真过 marker。Commit 2b 把此 stub 替换成真 layoutTable（cell.widthPx 触发
-     * CJK 单字 wrap → 视觉竖排）。
-     *
-     * Marker 匹配语义（[TABLE_MARKER_REGEX]）：
-     *  - `__MOREALM_TBL__` / `__/MOREALM_TBL__` / `__MOREALM_TR__` / `__/MOREALM_TR__`
-     *  - `__MOREALM_TD__<widthPx>__/MOREALM_TD_W__` —— 整段含 widthPx 剥掉（widthPx 是数字）
-     *  - `__/MOREALM_TD__`
-     */
-    private fun expandTableMarkersStub(paragraphs: List<String>): List<String> {
-        if (paragraphs.none { it.contains(TABLE_MARKER_TBL_START) }) return paragraphs
-        val out = ArrayList<String>(paragraphs.size)
-        for (p in paragraphs) {
-            if (!p.contains(TABLE_MARKER_TBL_START)) {
-                out.add(p)
-                continue
-            }
-            // 含 table marker：剥所有 marker + 还原 cell  → \n + split('\n') 平铺
-            val cleaned = p
-                .replace(TABLE_MARKER_REGEX, "")
-                .replace('\u0010', '\n')
-            for (sub in cleaned.split('\n')) {
-                if (sub.isNotEmpty()) out.add(sub)
-            }
-        }
-        return out
-    }
 
 
     /**
@@ -1386,6 +1479,71 @@ class ScrollLayoutEngine(
         val headingLevel: Int,
     )
 
+    /**
+     * **D2.a Commit 2b** —— [parseTableMarker] 输出的结构化表格。row × cell 嵌套，
+     * cell.contentParagraphs 已剥子 marker + 还原 U+0010 → `\n`，每段当独立 paragraph。
+     */
+    private data class ParsedTable(val rows: List<ParsedTableRow>)
+    private data class ParsedTableRow(val cells: List<ParsedTableCell>)
+    private data class ParsedTableCell(
+        val widthPx: Float?,
+        val contentParagraphs: List<String>,
+    )
+
+    /**
+     * **D2.a Commit 2b**：把含 `__MOREALM_TBL__...__/MOREALM_TBL__` 的 paragraph 解析成
+     * 结构化 [ParsedTable]。健壮性：marker 配对不齐 / payload 损坏返回 null。
+     *
+     * cell content 内部块间 `\n` 已被 epub-compat encodeTable escape 成 U+0010；这里识别
+     * 后还原 + split 当多段 paragraph（某 EPUB vol-title cell 通常单段）。
+     */
+    private fun parseTableMarker(raw: String): ParsedTable? {
+        val tblStart = raw.indexOf(TABLE_MARKER_TBL_START)
+        if (tblStart < 0) return null
+        val tblEnd = raw.indexOf(TABLE_MARKER_TBL_END, tblStart)
+        if (tblEnd < 0) return null
+        val body = raw.substring(tblStart + TABLE_MARKER_TBL_START.length, tblEnd)
+        val rows = ArrayList<ParsedTableRow>()
+        var i = 0
+        while (i < body.length) {
+            val rowStart = body.indexOf(TABLE_MARKER_TR_START, i)
+            if (rowStart < 0) break
+            val rowEnd = body.indexOf(TABLE_MARKER_TR_END, rowStart)
+            if (rowEnd < 0) break
+            val rowBody = body.substring(rowStart + TABLE_MARKER_TR_START.length, rowEnd)
+            rows.add(parseTableRow(rowBody))
+            i = rowEnd + TABLE_MARKER_TR_END.length
+        }
+        return if (rows.isEmpty()) null else ParsedTable(rows)
+    }
+
+    private fun parseTableRow(rowBody: String): ParsedTableRow {
+        val cells = ArrayList<ParsedTableCell>()
+        var i = 0
+        while (i < rowBody.length) {
+            val cellStart = rowBody.indexOf(TABLE_MARKER_TD_START, i)
+            if (cellStart < 0) break
+            val cellEnd = rowBody.indexOf(TABLE_MARKER_TD_END, cellStart)
+            if (cellEnd < 0) break
+            val cellBody = rowBody.substring(cellStart + TABLE_MARKER_TD_START.length, cellEnd)
+            // cellBody 格式：`<widthPx-or-empty><TD_W_END><content>`
+            val widthEnd = cellBody.indexOf(TABLE_MARKER_TD_W_END)
+            if (widthEnd < 0) {
+                i = cellEnd + TABLE_MARKER_TD_END.length
+                continue
+            }
+            val widthStr = cellBody.substring(0, widthEnd)
+            val content = cellBody.substring(widthEnd + TABLE_MARKER_TD_W_END.length)
+            val widthPx = if (widthStr.isEmpty()) null else widthStr.toFloatOrNull()
+            // 还原 U+0010 → \n 后 split 当 multi-paragraph
+            val restored = content.replace('\u0010', '\n')
+            val paras = restored.split('\n').filter { it.isNotEmpty() }
+            cells.add(ParsedTableCell(widthPx, paras))
+            i = cellEnd + TABLE_MARKER_TD_END.length
+        }
+        return ParsedTableRow(cells)
+    }
+
     companion object {
         /**
          * 章序号识别正则 —— 抄自 [com.morealm.app.domain.render.ChapterProvider]
@@ -1407,12 +1565,14 @@ class ScrollLayoutEngine(
             RegexOption.IGNORE_CASE,
         )
 
-        // **D2.a Commit 2a**：与 [com.morealm.epub.compat.StructuredChapterContent] 的
-        // TABLE_*/TABLE_NL_ESC_CHAR 常量对齐。host 端 stub 用，不依赖具体值。
+        // **D2.a Commit 2b**：与 [com.morealm.epub.compat.StructuredChapterContent] 的
+        // TABLE_*/TABLE_NL_ESC_CHAR 常量对齐，给 parseTableMarker / layoutTable 用。
         private const val TABLE_MARKER_TBL_START: String = "__MOREALM_TBL__"
-        private val TABLE_MARKER_REGEX = Regex(
-            """__MOREALM_TBL__|__/MOREALM_TBL__|__MOREALM_TR__|__/MOREALM_TR__|""" +
-                """__MOREALM_TD__-?[0-9.]*__/MOREALM_TD_W__|__/MOREALM_TD__""",
-        )
+        private const val TABLE_MARKER_TBL_END: String = "__/MOREALM_TBL__"
+        private const val TABLE_MARKER_TR_START: String = "__MOREALM_TR__"
+        private const val TABLE_MARKER_TR_END: String = "__/MOREALM_TR__"
+        private const val TABLE_MARKER_TD_START: String = "__MOREALM_TD__"
+        private const val TABLE_MARKER_TD_END: String = "__/MOREALM_TD__"
+        private const val TABLE_MARKER_TD_W_END: String = "__/MOREALM_TD_W__"
     }
 }
