@@ -198,7 +198,12 @@ class ScrollLayoutEngine(
         //      content[0]="第61章大明群星闪耀！（求票票~）思虑已定..."
         //      title 字符按顺序在段首出现，"~" 是装饰 → 剥掉 "第61章...票票）" 留 "思虑已定..."
         val normalizedTitle = normalizeTitleForCompare(title)
-        val paragraphs = stripTitleFromParagraphs(rawParagraphs, normalizedTitle)
+        val titleStripped = stripTitleFromParagraphs(rawParagraphs, normalizedTitle)
+        // **D2.a Commit 2a stub layout**：含 __MOREALM_TBL__ marker 的 paragraph 展开成
+        // 多个 sub-paragraphs（剥 marker + 还原 →\n）让 table 内容平铺渲染。视觉
+        // 对齐 Commit 1 soft launch 行为（某 EPUB vol-title 仍横排），但数据通路真过 marker。
+        // Commit 2b 替换成真 layoutTable（cell.widthPx 触发 CJK 单字 wrap → 竖排）。
+        val paragraphs = expandTableMarkersStub(titleStripped)
         val contentProvidesChapterTitle = false  // 保留自画 title 块；正文 title 已被 strip 掉
 
         val pages = mutableListOf<ScrollPage>()
@@ -1085,6 +1090,40 @@ class ScrollLayoutEngine(
         .trim()
 
     /**
+     * **D2.a Commit 2a stub layout** —— 把含 `__MOREALM_TBL__` marker 的 paragraph 展开
+     * 成多个 sub-paragraphs：剥 table marker + 还原 cell-内 `` → `\n`，cell content
+     * 块间分隔按 `\n` 切平铺。
+     *
+     * 视觉对齐 Commit 1 soft launch：某 EPUB vol-title「少年起微末/第一册」仍横排（不竖排），
+     * 但数据通路真过 marker。Commit 2b 把此 stub 替换成真 layoutTable（cell.widthPx 触发
+     * CJK 单字 wrap → 视觉竖排）。
+     *
+     * Marker 匹配语义（[TABLE_MARKER_REGEX]）：
+     *  - `__MOREALM_TBL__` / `__/MOREALM_TBL__` / `__MOREALM_TR__` / `__/MOREALM_TR__`
+     *  - `__MOREALM_TD__<widthPx>__/MOREALM_TD_W__` —— 整段含 widthPx 剥掉（widthPx 是数字）
+     *  - `__/MOREALM_TD__`
+     */
+    private fun expandTableMarkersStub(paragraphs: List<String>): List<String> {
+        if (paragraphs.none { it.contains(TABLE_MARKER_TBL_START) }) return paragraphs
+        val out = ArrayList<String>(paragraphs.size)
+        for (p in paragraphs) {
+            if (!p.contains(TABLE_MARKER_TBL_START)) {
+                out.add(p)
+                continue
+            }
+            // 含 table marker：剥所有 marker + 还原 cell  → \n + split('\n') 平铺
+            val cleaned = p
+                .replace(TABLE_MARKER_REGEX, "")
+                .replace('\u0010', '\n')
+            for (sub in cleaned.split('\n')) {
+                if (sub.isNotEmpty()) out.add(sub)
+            }
+        }
+        return out
+    }
+
+
+    /**
      * 剥掉 rawParagraphs 中重复 title 的部分。3 种场景：
      *   A. 第 1 段 normalized 整段 == title → drop 该段
      *   B. 前 N 段（N=2..3）拼起来 == title → drop 那 N 段
@@ -1366,6 +1405,14 @@ class ScrollLayoutEngine(
         private val imgRegex = Regex(
             "<img[^>]+src=['\"]([^'\"]*)['\"][^>]*>",
             RegexOption.IGNORE_CASE,
+        )
+
+        // **D2.a Commit 2a**：与 [com.morealm.epub.compat.StructuredChapterContent] 的
+        // TABLE_*/TABLE_NL_ESC_CHAR 常量对齐。host 端 stub 用，不依赖具体值。
+        private const val TABLE_MARKER_TBL_START: String = "__MOREALM_TBL__"
+        private val TABLE_MARKER_REGEX = Regex(
+            """__MOREALM_TBL__|__/MOREALM_TBL__|__MOREALM_TR__|__/MOREALM_TR__|""" +
+                """__MOREALM_TD__-?[0-9.]*__/MOREALM_TD_W__|__/MOREALM_TD__""",
         )
     }
 }

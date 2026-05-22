@@ -102,7 +102,13 @@ object EpubParser {
     // `table.vol-title { margin: 20% 0 0 auto }` 之前 fallback 0 让 vol-title 紧贴章首）。
     // chapterCacheFile 加 `__cbw${cbw}` 后缀避免不同 viewport 共享同一 cache（横竖屏切换）。
     // bump 让 v25 已固化的"无 % margin" cache 失效。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v26"
+    // v27：D2.a Commit 2a — table marker 启用。epub-compat encodeTable 把 ChapterBlock.Table
+    // 编成 `__MOREALM_TBL__/TR/TD/TD_W` 嵌套 marker，cell content \n escape 成 U+0010。host
+    // 端 ScrollLayoutEngine.expandTableMarkersStub 识别 marker 段剥 + 还原平铺（视觉对齐
+    // v26 soft launch，某 EPUB vol-title 仍横排但数据通路真过 marker）。Commit 2b 加真
+    // layoutTable 算法仅改 renderer 不 bump cache。bump 让 v26 旧"平铺纯文本"cache 失效
+    // 重 flatten 出 marker 结构，下次 Commit 2b 渲染层接管时 cache 复用。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v27"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
