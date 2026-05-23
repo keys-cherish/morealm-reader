@@ -99,6 +99,18 @@ data class TextRun(
     override val width: Float,
     override val height: Float,
     override val baseline: Float,
+    /**
+     * **D2.b 方案 F per-cell stride** —— layoutTable emit table 字符时携带 cell 索引，
+     * drawByAtoms 根据本字段查 [ScrollLine.cellLineHeights] 算独立 vertical baseline，
+     * 让两 cell 字号差大时各自字符 row stride 紧凑（cell[1] 0.9em 小字号字符之间不跟
+     * cell[0] 1.4em 大字号 row 节奏联动）。
+     *
+     * 默认 -1 = non-table atom（普通 paragraph / heading），drawByAtoms 走原路径不查
+     * cell stride table。
+     *
+     * TODO(D-future)：升级到 [ScrollLineCell] 子对象时本字段仍有效（cellIdx 索引到 cells[]）。
+     */
+    val cellIdx: Int = -1,
 ) : Atom {
     override val cpCount: Int get() = text.length
 }
