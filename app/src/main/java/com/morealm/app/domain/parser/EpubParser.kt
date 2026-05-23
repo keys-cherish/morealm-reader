@@ -129,7 +129,13 @@ object EpubParser {
     // 位置的 <img> (SampleLN chibi 巫女) frameStack 顶判断为 inline phrasing tag → 走
     // InlineImageSpan 小尺寸 (匹配参考图 41)。v30 cache 是 chibi 全屏 block-level 格式
     // (regression 严重) 必须 bump 失效。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v31"
+    // v32：task #14 bugfix v3 — TableMergeVisitor forward DIV 加 `data-merge-wrapper=true`
+    // marker，ChapterBlockBuilder.computeBlockStyle 识别后清掉 BlockStyle.textAlign。
+    // CSS spec：text-align: center 在 <table class="center"> 上仅控制 td 内 inline 字符
+    // 居中，不让 table 自身水平居中。MoRealm 把 textAlign 当 paragraph 整体水平位置控制 →
+    // SampleLN BookName 5 sibling tables 整段居中跟参考实现左对齐 (图 45) 不一致。修后 sibling
+    // 都左对齐，margin 仍生效让 negative mt 视觉层叠。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v32"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
