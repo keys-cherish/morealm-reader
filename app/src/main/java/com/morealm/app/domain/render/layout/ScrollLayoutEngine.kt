@@ -278,6 +278,9 @@ class ScrollLayoutEngine(
             lineHeightOverride: Float? = null,
             atoms: List<Atom>? = null,
             headingLevel: Int = 0,
+            // **D 模型 (阶段 1 重构)** — table line cells；null = 非 table line。
+            // 详 ScrollLine.cells / ScrollLineCell 注释。
+            cells: List<ScrollLineCell>? = null,
         ) {
             val effectiveLineHeight = lineHeightOverride ?: contentLineHeight
             val proposedTop = currentY
@@ -311,6 +314,7 @@ class ScrollLayoutEngine(
                     blockStyle = currentBlockStyle,
                     atoms = atoms,
                     headingLevel = headingLevel,
+                    cells = cells,
                 )
             )
             currentY = finalBottom
@@ -564,15 +568,16 @@ class ScrollLayoutEngine(
                     else -> 0f
                 }
 
-                // **D2.b 方案 F per-cell stride** —— 每 cell 独立 vertical stride，不跟 row max
-                // 联动（cell[1] 0.9em 字号字符不再被迫用 cell[0] 1.4em row 节奏，间距紧凑跟参考一致）。
-                // - cellStrides[i] = contentTextHeight × cell[i].sizeScale × 1.05
-                // - 每 cell 字符总高 = lineCount × stride
-                // - row 高 = max(cell content height)
-                // - emit ScrollLine.lineHeight = row 高
-                // - emit atoms 携带 cellIdx，drawByAtoms 用 atom.cellIdx 查 cellLineHeights[]
-                //   算独立 baseline = lineTop + atom.lineIdxInCell × cellStrides[cellIdx] + ascent
-                val rowMaxSize = row.cells.maxOf { it.sizeScale }
+                // **D 模型 (阶段 1 重构)** —— layoutTable emit D 模型：每 cell 是子 box
+                // ([ScrollLineCell]) 含 contentTop / contentHeight / atoms。drawByAtoms 走 cells
+                // 分支按 cell.contentLeft + atom.cellLocalX / cell.contentTop + atom.cellLocalY +
+                // atom.baseline 算字符位置。
+                //
+                // 几何零视觉变化：当前 vertical-align: top → cell.contentTop = 0；atom.cellLocalY =
+                // lineIdxInCell × cellStride；atom.baseline = cellAscent。三者之和 = lineIdxInCell ×
+                // cellStride + cellAscent = A 模型 hack 的 atom.baseline absolute 数值。
+                //
+                // cellStrides[i] / cellHeights[i] / rowLineHeight 同 A 模型（per-cell stride 算法）。
                 val cellStrides = FloatArray(row.cells.size) { idx ->
                     contentTextHeight * row.cells[idx].sizeScale * 1.05f
                 }
@@ -580,28 +585,11 @@ class ScrollLayoutEngine(
                     cellLines[idx].size * cellStrides[idx]
                 }
                 val rowLineHeight = maxOf(contentTextHeight, cellHeights.maxOrNull() ?: contentTextHeight)
-                // **D2b DIAG**：dump table 几何 + per-cell 配置 + 多 row 时 row 间距
-                com.morealm.app.core.log.AppLog.info(
-                    "D2b/Table",
-                    "row totalWidth=$totalWidth tableXOffset=$tableXOffset visibleWidth=$visibleWidth " +
-                        "cellGap=$cellGap rowMaxSize=$rowMaxSize rowLineHeight=$rowLineHeight " +
-                        "contentLineHeight=$contentLineHeight contentTextHeight=$contentTextHeight",
-                )
-                for ((cIdx, cell) in row.cells.withIndex()) {
-                    com.morealm.app.core.log.AppLog.info(
-                        "D2b/Table",
-                        "  cell[$cIdx] declared=${cell.widthPx} actualW=${cellWidths[cIdx]} " +
-                            "sizeScale=${cell.sizeScale} textColor=${cell.textColor?.toUInt()?.toString(16)} " +
-                            "linesCount=${cellLines[cIdx].size}",
-                    )
-                }
 
-                // **D2.b 方案 F**：emit 单 ScrollLine 装整个 row（atoms-only，columns 留 stub）。
-                // 每 atom 含 cellIdx + 独立 baseline (= cellTopOffset + lineIdxInCell × cellStrides[cIdx]
-                // + cellAscent) 让 drawByAtoms 用 atom.baseline 算每字符真 y 位置，cell[1] 0.9em
-                // 小字号字符按自己 stride 紧凑堆叠不跟 cell[0] 联动。
-                val atoms = ArrayList<Atom>()
-                val columns = ArrayList<ScrollColumn>()  // stub: 单字 placeholder 让 emitLine 满足非空判断
+                // 构建每 cell 的 ScrollLineCell 子对象 + 所属 atoms（含 cellLocalX/Y）+
+                // 同时 flatten 全局 columns 供反查（globalX = cellCursorX + localX）
+                val rowCells = ArrayList<ScrollLineCell>()
+                val allColumns = ArrayList<ScrollColumn>()
                 val sb = StringBuilder()
                 val firstCpInTable = chapterPositionCounter
                 var cellCursorX = tableXOffset
@@ -610,71 +598,77 @@ class ScrollLayoutEngine(
                     val cellStride = cellStrides[cIdx]
                     val cellAscent = contentTextHeight * cell.sizeScale * 0.8f
                     val cellLineList = cellLines[cIdx]
+                    val cellAtoms = ArrayList<Atom>()
                     for ((lineIdxInCell, cellLine) in cellLineList.withIndex()) {
                         if (cellLine.isEmpty()) continue
                         val lineW = cellLine.sumOf { it.second.toDouble() }.toFloat()
                         // cell 内文字水平居中（CSS td.vol-title-* text-align: center）
-                        var x = cellCursorX + ((cellW - lineW) / 2f).coerceAtLeast(0f)
-                        // baseline in line = cellTopOffset (0, vertical-align: top) + line stride + ascent
-                        val baselineInLine = lineIdxInCell * cellStride + cellAscent
+                        var localX = ((cellW - lineW) / 2f).coerceAtLeast(0f)
+                        val localY = lineIdxInCell * cellStride
                         for ((ch, w) in cellLine) {
-                            columns.add(
+                            val globalX = cellCursorX + localX
+                            allColumns.add(
                                 ScrollColumn(
                                     charData = ch,
-                                    start = x,
-                                    end = x + w,
+                                    start = globalX,
+                                    end = globalX + w,
                                     chapterPosition = chapterPositionCounter,
                                     colorArgb = cell.textColor,
                                 ),
                             )
-                            atoms.add(
+                            cellAtoms.add(
                                 TextRun(
                                     text = ch,
                                     colorArgb = cell.textColor,
                                     sizeScale = cell.sizeScale,
                                     width = w,
                                     height = cellStride,
-                                    baseline = baselineInLine,
-                                    cellIdx = cIdx,
+                                    baseline = cellAscent,
+                                    cellLocalX = localX,
+                                    cellLocalY = localY,
                                 ),
                             )
-                            if (lineIdxInCell == 0) {
-                                com.morealm.app.core.log.AppLog.info(
-                                    "D2b/Table",
-                                    "  emit cell[$cIdx] ch='$ch' x=$x w=$w lineIdxInCell=$lineIdxInCell " +
-                                        "stride=$cellStride baselineInLine=$baselineInLine",
-                                )
-                            }
                             sb.append(ch)
                             chapterPositionCounter++
-                            x += w
+                            localX += w
                         }
                     }
+                    rowCells.add(
+                        ScrollLineCell(
+                            contentTop = 0f,  // vertical-align: top；阶段 4 加 middle 时算 (row.h - cell.h) × {0.5/...}
+                            contentLeft = cellCursorX,
+                            contentWidth = cellW,
+                            contentHeight = cellLineList.size * cellStride,
+                            padding = 0f,
+                            atoms = cellAtoms,
+                        ),
+                    )
                     cellCursorX += cellW
                     if (cIdx < row.cells.lastIndex) cellCursorX += cellGap
                 }
-                run {
-                    if (columns.isNotEmpty()) {
-                        emitLine(
-                            lineColumns = columns,
-                            lineText = sb.toString(),
-                            paragraphNum = paragraphCounter,
-                            firstChapterPos = firstCpInTable,
-                            lastChapterPos = columns.last().chapterPosition,
-                            lineHeightOverride = rowLineHeight,
-                            atoms = atoms,
-                        )
-                    } else {
-                        val emptyCp = chapterPositionCounter++
-                        emitLine(
-                            lineColumns = emptyList(),
-                            lineText = "",
-                            paragraphNum = paragraphCounter,
-                            firstChapterPos = emptyCp,
-                            lastChapterPos = emptyCp,
-                            lineHeightOverride = rowLineHeight,
-                        )
-                    }
+
+                if (allColumns.isNotEmpty()) {
+                    emitLine(
+                        lineColumns = allColumns,
+                        lineText = sb.toString(),
+                        paragraphNum = paragraphCounter,
+                        firstChapterPos = firstCpInTable,
+                        lastChapterPos = allColumns.last().chapterPosition,
+                        lineHeightOverride = rowLineHeight,
+                        cells = rowCells,
+                        // table line 的 atoms 留 null —— cells 已含真正的 atoms（per cell）
+                    )
+                } else {
+                    val emptyCp = chapterPositionCounter++
+                    emitLine(
+                        lineColumns = emptyList(),
+                        lineText = "",
+                        paragraphNum = paragraphCounter,
+                        firstChapterPos = emptyCp,
+                        lastChapterPos = emptyCp,
+                        lineHeightOverride = rowLineHeight,
+                        cells = rowCells,
+                    )
                 }
                 // row 末隐式 \n cp 占 1 cp（跟普通段对齐）
                 chapterPositionCounter++
