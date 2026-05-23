@@ -119,6 +119,22 @@ data class ScrollLine(
      * H3 commit 接入 titlePaint 选择 + 段间距。
      */
     val headingLevel: Int = 0,
+    /**
+     * **D2.b 方案 F per-cell stride** —— layoutTable emit 表格行时每 cell 字符独立 stride
+     * （avoid cell[1] 0.9em 小字号字符在 cell[0] 1.4em row 节奏内空隙过大）。
+     *
+     * 格式：每个 atom 对应一个 cellIdx（atom.cellIdx 通过 [Atom.cellIdx] 字段携带），
+     * 本字段提供 cellIdx → vertical stride (px) 查找表。drawByAtoms 根据 atom.cellIdx 查
+     * stride 算独立 baseline = lineTop + cellOffset + ascent。
+     *
+     * **null = non-table line**（普通 paragraph / heading / image）—— drawByAtoms 走原路径
+     * 不读 cellLineHeights，全 atom 共用 line.lineTop 节奏。
+     *
+     * TODO(D-future)：vertical-align middle/bottom 或 cell padding/border/rowspan 需求出现
+     * 时，把 cellLineHeights[] 升级为 [ScrollLineCell]（含 contentTop/height/padding/cellIdx）
+     * 子对象数组。atom.cellIdx 字段保持兼容。
+     */
+    val cellLineHeights: FloatArray? = null,
 ) {
     val height: Float get() = lineBottom - lineTop
 

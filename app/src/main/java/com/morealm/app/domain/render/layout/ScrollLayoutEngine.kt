@@ -489,10 +489,14 @@ class ScrollLayoutEngine(
         // → CJK 字符 ~16-24 px 宽，一字一行 → 视觉竖排。
         fun layoutCellLines(cell: ParsedTableCell): List<List<Pair<String, Float>>> {
             val widthCap = cell.widthPx ?: visibleWidth.toFloat()
+            val sizeScale = cell.sizeScale
             val out = ArrayList<List<Pair<String, Float>>>()
             for (para in cell.contentParagraphs) {
-                val (chars, widths) = contentTextMeasure.measureTextSplit(para)
+                val (chars, rawWidths) = contentTextMeasure.measureTextSplit(para)
                 if (chars.isEmpty()) continue
+                // **D2.b**：cell.sizeScale 缩放字符宽度，让 wrap 按真实字号算（1.4em 字
+                // ~24×1.4=34px > cellW → 1字1行；0.9em 字 ~24×0.9=22px 可能塞 2字/行）。
+                val widths: List<Float> = if (sizeScale != 1f) rawWidths.map { it * sizeScale } else rawWidths
                 var lineBuf = ArrayList<Pair<String, Float>>()
                 var lineW = 0f
                 for (i in chars.indices) {
@@ -541,11 +545,16 @@ class ScrollLayoutEngine(
                     } ?: 0f
                     maxOf(declared, contentMax)
                 }
+                // **D2.b**：cell 之间间距 = CSS `border-spacing` 默认 2px（border-collapse: separate
+                // 默认值）。某 EPUB table.vol-title 未声明 border-spacing 也未声明 border-collapse →
+                // 走 CSS spec 默认 2px。不硬编 0.3em（之前 hack）— 真按 CSS 解析。
+                // TODO(D3.a)：解析 CSS `border-spacing` 当 caller 显式设时（某 EPUB场景默认即可）。
+                val cellGap: Float = 2f
                 val maxLines = cellLines.maxOfOrNull { it.size } ?: 0
                 if (maxLines == 0) continue
 
                 // table 整体水平 offset（基于 currentBlockStyle margin auto 检测）
-                val totalWidth = cellWidths.sum()
+                val totalWidth = cellWidths.sum() + cellGap * (cellWidths.size - 1)
                 val mlAuto = currentBlockStyle.marginLeftPx.isNaN()
                 val mrAuto = currentBlockStyle.marginRightPx.isNaN()
                 val tableXOffset = when {
@@ -555,41 +564,105 @@ class ScrollLayoutEngine(
                     else -> 0f
                 }
 
-                // 逐行 emit
-                for (lineIdx in 0 until maxLines) {
-                    val columns = ArrayList<ScrollColumn>()
-                    var cellCursorX = tableXOffset
-                    val sb = StringBuilder()
-                    for ((cIdx, _) in row.cells.withIndex()) {
-                        val cellW = cellWidths[cIdx]
-                        val cellLine = cellLines[cIdx].getOrNull(lineIdx)
-                        if (cellLine != null && cellLine.isNotEmpty()) {
-                            val lineW = cellLine.sumOf { it.second.toDouble() }.toFloat()
-                            // cell 内文字水平居中（某 EPUB td.vol-title-* text-align: center）
-                            var x = cellCursorX + ((cellW - lineW) / 2f).coerceAtLeast(0f)
-                            for ((ch, w) in cellLine) {
-                                columns.add(
-                                    ScrollColumn(
-                                        charData = ch,
-                                        start = x,
-                                        end = x + w,
-                                        chapterPosition = chapterPositionCounter,
-                                    ),
+                // **D2.b 方案 F per-cell stride** —— 每 cell 独立 vertical stride，不跟 row max
+                // 联动（cell[1] 0.9em 字号字符不再被迫用 cell[0] 1.4em row 节奏，间距紧凑跟参考一致）。
+                // - cellStrides[i] = contentTextHeight × cell[i].sizeScale × 1.05
+                // - 每 cell 字符总高 = lineCount × stride
+                // - row 高 = max(cell content height)
+                // - emit ScrollLine.lineHeight = row 高
+                // - emit atoms 携带 cellIdx，drawByAtoms 用 atom.cellIdx 查 cellLineHeights[]
+                //   算独立 baseline = lineTop + atom.lineIdxInCell × cellStrides[cellIdx] + ascent
+                val rowMaxSize = row.cells.maxOf { it.sizeScale }
+                val cellStrides = FloatArray(row.cells.size) { idx ->
+                    contentTextHeight * row.cells[idx].sizeScale * 1.05f
+                }
+                val cellHeights = FloatArray(row.cells.size) { idx ->
+                    cellLines[idx].size * cellStrides[idx]
+                }
+                val rowLineHeight = maxOf(contentTextHeight, cellHeights.maxOrNull() ?: contentTextHeight)
+                // **D2b DIAG**：dump table 几何 + per-cell 配置 + 多 row 时 row 间距
+                com.morealm.app.core.log.AppLog.info(
+                    "D2b/Table",
+                    "row totalWidth=$totalWidth tableXOffset=$tableXOffset visibleWidth=$visibleWidth " +
+                        "cellGap=$cellGap rowMaxSize=$rowMaxSize rowLineHeight=$rowLineHeight " +
+                        "contentLineHeight=$contentLineHeight contentTextHeight=$contentTextHeight",
+                )
+                for ((cIdx, cell) in row.cells.withIndex()) {
+                    com.morealm.app.core.log.AppLog.info(
+                        "D2b/Table",
+                        "  cell[$cIdx] declared=${cell.widthPx} actualW=${cellWidths[cIdx]} " +
+                            "sizeScale=${cell.sizeScale} textColor=${cell.textColor?.toUInt()?.toString(16)} " +
+                            "linesCount=${cellLines[cIdx].size}",
+                    )
+                }
+
+                // **D2.b 方案 F**：emit 单 ScrollLine 装整个 row（atoms-only，columns 留 stub）。
+                // 每 atom 含 cellIdx + 独立 baseline (= cellTopOffset + lineIdxInCell × cellStrides[cIdx]
+                // + cellAscent) 让 drawByAtoms 用 atom.baseline 算每字符真 y 位置，cell[1] 0.9em
+                // 小字号字符按自己 stride 紧凑堆叠不跟 cell[0] 联动。
+                val atoms = ArrayList<Atom>()
+                val columns = ArrayList<ScrollColumn>()  // stub: 单字 placeholder 让 emitLine 满足非空判断
+                val sb = StringBuilder()
+                val firstCpInTable = chapterPositionCounter
+                var cellCursorX = tableXOffset
+                for ((cIdx, cell) in row.cells.withIndex()) {
+                    val cellW = cellWidths[cIdx]
+                    val cellStride = cellStrides[cIdx]
+                    val cellAscent = contentTextHeight * cell.sizeScale * 0.8f
+                    val cellLineList = cellLines[cIdx]
+                    for ((lineIdxInCell, cellLine) in cellLineList.withIndex()) {
+                        if (cellLine.isEmpty()) continue
+                        val lineW = cellLine.sumOf { it.second.toDouble() }.toFloat()
+                        // cell 内文字水平居中（CSS td.vol-title-* text-align: center）
+                        var x = cellCursorX + ((cellW - lineW) / 2f).coerceAtLeast(0f)
+                        // baseline in line = cellTopOffset (0, vertical-align: top) + line stride + ascent
+                        val baselineInLine = lineIdxInCell * cellStride + cellAscent
+                        for ((ch, w) in cellLine) {
+                            columns.add(
+                                ScrollColumn(
+                                    charData = ch,
+                                    start = x,
+                                    end = x + w,
+                                    chapterPosition = chapterPositionCounter,
+                                    colorArgb = cell.textColor,
+                                ),
+                            )
+                            atoms.add(
+                                TextRun(
+                                    text = ch,
+                                    colorArgb = cell.textColor,
+                                    sizeScale = cell.sizeScale,
+                                    width = w,
+                                    height = cellStride,
+                                    baseline = baselineInLine,
+                                    cellIdx = cIdx,
+                                ),
+                            )
+                            if (lineIdxInCell == 0) {
+                                com.morealm.app.core.log.AppLog.info(
+                                    "D2b/Table",
+                                    "  emit cell[$cIdx] ch='$ch' x=$x w=$w lineIdxInCell=$lineIdxInCell " +
+                                        "stride=$cellStride baselineInLine=$baselineInLine",
                                 )
-                                sb.append(ch)
-                                chapterPositionCounter++
-                                x += w
                             }
+                            sb.append(ch)
+                            chapterPositionCounter++
+                            x += w
                         }
-                        cellCursorX += cellW
                     }
+                    cellCursorX += cellW
+                    if (cIdx < row.cells.lastIndex) cellCursorX += cellGap
+                }
+                run {
                     if (columns.isNotEmpty()) {
                         emitLine(
                             lineColumns = columns,
                             lineText = sb.toString(),
                             paragraphNum = paragraphCounter,
-                            firstChapterPos = columns.first().chapterPosition,
+                            firstChapterPos = firstCpInTable,
                             lastChapterPos = columns.last().chapterPosition,
+                            lineHeightOverride = rowLineHeight,
+                            atoms = atoms,
                         )
                     } else {
                         val emptyCp = chapterPositionCounter++
@@ -599,6 +672,7 @@ class ScrollLayoutEngine(
                             paragraphNum = paragraphCounter,
                             firstChapterPos = emptyCp,
                             lastChapterPos = emptyCp,
+                            lineHeightOverride = rowLineHeight,
                         )
                     }
                 }
@@ -1514,6 +1588,16 @@ class ScrollLayoutEngine(
     private data class ParsedTableCell(
         val widthPx: Float?,
         val contentParagraphs: List<String>,
+        /**
+         * **D2.b**：cell content char-level color marker 解码值（取首字 ARGB）。null = 无染色。
+         * 某 EPUB vol-title-number cell `ffb50a02` → 0xFFB50A02（红）。
+         */
+        val textColor: Int? = null,
+        /**
+         * **D2.b**：cell content char-level size marker 解码值（取首字 sizeScale，整 cell 同字号）。
+         * 1f = 默认字号。某 EPUB vol-title-name 1.4em → 1.4f / vol-title-number 0.9em → 0.9f。
+         */
+        val sizeScale: Float = 1f,
     )
 
     /**
@@ -1561,97 +1645,47 @@ class ScrollLayoutEngine(
             val widthStr = cellBody.substring(0, widthEnd)
             val content = cellBody.substring(widthEnd + TABLE_MARKER_TD_W_END.length)
             val widthPx = if (widthStr.isEmpty()) null else widthStr.toFloatOrNull()
-            // **D2.a Commit 2c bugfix**: restore U+0010 -> newline, split, then strip
-            // inner markers (BLOCK_STYLE / SPAN_COLOR / SIZE / INLINE_IMG / HEADING_LEVEL)
-            // so layoutCellLines sees clean CJK text. Char-level color/size deferred to D2.b.
+            // **D2.b**: restore U+0010 -> newline; for each para strip BLOCK_STYLE_MARKER then
+            // parseInlineMarkers to get cleanText + char-level color/size. Use first non-default
+            // color/size as the cell-level value (SampleEpub vol-title cells are uniform).
             val restored = content.replace('\u0010', '\n')
+            var cellTextColor: Int? = null
+            var cellSizeScale: Float = 1f
             val paras = restored.split('\n')
-                .map { stripInnerMarkersForCell(it) }
+                .map { paraRaw ->
+                    val withoutBlockStyle = stripBlockStyleMarker(paraRaw)
+                    val parsed = parseInlineMarkers(withoutBlockStyle)
+                    if (cellTextColor == null) {
+                        parsed.colorPerCp?.firstOrNull { it != 0 }?.let { cellTextColor = it }
+                    }
+                    if (cellSizeScale == 1f) {
+                        parsed.sizeScalePerCp?.firstOrNull { it != 1f }?.let { cellSizeScale = it }
+                    }
+                    parsed.cleanText
+                }
                 .filter { it.isNotEmpty() }
-            cells.add(ParsedTableCell(widthPx, paras))
+            cells.add(ParsedTableCell(widthPx, paras, cellTextColor, cellSizeScale))
             i = cellEnd + TABLE_MARKER_TD_END.length
         }
         return ParsedTableRow(cells)
     }
 
     /**
-     * **D2.a Commit 2c**: strip cell content inner markers so layoutCellLines sees clean text.
-     * Drops BLOCK_STYLE_MARKER block + control chars used by SPAN_COLOR/SIZE/INLINE_IMG/HEADING.
-     * Char-level color/size for cells deferred to D2.b (will decode into colorPerCp arrays).
+     * **D2.b**: strip BLOCK_STYLE_MARKER segments from a cell paragraph. char-level markers
+     * (SPAN_COLOR / SIZE / INLINE_IMG / HEADING_LEVEL) are parsed downstream by parseInlineMarkers.
      */
-    private fun stripInnerMarkersForCell(raw: String): String {
+    private fun stripBlockStyleMarker(raw: String): String {
         if (raw.isEmpty()) return raw
         var s = raw
-        // strip BLOCK_STYLE_MARKER...BLOCK_STYLE_END (string markers)
         while (true) {
             val a = s.indexOf(com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_MARKER)
             if (a < 0) break
             val b = s.indexOf(com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END, a)
             if (b < 0) break
-            s = s.substring(0, a) + s.substring(b + com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END.length)
+            s = s.substring(0, a) +
+                s.substring(b + com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END.length)
         }
-        // strip HEADING_LEVEL_START + 1 digit + HEADING_LEVEL_END (BEL + digit + BS)
-        // drop all control chars used by SPAN_COLOR/SIZE/INLINE_IMG markers + heading marker.
-        // Control char ranges: 0x01..0x08, 0x0B..0x0E (keep 0x09 tab, 0x0A newline, 0x0D CR)
-        val sb = StringBuilder(s.length)
-        var i = 0
-        while (i < s.length) {
-            val c = s[i]
-            val cc = c.code
-            if (cc in 0x01..0x08 || cc in 0x0B..0x0E) {
-                // marker control char: skip + skip following marker payload (color hex / sizeScale int).
-                // SPAN_COLOR  <argbHex8>  ; SIZE  <intHundreds> ; INLINE_IMG  <src> 
-                // simplification: skip until next non-marker char that is not also a marker payload (digit/hex/letter).
-                // For SPAN_COLOR/SIZE the payload is hex digits (0-9 a-f) until the END marker (/).
-                // We strip everything up to the next CJK / whitespace / ASCII letter that isn't hex.
-                // Safer: skip the marker char itself; the END marker (/) will be hit next iteration.
-                // Issue: payload chars (hex 0-9a-fA-F or sizeScale digits) remain in CJK text.
-                // Use targeted strip: handle pairs explicitly.
-                when (cc) {
-                    0x01 -> {
-                        // SPAN_COLOR_START + 8 hex + SPAN_MARKER_DELIM(0x02), skip 1 + 8 + 1
-                        val argbEnd = if (i + 10 <= s.length && s[i + 9].code == 0x02) i + 10 else i + 1
-                        i = argbEnd
-                        continue
-                    }
-                    0x0B -> {
-                        // SIZE_START + intHundreds + SIZE_DELIM(0x0C), digits variable len
-                        var j = i + 1
-                        while (j < s.length && s[j].isDigit()) j++
-                        if (j < s.length && s[j].code == 0x0C) j++
-                        i = j
-                        continue
-                    }
-                    0x04 -> {
-                        // INLINE_IMG_START + src + INLINE_IMG_DELIM(0x05), variable len src
-                        var j = i + 1
-                        while (j < s.length && s[j].code != 0x05) j++
-                        if (j < s.length) j++ // skip DELIM
-                        // skip placeholder U+FFFC + END marker(0x06)
-                        if (j < s.length && s[j] == '\ufffc') j++
-                        if (j < s.length && s[j].code == 0x06) j++
-                        i = j
-                        continue
-                    }
-                    0x07 -> {
-                        // HEADING_LEVEL_START + digit + HEADING_LEVEL_END(0x08)
-                        var j = i + 1
-                        while (j < s.length && s[j].isDigit()) j++
-                        if (j < s.length && s[j].code == 0x08) j++
-                        i = j
-                        continue
-                    }
-                    else -> {
-                        // standalone end markers ( STX,  ETX,  ENQ,  ACK,  BS, 0x0C FF, 0x0E SO)
-                        i++
-                        continue
-                    }
-                }
-            }
-            sb.append(c)
-            i++
-        }
-        return sb.toString()
+        return s
     }
 
     companion object {

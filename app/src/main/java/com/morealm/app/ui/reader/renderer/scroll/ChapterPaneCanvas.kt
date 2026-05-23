@@ -371,35 +371,44 @@ private fun drawAtomsRow(
     // CSS text-align cascade 算出的居中偏移（见 PagePaneCanvas.drawByAtoms 同款修复）
     var x = line.columns.firstOrNull()?.start ?: 0f
     var atomStartCp = line.firstChapterPos  // A5 Step 2：atom 起始 cp 用于 textColorByCp 查询
-    for (atom in atoms) {
+    for ((atomIdx, atom) in atoms.withIndex()) {
         when (atom) {
             is com.morealm.app.domain.render.layout.TextRun -> {
                 val baseSize = basePaint.textSize
                 val scale = atom.sizeScale
                 if (scale != 1f) basePaint.textSize = baseSize * scale
+                // **D2.b 方案 F per-cell stride** —— 详 PagePaneCanvas 同位注释
+                val effectiveBaselineY = when {
+                    atom.cellIdx >= 0 -> pageOffsetY + line.lineTop + atom.baseline
+                    scale != 1f -> pageOffsetY + line.lineTop + basePaint.textSize * 0.8f
+                    else -> baselineY
+                }
+                val effectiveX = if (atom.cellIdx >= 0) {
+                    line.columns.getOrNull(atomIdx)?.start ?: x
+                } else x
                 val hasOverride = if (textColorByCp.isNotEmpty()) {
                     (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
                 } else false
                 if (hasOverride) {
-                    var cx = x
+                    var cx = effectiveX
                     val baseColor = atom.colorArgb ?: defaultColor
                     for (ci in atom.text.indices) {
                         val cp = atomStartCp + ci
                         val color = textColorByCp[cp] ?: baseColor
                         basePaint.color = color
                         val ch = atom.text[ci].toString()
-                        canvas.drawText(ch, cx, baselineY, basePaint)
+                        canvas.drawText(ch, cx, effectiveBaselineY, basePaint)
                         cx += basePaint.measureText(ch)
                     }
                     basePaint.color = defaultColor
                 } else {
                     val origColor = basePaint.color
                     if (atom.colorArgb != null) basePaint.color = atom.colorArgb
-                    canvas.drawText(atom.text, x, baselineY, basePaint)
+                    canvas.drawText(atom.text, effectiveX, effectiveBaselineY, basePaint)
                     if (atom.colorArgb != null) basePaint.color = origColor
                 }
                 if (scale != 1f) basePaint.textSize = baseSize
-                x += atom.width
+                if (atom.cellIdx < 0) x += atom.width
             }
             is com.morealm.app.domain.render.layout.InlineImage -> {
                 val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())

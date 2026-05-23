@@ -338,36 +338,50 @@ private fun drawByAtoms(
     var x = line.columns.firstOrNull()?.start ?: 0f
     val baseSize = basePaint.textSize
     var atomStartCp = line.firstChapterPos  // A5 Step 2：atom 起始 cp 用于 textColorByCp 查询
-    for (atom in atoms) {
+    for ((atomIdx, atom) in atoms.withIndex()) {
         when (atom) {
             is com.morealm.app.domain.render.layout.TextRun -> {
                 val scale = atom.sizeScale
                 if (scale != 1f) basePaint.textSize = baseSize * scale
+                // **D2.b 方案 F per-cell stride** —— table cell atom (cellIdx>=0) 用 atom.baseline
+                // 当 line-relative absolute baseline + columns[atomIdx].start 取真 x（atoms 含
+                // cell vertical stack 多字符，不能用 x += atom.width 横向累加）。
+                // sizeScale ≠ 1 但非 table cell → vertical-align: top fallback 让小字号字符顶贴 line 顶。
+                // sizeScale = 1 → 沿用 caller baselineY 兼容现有路径（H2/SampleLN em15 等）。
+                val effectiveBaselineY = when {
+                    atom.cellIdx >= 0 -> line.lineTop + atom.baseline
+                    scale != 1f -> line.lineTop + basePaint.textSize * 0.8f
+                    else -> baselineY
+                }
+                val effectiveX = if (atom.cellIdx >= 0) {
+                    line.columns.getOrNull(atomIdx)?.start ?: x
+                } else x
                 // A5 Step 2：检查 atom range 内有无 user 高亮 textColorByCp override
                 // 命中 → 退化 char-by-char 按 cp 独立涂色；无 → fast path 整 atom drawText
                 val hasOverride = if (textColorByCp.isNotEmpty()) {
                     (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
                 } else false
                 if (hasOverride) {
-                    var cx = x
+                    var cx = effectiveX
                     val baseColor = atom.colorArgb ?: defaultColor
                     for (ci in atom.text.indices) {
                         val cp = atomStartCp + ci
                         val color = textColorByCp[cp] ?: baseColor
                         basePaint.color = color
                         val ch = atom.text[ci].toString()
-                        canvas.drawText(ch, cx, baselineY, basePaint)
+                        canvas.drawText(ch, cx, effectiveBaselineY, basePaint)
                         cx += basePaint.measureText(ch)
                     }
                     basePaint.color = defaultColor
                 } else {
                     val origColor = basePaint.color
                     if (atom.colorArgb != null) basePaint.color = atom.colorArgb
-                    canvas.drawText(atom.text, x, baselineY, basePaint)
+                    canvas.drawText(atom.text, effectiveX, effectiveBaselineY, basePaint)
                     if (atom.colorArgb != null) basePaint.color = origColor
                 }
                 if (scale != 1f) basePaint.textSize = baseSize
-                x += atom.width
+                // table cell atom 不累加 x（atom 顺序非水平排）；非 table 仍 x += atom.width
+                if (atom.cellIdx < 0) x += atom.width
             }
             is com.morealm.app.domain.render.layout.InlineImage -> {
                 val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
