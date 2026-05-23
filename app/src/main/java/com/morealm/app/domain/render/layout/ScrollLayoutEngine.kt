@@ -210,7 +210,19 @@ class ScrollLayoutEngine(
         val paragraphs = stripTitleFromParagraphs(rawParagraphs, normalizedTitle)
         // **D2.a Commit 2b**: 含 __MOREALM_TBL__ marker 的 paragraph 由主循环 table 分支解析 ParsedTable + 调 layoutTable（cell.widthPx 切行 → CJK 1字/行竖排）。
         // expandTableMarkersStub 展平 fallback 已下线
-        val contentProvidesChapterTitle = false  // 保留自画 title 块；正文 title 已被 strip 掉
+        //
+        // **阶段 2-F**：前 N 段任意段含 table marker → 视为"封面 / 卷首页 / BookName"等
+        // 结构化布局丰富页面（某 EPUB chapter-1 vol-title / SampleLN BookName.xhtml 等），跳过
+        // 自画 chapter title 大字 — 参考实现 在这些章不画 toc title 大字，仅 InfoBar 显示。
+        // MoRealm 之前自画 toc navLabel ("书名" / "第一卷 剑起风云") 让封面页顶部多出小字与
+        // 大字布局重复 → 视觉跟参考图 38 / 16 不一致。
+        //
+        // N=3 兜底某 EPUB chapter-1 场景（首段是 H2「惊蛰」段不含 table marker，table.vol-title
+        // 在后面段）。普通章节正文（前 3 段都是普通文本）不 skip → 仍画自画 title。
+        // 普通章节正文中间出现的 table（教科书表格 / 诗词对照表 / 数据表）不在前 3 段，
+        // 不会误判为封面页。
+        val firstFewParas = paragraphs.asSequence().filter { it.isNotBlank() }.take(3).toList()
+        val contentProvidesChapterTitle = firstFewParas.any { hasTableMarker(it) }
 
         val pages = mutableListOf<ScrollPage>()
         var currentPageLines = mutableListOf<ScrollLine>()
