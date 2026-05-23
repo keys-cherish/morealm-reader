@@ -140,7 +140,13 @@ object EpubParser {
     // 识别 sentinel → 用 minOf(rectW, rectH)/2 当 radius 让 box 成圆/椭圆。SampleLN
     // .qipao { border-radius: 100% } 「啊啊, 没用的女神大人」橙底椭圆气泡 (匹配参考图 41)。
     // v32 cache 的 br=16 错算值必须 bump 失效。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v33"
+    // v34：阶段 2-H — element-specific width/height 支持。BlockStyle 加 widthPx/heightPx
+    // (nullable, null = auto)，CssBlockStyleParser 解析 CSS width/height (em/px/%)，
+    // encode "w=" / "h=" 协议。ScrollBlockStyleDrawer 识别非 null widthPx/heightPx 用
+    // element-specific 尺寸算 rect (中心对齐 line columns + line center)。配合
+    // BORDER_RADIUS_CIRCLE 让 SampleLN qipao 真成 56×56 圆 (而非 v33 胶囊形)。v33 cache
+    // 不含 w=/h= 必须 bump 失效。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v34"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)

@@ -60,12 +60,39 @@ internal fun drawScrollLineBlockStyle(
     val lineTop = pageTop + line.lineTop
     val lineBottom = pageTop + line.lineBottom
     val halfBorder = bs.borderWidthPx / 2f
-    val rectLeft = leftX - bs.paddingLeftPx - halfBorder
-    val rectTop = lineTop - bs.paddingTopPx - halfBorder
-    val rectRight = rightX + bs.paddingRightPx + halfBorder
-    val rectBottom = lineBottom + bs.paddingBottomPx + halfBorder
+    // **阶段 2-H**：CSS width/height 元素 box 尺寸 — 非 null 时 rect 用 element-specific 尺寸
+    // 中心对齐 line.columns + line center。null 时退回 line-based 尺寸 (line.columns extent
+    // + lineTop/Bottom)。
+    //
+    // SampleLN `.qipao { width: 3.5em; height: 3.5em; border-radius: 100% }` 让 box 56×56
+    // 圆 (参考图 41 圆形气泡)。之前 v33 box 是 visibleWidth×lineHeight 让 borderRadius
+    // 自适应成胶囊形而非圆。
+    val rectLeft: Float
+    val rectTop: Float
+    val rectRight: Float
+    val rectBottom: Float
+    val widthPx = bs.widthPx
+    val heightPx = bs.heightPx
+    if (widthPx != null) {
+        // 宽度 = widthPx，中心对齐 line.columns 中心（字符可能溢出 box 外，CSS overflow: visible 默认）
+        val cx = (leftX + rightX) / 2f
+        rectLeft = cx - widthPx / 2f - bs.paddingLeftPx - halfBorder
+        rectRight = cx + widthPx / 2f + bs.paddingRightPx + halfBorder
+    } else {
+        rectLeft = leftX - bs.paddingLeftPx - halfBorder
+        rectRight = rightX + bs.paddingRightPx + halfBorder
+    }
+    if (heightPx != null) {
+        // 高度 = heightPx，中心对齐 line 中心
+        val cy = (lineTop + lineBottom) / 2f
+        rectTop = cy - heightPx / 2f - bs.paddingTopPx - halfBorder
+        rectBottom = cy + heightPx / 2f + bs.paddingBottomPx + halfBorder
+    } else {
+        rectTop = lineTop - bs.paddingTopPx - halfBorder
+        rectBottom = lineBottom + bs.paddingBottomPx + halfBorder
+    }
     // **阶段 2-D**：BORDER_RADIUS_CIRCLE (POSITIVE_INFINITY) sentinel → 自适应圆角 = box 边长 50%。
-    // SampleLN qipao `border-radius: 100%` 让 box 成圆/椭圆 (参考图 41 「啊啊...」橙底椭圆)。
+    // SampleLN qipao `border-radius: 100%` 让 box 成圆/椭圆。配合 widthPx/heightPx 后 box 真成圆。
     val rectW = rectRight - rectLeft
     val rectH = rectBottom - rectTop
     val r = if (bs.borderRadiusPx.isInfinite()) minOf(rectW, rectH) / 2f else bs.borderRadiusPx
