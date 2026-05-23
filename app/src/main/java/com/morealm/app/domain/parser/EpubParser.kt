@@ -135,7 +135,12 @@ object EpubParser {
     // 居中，不让 table 自身水平居中。MoRealm 把 textAlign 当 paragraph 整体水平位置控制 →
     // SampleLN BookName 5 sibling tables 整段居中跟参考实现左对齐 (图 45) 不一致。修后 sibling
     // 都左对齐，margin 仍生效让 negative mt 视觉层叠。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v32"
+    // v33：阶段 2-D — CSS border-radius: 100% 解析成 BORDER_RADIUS_CIRCLE sentinel
+    // (Float.POSITIVE_INFINITY)，encode "br=CIRCLE" 字面。renderer ScrollBlockStyleDrawer
+    // 识别 sentinel → 用 minOf(rectW, rectH)/2 当 radius 让 box 成圆/椭圆。SampleLN
+    // .qipao { border-radius: 100% } 「啊啊, 没用的女神大人」橙底椭圆气泡 (匹配参考图 41)。
+    // v32 cache 的 br=16 错算值必须 bump 失效。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v33"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
