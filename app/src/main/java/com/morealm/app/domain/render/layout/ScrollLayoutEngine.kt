@@ -1136,6 +1136,11 @@ class ScrollLayoutEngine(
                         val mlIndent = if (marginLeftAuto || currentBlockStyle.marginLeftPx <= 0f) 0f
                                        else currentBlockStyle.marginLeftPx
                         // P3-5b Step 2c：startX 计算按 CSS text-align + D1.a margin
+                        // **阶段 2-I (2026-05-23)**：marginLeftAuto + mrNonAuto → 段右贴（CSS spec：
+                        // `<table style="margin:-10em 0 0 auto">` 让 table 推到右边）。SampleLN 作者名
+                        // 表 `margin: -10em 0 0 auto` 让段从 visibleWidth - desiredWidth - mrPx 开始，
+                        // 不再跟 qipao 重叠。修反对称：marginLeftAuto only → 右贴；mrAuto only → 左对齐
+                        // 不动；双 auto → 居中保留旧逻辑。
                         val startX: Float = when {
                             cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.CENTER ->
                                 ((visibleWidth - desiredWidth) / 2f).coerceAtLeast(0f)
@@ -1144,6 +1149,17 @@ class ScrollLayoutEngine(
                             cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.LEFT ||
                                 cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.JUSTIFY -> {
                                 // 显式 LEFT/JUSTIFY：mlIndent 段缩进 + 段首 indent（heading 段不 indent）
+                                mlIndent + (if (isFirstLine && currentParaHeadingLevel == 0) effectiveFirstLineIndent else 0f)
+                            }
+                            // 阶段 2-I：margin-left:auto + margin-right 非 auto → 段右贴
+                            // CSS spec：mr 非 auto 是显式右边 margin，从 visibleWidth 减去 desiredWidth + mr
+                            marginLeftAuto && !marginRightAuto -> {
+                                val mrEffective = if (currentBlockStyle.marginRightPx > 0f) currentBlockStyle.marginRightPx else 0f
+                                (visibleWidth - desiredWidth - mrEffective).coerceAtLeast(0f)
+                            }
+                            // 阶段 2-I：margin-right:auto + margin-left 非 auto → 段左对齐 + mlIndent
+                            // (CSS spec 等同 ml 显式 + mr=auto 把多余空间放右，视觉=左对齐)
+                            !marginLeftAuto && marginRightAuto -> {
                                 mlIndent + (if (isFirstLine && currentParaHeadingLevel == 0) effectiveFirstLineIndent else 0f)
                             }
                             // cssAlign null（CSS 没显式 text-align）→ marginCenter 兜底（某 EPUB惊蛰
