@@ -743,18 +743,23 @@ class ScrollLayoutEngine(
             // （视觉会出 marker 文本，提示损坏数据，比直接吞段更安全）。
             if (hasTableMarker(paragraphText)) {
                 val parsed = parseTableMarker(paragraphText)
-                com.morealm.app.core.log.AppLog.info(
-                    "D2a/Table",
-                    "para#$paragraphCounter TBL detected parsed=${parsed != null} " +
-                        "rows=${parsed?.rows?.size ?: 0} " +
-                        "cells=${parsed?.rows?.sumOf { it.cells.size } ?: 0} " +
-                        "ml=${currentBlockStyle.marginLeftPx} mr=${currentBlockStyle.marginRightPx} " +
-                        "head60='${paragraphText.take(60)}'",
-                )
                 if (parsed != null) {
+                    // **阶段 2-A**：layoutTable 接 CSS margin-top / margin-bottom（之前固定加
+                    // paragraphSpacingPx 当尾距，吞了 SampleLN 5 sibling table 的 margin-top:
+                    // -1em / -1.5em / -10em 让视觉层叠失效）。
+                    //
+                    // 优先级（与 D1.a 段间 margin 路径同款）：
+                    //  - mt 非 NaN(AUTO) 且非 0f → currentY += mt（允许负，让段重叠）
+                    //  - mb 非 NaN 且非 0f → currentY += mb（替代 paragraphSpacingPx default）
+                    //  - mt/mb 任一缺失 → 默认 0 / paragraphSpacingPx
+                    //
+                    // CSS spec：margin-top/bottom 不参与 collapse（table 元素的 margin 跟普通
+                    // block 不同，跨 table 不 collapse），所以纯累加（跟 D1.a 段间 margin 一致）。
+                    val mt = currentBlockStyle.marginTopPx
+                    if (!mt.isNaN() && mt != 0f) currentY += mt
                     layoutTable(parsed)
-                    // table 段末间距：复用 paragraphSpacingPx（跟普通段一致）
-                    currentY += paragraphSpacingPx
+                    val mb = currentBlockStyle.marginBottomPx
+                    currentY += if (!mb.isNaN() && mb != 0f) mb else paragraphSpacingPx
                     continue
                 }
                 // parse 失败 fallthrough（极少见 — encodeTable 总产合法 marker）
