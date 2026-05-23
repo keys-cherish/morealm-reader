@@ -85,13 +85,23 @@ internal fun drawScrollLineBlockStyle(
     val padBottom = bs.paddingBottomPx * fontSizeScale
     val widthScaled = bs.widthPx?.let { it * fontSizeScale }
     val heightScaled = bs.heightPx?.let { it * fontSizeScale }
-    // **阶段 2-H**：CSS width/height 元素 box 尺寸 — 非 null 时 rect 用 element-specific 尺寸
-    // 中心对齐 line.columns + line center。null 时退回 line-based 尺寸。
+    // **方案 C inline-block container**：line.cells 非 null + bs.widthPx 非 null →
+    // 用 cells[0] 的 contentLeft / contentWidth 算 box 中心（ScrollLayoutEngine
+    // layoutInlineBlockContainer 已正确设 cell.contentLeft = marginLeft × scale，
+    // contentWidth = boxW，atoms 按 cellLocalX 排在 cell 内）。让 qipao 圆球覆盖
+    // cell 内字符（参考图 41 文字在椭圆内）。
+    //
+    // 退回路径：line.cells == null 时用 line.columns 范围中心（普通段 bg 装饰）。
+    val ibCell = if (widthScaled != null) line.cells?.firstOrNull() else null
     val rectLeft: Float
     val rectTop: Float
     val rectRight: Float
     val rectBottom: Float
-    if (widthScaled != null) {
+    if (ibCell != null && widthScaled != null) {
+        // box 由 cell 几何确定（contentLeft 已含 margin-left × scale）
+        rectLeft = ibCell.contentLeft - padLeft - halfBorder
+        rectRight = ibCell.contentLeft + widthScaled + padRight + halfBorder
+    } else if (widthScaled != null) {
         val cx = (leftX + rightX) / 2f
         rectLeft = cx - widthScaled / 2f - padLeft - halfBorder
         rectRight = cx + widthScaled / 2f + padRight + halfBorder
@@ -99,7 +109,12 @@ internal fun drawScrollLineBlockStyle(
         rectLeft = leftX - padLeft - halfBorder
         rectRight = rightX + padRight + halfBorder
     }
-    if (heightScaled != null) {
+    if (ibCell != null && heightScaled != null) {
+        // box 垂直填满 line（cells path lineHeight = max(boxH, contentH+padding)）
+        val cy = (lineTop + lineBottom) / 2f
+        rectTop = cy - heightScaled / 2f - padTop - halfBorder
+        rectBottom = cy + heightScaled / 2f + padBottom + halfBorder
+    } else if (heightScaled != null) {
         val cy = (lineTop + lineBottom) / 2f
         rectTop = cy - heightScaled / 2f - padTop - halfBorder
         rectBottom = cy + heightScaled / 2f + padBottom + halfBorder

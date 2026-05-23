@@ -840,6 +840,123 @@ class ScrollLayoutEngine(
                 continue
             }
 
+            // ── **方案 C inline-block container** ──
+            // BlockStyle.widthPx + heightPx 非 null → 段落是 inline-block 元素 (div.qipao /
+            // .cont-qipao / .chara-qipao / .qipao-hei 等 CSS class)。设计意图：固定 box 尺寸
+            // + 内含多行文字（按 boxWidth 切行竖排堆叠）+ box 装饰（圆角/背景由 drawer 画）。
+            //
+            // 与普通段差异：
+            //  - 行高不用 contentLineHeight，用 max(boxH × fontScale, contentH + padding)
+            //  - 文字按 boxWidth × fontScale - 2 × padding 切行（贪心 wrap，CJK 1-3 字/行）
+            //  - emit 1 ScrollLine 含 1 ScrollLineCell（drawer 用 cells[0] 算 box rect 中心）
+            //  - atoms 含 cellLocalX/Y 让 drawByCells 路径精确定位每字符
+            //  - margin-left/right 推开 box (cell.contentLeft = mlScaled)
+            //
+            // 当前简化（后续 task 完善）：
+            //  - sizeScale 用 1f (不读 currentParaSizeScales，简化逻辑)
+            //  - 文字水平居中（CSS .qipao 内层 table center 都是 text-align: center）
+            //  - vertical-align: middle in box（CSS table-cell default）
+            val bsW = currentBlockStyle.widthPx
+            val bsH = currentBlockStyle.heightPx
+            if (bsW != null && bsH != null && bsW > 0f && bsH > 0f) {
+                val fontScale = contentPaint.textSize / 16f
+                val boxW = bsW * fontScale
+                val boxH = bsH * fontScale
+                val padScaled = currentBlockStyle.paddingLeftPx * fontScale
+                val innerW = (boxW - 2f * padScaled).coerceAtLeast(0f)
+
+                val (ibChars, ibWidths) = contentTextMeasure.measureTextSplit(processedText)
+                if (ibChars.isNotEmpty() && innerW > 0f) {
+                    // 按 innerW 贪心切行 (CJK 字符 ~24-30px × scale，56px box → 1-2 字/行)
+                    val ibLines = ArrayList<List<Pair<String, Float>>>()
+                    var lineBuf = ArrayList<Pair<String, Float>>()
+                    var lineCumW = 0f
+                    for (i in ibChars.indices) {
+                        val w = ibWidths[i]
+                        if (lineCumW + w > innerW && lineBuf.isNotEmpty()) {
+                            ibLines.add(lineBuf.toList())
+                            lineBuf = ArrayList()
+                            lineCumW = 0f
+                        }
+                        lineBuf.add(ibChars[i] to w)
+                        lineCumW += w
+                    }
+                    if (lineBuf.isNotEmpty()) ibLines.add(lineBuf.toList())
+
+                    // 内 line stride - 内层 table class="em08" 0.8x 字号，紧凑堆叠
+                    val innerLH = contentTextHeight * 0.95f
+                    val contentH = ibLines.size * innerLH
+                    val lineH = maxOf(boxH, contentH + 2f * padScaled)
+
+                    // box 水平位置 = margin-left × scale (NaN = 0)
+                    val mlRaw = currentBlockStyle.marginLeftPx
+                    val mlScaled = if (mlRaw.isNaN()) 0f else mlRaw * fontScale
+                    val cellLeft = mlScaled
+
+                    // vertical-align: middle - 内容垂直居中
+                    val contentTopInCell = (lineH - contentH) / 2f
+
+                    val ibAtoms = ArrayList<Atom>(ibChars.size)
+                    val ibCols = ArrayList<ScrollColumn>(ibChars.size)
+                    val ibSb = StringBuilder()
+                    val ibFirstCp = chapterPositionCounter
+                    for ((rowIdx, rowChars) in ibLines.withIndex()) {
+                        val realLineW = rowChars.sumOf { it.second.toDouble() }.toFloat()
+                        // 水平居中 (CSS text-align: center)
+                        var localX = padScaled + ((innerW - realLineW) / 2f).coerceAtLeast(0f)
+                        val localY = contentTopInCell + rowIdx * innerLH
+                        for ((ch, w) in rowChars) {
+                            val globalX = cellLeft + localX
+                            ibCols.add(
+                                ScrollColumn(
+                                    charData = ch,
+                                    start = globalX,
+                                    end = globalX + w,
+                                    chapterPosition = chapterPositionCounter,
+                                    colorArgb = null,
+                                ),
+                            )
+                            ibAtoms.add(
+                                TextRun(
+                                    text = ch,
+                                    colorArgb = null,
+                                    sizeScale = 1f,
+                                    width = w,
+                                    height = innerLH,
+                                    baseline = innerLH * 0.8f,
+                                    cellLocalX = localX,
+                                    cellLocalY = localY,
+                                ),
+                            )
+                            ibSb.append(ch)
+                            chapterPositionCounter++
+                            localX += w
+                        }
+                    }
+                    val ibCell = ScrollLineCell(
+                        contentTop = 0f,
+                        contentLeft = cellLeft,
+                        contentWidth = boxW,
+                        contentHeight = lineH,
+                        padding = 0f,
+                        atoms = ibAtoms,
+                    )
+                    emitLine(
+                        lineColumns = ibCols,
+                        lineText = ibSb.toString(),
+                        paragraphNum = paragraphCounter,
+                        firstChapterPos = ibFirstCp,
+                        lastChapterPos = chapterPositionCounter - 1,
+                        lineHeightOverride = lineH,
+                        cells = listOf(ibCell),
+                    )
+                    val ibMb = currentBlockStyle.marginBottomPx
+                    currentY += if (!ibMb.isNaN() && ibMb != 0f) ibMb else paragraphSpacingPx
+                    chapterPositionCounter++  // 段末虚换行
+                    continue
+                }
+            }
+
             // ── 非空段：缩进作为排版属性，不生成 column ──
             // 段首第一行 lineCursorX 起点 = indentWidth；img 之后的 chunk 起点 = 0（无缩进）。
             // 每个 chunk 独立 emit 完所有行（ZhLayout 行打断 / 简单贪心 fallback），chunk 间换行。
