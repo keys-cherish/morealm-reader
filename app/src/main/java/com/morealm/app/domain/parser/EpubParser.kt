@@ -125,7 +125,11 @@ object EpubParser {
     // outer table 的 BlockStyle (margin-top: -1em / -1.5em / -10em 等)。ScrollLayoutEngine
     // D1.a margin path 应用 negative margin → SampleLN BookName 5 sibling tables 视觉层叠
     // (匹配参考图 38)。v29 cache 是 merged 单段格式不含 margin 必须重 flatten。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v30"
+    // v31：task #14 bugfix — DIV 后再 forward SPAN inline frame，让 sibling table 内首字符
+    // 位置的 <img> (SampleLN chibi 巫女) frameStack 顶判断为 inline phrasing tag → 走
+    // InlineImageSpan 小尺寸 (匹配参考图 41)。v30 cache 是 chibi 全屏 block-level 格式
+    // (regression 严重) 必须 bump 失效。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v31"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
