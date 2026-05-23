@@ -120,7 +120,12 @@ object EpubParser {
     // 拼标题字 merge 行为保留（class 不含 vol-title 关键字）不破坏视觉。
     // v28 cache 失效让 chapter-1.xhtml 重 flatten 拿到 __MOREALM_TBL__ marker。
     // 单测 SampleEpubVolTitleTableTest 验证 emit Table OK。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v29"
+    // v30：task #14 (阶段 2-A 续) — TableMergeVisitor merge 模式不再 merge sibling tables
+    // 成单段，改为每 outer table forward DIV(attrs) → 每 sibling 独立 paragraph 各自含
+    // outer table 的 BlockStyle (margin-top: -1em / -1.5em / -10em 等)。ScrollLayoutEngine
+    // D1.a margin path 应用 negative margin → SampleLN BookName 5 sibling tables 视觉层叠
+    // (匹配参考图 38)。v29 cache 是 merged 单段格式不含 margin 必须重 flatten。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v30"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)

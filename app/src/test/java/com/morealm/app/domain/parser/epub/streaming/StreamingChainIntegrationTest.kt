@@ -65,16 +65,21 @@ class StreamingChainIntegrationTest {
     }
 
     @Test
-    fun `sibling tables merge into one paragraph`() {
+    fun `sibling tables produce per-table paragraphs`() {
+        // **task #14 (阶段 2-A 续)**: TableMergeVisitor merge 模式改 — sibling table 边界
+        // forward DIV 给 delegate，每 sibling 独立 paragraph 保留 outer table 的 BlockStyle
+        // (含 margin-top: -1em 等)。之前是 merge 成单段（丢了 margin）。
+        // 新行为：3 sibling tables → 3 独立 paragraphs（cells within one table 仍合并）。
         val blocks = parseChain(
             "<table><tr><td>为美好的</td></tr></table>" +
                 "<table><tr><td>世界献上</td></tr></table>" +
                 "<table><tr><td>祝福</td></tr></table>",
         )
-        assertEquals(1, blocks.size)
-        val text = (blocks[0] as ChapterBlock.Paragraph).text
-        assertTrue("got $text", text.contains("为美好的"))
-        assertTrue("got $text", text.contains("祝福"))
+        assertEquals(3, blocks.size)
+        val texts = blocks.map { (it as ChapterBlock.Paragraph).text }
+        assertTrue("got $texts", texts.any { it.contains("为美好的") })
+        assertTrue("got $texts", texts.any { it.contains("世界献上") })
+        assertTrue("got $texts", texts.any { it.contains("祝福") })
     }
 
     @Test
