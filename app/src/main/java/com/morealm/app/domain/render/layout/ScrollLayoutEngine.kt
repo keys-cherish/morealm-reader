@@ -211,18 +211,24 @@ class ScrollLayoutEngine(
         // **D2.a Commit 2b**: 含 __MOREALM_TBL__ marker 的 paragraph 由主循环 table 分支解析 ParsedTable + 调 layoutTable（cell.widthPx 切行 → CJK 1字/行竖排）。
         // expandTableMarkersStub 展平 fallback 已下线
         //
-        // **阶段 2-F**：前 N 段任意段含 table marker → 视为"封面 / 卷首页 / BookName"等
-        // 结构化布局丰富页面（某 EPUB chapter-1 vol-title / SampleLN BookName.xhtml 等），跳过
-        // 自画 chapter title 大字 — 参考实现 在这些章不画 toc title 大字，仅 InfoBar 显示。
-        // MoRealm 之前自画 toc navLabel ("书名" / "第一卷 剑起风云") 让封面页顶部多出小字与
-        // 大字布局重复 → 视觉跟参考图 38 / 16 不一致。
+        // **阶段 2-F**：双条件检测"封面 / 卷首页 / BookName" 等特殊章 → 跳过自画 title 大字。
         //
-        // N=3 兜底某 EPUB chapter-1 场景（首段是 H2「惊蛰」段不含 table marker，table.vol-title
-        // 在后面段）。普通章节正文（前 3 段都是普通文本）不 skip → 仍画自画 title。
-        // 普通章节正文中间出现的 table（教科书表格 / 诗词对照表 / 数据表）不在前 3 段，
-        // 不会误判为封面页。
+        // 参考实现 不在这些章正文画 toc navLabel，仅 InfoBar 显示。MoRealm 之前自画
+        // toc navLabel ("书名" / "封面" / "第一卷 剑起风云") 让封面页顶部多出小字与大字布局
+        // 重复 → 视觉跟参考图 38 / 16 不一致。
+        //
+        // 条件 1：title 是常见的"非内容章节"关键字（精确匹配 trim 后的 title）→
+        //   覆盖 SampleLN BookName/cover/封面 等 toc navLabel 是 generic tag 的场景。
+        //   (SampleLN 5 sibling tables 被 TableMergeVisitor merge 成普通 RichText paragraph
+        //    不产 table marker，所以走条件 1 而非条件 2。)
+        //
+        // 条件 2：paragraphs 前 3 段任意段含 table marker → 覆盖某 EPUB chapter-1 卷扉页
+        //   (toc navLabel "第一卷 剑起风云" 不是 generic tag，但内容是 vol-title table)。
+        val titleTrimmed = title.trim()
+        val isSpecialChapterTitle = titleTrimmed in SPECIAL_CHAPTER_TITLES
         val firstFewParas = paragraphs.asSequence().filter { it.isNotBlank() }.take(3).toList()
-        val contentProvidesChapterTitle = firstFewParas.any { hasTableMarker(it) }
+        val hasEarlyTableMarker = firstFewParas.any { hasTableMarker(it) }
+        val contentProvidesChapterTitle = isSpecialChapterTitle || hasEarlyTableMarker
 
         val pages = mutableListOf<ScrollPage>()
         var currentPageLines = mutableListOf<ScrollLine>()
@@ -1468,6 +1474,25 @@ class ScrollLayoutEngine(
     }
 
     companion object {
+        /**
+         * **阶段 2-F**：常见"非内容章节"标题关键字集合 — 这些 toc navLabel 是 generic tag
+         * (不是真正的章节标题)，不应在正文画大字 chapter title。
+         *
+         * 精确匹配 trim 后的 title (不做 substring 模糊匹配，避免"第三卷：剑起风云"含"卷"
+         * 被误判)。覆盖 SampleLN "书名" / "封面" / EPUB 通用 "目录" / "前言" / "后记" 等。
+         */
+        private val SPECIAL_CHAPTER_TITLES: Set<String> = setOf(
+            // 中文
+            "书名", "封面", "封底", "扉页", "目录", "版权", "版权页",
+            "前言", "序", "序言", "序章", "导言", "弁言", "引言", "引子",
+            "后记", "跋", "结语", "尾声", "致谢", "致辞",
+            "楔子", "卷首", "卷首语", "卷尾", "卷末",
+            // 英文
+            "Cover", "Title", "Title Page", "Contents", "Table of Contents",
+            "Foreword", "Preface", "Prologue", "Epilogue",
+            "Afterword", "Acknowledgments", "Dedication",
+        )
+
         /**
          * 章序号识别正则 —— 抄自 [com.morealm.app.domain.render.ChapterProvider]
          * companion 内同款表达式，保持识别行为完全一致。
