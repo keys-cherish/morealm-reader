@@ -261,8 +261,20 @@ fun ChapterPaneCanvas(
                                 "lineText='${line.text.take(15)}'",
                         )
                     }
-                    // A5 atoms 骨架：line.atoms 非 null 走新路径 (drawAtomsRow)。
+                    // **D 模型 (阶段 1 重构)** 分发优先级：cells != null → drawCellsRow (table line)
+                    // > atoms != null → drawAtomsRow (普通段 atom 路径) > columns 路径
+                    val lineCells = line.cells
                     val lineAtoms = line.atoms
+                    if (lineCells != null) {
+                        drawCellsRow(
+                            nc, lineCells, line, paint, pageOffsetY,
+                            textColorByCp = textColorByCp,
+                            defaultColor = defaultColor,
+                        )
+                        if (paragraphColor != null) paint.color = defaultColor
+                        if (shadowApplied) paint.clearShadowLayer()
+                        continue
+                    }
                     if (lineAtoms != null) {
                         drawAtomsRow(
                             nc, lineAtoms, line, paint, baselineY, pageOffsetY,
@@ -371,26 +383,21 @@ private fun drawAtomsRow(
     // CSS text-align cascade 算出的居中偏移（见 PagePaneCanvas.drawByAtoms 同款修复）
     var x = line.columns.firstOrNull()?.start ?: 0f
     var atomStartCp = line.firstChapterPos  // A5 Step 2：atom 起始 cp 用于 textColorByCp 查询
-    for ((atomIdx, atom) in atoms.withIndex()) {
+    for (atom in atoms) {
         when (atom) {
             is com.morealm.app.domain.render.layout.TextRun -> {
                 val baseSize = basePaint.textSize
                 val scale = atom.sizeScale
                 if (scale != 1f) basePaint.textSize = baseSize * scale
-                // **D2.b 方案 F per-cell stride** —— 详 PagePaneCanvas 同位注释
-                val effectiveBaselineY = when {
-                    atom.cellIdx >= 0 -> pageOffsetY + line.lineTop + atom.baseline
-                    scale != 1f -> pageOffsetY + line.lineTop + basePaint.textSize * 0.8f
-                    else -> baselineY
-                }
-                val effectiveX = if (atom.cellIdx >= 0) {
-                    line.columns.getOrNull(atomIdx)?.start ?: x
-                } else x
+                // sizeScale ≠ 1 时 vertical-align: top fallback；= 1 沿用 caller baselineY
+                val effectiveBaselineY = if (scale != 1f) {
+                    pageOffsetY + line.lineTop + basePaint.textSize * 0.8f
+                } else baselineY
                 val hasOverride = if (textColorByCp.isNotEmpty()) {
                     (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
                 } else false
                 if (hasOverride) {
-                    var cx = effectiveX
+                    var cx = x
                     val baseColor = atom.colorArgb ?: defaultColor
                     for (ci in atom.text.indices) {
                         val cp = atomStartCp + ci
@@ -404,11 +411,11 @@ private fun drawAtomsRow(
                 } else {
                     val origColor = basePaint.color
                     if (atom.colorArgb != null) basePaint.color = atom.colorArgb
-                    canvas.drawText(atom.text, effectiveX, effectiveBaselineY, basePaint)
+                    canvas.drawText(atom.text, x, effectiveBaselineY, basePaint)
                     if (atom.colorArgb != null) basePaint.color = origColor
                 }
                 if (scale != 1f) basePaint.textSize = baseSize
-                if (atom.cellIdx < 0) x += atom.width
+                x += atom.width
             }
             is com.morealm.app.domain.render.layout.InlineImage -> {
                 val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
@@ -429,6 +436,82 @@ private fun drawAtomsRow(
             }
         }
         atomStartCp += atom.cpCount
+    }
+}
+
+/**
+ * **D 模型 (阶段 1 重构)** —— ChapterPane (SCROLL 模式) 的 table line cells 路径绘制。
+ *
+ * 跟 [drawAtomsRow] 的差异：本函数承载 chapter-level pageOffsetY 偏移（每条 line.lineTop
+ * 是 page-relative，加上 pageOffsetY 拿到 chapter-relative y 坐标）。
+ *
+ * 几何关系与 [PagePaneCanvas.drawByCells] 同：
+ *  - effective atom 左 x = cell.contentLeft + cell.padding + atom.cellLocalX
+ *  - effective baseline y = pageOffsetY + line.lineTop + cell.contentTop + cell.padding +
+ *    atom.cellLocalY + atom.baseline
+ */
+private fun drawCellsRow(
+    canvas: android.graphics.Canvas,
+    cells: List<com.morealm.app.domain.render.layout.ScrollLineCell>,
+    line: com.morealm.app.domain.render.layout.ScrollLine,
+    basePaint: android.text.TextPaint,
+    pageOffsetY: Float,
+    textColorByCp: Map<Int, Int> = emptyMap(),
+    defaultColor: Int = basePaint.color,
+) {
+    val baseSize = basePaint.textSize
+    var atomStartCp = line.firstChapterPos
+    for (cell in cells) {
+        // 未来 Task 2-D：cell.backgroundColor / borderRadiusPx 装饰盒
+        for (atom in cell.atoms) {
+            when (atom) {
+                is com.morealm.app.domain.render.layout.TextRun -> {
+                    val scale = atom.sizeScale
+                    if (scale != 1f) basePaint.textSize = baseSize * scale
+                    val effectiveX = cell.contentLeft + cell.padding + atom.cellLocalX
+                    val effectiveBaselineY = pageOffsetY + line.lineTop + cell.contentTop +
+                        cell.padding + atom.cellLocalY + atom.baseline
+                    val hasOverride = if (textColorByCp.isNotEmpty()) {
+                        (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
+                    } else false
+                    if (hasOverride) {
+                        var cx = effectiveX
+                        val baseColor = atom.colorArgb ?: defaultColor
+                        for (ci in atom.text.indices) {
+                            val cp = atomStartCp + ci
+                            basePaint.color = textColorByCp[cp] ?: baseColor
+                            val ch = atom.text[ci].toString()
+                            canvas.drawText(ch, cx, effectiveBaselineY, basePaint)
+                            cx += basePaint.measureText(ch)
+                        }
+                        basePaint.color = defaultColor
+                    } else {
+                        val origColor = basePaint.color
+                        if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                        canvas.drawText(atom.text, effectiveX, effectiveBaselineY, basePaint)
+                        if (atom.colorArgb != null) basePaint.color = origColor
+                    }
+                    if (scale != 1f) basePaint.textSize = baseSize
+                }
+                is com.morealm.app.domain.render.layout.InlineImage -> {
+                    val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
+                    if (bmp != null) {
+                        val drawX = cell.contentLeft + cell.padding + atom.cellLocalX
+                        val drawY = pageOffsetY + line.lineTop + cell.contentTop + cell.padding +
+                            atom.cellLocalY
+                        val scaleF = minOf(atom.width / bmp.width, atom.height / bmp.height)
+                        val drawW = bmp.width * scaleF
+                        val drawH = bmp.height * scaleF
+                        canvas.drawBitmap(
+                            bmp, null,
+                            android.graphics.RectF(drawX, drawY, drawX + drawW, drawY + drawH),
+                            null,
+                        )
+                    }
+                }
+            }
+            atomStartCp += atom.cpCount
+        }
     }
 }
 

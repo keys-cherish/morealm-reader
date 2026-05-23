@@ -120,24 +120,70 @@ data class ScrollLine(
      */
     val headingLevel: Int = 0,
     /**
-     * **D2.b 方案 F per-cell stride** —— layoutTable emit 表格行时每 cell 字符独立 stride
-     * （avoid cell[1] 0.9em 小字号字符在 cell[0] 1.4em row 节奏内空隙过大）。
+     * **D 模型 (阶段 1 重构)** —— table line cells，承载 row 内每个 cell 的子布局结果。
      *
-     * 格式：每个 atom 对应一个 cellIdx（atom.cellIdx 通过 [Atom.cellIdx] 字段携带），
-     * 本字段提供 cellIdx → vertical stride (px) 查找表。drawByAtoms 根据 atom.cellIdx 查
-     * stride 算独立 baseline = lineTop + cellOffset + ascent。
+     * 设计动机：A 模型把 cell 内字符 flatten 到 line.atoms，靠 [Atom.cellIdx] hack
+     * 在 drawByAtoms 时回溯 cell 归属。D 模型把 cell 提升为一等公民，每个 cell 是一个
+     * 子 box（[ScrollLineCell]）含 contentTop / contentHeight / atoms。drawByAtoms 直接
+     * 遍历 cells → cell.atoms 计算字符 y = pageOffsetY + line.lineTop + cell.contentTop +
+     * atom.cellLocalY + atom.baseline。
      *
-     * **null = non-table line**（普通 paragraph / heading / image）—— drawByAtoms 走原路径
-     * 不读 cellLineHeights，全 atom 共用 line.lineTop 节奏。
+     * **互斥分发**：
+     *  - `cells != null` → table line，走 D 模型路径（drawByCells）
+     *  - `cells == null` → 非 table line（paragraph / heading / image），走 A 模型旧路径
+     *    （drawByAtoms 用 [atoms] / drawByColumns 用 [columns]）
      *
-     * TODO(D-future)：vertical-align middle/bottom 或 cell padding/border/rowspan 需求出现
-     * 时，把 cellLineHeights[] 升级为 [ScrollLineCell]（含 contentTop/height/padding/cellIdx）
-     * 子对象数组。atom.cellIdx 字段保持兼容。
+     * **反查兼容**：table line 时 [columns] 仍含全部 cell 字符 flatten（globalX = line.lineLeft +
+     * cell.contentLeft + atom.cellLocalX 算出的 absolute x），让 chapterPosition → column
+     * 反查工具继续可用。highlight rect bounds 按 cell.contentLeft+contentWidth /
+     * line.lineTop + cell.contentTop + contentHeight 算更准（未来 highlight 升级时用）。
+     *
+     * **未来扩展（阶段 3-B/C/4）**：
+     *  - rowspan：cell 含 spanRows: N，row.height 算 max(cell.contentH / N)（表格 rowspan 行高布局）
+     *  - 嵌套 table：cell.children: List<Atom> 升级为 List<LayoutNode>，含子 ScrollLine 树
+     *  - vertical-align middle/baseline：cell.contentTop = (row.h - cell.contentH) × {0.5 / baselineDelta}
      */
-    val cellLineHeights: FloatArray? = null,
+    val cells: List<ScrollLineCell>? = null,
 ) {
     val height: Float get() = lineBottom - lineTop
 
     /** 该行是否承载某 chapterPosition（含起含止）。反查时常用。 */
     fun containsChapterPos(cp: Int): Boolean = cp in firstChapterPos..lastChapterPos
 }
+
+/**
+ * **D 模型 (阶段 1 重构)** —— [ScrollLine.cells] 中的一个 cell box。
+ *
+ * 几何约定：
+ *  - 坐标系：以 [ScrollLine.lineTop] 为 0 的相对坐标
+ *  - cell 顶 = `line.lineTop + contentTop`
+ *  - cell 底 = `line.lineTop + contentTop + contentHeight + 2 * padding`
+ *  - cell 左 = `line.lineLeft + contentLeft`（line.lineLeft 当前固定 0）
+ *  - cell 右 = `cell 左 + contentWidth + 2 * padding`
+ *
+ * cell 内 atom 的 effective draw 坐标：
+ *  - effectiveX = pageOffsetX + line.lineLeft + cell.contentLeft + padding + atom.cellLocalX
+ *  - effectiveY = pageOffsetY + line.lineTop + cell.contentTop + padding + atom.cellLocalY
+ *  - effectiveBaselineY = effectiveY + atom.baseline
+ *
+ * @property contentTop cell box 顶在 [ScrollLine] 内的 y offset (px)。vertical-align: top → 0；
+ *   middle → (row.h - cell.contentH) / 2；bottom → row.h - cell.contentH。
+ * @property contentLeft cell box 左在 [ScrollLine] 内的 x offset (px)。row 内 cell 横排时累加。
+ * @property contentWidth cell box 内容宽 (px)，不含 padding。
+ * @property contentHeight cell box 内容高 (px)，不含 padding。等于 cell 内最深 atom.cellLocalY +
+ *   atom.height（约等于 lineCountInCell × cellStride）。
+ * @property padding cell 内边距 (px)，默认 0f（CSS table-cell padding 暂不支持，未来 Task 2-D 加）。
+ * @property atoms cell 内 atoms 序列。可空（空 cell 占位用）。
+ * @property backgroundColor cell box 背景色 ARGB，null = 无装饰。未来 Task 2-D 启用 qipao 椭圆时用。
+ * @property borderRadiusPx cell box 圆角半径 (px)，0f = 直角。100% CSS 时 = cell box 宽/2 (椭圆/圆)。
+ */
+data class ScrollLineCell(
+    val contentTop: Float,
+    val contentLeft: Float,
+    val contentWidth: Float,
+    val contentHeight: Float,
+    val padding: Float = 0f,
+    val atoms: List<Atom>,
+    val backgroundColor: Int? = null,
+    val borderRadiusPx: Float = 0f,
+)

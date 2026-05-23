@@ -67,6 +67,34 @@ sealed interface Atom {
 
     /** Atom 顶部到文字基线的像素距离。Canvas drawText 需要的 baseline y 偏移。 */
     val baseline: Float
+
+    /**
+     * **D 模型 (阶段 1 重构)** — 在 [ScrollLineCell] 内的 atom 左偏移 (px)。
+     *
+     * 几何关系：
+     *   effective atom 左边 x = pageOffsetX + line.lineLeft + cell.contentLeft + atom.cellLocalX
+     *
+     * 普通段（非 table）atom：默认 0f，行内 x 由 [com.morealm.app.domain.render.layout.ScrollLine.columns]
+     * `[atomIdx].start` 提供（A 模型路径不读 cellLocalX/Y）。
+     *
+     * Table cell 内 atom：[layoutTable] emit 时填正值，drawByAtoms 走 cells 分支读此字段。
+     */
+    val cellLocalX: Float get() = 0f
+
+    /**
+     * **D 模型 (阶段 1 重构)** — 在 [ScrollLineCell] 内的 atom 顶偏移 (px)。
+     *
+     * 几何关系：
+     *   effective atom 顶 y       = pageOffsetY + line.lineTop + cell.contentTop + atom.cellLocalY
+     *   effective drawText baselineY = effective atom 顶 y + atom.baseline
+     *
+     * 普通段（非 table）atom：默认 0f，drawText baseline y 由 caller `baselineY = line.lineTop +
+     * contentAscent` 直接传（A 模型路径不读 cellLocalY）。
+     *
+     * Table cell 内 atom：等于该 atom 所属 cell-internal line 的 `lineIdxInCell × cellStride`
+     * （cell 内多 line 字符堆叠时不同 line 的 atom 各自 cellLocalY 不同）。
+     */
+    val cellLocalY: Float get() = 0f
 }
 
 /**
@@ -99,18 +127,8 @@ data class TextRun(
     override val width: Float,
     override val height: Float,
     override val baseline: Float,
-    /**
-     * **D2.b 方案 F per-cell stride** —— layoutTable emit table 字符时携带 cell 索引，
-     * drawByAtoms 根据本字段查 [ScrollLine.cellLineHeights] 算独立 vertical baseline，
-     * 让两 cell 字号差大时各自字符 row stride 紧凑（cell[1] 0.9em 小字号字符之间不跟
-     * cell[0] 1.4em 大字号 row 节奏联动）。
-     *
-     * 默认 -1 = non-table atom（普通 paragraph / heading），drawByAtoms 走原路径不查
-     * cell stride table。
-     *
-     * TODO(D-future)：升级到 [ScrollLineCell] 子对象时本字段仍有效（cellIdx 索引到 cells[]）。
-     */
-    val cellIdx: Int = -1,
+    override val cellLocalX: Float = 0f,
+    override val cellLocalY: Float = 0f,
 ) : Atom {
     override val cpCount: Int get() = text.length
 }

@@ -221,9 +221,16 @@ fun PagePaneCanvas(
                             "lineText='${line.text.take(15)}'",
                     )
                 }
-                // A5 atoms 骨架：line.atoms 非 null 走新路径 (drawByAtoms)，否则走旧 column 路径。
-                // 当前阶段 emit 仍走 column，atoms 永远 null —— 分发函数 dead code 等 A4c 起填 atoms。
+                // **D 模型 (阶段 1 重构)** 分发优先级：cells != null → drawByCells (table line)
+                // > atoms != null → drawByAtoms (普通段 atom 路径) > columns 路径（旧 char-level）
+                val lineCells = line.cells
                 val lineAtoms = line.atoms
+                if (lineCells != null) {
+                    drawByCells(nc, lineCells, line, paint, defaultColor, textColorByCp)
+                    if (paragraphColor != null) paint.color = defaultColor
+                    if (shadowApplied) paint.clearShadowLayer()
+                    continue
+                }
                 if (lineAtoms != null) {
                     drawByAtoms(nc, lineAtoms, line, paint, baselineY, defaultColor, textColorByCp)
                     if (paragraphColor != null) paint.color = defaultColor
@@ -338,31 +345,23 @@ private fun drawByAtoms(
     var x = line.columns.firstOrNull()?.start ?: 0f
     val baseSize = basePaint.textSize
     var atomStartCp = line.firstChapterPos  // A5 Step 2：atom 起始 cp 用于 textColorByCp 查询
-    for ((atomIdx, atom) in atoms.withIndex()) {
+    for (atom in atoms) {
         when (atom) {
             is com.morealm.app.domain.render.layout.TextRun -> {
                 val scale = atom.sizeScale
                 if (scale != 1f) basePaint.textSize = baseSize * scale
-                // **D2.b 方案 F per-cell stride** —— table cell atom (cellIdx>=0) 用 atom.baseline
-                // 当 line-relative absolute baseline + columns[atomIdx].start 取真 x（atoms 含
-                // cell vertical stack 多字符，不能用 x += atom.width 横向累加）。
-                // sizeScale ≠ 1 但非 table cell → vertical-align: top fallback 让小字号字符顶贴 line 顶。
+                // sizeScale ≠ 1 时 vertical-align: top fallback 让小字号字符顶贴 line 顶。
                 // sizeScale = 1 → 沿用 caller baselineY 兼容现有路径（H2/SampleLN em15 等）。
-                val effectiveBaselineY = when {
-                    atom.cellIdx >= 0 -> line.lineTop + atom.baseline
-                    scale != 1f -> line.lineTop + basePaint.textSize * 0.8f
-                    else -> baselineY
-                }
-                val effectiveX = if (atom.cellIdx >= 0) {
-                    line.columns.getOrNull(atomIdx)?.start ?: x
-                } else x
+                val effectiveBaselineY = if (scale != 1f) {
+                    line.lineTop + basePaint.textSize * 0.8f
+                } else baselineY
                 // A5 Step 2：检查 atom range 内有无 user 高亮 textColorByCp override
                 // 命中 → 退化 char-by-char 按 cp 独立涂色；无 → fast path 整 atom drawText
                 val hasOverride = if (textColorByCp.isNotEmpty()) {
                     (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
                 } else false
                 if (hasOverride) {
-                    var cx = effectiveX
+                    var cx = x
                     val baseColor = atom.colorArgb ?: defaultColor
                     for (ci in atom.text.indices) {
                         val cp = atomStartCp + ci
@@ -376,12 +375,11 @@ private fun drawByAtoms(
                 } else {
                     val origColor = basePaint.color
                     if (atom.colorArgb != null) basePaint.color = atom.colorArgb
-                    canvas.drawText(atom.text, effectiveX, effectiveBaselineY, basePaint)
+                    canvas.drawText(atom.text, x, effectiveBaselineY, basePaint)
                     if (atom.colorArgb != null) basePaint.color = origColor
                 }
                 if (scale != 1f) basePaint.textSize = baseSize
-                // table cell atom 不累加 x（atom 顺序非水平排）；非 table 仍 x += atom.width
-                if (atom.cellIdx < 0) x += atom.width
+                x += atom.width
             }
             is com.morealm.app.domain.render.layout.InlineImage -> {
                 val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
@@ -402,6 +400,87 @@ private fun drawByAtoms(
             }
         }
         atomStartCp += atom.cpCount
+    }
+}
+
+/**
+ * **D 模型 (阶段 1 重构)** —— table line 的 cells 路径绘制。
+ *
+ * 几何关系：
+ *  - effective atom 左 x = cell.contentLeft + cell.padding + atom.cellLocalX
+ *  - effective baseline y = line.lineTop + cell.contentTop + cell.padding + atom.cellLocalY +
+ *    atom.baseline
+ *
+ * 与 [drawByAtoms] 的区别：
+ *  - drawByAtoms 走 line.atoms 扁平 list，atoms 间用 `x += atom.width` 水平累加
+ *  - drawByCells 走 line.cells 嵌套结构，每 cell 内 atom 由 cell-local 坐标精确定位（不依赖累加）
+ *
+ * 这让 cell 内多 line 字符堆叠（CJK 单字 1 行）、跨 cell 字号差大、未来 rowspan / vertical-align
+ * middle 等场景的几何计算解耦到 emit 阶段，drawing 端只做坐标加和。
+ *
+ * **未来扩展（Task 2-D）**：cell.backgroundColor / borderRadiusPx 启用时在 atom 前画 cell box
+ * 装饰盒（drawRoundRect）。当前 D2.b 场景全 null/0f → 跳过。
+ */
+private fun drawByCells(
+    canvas: android.graphics.Canvas,
+    cells: List<com.morealm.app.domain.render.layout.ScrollLineCell>,
+    line: com.morealm.app.domain.render.layout.ScrollLine,
+    basePaint: android.text.TextPaint,
+    defaultColor: Int,
+    textColorByCp: Map<Int, Int> = emptyMap(),
+) {
+    val baseSize = basePaint.textSize
+    var atomStartCp = line.firstChapterPos
+    for (cell in cells) {
+        // 未来 Task 2-D：cell.backgroundColor != null 时画 RoundRect bg + cell.borderRadiusPx 圆角
+        for (atom in cell.atoms) {
+            when (atom) {
+                is com.morealm.app.domain.render.layout.TextRun -> {
+                    val scale = atom.sizeScale
+                    if (scale != 1f) basePaint.textSize = baseSize * scale
+                    val effectiveX = cell.contentLeft + cell.padding + atom.cellLocalX
+                    val effectiveBaselineY = line.lineTop + cell.contentTop + cell.padding +
+                        atom.cellLocalY + atom.baseline
+                    val hasOverride = if (textColorByCp.isNotEmpty()) {
+                        (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
+                    } else false
+                    if (hasOverride) {
+                        var cx = effectiveX
+                        val baseColor = atom.colorArgb ?: defaultColor
+                        for (ci in atom.text.indices) {
+                            val cp = atomStartCp + ci
+                            basePaint.color = textColorByCp[cp] ?: baseColor
+                            val ch = atom.text[ci].toString()
+                            canvas.drawText(ch, cx, effectiveBaselineY, basePaint)
+                            cx += basePaint.measureText(ch)
+                        }
+                        basePaint.color = defaultColor
+                    } else {
+                        val origColor = basePaint.color
+                        if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                        canvas.drawText(atom.text, effectiveX, effectiveBaselineY, basePaint)
+                        if (atom.colorArgb != null) basePaint.color = origColor
+                    }
+                    if (scale != 1f) basePaint.textSize = baseSize
+                }
+                is com.morealm.app.domain.render.layout.InlineImage -> {
+                    val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
+                    if (bmp != null) {
+                        val drawX = cell.contentLeft + cell.padding + atom.cellLocalX
+                        val drawY = line.lineTop + cell.contentTop + cell.padding + atom.cellLocalY
+                        val scaleF = minOf(atom.width / bmp.width, atom.height / bmp.height)
+                        val drawW = bmp.width * scaleF
+                        val drawH = bmp.height * scaleF
+                        canvas.drawBitmap(
+                            bmp, null,
+                            android.graphics.RectF(drawX, drawY, drawX + drawW, drawY + drawH),
+                            null,
+                        )
+                    }
+                }
+            }
+            atomStartCp += atom.cpCount
+        }
     }
 }
 
