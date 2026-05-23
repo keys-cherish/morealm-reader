@@ -560,17 +560,31 @@ class ReaderViewModel @Inject constructor(
     fun onScrollNearBottom() = chapter.onScrollNearBottom()
     fun onScrollReachedBottom() = navigation.onScrollReachedBottom()
 
-    fun searchFullText(query: String) = search.searchFullText(query)
+    /**
+     * 全文搜索。同时把 [AppPreferences.innerSearchMode] 与当前阅读位置传给
+     * SearchController 做方向过滤；mode = "all" 时与旧行为完全等价。
+     */
+    fun searchFullText(query: String) = viewModelScope.launch {
+        val mode = prefs.innerSearchMode.first()
+        val cur = chapter.currentChapterIndex.value
+        val pos = progress.visiblePage.value.chapterPosition.coerceAtLeast(0)
+        search.searchFullText(query, mode, cur, pos)
+    }
     /**
      * 章内搜索：用已加载的当前章节内容做关键词扫描，列出**所有**命中位置。比
      * [searchFullText] 瞬时（无 IO，不下载其它章节），命中无 50 条上限。
      * 复用 `_searchResults`，UI 端共用 [FullTextSearchPanel] 渲染——区别由 Tab 决定。
+     *
+     * 同样应用 [AppPreferences.innerSearchMode] 方向过滤：前向只列当前页前的命中，
+     * 后向只列之后的（同章内按 queryIndexInChapter 与 chapterPosition 比较）。
      */
-    fun searchInChapter(query: String) {
+    fun searchInChapter(query: String) = viewModelScope.launch {
+        val mode = prefs.innerSearchMode.first()
         val plain = chapter.chapterContent.value.stripHtml()
         val idx = chapter.currentChapterIndex.value
+        val pos = progress.visiblePage.value.chapterPosition.coerceAtLeast(0)
         val title = chapter.chapters.value.getOrNull(idx)?.title ?: ""
-        search.searchCurrentChapter(query, plain, idx, title)
+        search.searchCurrentChapter(query, plain, idx, title, mode, pos)
     }
     fun clearSearchResults() = search.clearSearchResults()
     fun openSearchResult(result: ReaderSearchController.SearchResult) = search.openSearchResult(result)

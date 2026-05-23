@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.RecordVoiceOver
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.ScreenLockPortrait
 import androidx.compose.material.icons.outlined.SyncAlt
 import androidx.compose.material.icons.outlined.TextFields
@@ -78,6 +79,7 @@ fun ReadingSettingsScreen(
     val showChapterName by viewModel.isChapterNameVisible.collectAsStateWithLifecycle()
     val showTimeBattery by viewModel.isTimeBatteryVisible.collectAsStateWithLifecycle()
     val titleAlign by viewModel.titleAlign.collectAsStateWithLifecycle()
+    val innerSearchMode by viewModel.innerSearchMode.collectAsStateWithLifecycle()
     val customTxtChapterRegex by viewModel.customTxtChapterRegex.collectAsStateWithLifecycle()
 
     // Dialog states
@@ -89,6 +91,8 @@ fun ReadingSettingsScreen(
     var showReadingDirectionDialog by remember { mutableStateOf(false) }
     // 章节标题对齐方式选择弹窗（左/中/右）。
     var showTitleAlignDialog by remember { mutableStateOf(false) }
+    // 文内搜索方向选择弹窗（全文 / 前向 / 后向）。
+    var showInnerSearchModeDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -245,6 +249,18 @@ fun ReadingSettingsScreen(
                     title = "章节标题对齐",
                     value = titleAlignLabel(titleAlign),
                     onClick = { showTitleAlignDialog = true },
+                )
+            }
+
+            // ── 文内搜索 ──
+            SectionHeader("文内搜索")
+            SettingsCard {
+                SettingsClickRow(
+                    icon = Icons.Outlined.Search,
+                    title = "搜索方向",
+                    subtitle = "前向 = 当前页之前；后向 = 当前页之后",
+                    value = innerSearchModeLabel(innerSearchMode),
+                    onClick = { showInnerSearchModeDialog = true },
                 )
             }
 
@@ -441,6 +457,13 @@ fun ReadingSettingsScreen(
             onDismiss = { showTitleAlignDialog = false },
         )
     }
+    if (showInnerSearchModeDialog) {
+        InnerSearchModeDialog(
+            current = innerSearchMode,
+            onSelect = { viewModel.setInnerSearchMode(it); showInnerSearchModeDialog = false },
+            onDismiss = { showInnerSearchModeDialog = false },
+        )
+    }
 }
 
 // ── Helper composables ──
@@ -612,6 +635,12 @@ private fun titleAlignLabel(mode: Int): String = when (mode) {
     else -> "左对齐"
 }
 
+private fun innerSearchModeLabel(mode: String): String = when (mode) {
+    "forward" -> "前向（之前）"
+    "backward" -> "后向（之后）"
+    else -> "全文"
+}
+
 /**
  * 章节标题对齐弹窗 —— 三选一（左/中/右），选完立即落 DataStore。
  *
@@ -648,6 +677,58 @@ private fun TitleAlignDialog(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(label)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
+
+/**
+ * 文内搜索方向弹窗 —— 三选一（全文 / 前向 / 后向），点完立即落 DataStore。
+ * 每项带副文案说明语义，避免「前向/后向」这种容易在中文里混淆方向的术语让用户犹豫。
+ */
+@Composable
+private fun InnerSearchModeDialog(
+    current: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    data class Opt(val value: String, val label: String, val sub: String)
+    val options = listOf(
+        Opt("all", "全文搜索", "显示全部命中，不区分位置"),
+        Opt("forward", "前向搜索", "只显示当前页之前的命中"),
+        Opt("backward", "后向搜索", "只显示当前页之后的命中"),
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("文内搜索方向") },
+        text = {
+            Column {
+                options.forEach { opt ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(opt.value) }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = current == opt.value,
+                            onClick = { onSelect(opt.value) },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text(opt.label, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                opt.sub,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            )
+                        }
                     }
                 }
             }

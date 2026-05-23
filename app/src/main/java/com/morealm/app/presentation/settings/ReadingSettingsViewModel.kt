@@ -65,6 +65,10 @@ class ReadingSettingsViewModel @Inject constructor(
     val customTxtChapterRegex: StateFlow<String> = prefs.customTxtChapterRegex
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    /** 文内搜索方向模式：all/forward/backward。详见 [AppPreferences.innerSearchMode]。 */
+    val innerSearchMode: StateFlow<String> = prefs.innerSearchMode
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "all")
+
     val ttsSkipPattern: StateFlow<String> = prefs.ttsSkipPattern
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
@@ -105,6 +109,7 @@ class ReadingSettingsViewModel @Inject constructor(
     fun setShowTimeBattery(v: Boolean) = viewModelScope.launch { prefs.setShowTimeBattery(v) }
     fun setTitleAlign(v: Int) = viewModelScope.launch { prefs.setTitleAlign(v) }
     fun setCustomTxtChapterRegex(v: String) = viewModelScope.launch { prefs.setCustomTxtChapterRegex(v) }
+    fun setInnerSearchMode(v: String) = viewModelScope.launch { prefs.setInnerSearchMode(v) }
     fun setTtsSkipPattern(v: String) = viewModelScope.launch { prefs.setTtsSkipPattern(v) }
     fun setTtsKeepCpuAwake(v: Boolean) = viewModelScope.launch { prefs.setTtsKeepCpuAwake(v) }
     fun setReaderBgImageDay(v: String) = viewModelScope.launch { prefs.setReaderBgImageDay(v) }

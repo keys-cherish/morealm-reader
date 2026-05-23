@@ -253,6 +253,17 @@ class AppPreferences @Inject constructor(
          * 章节内搜索的最近历史。换行分隔，最多 20 条；UI chip 展示。
          */
         val READER_SEARCH_HISTORY = stringPreferencesKey("reader_search_history")
+        /**
+         * 文内搜索方向模式。作用于阅读器底部搜索面板的「全书」+「当前章」两个 Tab：
+         *  - "all"      : 不过滤，所有命中都显示（默认；与历史行为一致）
+         *  - "forward"  : 只显示当前阅读位置 **之前** 的命中（含同章 qIdx < curPos）
+         *  - "backward" : 只显示当前阅读位置 **之后** 的命中（含同章 qIdx > curPos）
+         *
+         * 用户原话「前向搜索/后向搜索/全文搜索」—— "前向"=向前看（之前已经过的内容），
+         * "后向"=向后看（还没读到的内容）。精度按 chapterIndex + chapterPosition 比较，
+         * 跨章只比 chapterIndex，同章对比 queryIndexInChapter 与 visiblePage.chapterPosition。
+         */
+        val INNER_SEARCH_MODE = stringPreferencesKey("inner_search_mode")
         // ── 阅读器工具栏编辑 ──────────────────────────────────────────────
         val READER_TOOLBAR_LAYOUT = stringPreferencesKey("reader_toolbar_layout")
         val READER_TOOLBAR_EDIT_GUIDE_SEEN = booleanPreferencesKey("reader_toolbar_edit_guide_seen")
@@ -578,6 +589,10 @@ class AppPreferences @Inject constructor(
     val customTxtChapterRegex: Flow<String> = context.dataStore.data
         .map { it[Keys.CUSTOM_TXT_CHAPTER_REGEX] ?: "" }
 
+    /** 见 [Keys.INNER_SEARCH_MODE]。默认 "all"；异常值由 setter coerce 回 "all"。 */
+    val innerSearchMode: Flow<String> = context.dataStore.data
+        .map { it[Keys.INNER_SEARCH_MODE] ?: "all" }
+
     val ttsSkipPattern: Flow<String> = context.dataStore.data
         .map { it[Keys.TTS_SKIP_PATTERN] ?: "" }
 
@@ -867,6 +882,9 @@ class AppPreferences @Inject constructor(
     suspend fun setGlobalBgCardAlpha(alpha: Float) = update(Keys.GLOBAL_BG_CARD_ALPHA, alpha.coerceIn(0.3f, 1.0f))
     suspend fun setGlobalBgCardBlur(blur: Float) = update(Keys.GLOBAL_BG_CARD_BLUR, blur.coerceIn(0f, 25f))
     suspend fun setCustomTxtChapterRegex(regex: String) = update(Keys.CUSTOM_TXT_CHAPTER_REGEX, regex)
+    /** 文内搜索方向：all / forward / backward；异常值回退 "all"。 */
+    suspend fun setInnerSearchMode(mode: String) =
+        update(Keys.INNER_SEARCH_MODE, if (mode == "forward" || mode == "backward") mode else "all")
     suspend fun setTtsSkipPattern(pattern: String) = update(Keys.TTS_SKIP_PATTERN, pattern)
     suspend fun setTtsVoice(voice: String) = update(Keys.TTS_VOICE, voice)
     suspend fun setTtsSystemVoice(voice: String) = update(Keys.TTS_SYSTEM_VOICE, voice)
