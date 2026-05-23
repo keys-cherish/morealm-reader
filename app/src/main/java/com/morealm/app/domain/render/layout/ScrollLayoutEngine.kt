@@ -5,6 +5,15 @@ import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.TextMeasure
 import com.morealm.app.domain.render.ZhLayout
 import com.morealm.app.domain.render.textHeight
+// **R1 (阶段 R1)** —— 核心 marker 解析 + 数据类迁到独立仓库 epub-layout。主仓只调用 entry point
+// + 引用 public data class。internal marker 字面值 / parser helper 全藏在 epub-layout module。
+import com.morealm.epub.layout.InlineMarkersResult
+import com.morealm.epub.layout.ParsedTable
+import com.morealm.epub.layout.ParsedTableCell
+import com.morealm.epub.layout.ParsedTableRow
+import com.morealm.epub.layout.hasTableMarker
+import com.morealm.epub.layout.parseInlineMarkers
+import com.morealm.epub.layout.parseTableMarker
 
 /**
  * 滚动 Canvas 引擎 —— 把原始章节文本排版成 [ScrollChapterLayout]（含每字符的像素坐标）。
@@ -732,7 +741,7 @@ class ScrollLayoutEngine(
             // （table 自身的 margin/auto 等装饰）。layoutTable 调 emitLine 共享主 currentY /
             // currentPageLines / chapterPositionCounter 状态。parse 失败兜底当普通段处理
             // （视觉会出 marker 文本，提示损坏数据，比直接吞段更安全）。
-            if (paragraphText.contains(TABLE_MARKER_TBL_START)) {
+            if (hasTableMarker(paragraphText)) {
                 val parsed = parseTableMarker(paragraphText)
                 com.morealm.app.core.log.AppLog.info(
                     "D2a/Table",
@@ -1441,247 +1450,6 @@ class ScrollLayoutEngine(
         return parsed.cleanText to parsed.colorPerCp
     }
 
-    /**
-     * **A4b 扩展**：parseCharColors 升级版，同时处理 SOH/STX/ETX char-level color
-     * marker + EOT/ENQ/ACK inline image marker。
-     *
-     * 输入语义：
-     *  - 旧 color marker：`SOH<argbHex8>STX<text>ETX`（U+0001 / U+0002 / U+0003）
-     *  - 新 image marker：`EOT<src>ENQ<U+FFFC>ACK`（U+0004 / U+0005 / U+0006）
-     *
-     * 输出：cleanText 去掉所有 marker（保留 U+FFFC 作 inline image 占位）；perCpColor
-     * 跟之前一样；perCpImageSrc 在 U+FFFC 位置填 src，其他位置 null。
-     */
-    private fun parseInlineMarkers(text: String): InlineMarkersResult {
-        if (text.isEmpty()) return InlineMarkersResult(text, null, null, null, 0)
-        // H1+H2 heading-level marker strip: BEL<digit>BS prefix
-        var workText = text
-        var parsedHeadingLevel = 0
-        if (workText.startsWith('\u0007') && workText.length >= 3) {
-            val bsIdx = workText.indexOf('\u0008', 1)
-            if (bsIdx in 2..3) {
-                val levelStr = workText.substring(1, bsIdx)
-                val parsed = levelStr.toIntOrNull()
-                if (parsed != null && parsed in 1..6) {
-                    parsedHeadingLevel = parsed
-                    workText = workText.substring(bsIdx + 1)
-                }
-            }
-        }
-        val hasColor = workText.contains('\u0001')
-        val hasImage = workText.contains('\u0004')
-        val hasSize = workText.contains('\u000B')
-        if (!hasColor && !hasImage && !hasSize) return InlineMarkersResult(workText, null, null, null, parsedHeadingLevel)
-
-        val sb = StringBuilder(workText.length)
-        val colors = ArrayList<Int>(workText.length)
-        val images = ArrayList<String?>(workText.length)
-        val sizes = ArrayList<Float>(workText.length)
-        var curColor = 0
-        var curSize = 1f
-        var hasAnyColor = false
-        var hasAnyImage = false
-        var hasAnySize = false
-        var i = 0
-        val n = workText.length
-        while (i < n) {
-            val c = workText[i]
-            if (c == '\u0001' && i + 9 < n && workText[i + 9] == '\u0002') {
-                val hex = workText.substring(i + 1, i + 9)
-                val argb = runCatching { hex.toUInt(16).toInt() }.getOrNull()
-                if (argb != null) {
-                    curColor = argb
-                    hasAnyColor = true
-                    i += 10
-                    continue
-                }
-            }
-            if (c == '\u0003') {
-                curColor = 0
-                i++
-                continue
-            }
-            if (c == '\u000B') {
-                val delimIdx = workText.indexOf('\u000C', i + 1)
-                if (delimIdx > 0) {
-                    val sizeStr = workText.substring(i + 1, delimIdx)
-                    val sz = sizeStr.toIntOrNull()
-                    if (sz != null && sz > 0) {
-                        curSize = sz / 100f
-                        hasAnySize = true
-                        i = delimIdx + 1
-                        continue
-                    }
-                }
-                i++
-                continue
-            }
-            if (c == '\u000E') {
-                curSize = 1f
-                i++
-                continue
-            }
-            if (c == '\u0004') {
-                val delimIdx = workText.indexOf('\u0005', i + 1)
-                if (delimIdx > 0 && delimIdx + 2 < n && workText[delimIdx + 2] == '\u0006') {
-                    val src = workText.substring(i + 1, delimIdx)
-                    val placeholder = workText[delimIdx + 1]
-                    sb.append(placeholder)
-                    colors.add(curColor)
-                    images.add(src)
-                    sizes.add(curSize)
-                    hasAnyImage = true
-                    i = delimIdx + 3
-                    continue
-                }
-                i++
-                continue
-            }
-            if (c.isHighSurrogate() && i + 1 < n && workText[i + 1].isLowSurrogate()) {
-                sb.append(c)
-                sb.append(workText[i + 1])
-                colors.add(curColor)
-                images.add(null)
-                sizes.add(curSize)
-                i += 2
-                continue
-            }
-            sb.append(c)
-            colors.add(curColor)
-            images.add(null)
-            sizes.add(curSize)
-            i++
-        }
-        val cleanText = sb.toString()
-        return InlineMarkersResult(
-            cleanText = cleanText,
-            colorPerCp = if (hasAnyColor) IntArray(colors.size) { colors[it] } else null,
-            imageSrcPerCp = if (hasAnyImage) Array(images.size) { images[it] } else null,
-            sizeScalePerCp = if (hasAnySize) FloatArray(sizes.size) { sizes[it] } else null,
-            headingLevel = parsedHeadingLevel,
-        )
-    }
-
-    /**
-     * A4b：parseInlineMarkers 返回值。null 字段表示该 marker 不存在零开销。
-     */
-    private data class InlineMarkersResult(
-        val cleanText: String,
-        val colorPerCp: IntArray?,
-        val imageSrcPerCp: Array<String?>?,
-        val sizeScalePerCp: FloatArray?,
-        val headingLevel: Int,
-    )
-
-    /**
-     * **D2.a Commit 2b** —— [parseTableMarker] 输出的结构化表格。row × cell 嵌套，
-     * cell.contentParagraphs 已剥子 marker + 还原 U+0010 → `\n`，每段当独立 paragraph。
-     */
-    private data class ParsedTable(val rows: List<ParsedTableRow>)
-    private data class ParsedTableRow(val cells: List<ParsedTableCell>)
-    private data class ParsedTableCell(
-        val widthPx: Float?,
-        val contentParagraphs: List<String>,
-        /**
-         * **D2.b**：cell content char-level color marker 解码值（取首字 ARGB）。null = 无染色。
-         * 某 EPUB vol-title-number cell `ffb50a02` → 0xFFB50A02（红）。
-         */
-        val textColor: Int? = null,
-        /**
-         * **D2.b**：cell content char-level size marker 解码值（取首字 sizeScale，整 cell 同字号）。
-         * 1f = 默认字号。某 EPUB vol-title-name 1.4em → 1.4f / vol-title-number 0.9em → 0.9f。
-         */
-        val sizeScale: Float = 1f,
-    )
-
-    /**
-     * **D2.a Commit 2b**：把含 `__MOREALM_TBL__...__/MOREALM_TBL__` 的 paragraph 解析成
-     * 结构化 [ParsedTable]。健壮性：marker 配对不齐 / payload 损坏返回 null。
-     *
-     * cell content 内部块间 `\n` 已被 epub-compat encodeTable escape 成 U+0010；这里识别
-     * 后还原 + split 当多段 paragraph（某 EPUB vol-title cell 通常单段）。
-     */
-    private fun parseTableMarker(raw: String): ParsedTable? {
-        val tblStart = raw.indexOf(TABLE_MARKER_TBL_START)
-        if (tblStart < 0) return null
-        val tblEnd = raw.indexOf(TABLE_MARKER_TBL_END, tblStart)
-        if (tblEnd < 0) return null
-        val body = raw.substring(tblStart + TABLE_MARKER_TBL_START.length, tblEnd)
-        val rows = ArrayList<ParsedTableRow>()
-        var i = 0
-        while (i < body.length) {
-            val rowStart = body.indexOf(TABLE_MARKER_TR_START, i)
-            if (rowStart < 0) break
-            val rowEnd = body.indexOf(TABLE_MARKER_TR_END, rowStart)
-            if (rowEnd < 0) break
-            val rowBody = body.substring(rowStart + TABLE_MARKER_TR_START.length, rowEnd)
-            rows.add(parseTableRow(rowBody))
-            i = rowEnd + TABLE_MARKER_TR_END.length
-        }
-        return if (rows.isEmpty()) null else ParsedTable(rows)
-    }
-
-    private fun parseTableRow(rowBody: String): ParsedTableRow {
-        val cells = ArrayList<ParsedTableCell>()
-        var i = 0
-        while (i < rowBody.length) {
-            val cellStart = rowBody.indexOf(TABLE_MARKER_TD_START, i)
-            if (cellStart < 0) break
-            val cellEnd = rowBody.indexOf(TABLE_MARKER_TD_END, cellStart)
-            if (cellEnd < 0) break
-            val cellBody = rowBody.substring(cellStart + TABLE_MARKER_TD_START.length, cellEnd)
-            // cellBody 格式：`<widthPx-or-empty><TD_W_END><content>`
-            val widthEnd = cellBody.indexOf(TABLE_MARKER_TD_W_END)
-            if (widthEnd < 0) {
-                i = cellEnd + TABLE_MARKER_TD_END.length
-                continue
-            }
-            val widthStr = cellBody.substring(0, widthEnd)
-            val content = cellBody.substring(widthEnd + TABLE_MARKER_TD_W_END.length)
-            val widthPx = if (widthStr.isEmpty()) null else widthStr.toFloatOrNull()
-            // **D2.b**: restore U+0010 -> newline; for each para strip BLOCK_STYLE_MARKER then
-            // parseInlineMarkers to get cleanText + char-level color/size. Use first non-default
-            // color/size as the cell-level value (SampleEpub vol-title cells are uniform).
-            val restored = content.replace('\u0010', '\n')
-            var cellTextColor: Int? = null
-            var cellSizeScale: Float = 1f
-            val paras = restored.split('\n')
-                .map { paraRaw ->
-                    val withoutBlockStyle = stripBlockStyleMarker(paraRaw)
-                    val parsed = parseInlineMarkers(withoutBlockStyle)
-                    if (cellTextColor == null) {
-                        parsed.colorPerCp?.firstOrNull { it != 0 }?.let { cellTextColor = it }
-                    }
-                    if (cellSizeScale == 1f) {
-                        parsed.sizeScalePerCp?.firstOrNull { it != 1f }?.let { cellSizeScale = it }
-                    }
-                    parsed.cleanText
-                }
-                .filter { it.isNotEmpty() }
-            cells.add(ParsedTableCell(widthPx, paras, cellTextColor, cellSizeScale))
-            i = cellEnd + TABLE_MARKER_TD_END.length
-        }
-        return ParsedTableRow(cells)
-    }
-
-    /**
-     * **D2.b**: strip BLOCK_STYLE_MARKER segments from a cell paragraph. char-level markers
-     * (SPAN_COLOR / SIZE / INLINE_IMG / HEADING_LEVEL) are parsed downstream by parseInlineMarkers.
-     */
-    private fun stripBlockStyleMarker(raw: String): String {
-        if (raw.isEmpty()) return raw
-        var s = raw
-        while (true) {
-            val a = s.indexOf(com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_MARKER)
-            if (a < 0) break
-            val b = s.indexOf(com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END, a)
-            if (b < 0) break
-            s = s.substring(0, a) +
-                s.substring(b + com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END.length)
-        }
-        return s
-    }
-
     companion object {
         /**
          * 章序号识别正则 —— 抄自 [com.morealm.app.domain.render.ChapterProvider]
@@ -1703,14 +1471,8 @@ class ScrollLayoutEngine(
             RegexOption.IGNORE_CASE,
         )
 
-        // **D2.a Commit 2b**：与 [com.morealm.epub.compat.StructuredChapterContent] 的
-        // TABLE_*/TABLE_NL_ESC_CHAR 常量对齐，给 parseTableMarker / layoutTable 用。
-        private const val TABLE_MARKER_TBL_START: String = "__MOREALM_TBL__"
-        private const val TABLE_MARKER_TBL_END: String = "__/MOREALM_TBL__"
-        private const val TABLE_MARKER_TR_START: String = "__MOREALM_TR__"
-        private const val TABLE_MARKER_TR_END: String = "__/MOREALM_TR__"
-        private const val TABLE_MARKER_TD_START: String = "__MOREALM_TD__"
-        private const val TABLE_MARKER_TD_END: String = "__/MOREALM_TD__"
-        private const val TABLE_MARKER_TD_W_END: String = "__/MOREALM_TD_W__"
+        // **R1 (阶段 R1.2)**：TABLE_MARKER_* 常量已迁到 com.morealm.epub.layout.TableMarkers
+        // (internal object)。主仓 contains 检测改用 hasTableMarker(text) entry point，不再
+        // 暴露 marker 字面值。jadx 字节码分析主仓只能看到函数调用，不见 "__MOREALM_TBL__" 字面。
     }
 }
