@@ -103,8 +103,16 @@ fun PagePaneCanvas(
 
             // ─── 层 0：P3-5b Phase 3 块装饰（圆角背景 / 边框） ───
             // 最底层 —— 用户高亮 / 选区 / 搜索高亮 / 文字都画在装饰之上
+            // **阶段 2-H bugfix v3**：fontSizeScale = contentPaint.textSize / 16f 让 BlockStyle 内
+            // 设计 px (16f base) 的 box 装饰字段 (widthPx/heightPx/padding/borderRadius/borderWidth)
+            // 缩放到 user 字号下的真实 px (margin 不缩放，保持设计微间距 layout)。
+            val bsScale = contentPaint.textSize / 16f
             for (line in page.lines) {
-                drawScrollLineBlockStyle(nc, line, pageTop = 0f, fallbackLeft = 0f, fallbackRight = visibleWidthF)
+                drawScrollLineBlockStyle(
+                    nc, line, pageTop = 0f,
+                    fallbackLeft = 0f, fallbackRight = visibleWidthF,
+                    fontSizeScale = bsScale,
+                )
             }
 
             // ─── 层 1：背景高亮 rect ───

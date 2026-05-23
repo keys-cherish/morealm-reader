@@ -35,6 +35,22 @@ internal fun drawScrollLineBlockStyle(
     pageTop: Float,
     fallbackLeft: Float = 0f,
     fallbackRight: Float = 0f,
+    /**
+     * **阶段 2-H bugfix v3 (user 参考图样验证 + image 52 验证)**：仅对 box 装饰字段缩放。
+     *
+     * 设计基线：epub-compat ChapterReader.readTree 用 rootFontSizePx=16f 解析 CSS em
+     * (cache 稳定不跟随 user 字号变；ScrollLayoutEngine 主循环按设计 px 算 margin
+     * layout)。但 box 装饰 (qipao widthPx/heightPx/padding/borderRadius/borderWidth)
+     * 需要按 user 字号缩放才能跟字符大小协调 — 参考图 52 显示 qipao 220px 直径 ≈
+     * 3.5em × user 字号 ≈ 56 × (user 字号 / 16)。
+     *
+     * 不缩放：margin* (ScrollLayoutEngine 主循环用 D1.a path，设计 -16 = 参考微间距)。
+     * 缩放：widthPx / heightPx / paddingTop/Right/Bottom/LeftPx / borderRadiusPx /
+     *      borderWidthPx (装饰盒尺寸)。
+     *
+     * 默认 1f = 16f 设计字号；用户 24sp×3 = 72px → 4.5x → qipao 252px 圆 (≈ 参考 220)。
+     */
+    fontSizeScale: Float = 1f,
 ) {
     val bs = line.blockStyle
     if (bs === BlockStyle.EMPTY) return
@@ -59,43 +75,44 @@ internal fun drawScrollLineBlockStyle(
 
     val lineTop = pageTop + line.lineTop
     val lineBottom = pageTop + line.lineBottom
-    val halfBorder = bs.borderWidthPx / 2f
+    // **阶段 2-H bugfix v3**：box 装饰字段按 fontSizeScale 缩放（设计 16f px → user 字号 px）。
+    // margin 在 ScrollLayoutEngine 主循环用 D1.a path（不在此处理，保持设计微间距）。
+    val borderWidthScaled = bs.borderWidthPx * fontSizeScale
+    val halfBorder = borderWidthScaled / 2f
+    val padLeft = bs.paddingLeftPx * fontSizeScale
+    val padRight = bs.paddingRightPx * fontSizeScale
+    val padTop = bs.paddingTopPx * fontSizeScale
+    val padBottom = bs.paddingBottomPx * fontSizeScale
+    val widthScaled = bs.widthPx?.let { it * fontSizeScale }
+    val heightScaled = bs.heightPx?.let { it * fontSizeScale }
     // **阶段 2-H**：CSS width/height 元素 box 尺寸 — 非 null 时 rect 用 element-specific 尺寸
-    // 中心对齐 line.columns + line center。null 时退回 line-based 尺寸 (line.columns extent
-    // + lineTop/Bottom)。
-    //
-    // SampleLN `.qipao { width: 3.5em; height: 3.5em; border-radius: 100% }` 让 box 56×56
-    // 圆 (参考图 41 圆形气泡)。之前 v33 box 是 visibleWidth×lineHeight 让 borderRadius
-    // 自适应成胶囊形而非圆。
+    // 中心对齐 line.columns + line center。null 时退回 line-based 尺寸。
     val rectLeft: Float
     val rectTop: Float
     val rectRight: Float
     val rectBottom: Float
-    val widthPx = bs.widthPx
-    val heightPx = bs.heightPx
-    if (widthPx != null) {
-        // 宽度 = widthPx，中心对齐 line.columns 中心（字符可能溢出 box 外，CSS overflow: visible 默认）
+    if (widthScaled != null) {
         val cx = (leftX + rightX) / 2f
-        rectLeft = cx - widthPx / 2f - bs.paddingLeftPx - halfBorder
-        rectRight = cx + widthPx / 2f + bs.paddingRightPx + halfBorder
+        rectLeft = cx - widthScaled / 2f - padLeft - halfBorder
+        rectRight = cx + widthScaled / 2f + padRight + halfBorder
     } else {
-        rectLeft = leftX - bs.paddingLeftPx - halfBorder
-        rectRight = rightX + bs.paddingRightPx + halfBorder
+        rectLeft = leftX - padLeft - halfBorder
+        rectRight = rightX + padRight + halfBorder
     }
-    if (heightPx != null) {
-        // 高度 = heightPx，中心对齐 line 中心
+    if (heightScaled != null) {
         val cy = (lineTop + lineBottom) / 2f
-        rectTop = cy - heightPx / 2f - bs.paddingTopPx - halfBorder
-        rectBottom = cy + heightPx / 2f + bs.paddingBottomPx + halfBorder
+        rectTop = cy - heightScaled / 2f - padTop - halfBorder
+        rectBottom = cy + heightScaled / 2f + padBottom + halfBorder
     } else {
-        rectTop = lineTop - bs.paddingTopPx - halfBorder
-        rectBottom = lineBottom + bs.paddingBottomPx + halfBorder
+        rectTop = lineTop - padTop - halfBorder
+        rectBottom = lineBottom + padBottom + halfBorder
     }
     // **阶段 2-D**：BORDER_RADIUS_CIRCLE (POSITIVE_INFINITY) sentinel → 自适应圆角 = box 边长 50%。
     // SampleLN qipao `border-radius: 100%` 让 box 成圆/椭圆。配合 widthPx/heightPx 后 box 真成圆。
     val rectW = rectRight - rectLeft
     val rectH = rectBottom - rectTop
-    val r = if (bs.borderRadiusPx.isInfinite()) minOf(rectW, rectH) / 2f else bs.borderRadiusPx
+    val r = if (bs.borderRadiusPx.isInfinite()) minOf(rectW, rectH) / 2f
+            else bs.borderRadiusPx * fontSizeScale
     val paint = Paint().apply { isAntiAlias = true }
 
     bs.backgroundColor?.let { bgArgb ->
@@ -105,12 +122,12 @@ internal fun drawScrollLineBlockStyle(
     }
 
     val bc = bs.borderColor
-    if (bc != null && bs.borderWidthPx > 0f) {
+    if (bc != null && borderWidthScaled > 0f) {
         paint.style = Paint.Style.STROKE
         paint.color = bc
         when (bs.borderStyle) {
             BlockStyle.BorderStyle.DOUBLE -> {
-                val third = bs.borderWidthPx / 3f
+                val third = borderWidthScaled / 3f
                 paint.strokeWidth = third
                 canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
                 val innerOff = 2f * third
@@ -125,7 +142,7 @@ internal fun drawScrollLineBlockStyle(
             BlockStyle.BorderStyle.DASHED,
             BlockStyle.BorderStyle.DOTTED,
             -> {
-                paint.strokeWidth = bs.borderWidthPx
+                paint.strokeWidth = borderWidthScaled
                 canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
             }
         }
