@@ -741,25 +741,6 @@ object EpubParser {
         // formatKeepImg 老链在 readChapter 路径下线（preCacheChapters 老路径暂留）。
         val structured = readChapterStructured(context, uri, chapter, containingBlockWidthPx)
         val content = if (structured.isEmpty()) "" else structured.flattenToString()
-        // **D2.a Commit 2b DIAG**：写 cache 前看 blocks 中是否含 Table + flatten 后是否含 marker
-        run {
-            val blockTypes = structured.blocks.groupingBy { it::class.simpleName ?: "?" }.eachCount()
-            val tableCount = structured.blocks.count { it is com.morealm.epub.compat.ChapterBlock.Table }
-            val hasTblMarker = content.contains("__MOREALM_TBL__")
-            com.morealm.app.core.log.AppLog.info(
-                "D2a/Table",
-                "writeCache chapter='${chapter.title}' blocks=${structured.blocks.size} " +
-                    "types=$blockTypes tables=$tableCount hasTblMarker=$hasTblMarker " +
-                    "contentLen=${content.length}",
-            )
-            if (tableCount > 0 && !hasTblMarker) {
-                com.morealm.app.core.log.AppLog.warn(
-                    "D2a/Table",
-                    "BUG: blocks has Table but marker missing! head100='${content.take(100)}'",
-                )
-            }
-        }
-
         // P3-5b Step 2c diag：标题/cover 等多色 RichText 章 flatten 后应该含 SOH(0x01) marker
         val hasSpanMarker = content.contains('')
         if (hasSpanMarker) {
@@ -1061,28 +1042,7 @@ object EpubParser {
             f.delete()
             return null
         }
-        // **D1.a DIAG**：cache hit → 检查含 marker + mt/mr/mb/ml key
-        val hasBlockMarker = text.contains("__MOREALM_BLOCK_STYLE__")
-        val hasMarginKey = text.contains("|mt=") || text.contains("|mr=") ||
-            text.contains("|mb=") || text.contains("|ml=") ||
-            text.contains("__mt=") || text.contains("__ml=") ||
-            // 单 key 场景：marker 后第一字段就是 mt/ml
-            text.contains("STYLE__mt=") || text.contains("STYLE__ml=") ||
-            text.contains("STYLE__mb=") || text.contains("STYLE__mr=")
-        val hasTableMarker = text.contains("__MOREALM_TBL__")
-        com.morealm.app.core.log.AppLog.info(
-            "D1a/Cache",
-            "HIT dir=$CHAPTER_CACHE_DIR path='$path' len=${text.length} " +
-                "hasBlockMarker=$hasBlockMarker hasMarginKey=$hasMarginKey " +
-                "hasTableMarker=$hasTableMarker",
-        )
-        if (hasTableMarker) {
-            val tblIdx = text.indexOf("__MOREALM_TBL__")
-            com.morealm.app.core.log.AppLog.info(
-                "D2a/Table",
-                "cache TBL section sample='${text.substring(tblIdx, minOf(tblIdx + 300, text.length))}'",
-            )
-        }
+        com.morealm.app.core.log.AppLog.info("Cache", "HIT path='$path' len=${text.length}")
         return text
     }
 
