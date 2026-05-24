@@ -270,11 +270,36 @@ fun PageLevelReaderHost(
     // restoreToken 消费幂等：同一 token 只 JUMP 一次。
     var lastConsumedRestoreToken by remember { mutableLongStateOf(0L) }
     LaunchedEffect(restoreToken, core.state.currentChapter) {
-        if (restoreToken == 0L) return@LaunchedEffect
-        if (restoreToken == lastConsumedRestoreToken) return@LaunchedEffect
-        if (initialChapterPosition <= 0 && initialProgress <= 0) return@LaunchedEffect
-        val layout = core.state.currentChapter ?: return@LaunchedEffect
-        if (layout.chapterIndex != core.state.currentChapterIndex) return@LaunchedEffect
+        val curChIdx = core.state.currentChapterIndex
+        val layoutChIdx = core.state.currentChapter?.chapterIndex
+        val curPgIdx = core.pageFactory.pageIndex
+        com.morealm.app.core.log.AppLog.info(
+            "PageLevelReaderHost",
+            "JUMP-ENTRY token=$restoreToken lastConsumed=$lastConsumedRestoreToken cp=$initialChapterPosition prog=$initialProgress curChIdx=$curChIdx layoutChIdx=$layoutChIdx curPgIdx=$curPgIdx",
+        )
+        if (restoreToken == 0L) {
+            com.morealm.app.core.log.AppLog.info("PageLevelReaderHost", "JUMP-SKIP token=0L (no jump intent)")
+            return@LaunchedEffect
+        }
+        if (restoreToken == lastConsumedRestoreToken) {
+            com.morealm.app.core.log.AppLog.info("PageLevelReaderHost", "JUMP-SKIP token already consumed")
+            return@LaunchedEffect
+        }
+        // 注：原 `if (initialChapterPosition <= 0 && initialProgress <= 0) return` 早退是 bug —
+        // 用户拖 Slider 到 0% (P0 bug 2026-05-24)、跨章 loadChapter 默认章首 (cp=0,prog=0)
+        // 都需要 moveToPage(0) reset pageIndex。restoreToken != 0L 已表达"有 JUMP 意图"，无需再卡 cp/prog。
+        val layout = core.state.currentChapter
+        if (layout == null) {
+            com.morealm.app.core.log.AppLog.info("PageLevelReaderHost", "JUMP-WAIT layout=null")
+            return@LaunchedEffect
+        }
+        if (layout.chapterIndex != core.state.currentChapterIndex) {
+            com.morealm.app.core.log.AppLog.info(
+                "PageLevelReaderHost",
+                "JUMP-WAIT layout.chIdx=${layout.chapterIndex} != state.chIdx=${core.state.currentChapterIndex}",
+            )
+            return@LaunchedEffect
+        }
 
         val total = layout.pages.size.coerceAtLeast(1)
         val targetPageIdx: Int = if (initialChapterPosition > 0) {
@@ -287,7 +312,7 @@ fun PageLevelReaderHost(
         lastConsumedRestoreToken = restoreToken
         com.morealm.app.core.log.AppLog.info(
             "PageLevelReaderHost",
-            "JUMP restoreToken=$restoreToken cp=$initialChapterPosition prog=$initialProgress → page=$targetPageIdx (total=$total) [consumed]",
+            "JUMP-DONE token=$restoreToken cp=$initialChapterPosition prog=$initialProgress → page=$targetPageIdx (total=$total) [moveToPage curPgIdx ${curPgIdx} → ${core.pageFactory.pageIndex}]",
         )
         onProgressRestored()
     }

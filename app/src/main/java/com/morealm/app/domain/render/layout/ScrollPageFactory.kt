@@ -156,20 +156,32 @@ class ScrollPageFactory(
      * @return true = 移动成功（章内 OR 跨章），false = 已到末章末页 / next 未加载
      */
     fun moveToNext(): Boolean {
-        val ch = dataSource.currentChapter ?: return false
+        val ch = dataSource.currentChapter ?: run {
+            com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToNext SKIP (currentChapter=null)")
+            return false
+        }
+        val before = pageIndex
         // 章内：直接 pageIndex++
         if (pageIndex < ch.pages.lastIndex) {
             pageIndex++
+            com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToNext in-ch $before → $pageIndex / ${ch.pages.lastIndex}")
             return true
         }
         // 章末：尝试跨章
-        if (!dataSource.hasNextChapter()) return false  // 末章
-        if (dataSource.nextChapter == null) return false  // next 加载中
+        if (!dataSource.hasNextChapter()) {
+            com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToNext SKIP (last chapter)")
+            return false
+        }
+        if (dataSource.nextChapter == null) {
+            com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToNext SKIP (next chapter not loaded yet)")
+            return false
+        }
         // 跨章 swap 由 Host 在 chapterShiftCallback 回调内完成（更新 dataSource state）。
         // Factory 这里先重设 pageIndex = 0，然后回调通知 Host。Host 同步 swap 后下次
         // currentChapter 访问就是新章了。
         // 注意：pageIndex 重设必须在 callback 之前，否则 Host 内 derivedStateOf 可能读到旧 pageIndex。
         pageIndex = 0
+        com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToNext cross-ch (was last page idx=$before, now pageIndex=0, fire callback +1)")
         chapterShiftCallback(+1)
         return true
     }
@@ -179,17 +191,29 @@ class ScrollPageFactory(
      * @return true = 移动成功（章内 OR 跨章），false = 已到首章首页 / prev 未加载
      */
     fun moveToPrev(): Boolean {
-        if (dataSource.currentChapter == null) return false
+        if (dataSource.currentChapter == null) {
+            com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToPrev SKIP (currentChapter=null)")
+            return false
+        }
+        val before = pageIndex
         // 章内：直接 pageIndex--
         if (pageIndex > 0) {
             pageIndex--
+            com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToPrev in-ch $before → $pageIndex")
             return true
         }
         // 章首：尝试跨章
-        if (!dataSource.hasPrevChapter()) return false  // 首章
-        val prev = dataSource.prevChapter ?: return false  // prev 加载中
+        if (!dataSource.hasPrevChapter()) {
+            com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToPrev SKIP (first chapter)")
+            return false
+        }
+        val prev = dataSource.prevChapter ?: run {
+            com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToPrev SKIP (prev chapter not loaded yet)")
+            return false
+        }
         // pageIndex 重设为新章末页索引（先记住，再 callback；callback 内 Host 把 prev swap 到 cur）
         pageIndex = prev.pages.lastIndex.coerceAtLeast(0)
+        com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToPrev cross-ch (was first page, now pageIndex=$pageIndex on prev=${prev.chapterIndex}, fire callback -1)")
         chapterShiftCallback(-1)
         return true
     }
@@ -210,8 +234,15 @@ class ScrollPageFactory(
      * pageIdx 越界自动 coerce。
      */
     fun moveToPage(pageIdx: Int) {
-        val ch = dataSource.currentChapter ?: run { pageIndex = 0; return }
-        pageIndex = pageIdx.coerceIn(0, ch.pages.lastIndex.coerceAtLeast(0))
+        val before = pageIndex
+        val ch = dataSource.currentChapter ?: run {
+            pageIndex = 0
+            com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToPage($pageIdx) currentChapter=null → pageIndex $before → 0")
+            return
+        }
+        val target = pageIdx.coerceIn(0, ch.pages.lastIndex.coerceAtLeast(0))
+        pageIndex = target
+        com.morealm.app.core.log.AppLog.info("ScrollPageFactory", "moveToPage($pageIdx) ch=${ch.chapterIndex} pageIndex $before → $target / ${ch.pages.lastIndex}")
     }
 
     companion object {

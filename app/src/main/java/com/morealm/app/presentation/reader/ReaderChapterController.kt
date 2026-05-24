@@ -1514,6 +1514,10 @@ class ReaderChapterController(
         val curIdx = _currentChapterIndex.value
         if (index != curIdx) {
             // 跨章：走完整 loadChapter 路径（与现有 onSeekFullBook 同等价格）
+            com.morealm.app.core.log.AppLog.info(
+                "ProgressSeek",
+                "seekProgressInPlace CROSS-CH idx=$index progress=$progress curIdx=$curIdx → loadChapter",
+            )
             loadChapter(index, restoreProgress = progress)
             return
         }
@@ -1521,20 +1525,26 @@ class ReaderChapterController(
         val rendered = _renderedChapter.value
         if (rendered.index != index) {
             // 罕见竞态：rendered 还没切到 curIdx → fallback loadChapter 强同步
+            com.morealm.app.core.log.AppLog.info(
+                "ProgressSeek",
+                "seekProgressInPlace RENDER-MISMATCH idx=$index renderedIdx=${rendered.index} curIdx=$curIdx → fallback loadChapter",
+            )
             loadChapter(index, restoreProgress = clamped)
             return
         }
+        val oldToken = rendered.restoreToken
+        val newToken = System.nanoTime()
         _renderedChapter.value = rendered.copy(
             initialProgress = clamped,
             initialChapterPosition = 0,
-            restoreToken = System.nanoTime(),
+            restoreToken = newToken,
         )
         if (::scrollProgressState.isInitialized) {
             scrollProgressState.value = clamped
         }
-        com.morealm.app.core.log.AppLog.debug(
+        com.morealm.app.core.log.AppLog.info(
             "ProgressSeek",
-            "seekProgressInPlace SAME-CH idx=$index progress=$clamped (token bumped)",
+            "seekProgressInPlace SAME-CH idx=$index progress=$clamped token=$oldToken→$newToken",
         )
     }
 
