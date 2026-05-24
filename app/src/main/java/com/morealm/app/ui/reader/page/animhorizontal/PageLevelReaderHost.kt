@@ -516,6 +516,14 @@ fun PageLevelReaderHost(
         } else null
     }
     val bgBitmap = bgEntry?.bitmap
+    // bgBitmap != null 时 Transition 用透明背景，让底层 Box Canvas 画的 bgBitmap 透出来；
+    // 否则用 bgColorArgb 纯色 (跟历史行为一致)。修「page-level 翻页模式 (NONE/SLIDE/COVER)
+    // 章节级背景图不显示」historical bug — Transition 内部 Modifier.fillMaxSize().background
+    // (backgroundColor) 会用不透明色 fill 整个 page Box 把底层 bgBitmap 完全遮住。ScrollCanvas
+    // Renderer 没这层不透明覆盖所以滚动模式 OK。
+    val transitionBgColor: androidx.compose.ui.graphics.Color =
+        if (bgBitmap != null) androidx.compose.ui.graphics.Color.Transparent
+        else androidx.compose.ui.graphics.Color(bgColorArgb)
 
     Box(
         modifier
@@ -646,7 +654,7 @@ fun PageLevelReaderHost(
                     NonePageTransition(
                         state = core.state,
                         pageFactory = core.pageFactory,
-                        backgroundColor = androidx.compose.ui.graphics.Color(bgColorArgb),
+                        backgroundColor = transitionBgColor,
                         contentPaint = contentPaint,
                         titlePaint = titlePaint,
                         chapterNumPaint = chapterNumPaint,
@@ -665,7 +673,7 @@ fun PageLevelReaderHost(
                     SlidePageTransition(
                         state = core.state,
                         pageFactory = core.pageFactory,
-                        backgroundColor = androidx.compose.ui.graphics.Color(bgColorArgb),
+                        backgroundColor = transitionBgColor,
                         contentPaint = contentPaint,
                         titlePaint = titlePaint,
                         chapterNumPaint = chapterNumPaint,
@@ -689,7 +697,7 @@ fun PageLevelReaderHost(
                     CoverPageTransition(
                         state = core.state,
                         pageFactory = core.pageFactory,
-                        backgroundColor = androidx.compose.ui.graphics.Color(bgColorArgb),
+                        backgroundColor = transitionBgColor,
                         contentPaint = contentPaint,
                         titlePaint = titlePaint,
                         chapterNumPaint = chapterNumPaint,
@@ -713,7 +721,7 @@ fun PageLevelReaderHost(
                     NonePageTransition(
                         state = core.state,
                         pageFactory = core.pageFactory,
-                        backgroundColor = androidx.compose.ui.graphics.Color(bgColorArgb),
+                        backgroundColor = transitionBgColor,
                         contentPaint = contentPaint,
                         titlePaint = titlePaint,
                         chapterNumPaint = chapterNumPaint,
