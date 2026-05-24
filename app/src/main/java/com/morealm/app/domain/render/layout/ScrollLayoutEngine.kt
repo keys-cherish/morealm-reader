@@ -381,10 +381,16 @@ class ScrollLayoutEngine(
             cellLevelColor: Int? = null,
         ) {
             val fontScale = contentPaint.textSize / 16f
-            val boxW = designW * fontScale
-            val boxH = designH * fontScale
+            // **Step 7 v6 (2026-05-24)**: CSS box-sizing: content-box (default) — padding 加在
+            // width 外。box rect 视觉宽高 = inner content 宽高 + 2 × padding。
+            // 之前 (v5) `innerW = boxW - 2 × pad` 把 padding 算 box 内 (border-box)，让
+            // innerW = 252 - 28.8 = 223 不够「女神大人」(234px) 1 行 → "人" 折行。
+            // CSS spec: .qipao { width:3.5em; padding:0.2em } → content width = 3.5em，
+            // box visual width = 3.5em + 2×0.2em = 3.9em。
+            val innerW = designW * fontScale
             val padScaled = currentBlockStyle.paddingLeftPx * fontScale
-            val innerW = (boxW - 2f * padScaled).coerceAtLeast(0f)
+            val boxW = innerW + 2f * padScaled
+            val boxH = designH * fontScale + 2f * padScaled
 
             // **Step 7 v5**: 每 row 独立 wrap。row 内 runs 拼成 glyphs，按 innerW 贪心切行
             // (单 row 太宽时仍 wrap)。row 间强制新 line。
@@ -450,7 +456,10 @@ class ScrollLayoutEngine(
             val ibFirstCp = chapterPositionCounter
             for ((rowIdx, rowGlyphs) in ibLines.withIndex()) {
                 val realLineW = rowGlyphs.sumOf { it.width.toDouble() }.toFloat()
-                var localX = padScaled + ((innerW - realLineW) / 2f).coerceAtLeast(0f)
+                // **Step 7 v6**: localX 不再加 padScaled — cell.contentLeft 已经是 rect 内容区
+                // 左边界 (drawer rect 算法: rectLeft = cell.contentLeft - padLeft)，atom 中心
+                // = cell.contentLeft + innerW/2 等于 rect 中心 (padLeft==padRight)。
+                var localX = ((innerW - realLineW) / 2f).coerceAtLeast(0f)
                 val localY = contentTopInCell + rowIdx * innerLH
                 for (g in rowGlyphs) {
                     val globalX = cellLeft + localX
