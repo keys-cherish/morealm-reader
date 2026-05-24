@@ -777,8 +777,15 @@ class ScrollLayoutEngine(
                 val cellStrides = FloatArray(row.cells.size) { idx ->
                     contentTextHeight * row.cells[idx].sizeScale * 1.05f
                 }
+                // **Step 7 bugfix v3 (2026-05-24)**: cellHeights 取 max(字符总高, image 最大高)。
+                // 单 line cell 含 chibi (square width × width) 时 image height = imgW
+                // (~280px) >> cellStride (~60px)。cell 高度需扩到 image 高让 chibi 不被 cell 裁。
                 val cellHeights = FloatArray(row.cells.size) { idx ->
-                    cellLines[idx].size * cellStrides[idx]
+                    val charLineH = cellLines[idx].size * cellStrides[idx]
+                    val maxImageH = cellLines[idx].maxOfOrNull { line ->
+                        line.maxOfOrNull { g -> if (g.imageSrc != null) g.width else 0f } ?: 0f
+                    } ?: 0f
+                    maxOf(charLineH, maxImageH)
                 }
                 val rowLineHeight = maxOf(contentTextHeight, cellHeights.maxOrNull() ?: contentTextHeight)
 
@@ -823,11 +830,18 @@ class ScrollLayoutEngine(
                                 ),
                             )
                             if (g.imageSrc != null) {
+                                // **Step 7 bugfix v3 (2026-05-24)**: image height = width
+                                // (square chibi)，不是 cellStride (字符 line height)。drawer 算
+                                // scaleF = min(atom.width/bmp.w, atom.height/bmp.h)，atom.height
+                                // = cellStride ~60px 让 chibi 缩到 ~60px (image 63 太小)。
+                                // CSS spec：img width:100% + height:auto → 保持 aspect ratio。
+                                // chibi 通常 square 让 height = width 视觉等价 aspect-preserve
+                                // (drawer 自己 minOf width 和 height 让 image 填到 box)。
                                 cellAtoms.add(
                                     InlineImage(
                                         src = g.imageSrc,
                                         width = g.width,
-                                        height = cellStride,
+                                        height = g.width,
                                         cellLocalX = localX,
                                         cellLocalY = localY,
                                     ),
