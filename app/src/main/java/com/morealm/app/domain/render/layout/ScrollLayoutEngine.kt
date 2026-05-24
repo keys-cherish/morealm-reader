@@ -360,28 +360,71 @@ class ScrollLayoutEngine(
         //
         // 不处理 margin-top / margin-bottom (由 caller 应用)，也不应用 chapterPositionCounter++
         // 末位虚换行 — 由 caller 做。
-        fun emitInlineBlockContainer(text: String, designW: Float, designH: Float) {
+        /**
+         * **Step 7 v4 (2026-05-24)** — emitInlineBlockContainer 升级用 List<ContentRun>。
+         *
+         * 之前用 String text 喂 measureTextSplit — 字符 layout 但 color/sizeScale 信息丢失
+         * (qipao 内字符全黑色 + 全 1f 字号，跟参考图 62 白色 + em08/em07 不一致)。
+         *
+         * 新签名接 List<ContentRun>：把 ContentRun.Text 内 InlineStyle.color/fontSizeEm 提到
+         * 每 CellGlyph，emit 时 atom.colorArgb 用 InlineStyle.color (cell-level 兜底)，
+         * atom.sizeScale 用 InlineStyle.fontSizeEm。Image 当前 qipao 内不会出现 (留兜底)。
+         *
+         * @param runs 平铺 ContentRun 列表 (跨 cell/row 拼接)
+         * @param cellLevelColor 来自 Table.blockStyle.textColor (e.g. `.qipao color:#ffffff` → 白)，
+         *   用作 InlineStyle.color null 时的 fallback。
+         */
+        fun emitInlineBlockContainer(
+            runs: List<ContentRun>,
+            designW: Float,
+            designH: Float,
+            cellLevelColor: Int? = null,
+        ) {
             val fontScale = contentPaint.textSize / 16f
             val boxW = designW * fontScale
             val boxH = designH * fontScale
             val padScaled = currentBlockStyle.paddingLeftPx * fontScale
             val innerW = (boxW - 2f * padScaled).coerceAtLeast(0f)
 
-            val (ibChars, ibWidths) = contentTextMeasure.measureTextSplit(text)
-            if (ibChars.isEmpty() || innerW <= 0f) return
+            // 把 runs (跨 ContentRun.Text / Image / NestedTable) 扁平化成 CellGlyph 序列
+            val ibGlyphs = ArrayList<CellGlyph>()
+            for (run in runs) {
+                when (run) {
+                    is ContentRun.Text -> {
+                        val (chars, rawWidths) = contentTextMeasure.measureTextSplit(run.text)
+                        val effScale = run.style.fontSizeEm ?: 1f
+                        // run.style.color 非 null → 用之；null → fallback cellLevelColor (cell
+                        // 默认色，e.g. qipao.color #ffffff)；都 null → 默认黑 (TextRun colorArgb null)。
+                        val effColor = run.style.color ?: cellLevelColor
+                        for (i in chars.indices) {
+                            val w = if (effScale != 1f) rawWidths[i] * effScale else rawWidths[i]
+                            ibGlyphs.add(CellGlyph(chars[i], w, effColor, null, effScale))
+                        }
+                    }
+                    is ContentRun.Image -> {
+                        // qipao 内不会有 image (.qipao 内嵌 table 没含 img)，兜底 fallback
+                        val imgW = contentLineHeight * 1.5f
+                        ibGlyphs.add(CellGlyph("￼", imgW, null, run.src, 1f))
+                    }
+                    is ContentRun.NestedTable -> {
+                        // 跳过
+                    }
+                }
+            }
+            if (ibGlyphs.isEmpty() || innerW <= 0f) return
 
-            val ibLines = ArrayList<List<Pair<String, Float>>>()
-            var lineBuf = ArrayList<Pair<String, Float>>()
+            // 按 innerW 贪心切行 (CJK 字符 ~24-30 × scale，56px box → 1-2 字/行)
+            val ibLines = ArrayList<List<CellGlyph>>()
+            var lineBuf = ArrayList<CellGlyph>()
             var lineCumW = 0f
-            for (i in ibChars.indices) {
-                val w = ibWidths[i]
-                if (lineCumW + w > innerW && lineBuf.isNotEmpty()) {
+            for (g in ibGlyphs) {
+                if (lineCumW + g.width > innerW && lineBuf.isNotEmpty()) {
                     ibLines.add(lineBuf.toList())
                     lineBuf = ArrayList()
                     lineCumW = 0f
                 }
-                lineBuf.add(ibChars[i] to w)
-                lineCumW += w
+                lineBuf.add(g)
+                lineCumW += g.width
             }
             if (lineBuf.isNotEmpty()) ibLines.add(lineBuf.toList())
 
@@ -395,40 +438,50 @@ class ScrollLayoutEngine(
 
             val contentTopInCell = (lineH - contentH) / 2f
 
-            val ibAtoms = ArrayList<Atom>(ibChars.size)
-            val ibCols = ArrayList<ScrollColumn>(ibChars.size)
+            val ibAtoms = ArrayList<Atom>(ibGlyphs.size)
+            val ibCols = ArrayList<ScrollColumn>(ibGlyphs.size)
             val ibSb = StringBuilder()
             val ibFirstCp = chapterPositionCounter
-            for ((rowIdx, rowChars) in ibLines.withIndex()) {
-                val realLineW = rowChars.sumOf { it.second.toDouble() }.toFloat()
+            for ((rowIdx, rowGlyphs) in ibLines.withIndex()) {
+                val realLineW = rowGlyphs.sumOf { it.width.toDouble() }.toFloat()
                 var localX = padScaled + ((innerW - realLineW) / 2f).coerceAtLeast(0f)
                 val localY = contentTopInCell + rowIdx * innerLH
-                for ((ch, w) in rowChars) {
+                for (g in rowGlyphs) {
                     val globalX = cellLeft + localX
                     ibCols.add(
                         ScrollColumn(
-                            charData = ch,
+                            charData = g.text,
                             start = globalX,
-                            end = globalX + w,
+                            end = globalX + g.width,
                             chapterPosition = chapterPositionCounter,
-                            colorArgb = null,
+                            colorArgb = g.color,
+                            inlineImageSrc = g.imageSrc,
                         ),
                     )
-                    ibAtoms.add(
-                        TextRun(
-                            text = ch,
-                            colorArgb = null,
-                            sizeScale = 1f,
-                            width = w,
-                            height = innerLH,
-                            baseline = innerLH * 0.8f,
-                            cellLocalX = localX,
-                            cellLocalY = localY,
-                        ),
-                    )
-                    ibSb.append(ch)
+                    if (g.imageSrc != null) {
+                        ibAtoms.add(
+                            InlineImage(
+                                src = g.imageSrc, width = g.width, height = g.width,
+                                cellLocalX = localX, cellLocalY = localY,
+                            ),
+                        )
+                    } else {
+                        ibAtoms.add(
+                            TextRun(
+                                text = g.text,
+                                colorArgb = g.color,
+                                sizeScale = g.sizeScale,
+                                width = g.width,
+                                height = innerLH,
+                                baseline = innerLH * 0.8f,
+                                cellLocalX = localX,
+                                cellLocalY = localY,
+                            ),
+                        )
+                    }
+                    ibSb.append(g.text)
                     chapterPositionCounter++
-                    localX += w
+                    localX += g.width
                 }
             }
             val ibCell = ScrollLineCell(
@@ -979,17 +1032,21 @@ class ScrollLayoutEngine(
                     val bsW = currentBlockStyle.widthPx
                     val bsH = currentBlockStyle.heightPx
                     if (bsW != null && bsH != null && bsW > 0f && bsH > 0f) {
-                        // Table 内字符全拼接 (跨 row/cell) 喂给 emitInlineBlockContainer
-                        val innerText = buildString {
-                            for (row in parsed.rows) {
-                                for (cell in row.cells) {
-                                    for (p in cell.contentParagraphs) append(p)
+                        // **Step 7 v4 (2026-05-24)**: 拼 ContentRun list (跨 row/cell) 替代字符串。
+                        // 保留 per-cp color (qipao 内文白色) + sizeScale (em08/em07 size 变化)。
+                        val innerRuns = ArrayList<ContentRun>()
+                        for (row in parsed.rows) {
+                            for (cell in row.cells) {
+                                for (paraRuns in cell.paragraphs) {
+                                    innerRuns.addAll(paraRuns)
                                 }
                             }
                         }
                         val mt = currentBlockStyle.marginTopPx
                         if (!mt.isNaN() && mt != 0f) currentY += mt
-                        emitInlineBlockContainer(innerText, bsW, bsH)
+                        // cellLevelColor = Table 顶层 BlockStyle.textColor (.qipao
+                        // `color: #ffffff` → 白)，让 run.style.color null 时 fallback。
+                        emitInlineBlockContainer(innerRuns, bsW, bsH, currentBlockStyle.textColor)
                         val mb = currentBlockStyle.marginBottomPx
                         currentY += if (!mb.isNaN() && mb != 0f) mb else paragraphSpacingPx
                         chapterPositionCounter++  // 段末虚换行
@@ -1072,10 +1129,18 @@ class ScrollLayoutEngine(
             // ── **方案 C inline-block container** (普通 RichText 路径) ──
             // BlockStyle.widthPx + heightPx 非 null → div.qipao 等 inline-block 元素。
             // 调 emitInlineBlockContainer helper（hasTableMarker 路径也调同 helper 保持一致）。
+            //
+            // **Step 7 v4 (2026-05-24)**: emitInlineBlockContainer 签名升级为 List<ContentRun>。
+            // 普通段路径（Plan B-1 之前 qipao 走 RichText 情况；Step 5 后罕见）兜底把 processedText
+            // 包装成单 ContentRun.Text。per-cp color/size 由 currentParaCharColors/sizeScales
+            // 补充（如果需要可后续从 colorPerCp 重建 ContentRun.Text 序列）。
             val bsW = currentBlockStyle.widthPx
             val bsH = currentBlockStyle.heightPx
             if (bsW != null && bsH != null && bsW > 0f && bsH > 0f) {
-                emitInlineBlockContainer(processedText, bsW, bsH)
+                val singleRun = listOf<ContentRun>(
+                    ContentRun.Text(processedText, com.morealm.epub.layout.InlineStyle.DEFAULT),
+                )
+                emitInlineBlockContainer(singleRun, bsW, bsH, currentBlockStyle.textColor)
                 val ibMb = currentBlockStyle.marginBottomPx
                 currentY += if (!ibMb.isNaN() && ibMb != 0f) ibMb else paragraphSpacingPx
                 chapterPositionCounter++  // 段末虚换行
