@@ -153,7 +153,11 @@ object EpubParser {
     // Table 含 nested Table in cell[3,0].content (Step 7 完整渲染前 strip 避免 marker 字面)。
     // + ArenaBuilder selfClosing fix + isInlineImageContext TD/TH (cell 内 img 走 inline)。
     // ChapterBlock 树结构变化 + cache 必须 bump。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v37"
+    // v38：Step 7 v8 (2026-05-24) — ChapterBlockBuilder.inHeadDepth 让 <head> 内 events 不
+    // 产 content。SampleLN cover.xhtml `<head><title>Cover</title></head>` 之前让 "Cover"
+    // 成为 Paragraph 段，cover 章 content="Cover\n<img...>"。修后只剩 Image 段。
+    // 所有 chapter 受影响 — head 内 metadata 不再污染 body content。v37 cache 必须 bump。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v38"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
