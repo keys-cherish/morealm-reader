@@ -8,6 +8,7 @@ import com.morealm.epub.compat.ImgRewriteVisitor
 import com.morealm.epub.compat.RubyRewriteVisitor
 import com.morealm.epub.compat.SvgImageRewriteVisitor
 import com.morealm.epub.compat.TableMergeVisitor
+import com.morealm.epub.compat.TextSpan
 import com.morealm.epub.xhtml.XhtmlReader
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -65,18 +66,30 @@ class StreamingChainIntegrationTest {
     }
 
     @Test
-    fun `sibling tables produce per-table paragraphs`() {
-        // **task #14 (阶段 2-A 续)**: TableMergeVisitor merge 模式改 — sibling table 边界
-        // forward DIV 给 delegate，每 sibling 独立 paragraph 保留 outer table 的 BlockStyle
-        // (含 margin-top: -1em 等)。之前是 merge 成单段（丢了 margin）。
-        // 新行为：3 sibling tables → 3 独立 paragraphs（cells within one table 仍合并）。
+    fun `sibling tables produce per-table Table blocks`() {
+        // **Step 5 (2026-05-24) - Plan B-1**: TableMergeVisitor thin pass-through 后 sibling
+        // table 不再 merge 成 paragraph，每个 outer table 产 ChapterBlock.Table 含 row × cell
+        // × content (RichText/Paragraph)。cell 内字符在 RichText 内携带。
+        //
+        // 之前 (task #14) sibling → 各产 Paragraph 段；Step 5 后 → 各产 Table 段。
         val blocks = parseChain(
             "<table><tr><td>为美好的</td></tr></table>" +
                 "<table><tr><td>世界献上</td></tr></table>" +
                 "<table><tr><td>祝福</td></tr></table>",
         )
         assertEquals(3, blocks.size)
-        val texts = blocks.map { (it as ChapterBlock.Paragraph).text }
+        val tables = blocks.map { it as ChapterBlock.Table }
+        // 每 Table 含 1 row × 1 cell，cell.content 是 RichText/Paragraph 含字符
+        val texts = tables.map { table ->
+            val cell = table.rows.first().cells.first()
+            cell.content.joinToString("") { b ->
+                when (b) {
+                    is ChapterBlock.Paragraph -> b.text
+                    is ChapterBlock.RichText -> b.spans.filterIsInstance<TextSpan>().joinToString("") { it.text }
+                    else -> ""
+                }
+            }
+        }
         assertTrue("got $texts", texts.any { it.contains("为美好的") })
         assertTrue("got $texts", texts.any { it.contains("世界献上") })
         assertTrue("got $texts", texts.any { it.contains("祝福") })
