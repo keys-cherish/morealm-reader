@@ -233,7 +233,7 @@ class ScrollLayoutEngine(
         // 视为 "封面 / 卷首页" → skip self-draw title。SampleLN cover.xhtml 内容只 1 个
         // ChapterBlock.Image，flatten 后 paragraph = "<img src=\"img:Images/cover.jpg\">"
         // (单 line 含 img tag)。caller 传 title="Cover" (或其他) 都该 skip。
-        val imgOnlyPattern = Regex("^\\s*<img\\s+[^>]*>\\s*$")
+        val imgOnlyPattern = Regex("^\\s*<img(?:fp)?\\s+[^>]*>\\s*$")
         val firstParaIsImageOnly = firstFewParas.firstOrNull()?.let { imgOnlyPattern.matches(it) } ?: false
         val contentProvidesChapterTitle = isSpecialChapterTitle || hasEarlyTableMarker || firstParaIsImageOnly
 
@@ -309,6 +309,7 @@ class ScrollLayoutEngine(
             isTitleEnd: Boolean = false,
             isImage: Boolean = false,
             imageSrc: String? = null,
+            isFullPageImage: Boolean = false,
             lineHeightOverride: Float? = null,
             atoms: List<Atom>? = null,
             headingLevel: Int = 0,
@@ -345,6 +346,7 @@ class ScrollLayoutEngine(
                     isTitleEnd = isTitleEnd,
                     isImage = isImage,
                     imageSrc = imageSrc,
+                    isFullPageImage = isFullPageImage,
                     blockStyle = currentBlockStyle,
                     atoms = atoms,
                     headingLevel = headingLevel,
@@ -529,14 +531,23 @@ class ScrollLayoutEngine(
         // dims 解码走 [imageDimensionsResolver]；null 时 fallback 4:3（visibleWidth × 0.75）。
         // 占 1 cp 与旧引擎 stringBuilder.append(" ") 严格对齐。
         // 返回累加后的 chapterPositionCounter（含图片占的 1 cp）。
-        fun emitImage(src: String, paragraphNum: Int, startCp: Int): Int {
+        fun emitImage(src: String, paragraphNum: Int, startCp: Int, isFullPage: Boolean = false): Int {
             val dims = imageDimensionsResolver.resolve(src, visibleWidth)
             val imgWidth: Int
             val imgHeight: Int
+            val origW = dims?.first ?: -1
+            val origH = dims?.second ?: -1
+            // **fullpage 整屏渲染分支**：某 EPUB等 EPUB 用 `<svg width="100%" height="100%">`
+            // 包裹封面 image，[SvgImageRewriteVisitor] 把 svg 容器转 `<imgfp>` marker；
+            // 调用方设 isFullPage=true 后，slot 用 viewWidth (整屏宽，不减 padding) 替代
+            // visibleWidth，让封面图占满整个屏幕宽度（视觉效果优化 cover）。
+            // 普通 `<img>` (示例 LN B 01 等) isFullPage=false 走原 visibleWidth 段落图行为。
+            val baseW = if (isFullPage) viewWidth else visibleWidth
             if (dims != null && dims.first > 0 && dims.second > 0) {
                 val (intW, intH) = dims
-                var w = visibleWidth
-                var h = (intH.toFloat() * visibleWidth / intW).toInt()
+                var w = baseW
+                var h = (intH.toFloat() * baseW / intW).toInt()
+                // 高度上限仍按 visibleHeight clamp（不超过 page 可用高），避免被 InfoBar 裁掉
                 if (h > visibleHeight) {
                     w = (w.toFloat() * visibleHeight / h).toInt()
                     h = visibleHeight
@@ -544,9 +555,17 @@ class ScrollLayoutEngine(
                 imgWidth = w; imgHeight = h
             } else {
                 // Fallback 4:3，与旧 ChapterProvider.setTypeImage line 684 兜底一致
-                imgWidth = visibleWidth
-                imgHeight = (visibleWidth * 0.75f).toInt().coerceAtMost(visibleHeight)
+                imgWidth = baseW
+                imgHeight = (baseW * 0.75f).toInt().coerceAtMost(visibleHeight)
             }
+            // 诊断日志：原图 W/H、resolver 返回值、visible/view 区、emit 后的 imgWidth/imgHeight。
+            com.morealm.app.core.log.AppLog.info(
+                "Engine/Image",
+                "emitImage src='${src.takeLast(40)}' orig=${origW}x${origH} " +
+                    "view=${viewWidth}x${viewHeight} visible=${visibleWidth}x${visibleHeight} " +
+                    "isFullPage=$isFullPage → emit=${imgWidth}x${imgHeight} " +
+                    "paraNum=$paragraphNum startCp=$startCp pageLevelMode=$pageLevelMode",
+            )
 
             // emitLine 用 lineHeightOverride 让图片行高 = imgHeight（不走 contentLineHeight）
             emitLine(
@@ -557,6 +576,7 @@ class ScrollLayoutEngine(
                 lastChapterPos = startCp,
                 isImage = true,
                 imageSrc = src,
+                isFullPageImage = isFullPage,
                 lineHeightOverride = imgHeight.toFloat(),
             )
             // 图片占 1 cp（旧引擎 stringBuilder.append(" ")）
@@ -1459,10 +1479,14 @@ class ScrollLayoutEngine(
                         emitTextChunk(before, isFirstChunkOfPara = isFirstChunk)
                         isFirstChunk = false
                     }
+                    val tagName = m.groupValues[1]
+                    val srcVal = m.groupValues[2]
+                    val isFullPage = tagName.equals("imgfp", ignoreCase = true)
                     chapterPositionCounter = emitImage(
-                        src = m.groupValues[1],
+                        src = srcVal,
                         paragraphNum = paragraphCounter,
                         startCp = chapterPositionCounter,
+                        isFullPage = isFullPage,
                     )
                     isFirstChunk = false  // img 后续 chunk 不是段首
                     cursor = m.range.last + 1
@@ -1855,11 +1879,18 @@ class ScrollLayoutEngine(
 
         /**
          * 图片占位标记识别正则 —— 与 [com.morealm.app.core.text.AppPattern.imgSrcPattern]
-         * 同款表达式，group 1 = src。
+         * 同款表达式 扩展加 `<imgfp>` (full-page image) tag union；
+         * group 1 = tag name (img / imgfp)，group 2 = src。
          * 直接定义为 Regex 而非引用 Pattern 转换，避免每次调用开销。
+         *
+         * fullpage 信号：epub-lib StructuredContent.flattenToString 对
+         * [com.morealm.epub.compat.ChapterBlock.Image.isFullPage] = true 的 image 块写
+         * `<imgfp src="...">`，由 [SvgImageRewriteVisitor] 把 `<svg><image/></svg>` 转
+         * IMG event 时注入 `data-morealm-fullpage="1"` 触发。本 regex 用 `\b` boundary
+         * 让 `<img\b` 不误匹配 `<imgfp` (gf 间无 word boundary)。
          */
         private val imgRegex = Regex(
-            "<img[^>]+src=['\"]([^'\"]*)['\"][^>]*>",
+            "<(imgfp|img)\\b[^>]*src=['\"]([^'\"]*)['\"][^>]*>",
             RegexOption.IGNORE_CASE,
         )
 

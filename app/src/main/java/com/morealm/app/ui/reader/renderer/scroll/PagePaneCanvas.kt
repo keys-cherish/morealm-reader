@@ -6,6 +6,7 @@ import android.graphics.Path
 import android.text.TextPaint
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -95,6 +96,26 @@ fun PagePaneCanvas(
     val pageLastCp = page.lines.lastOrNull()?.lastChapterPos ?: -1
     val visibleWidthF = (chapterViewWidth - chapterPaddingLeft * 2).toFloat()
 
+    // 字体颜色诊断（EPUB CharColor / 段落 textColor / atom.colorArgb / col.colorArgb）
+    // —— 每 page 切换打 1 行 INFO，列前 3 行关键字段。便于对比 SCROLL vs page-level
+    // 横向模式渲染时颜色是否一致。开销可忽略：page 切换才 fire。
+    LaunchedEffect(page.chapterIndex, page.pageIndex, page.lines.size) {
+        if (page.lines.isEmpty()) return@LaunchedEffect
+        val sample = page.lines.take(3).mapIndexed { i, line ->
+            val paragraphColor = line.blockStyle.textColor?.let { "0x${it.toUInt().toString(16)}" } ?: "null"
+            val col0Color = line.columns.firstOrNull()?.colorArgb?.let { "0x${it.toUInt().toString(16)}" } ?: "null"
+            val atom0Color = (line.atoms?.firstOrNull() as? com.morealm.app.domain.render.layout.TextRun)
+                ?.colorArgb?.let { "0x${it.toUInt().toString(16)}" } ?: "null"
+            val text15 = line.text.take(15).replace("\n", "\\n")
+            "  L$i: paraC=$paragraphColor atoms=${line.atoms != null} cells=${line.cells != null}" +
+                " col0C=$col0Color atom0C=$atom0Color text='$text15'"
+        }.joinToString("\n")
+        com.morealm.app.core.log.AppLog.info(
+            "PagePane/ColorDiag",
+            "ch=${page.chapterIndex} pg=${page.pageIndex} lines=${page.lines.size} paint.color=0x${contentPaint.color.toUInt().toString(16)}\n$sample",
+        )
+    }
+
     Canvas(modifier) {
         drawIntoCanvas { canvas ->
             val nc = canvas.nativeCanvas
@@ -159,18 +180,46 @@ fun PagePaneCanvas(
             for (line in page.lines) {
                 if (line.isImage) {
                     val src = line.imageSrc ?: continue
-                    val slotW = visibleWidthF
+                    // **fullpage cover 整屏渲染**：某 EPUB等 EPUB 用 `<svg width="100%" height="100%">`
+                    // 包裹的封面 image 通过 [com.morealm.app.domain.render.layout.ScrollLine.isFullPageImage]
+                    // 透传到本层，slot 用整屏宽（chapterViewWidth）+ 绕过 paddingLeft translate 让
+                    // 封面图占满屏（视觉效果优化 cover）。普通 `<p><img/></p>`（示例 LN B 01 等）
+                    // isFullPageImage=false 仍走 visibleWidthF 段落图行为。
+                    val isFullPage = line.isFullPageImage
+                    val slotW: Float
+                    val baseX: Float
+                    val cacheTargetW: Int
+                    if (isFullPage) {
+                        slotW = chapterViewWidth.toFloat()
+                        baseX = -chapterPaddingLeft.toFloat()  // 抵消外层 nc.translate(chapterPaddingLeft, 0)
+                        cacheTargetW = chapterViewWidth.coerceAtLeast(1)
+                    } else {
+                        slotW = visibleWidthF
+                        baseX = 0f
+                        cacheTargetW = slotW.toInt().coerceAtLeast(1)
+                    }
                     val slotH = line.lineBottom - line.lineTop
                     val bitmap = com.morealm.app.domain.render.ImageCache.get(
-                        src, slotW.toInt().coerceAtLeast(1),
+                        src, cacheTargetW,
                     ) ?: continue
                     val bmpW = bitmap.width.toFloat()
                     val bmpH = bitmap.height.toFloat()
                     val scale = minOf(slotW / bmpW, slotH / bmpH)
                     val drawW = bmpW * scale
                     val drawH = bmpH * scale
-                    val offsetX = (slotW - drawW) / 2f
+                    val offsetX = baseX + (slotW - drawW) / 2f
                     val offsetY = line.lineTop + (slotH - drawH) / 2f
+                    // 诊断日志（某 EPUB全屏 vs 示例 LN B 01 非全屏，看渲染层数据差异）：
+                    // page 上下文 + isFullPage + slot 大小 + bmp 大小 + scale + 最终 draw 区域。
+                    com.morealm.app.core.log.AppLog.info(
+                        "PagePane/Image",
+                        "ch=${page.chapterIndex} pg=${page.pageIndex} pageH=${page.height} " +
+                            "isFullPage=$isFullPage pageLines=${page.lines.size} " +
+                            "lineTop=${line.lineTop.toInt()} lineBottom=${line.lineBottom.toInt()} " +
+                            "src='${src.takeLast(40)}' slot=${slotW.toInt()}x${slotH.toInt()} " +
+                            "bmp=${bmpW.toInt()}x${bmpH.toInt()} scale=${"%.3f".format(scale)} " +
+                            "draw=${drawW.toInt()}x${drawH.toInt()} offset=(${offsetX.toInt()},${offsetY.toInt()})",
+                    )
                     nc.drawBitmap(
                         bitmap,
                         null,

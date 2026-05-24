@@ -856,6 +856,7 @@ fun ReaderScreen(
                 titleAlign = effectiveReaderStyle?.titleMode?.takeIf { it != 0 } ?: 0,
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
                 bgColorArgb = readerBg.toArgb(),
+                bgImageUri = readerBgImage,
                 restoreToken = renderedChapter.restoreToken,
                 initialChapterPosition = renderedChapter.initialChapterPosition,
                 initialProgress = renderedChapter.initialProgress,

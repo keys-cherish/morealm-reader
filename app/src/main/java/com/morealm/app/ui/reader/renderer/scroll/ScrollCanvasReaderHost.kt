@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.geometry.Offset
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
+import com.morealm.app.domain.render.ImageCache
+import com.morealm.app.domain.render.layout.ScrollImageDimensionsResolver
 import com.morealm.app.domain.render.layout.ScrollLayoutEngine
 import com.morealm.app.domain.render.layout.extractText
 import com.morealm.app.domain.render.layout.findColumnAt
@@ -302,6 +304,9 @@ fun ScrollCanvasReaderHost(
             titleMode = titleMode,
             titleAlign = titleAlign,
             textFullJustify = textFullJustify,
+            // 注入真实 dims 解析器 — 让 emitImage 拿到原图 aspect ratio 不走 4:3 fallback。
+            // 修「cover/inline image 被压扁」根因 (resolver 默认 NoOp → dims=null → fallback)。
+            imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
         )
     }
 
