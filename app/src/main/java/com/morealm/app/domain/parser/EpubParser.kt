@@ -162,7 +162,11 @@ object EpubParser {
     // ChapterBlock.Image.isFullPage，flattenToString 输出 `<imgfp src="...">` marker。
     // 某 EPUB等 svg-wrap cover 章节 cache 内容从 `<img>` 变成 `<imgfp>` 必须 bump 失效。
     // 渲染端 PagePaneCanvas 根据 ScrollLine.isFullPageImage 整屏渲染（视觉效果优化 cover）。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v39"
+    // v40：epub-lib ImgRewriteVisitor 透传 data-morealm-fullpage attr 修复 (2026-05-24 23:xx)。
+    // v39 引入时 ImgRewriteVisitor 还在 strip 此 attr → cover.xhtml 在 v39 dir 第一次装机
+    // 跑出 `<img>` 旧 marker 被缓存。第二次装机即使 epub-lib 修了，cache HIT len=223 直接
+    // 用旧内容跳过 epub-lib parse → isFullPage 永远 false。bump v40 强制 re-flatten。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v40"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
