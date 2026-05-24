@@ -215,6 +215,20 @@ fun rememberPageLevelCore(
             val layout = loadAndLayout(curIdx)
             if (layout != null) {
                 state.currentChapter = layout
+                // 跨章 load 完毕：reset pageFactory.pageIndex + state.pageOffset 到章首 0。
+                // V2 swap 路径 (ScrollPageFactory.moveToNext/Prev) 自身已 reset pageIndex；
+                // 本路径专门处理 loadChapter / setExternalChapterIndex 跨章后 factory
+                // 没人 reset 的 case —— 旧 pageIndex 若越界新 layout（如章 8 pageIndex=38
+                // 切到只有 1 page 的章 0）→ curPage = EMPTY_PAGE → curPageH = 0 →
+                // applyPageScrollDelta consume + 不动 = 卡死无法滑动 (P0 fix 2026-05-24).
+                // Slider 拖动 in-place seek 的 restoreToken JUMP 路径会在 Host 层下一帧
+                // 覆盖 pageIndex / pageOffset 到目标 progress（cp>0 或 prog>0 时），无副作用。
+                val oldPageIdx = pageFactory.pageIndex
+                if (oldPageIdx != 0 || state.pageOffset != 0f) {
+                    pageFactory.moveToPage(0)
+                    state.pageOffset = 0f
+                    AppLog.info("PageLevelCore", "  cross-ch reset pageIndex $oldPageIdx → 0, pageOffset → 0")
+                }
                 AppLog.info("PageLevelCore", "  cur READY pages=${layout.pages.size} totalH=${layout.totalHeight}")
             } else {
                 state.currentChapter = null
