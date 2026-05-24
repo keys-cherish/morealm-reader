@@ -7,6 +7,7 @@ import com.morealm.app.domain.render.ZhLayout
 import com.morealm.app.domain.render.textHeight
 // **R1 (阶段 R1)** —— 核心 marker 解析 + 数据类迁到独立仓库 epub-layout。主仓只调用 entry point
 // + 引用 public data class。internal marker 字面值 / parser helper 全藏在 epub-layout module。
+import com.morealm.epub.layout.ContentRun
 import com.morealm.epub.layout.InlineMarkersResult
 import com.morealm.epub.layout.ParsedTable
 import com.morealm.epub.layout.ParsedTableCell
@@ -645,36 +646,59 @@ class ScrollLayoutEngine(
             return sb.toString()
         }
 
-        // **D2.a Commit 2b** —— layoutCellLines：把 cell 内 paragraph 列表按 cell.widthPx
-        // 切成行，返回 List<List<(char, width)>>。某 EPUB vol-title td.widthPx=19.2 (1.2em)
-        // → CJK 字符 ~16-24 px 宽，一字一行 → 视觉竖排。
+        // **Step 7 (2026-05-24)** —— layoutCellLines 升级 ContentRun 路径。
+        // 之前用 cell.contentParagraphs (List<String> 含 cleanText 含 U+FFFC 占位 +
+        // 字面 markers) — image src 丢失 (cell 内 chibi 渲染成 [OBJ] placeholder)，cell
+        // 内 per-cp color 丢失 (只用 cell.textColor 首字色)。
         //
-        // **Step 5 (2026-05-24)**: para 内可能含 nested __MOREALM_TBL__ marker (cell 内嵌
-        // table，如 SampleLN 作者名 cell[3,0] 内嵌「测试作者 B」5 row 单 cell table)。
-        // strip nested marker + 字符 (作者名 nested 内容暂时丢失但避免 marker 字面显示)。
-        // 完整 nested layout 留 Step 7 做。
-        fun layoutCellLines(cell: ParsedTableCell): List<List<Pair<String, Float>>> {
+        // 切换到 cell.paragraphs (List<List<ContentRun>>) 让 inline image / per-cp color/size /
+        // nested table 都有结构化数据。NestedTable 当前 strip (Step 7+ 真递归)。
+        //
+        // CellGlyph 携带 (text 或 image src + width + color + size)，layoutTable emit 时
+        // 识别 imageSrc 非 null → emit InlineImage atom 取代 TextRun。
+        fun layoutCellLines(cell: ParsedTableCell): List<List<CellGlyph>> {
             val widthCap = cell.widthPx ?: visibleWidth.toFloat()
-            val sizeScale = cell.sizeScale
-            val out = ArrayList<List<Pair<String, Float>>>()
-            for (paraRaw in cell.contentParagraphs) {
-                val para = stripNestedTableMarkers(paraRaw)
-                val (chars, rawWidths) = contentTextMeasure.measureTextSplit(para)
-                if (chars.isEmpty()) continue
-                // **D2.b**：cell.sizeScale 缩放字符宽度，让 wrap 按真实字号算（1.4em 字
-                // ~24×1.4=34px > cellW → 1字1行；0.9em 字 ~24×0.9=22px 可能塞 2字/行）。
-                val widths: List<Float> = if (sizeScale != 1f) rawWidths.map { it * sizeScale } else rawWidths
-                var lineBuf = ArrayList<Pair<String, Float>>()
+            val cellLevelSizeScale = cell.sizeScale
+            val cellLevelColor = cell.textColor
+            val out = ArrayList<List<CellGlyph>>()
+
+            for (paraRuns in cell.paragraphs) {
+                // 把 paraRuns (List<ContentRun>) 扁平化成 CellGlyph 序列，然后按 widthCap 切行
+                val glyphs = ArrayList<CellGlyph>()
+                for (run in paraRuns) {
+                    when (run) {
+                        is ContentRun.Text -> {
+                            val (chars, rawWidths) = contentTextMeasure.measureTextSplit(run.text)
+                            val effScale = run.style.fontSizeEm ?: cellLevelSizeScale
+                            val effColor = run.style.color ?: cellLevelColor
+                            for (i in chars.indices) {
+                                val w = if (effScale != 1f) rawWidths[i] * effScale else rawWidths[i]
+                                glyphs.add(CellGlyph(text = chars[i], width = w, color = effColor, imageSrc = null, sizeScale = effScale))
+                            }
+                        }
+                        is ContentRun.Image -> {
+                            // inline image 占位：宽 ≈ contentLineHeight × 1.5（与 emitOneLine 内同款）
+                            val imgW = contentLineHeight * 1.5f
+                            glyphs.add(CellGlyph(text = "￼", width = imgW, color = null, imageSrc = run.src, sizeScale = 1f))
+                        }
+                        is ContentRun.NestedTable -> {
+                            // Step 7+：暂跳过 nested table content (留独立 task 做 nested 递归 layout)
+                            // 让 marker 字面不显示 + 字符 (5 字「测试作者 B」) 暂丢
+                        }
+                    }
+                }
+                if (glyphs.isEmpty()) continue
+                // 按 widthCap 贪心切行
+                var lineBuf = ArrayList<CellGlyph>()
                 var lineW = 0f
-                for (i in chars.indices) {
-                    val w = widths[i]
-                    if (lineW + w > widthCap && lineBuf.isNotEmpty()) {
+                for (g in glyphs) {
+                    if (lineW + g.width > widthCap && lineBuf.isNotEmpty()) {
                         out.add(lineBuf.toList())
                         lineBuf = ArrayList()
                         lineW = 0f
                     }
-                    lineBuf.add(chars[i] to w)
-                    lineW += w
+                    lineBuf.add(g)
+                    lineW += g.width
                 }
                 if (lineBuf.isNotEmpty()) out.add(lineBuf.toList())
             }
@@ -699,7 +723,7 @@ class ScrollLayoutEngine(
         fun layoutTable(parsed: ParsedTable) {
             for (row in parsed.rows) {
                 if (row.cells.isEmpty()) continue
-                val cellLines: List<List<List<Pair<String, Float>>>> = row.cells.map { layoutCellLines(it) }
+                val cellLines: List<List<List<CellGlyph>>> = row.cells.map { layoutCellLines(it) }
                 // **D2.a Commit 2d fix**：CSS spec — td.width 是最小宽度；实际 cell width =
                 // max(declared widthPx, actual content max line width)。某 EPUB td.width=1.2em
                 // ≈ 19.2px < CJK 字符 ~24-30px → 字符会溢出 + cellCursorX 累加用 19.2 让
@@ -708,7 +732,7 @@ class ScrollLayoutEngine(
                 val cellWidths: List<Float> = row.cells.mapIndexed { idx, cell ->
                     val declared = cell.widthPx ?: 0f
                     val contentMax = cellLines[idx].maxOfOrNull { line ->
-                        line.sumOf { it.second.toDouble() }.toFloat()
+                        line.sumOf { it.width.toDouble() }.toFloat()
                     } ?: 0f
                     maxOf(declared, contentMax)
                 }
@@ -764,36 +788,55 @@ class ScrollLayoutEngine(
                     val cellAtoms = ArrayList<Atom>()
                     for ((lineIdxInCell, cellLine) in cellLineList.withIndex()) {
                         if (cellLine.isEmpty()) continue
-                        val lineW = cellLine.sumOf { it.second.toDouble() }.toFloat()
+                        val lineW = cellLine.sumOf { it.width.toDouble() }.toFloat()
                         // cell 内文字水平居中（CSS td.vol-title-* text-align: center）
                         var localX = ((cellW - lineW) / 2f).coerceAtLeast(0f)
                         val localY = lineIdxInCell * cellStride
-                        for ((ch, w) in cellLine) {
+                        // **Step 7 (2026-05-24)** —— cell glyph 携带 per-cp color/imageSrc/size：
+                        // - glyph.imageSrc != null → emit InlineImage atom (chibi 真显示)
+                        // - glyph.color != null → 用 glyph.color (vs fallback cell.textColor)
+                        // - glyph.sizeScale != 1f → 用 glyph.sizeScale (vs cell.sizeScale)
+                        for (g in cellLine) {
                             val globalX = cellCursorX + localX
+                            val effColor = g.color ?: cell.textColor
+                            val effScale = if (g.sizeScale != 1f) g.sizeScale else cell.sizeScale
                             allColumns.add(
                                 ScrollColumn(
-                                    charData = ch,
+                                    charData = g.text,
                                     start = globalX,
-                                    end = globalX + w,
+                                    end = globalX + g.width,
                                     chapterPosition = chapterPositionCounter,
-                                    colorArgb = cell.textColor,
+                                    colorArgb = effColor,
+                                    inlineImageSrc = g.imageSrc,
                                 ),
                             )
-                            cellAtoms.add(
-                                TextRun(
-                                    text = ch,
-                                    colorArgb = cell.textColor,
-                                    sizeScale = cell.sizeScale,
-                                    width = w,
-                                    height = cellStride,
-                                    baseline = cellAscent,
-                                    cellLocalX = localX,
-                                    cellLocalY = localY,
-                                ),
-                            )
-                            sb.append(ch)
+                            if (g.imageSrc != null) {
+                                cellAtoms.add(
+                                    InlineImage(
+                                        src = g.imageSrc,
+                                        width = g.width,
+                                        height = cellStride,
+                                        cellLocalX = localX,
+                                        cellLocalY = localY,
+                                    ),
+                                )
+                            } else {
+                                cellAtoms.add(
+                                    TextRun(
+                                        text = g.text,
+                                        colorArgb = effColor,
+                                        sizeScale = effScale,
+                                        width = g.width,
+                                        height = cellStride,
+                                        baseline = cellAscent,
+                                        cellLocalX = localX,
+                                        cellLocalY = localY,
+                                    ),
+                                )
+                            }
+                            sb.append(g.text)
                             chapterPositionCounter++
-                            localX += w
+                            localX += g.width
                         }
                     }
                     rowCells.add(
@@ -1707,3 +1750,22 @@ class ScrollLayoutEngine(
         // 暴露 marker 字面值。jadx 字节码分析主仓只能看到函数调用，不见 "__MOREALM_TBL__" 字面。
     }
 }
+
+/**
+ * **Step 7 (2026-05-24)** —— layoutCellLines 返回的 cell 内单 glyph 数据。
+ *
+ * 替代之前 `Pair<String, Float>` 模型 — 携带 per-glyph color/imageSrc/sizeScale。
+ *
+ * @property text 字符（CJK / Latin / 标点 / U+FFFC 占位 for image）
+ * @property width 该 glyph 渲染宽度 (px)，含 sizeScale 缩放后值
+ * @property color ARGB 字符前景色；null = 用 cell.textColor 或默认
+ * @property imageSrc 非 null 时该 glyph 是 inline image (text 是 U+FFFC 占位)，width 是 image 占位宽
+ * @property sizeScale 字符 size 缩放（1f = 默认）；image 始终 1f
+ */
+internal data class CellGlyph(
+    val text: String,
+    val width: Float,
+    val color: Int? = null,
+    val imageSrc: String? = null,
+    val sizeScale: Float = 1f,
+)

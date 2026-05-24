@@ -147,6 +147,8 @@ data class InlineImage(
     val src: String,
     override val width: Float,
     override val height: Float,
+    override val cellLocalX: Float = 0f,
+    override val cellLocalY: Float = 0f,
 ) : Atom {
     override val cpCount: Int get() = 1
     override val baseline: Float get() = height
