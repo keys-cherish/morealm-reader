@@ -146,7 +146,14 @@ object EpubParser {
     // element-specific 尺寸算 rect (中心对齐 line columns + line center)。配合
     // BORDER_RADIUS_CIRCLE 让 SampleLN qipao 真成 56×56 圆 (而非 v33 胶囊形)。v33 cache
     // 不含 w=/h= 必须 bump 失效。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v34"
+    // v37：Step 5 / Plan B-1+B-2 re-apply (2026-05-24) — TableMergeVisitor thin pass-through，
+    // 所有 outer table 走 ChapterBlock.Table 路径保留 row × cell × content 结构。SampleLN
+    // 5 sibling → 5 独立 Table 段；qipao div → Table + ancestor BlockStyle 含装饰 → 主仓
+    // hasTableMarker 内 widthPx 非 null 走 emitInlineBlockContainer (圆球 + 切行)；作者名 →
+    // Table 含 nested Table in cell[3,0].content (Step 7 完整渲染前 strip 避免 marker 字面)。
+    // + ArenaBuilder selfClosing fix + isInlineImageContext TD/TH (cell 内 img 走 inline)。
+    // ChapterBlock 树结构变化 + cache 必须 bump。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v37"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
