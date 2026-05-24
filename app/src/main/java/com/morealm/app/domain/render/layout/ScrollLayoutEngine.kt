@@ -229,7 +229,13 @@ class ScrollLayoutEngine(
         val isSpecialChapterTitle = titleTrimmed in SPECIAL_CHAPTER_TITLES
         val firstFewParas = paragraphs.asSequence().filter { it.isNotBlank() }.take(3).toList()
         val hasEarlyTableMarker = firstFewParas.any { hasTableMarker(it) }
-        val contentProvidesChapterTitle = isSpecialChapterTitle || hasEarlyTableMarker
+        // **Step 7 v7 (2026-05-24)**: 条件 3 — image-only 章 (第 1 段是纯 <img src="...">) →
+        // 视为 "封面 / 卷首页" → skip self-draw title。SampleLN cover.xhtml 内容只 1 个
+        // ChapterBlock.Image，flatten 后 paragraph = "<img src=\"img:Images/cover.jpg\">"
+        // (单 line 含 img tag)。caller 传 title="Cover" (或其他) 都该 skip。
+        val imgOnlyPattern = Regex("^\\s*<img\\s+[^>]*>\\s*$")
+        val firstParaIsImageOnly = firstFewParas.firstOrNull()?.let { imgOnlyPattern.matches(it) } ?: false
+        val contentProvidesChapterTitle = isSpecialChapterTitle || hasEarlyTableMarker || firstParaIsImageOnly
 
         val pages = mutableListOf<ScrollPage>()
         var currentPageLines = mutableListOf<ScrollLine>()
