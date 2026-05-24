@@ -3,9 +3,13 @@ package com.morealm.app.ui.reader.page.animhorizontal
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.TextPaint
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import com.morealm.app.ui.reader.renderer.drawBgBitmap
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
@@ -33,7 +37,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
+import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
+import com.morealm.app.domain.render.layout.ScrollImageDimensionsResolver
 import com.morealm.app.domain.render.layout.ScrollLayoutEngine
 import com.morealm.app.domain.render.layout.extractText
 import com.morealm.app.domain.render.layout.findColumnAt
@@ -118,6 +124,12 @@ fun PageLevelReaderHost(
     titleAlign: Int = 0,
     textFullJustify: Boolean = true,
     bgColorArgb: Int = Color.WHITE,
+    /**
+     * 阅读区背景图 uri；空串 = 纯色背景。来自 ReaderScreen 的 readerBgImage。
+     * 优先级：当前章节 EPUB body 背景图 (state.currentChapter.chapterBgImageSrc) >
+     * 本参数 (阅读器全局) > 纯色 [bgColorArgb]。某 EPUB / 仙侠类章节级背景图通过此通路透传。
+     */
+    bgImageUri: String = "",
     restoreToken: Long = 0L,
     /** 跳书签 / 续读 / 搜索定位的目标章内 chapterPosition（cp）。0 = 章首。 */
     initialChapterPosition: Int = 0,
@@ -249,6 +261,10 @@ fun PageLevelReaderHost(
             titleMode = titleMode,
             titleAlign = titleAlign,
             textFullJustify = textFullJustify,
+            // 注入真实 dims 解析器 — 让 emitImage 拿到原图 aspect ratio 不走 4:3 fallback。
+            // 修「示例 LN B 01 cover 1000x1333 被算成 798x598 (4:3 压扁) 视觉只占视口 1/3」根因
+            // (resolver 默认 NoOp → dims=null → fallback `visibleWidth*0.75=598`)。
+            imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
             pageLevelMode = true,
         )
     }
@@ -478,6 +494,29 @@ fun PageLevelReaderHost(
         }
     }
 
+    // 背景图加载（与 ScrollCanvasReaderHost.kt:475-496 同款逻辑，移植以支持 EPUB 章节级背景图）
+    // 优先级链：当前章节 EPUB body 背景图 (chapterBgImageSrc) > 阅读器全局 (bgImageUri) > 纯色
+    // BgImageManager LRU 缓存（最多 3 张），同 uri 同尺寸命中。
+    val chapterBgSrc = core.state.currentChapter?.chapterBgImageSrc
+    val effectiveBgUri = chapterBgSrc?.takeIf { it.isNotEmpty() } ?: bgImageUri
+    val bgEntry = remember(effectiveBgUri, viewWidth, viewHeight) {
+        if (effectiveBgUri.isNotEmpty() && viewWidth > 0 && viewHeight > 0) {
+            val t0 = System.currentTimeMillis()
+            val entry = com.morealm.app.domain.render.BgImageManager.getBgBitmap(
+                context, effectiveBgUri, viewWidth, viewHeight,
+            )
+            val dt = System.currentTimeMillis() - t0
+            com.morealm.app.core.log.AppLog.info(
+                "PageLvlHost/Bg",
+                "load bg src='${effectiveBgUri.take(80)}' viewW=$viewWidth viewH=$viewHeight " +
+                    "cost=${dt}ms result=${if (entry?.bitmap != null) "OK (${entry.bitmap.width}x${entry.bitmap.height})" else "NULL"} " +
+                    "chapterLevel=${chapterBgSrc != null}",
+            )
+            entry
+        } else null
+    }
+    val bgBitmap = bgEntry?.bitmap
+
     Box(
         modifier
             .fillMaxSize()
@@ -584,6 +623,19 @@ fun PageLevelReaderHost(
                 )
             }
     ) {
+        // 背景图层（固定不滚动，z-order 在 Transition 文字下方）：
+        // 在 Box 内但在各 Transition 之前先画 → 与 ScrollCanvasReaderHost.kt:629-642 同款。
+        // bgBitmap 已经按 viewWidth × viewHeight 缓存，drawBgBitmap 内部做 center-crop 填满。
+        bgBitmap?.let { bmp ->
+            Canvas(Modifier.fillMaxSize()) {
+                if (!bmp.isRecycled) {
+                    drawIntoCanvas { compose ->
+                        drawBgBitmap(compose.nativeCanvas, bmp, size.width, size.height)
+                    }
+                }
+            }
+        }
+
         val currentLayout = core.state.currentChapter
         if (currentLayout != null) {
             val selectionChapterIndex = if (selection.isActive) selection.chapterIndex else -1

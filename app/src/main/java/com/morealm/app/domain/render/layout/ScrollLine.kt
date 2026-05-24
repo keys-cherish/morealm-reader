@@ -55,6 +55,19 @@ data class ScrollLine(
      */
     val imageSrc: String? = null,
     /**
+     * true = 该图片占整页（某 EPUB等 EPUB 用 `<svg width="100%" height="100%"><image .../></svg>`
+     * 包裹封面 image 的标准写法）。来源链：epub-lib [SvgImageRewriteVisitor] svg→img 转换
+     * 时注入 `data-morealm-fullpage="1"` attr → [ChapterBlockBuilder] emit
+     * [ChapterBlock.Image.isFullPage]=true → [StructuredChapterContent.flattenToString] 用专属
+     * `<imgfp>` marker → MoRealm [ScrollLayoutEngine.imgRegex] union 模式识别 tag=imgfp →
+     * [ScrollLayoutEngine.emitImage] isFullPage=true → 本字段。
+     *
+     * 渲染层 [com.morealm.app.ui.reader.renderer.scroll.PagePaneCanvas] 检测本字段：
+     * - true → slot 用整屏宽（chapterViewWidth）+ 绕过 paddingLeft translate，让封面图占满
+     * - false → 走 visibleWidth (减 padding) 的段落图行为（示例 LN B 01 等普通 `<p><img/></p>`）
+     */
+    val isFullPageImage: Boolean = false,
+    /**
      * 行内整文本（含全角空格 / 标点，由 [ScrollLayoutEngine] 决定是否含末尾对齐填充）。
      * 跟 `columns.map { it.charData }.joinToString("")` 在大多数行下等价，但章首块 /
      * 图片段例外 —— 文本以 `text` 为权威，columns 为坐标权威。

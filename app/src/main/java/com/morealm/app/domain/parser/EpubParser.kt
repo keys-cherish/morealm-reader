@@ -157,7 +157,12 @@ object EpubParser {
     // 产 content。SampleLN cover.xhtml `<head><title>Cover</title></head>` 之前让 "Cover"
     // 成为 Paragraph 段，cover 章 content="Cover\n<img...>"。修后只剩 Image 段。
     // 所有 chapter 受影响 — head 内 metadata 不再污染 body content。v37 cache 必须 bump。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v38"
+    // v39：fullpage cover (2026-05-24) — epub-lib SvgImageRewriteVisitor 给 svg 容器内的
+    // image 注入 `data-morealm-fullpage="1"` attr，ChapterBlockBuilder 透传到
+    // ChapterBlock.Image.isFullPage，flattenToString 输出 `<imgfp src="...">` marker。
+    // 某 EPUB等 svg-wrap cover 章节 cache 内容从 `<img>` 变成 `<imgfp>` 必须 bump 失效。
+    // 渲染端 PagePaneCanvas 根据 ScrollLine.isFullPageImage 整屏渲染（视觉效果优化 cover）。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v39"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)

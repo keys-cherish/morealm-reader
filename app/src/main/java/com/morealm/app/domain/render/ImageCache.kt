@@ -9,6 +9,7 @@ import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.http.okHttpClient
 import com.morealm.app.domain.parser.MobiResourceLoader
 import okhttp3.Request
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 图片 LRU 缓存，避免每次绘制都重新解码。
@@ -156,9 +157,57 @@ object ImageCache {
         return inSampleSize
     }
 
+    /**
+     * 同 src image 多次 emit 时复用 header 解析结果。bounds 是 immutable Pair（≈32B/entry），
+     * 不参与 LRU / onTrimMemory（单本书 image 数 < 200，6KB 量级可忽略）。
+     */
+    private val boundsCache = ConcurrentHashMap<String, Pair<Int, Int>>()
+
+    /**
+     * **同步**读 image header 拿 (intrinsicWidth, intrinsicHeight)，不 decode 整张 bitmap。
+     * 用 `inJustDecodeBounds=true` 走 header 解析（KB 级 I/O，10ms 量级），让 layout
+     * 阶段拿到真实 aspect ratio 而不是 4:3 fallback 让 cover 等图片被压扁。
+     *
+     * 用途：[com.morealm.app.domain.render.layout.ScrollLayoutEngine.emitImage] 的
+     * `imageDimensionsResolver` 桥接实现调本方法
+     * (`ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) }`)。
+     *
+     * 支持的 src 协议：
+     *  - `mobi-img://` → [MobiResourceLoader] 读 bytes + decodeByteArray
+     *  - `file://` 或裸 path → BitmapFactory.decodeFile
+     *  - 其他（http(s):// 等） → null，调用方走 4:3 fallback
+     */
+    fun getBounds(src: String): Pair<Int, Int>? {
+        boundsCache[src]?.let { return it }
+        return decodeBounds(src)?.also { boundsCache[src] = it }
+    }
+
+    private fun decodeBounds(src: String): Pair<Int, Int>? {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        try {
+            if (src.startsWith("mobi-img://")) {
+                val ctx = appContext ?: return null
+                val parts = src.removePrefix("mobi-img://").split("/", limit = 2)
+                if (parts.size < 2) return null
+                val hash = parts[0]
+                val idx = parts[1].toIntOrNull() ?: return null
+                val bytes = MobiResourceLoader.readBytes(ctx, hash, idx) ?: return null
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            } else {
+                val path = src.removePrefix("file://")
+                BitmapFactory.decodeFile(path, opts)
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        if (opts.outWidth <= 0 || opts.outHeight <= 0) return null
+        return opts.outWidth to opts.outHeight
+    }
+
     /** 清空缓存并回收所有 Bitmap */
     fun clear() {
         cache.evictAll()
+        boundsCache.clear()
     }
 
     /**
