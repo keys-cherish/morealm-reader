@@ -659,8 +659,13 @@ class ScrollLayoutEngine(
         fun layoutCellLines(cell: ParsedTableCell): List<List<CellGlyph>> {
             val widthCap = cell.widthPx ?: visibleWidth.toFloat()
             val cellLevelSizeScale = cell.sizeScale
-            val cellLevelColor = cell.textColor
+            // **Step 7 bugfix v2 (2026-05-24)**: 不 fallback to cell.textColor (首字 color)。
+            // ContentRun.Text.style.color 已携带 per-cp color (parseInlineMarkers 出的 colorPerCp
+            // coalesced 进 InlineStyle)。null = 用默认色 (黑)，不应被首字色污染。
+            // SampleLN sibling table 「为美好的」cell 内 "为" "的" color=null (默认黑) vs
+            // "美""好" color=粉/橙 — 之前 fallback cellLevelColor 让 "为" 也粉色 (bug)。
             val out = ArrayList<List<CellGlyph>>()
+            val fontScale = contentPaint.textSize / 16f
 
             for (paraRuns in cell.paragraphs) {
                 // 把 paraRuns (List<ContentRun>) 扁平化成 CellGlyph 序列，然后按 widthCap 切行
@@ -670,15 +675,19 @@ class ScrollLayoutEngine(
                         is ContentRun.Text -> {
                             val (chars, rawWidths) = contentTextMeasure.measureTextSplit(run.text)
                             val effScale = run.style.fontSizeEm ?: cellLevelSizeScale
-                            val effColor = run.style.color ?: cellLevelColor
+                            // null = 默认色 (黑)；非 null = per-cp color
+                            val effColor = run.style.color
                             for (i in chars.indices) {
                                 val w = if (effScale != 1f) rawWidths[i] * effScale else rawWidths[i]
                                 glyphs.add(CellGlyph(text = chars[i], width = w, color = effColor, imageSrc = null, sizeScale = effScale))
                             }
                         }
                         is ContentRun.Image -> {
-                            // inline image 占位：宽 ≈ contentLineHeight × 1.5（与 emitOneLine 内同款）
-                            val imgW = contentLineHeight * 1.5f
+                            // **Step 7 bugfix v2**: chibi 占 cell.widthPx × fontScale (CSS img
+                            // width:100% inherits cell width)。无 cell.widthPx 时 fallback
+                            // contentLineHeight × 1.5。 SampleLN sibling 2 chibi sy2.png 在
+                            // cell style="width:4em" → cell.widthPx=64 → image width = 64*4.5 ≈ 288。
+                            val imgW = cell.widthPx?.let { it * fontScale } ?: (contentLineHeight * 1.5f)
                             glyphs.add(CellGlyph(text = "￼", width = imgW, color = null, imageSrc = run.src, sizeScale = 1f))
                         }
                         is ContentRun.NestedTable -> {
@@ -798,7 +807,10 @@ class ScrollLayoutEngine(
                         // - glyph.sizeScale != 1f → 用 glyph.sizeScale (vs cell.sizeScale)
                         for (g in cellLine) {
                             val globalX = cellCursorX + localX
-                            val effColor = g.color ?: cell.textColor
+                            // **Step 7 bugfix v2**: 不 fallback cell.textColor (首字色)。
+                            // ContentRun 已 per-cp 携带 color；首字 fallback 会污染 cell 内非首字
+                            // (如 SampleLN「为美好的」"为""的" 是 null 应该默认黑而非粉首字色)。
+                            val effColor = g.color
                             val effScale = if (g.sizeScale != 1f) g.sizeScale else cell.sizeScale
                             allColumns.add(
                                 ScrollColumn(
