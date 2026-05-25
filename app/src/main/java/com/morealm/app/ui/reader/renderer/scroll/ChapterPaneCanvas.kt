@@ -330,14 +330,23 @@ fun ChapterPaneCanvas(
             }
 
             // ─── 层 3：下划线（4 种线型：SOLID / DASHED / DOTTED / WAVY），按 viewport 剔除 ───
+            // **关键**：rect.top/bottom = line.lineTop/lineBottom，含 lineSpacingExtra。
+            // 直接用 rect.bottom 会把线画到行距底部（远离字符）。改用 rect.top + ascent + descent
+            // = 字符底沿，让下划线紧贴文字本体而不是行距。
+            val underlineStroke = (contentPaint.textSize * 0.1f).coerceAtLeast(2.5f)
+            val fm = contentPaint.fontMetrics
+            val textHeight = -fm.ascent + fm.descent  // 从 lineTop 到字底沿
+            val wavyAmplitude = (contentPaint.textSize * 0.12f).coerceAtLeast(4f)
+            val wavyPeriod = (contentPaint.textSize * 0.6f).coerceAtLeast(12f)
             for (spec in underlineSpecs) {
-                val linePaint = underlinePaintFor(spec.argb, spec.underlineStyle)
+                val linePaint = underlinePaintFor(spec.argb, spec.underlineStyle, underlineStroke)
                 for (rect in spec.rects) {
                     if (rect.bottom < viewportTop || rect.top > viewportBottom) continue
-                    val underlineY = rect.bottom - 2f  // 字符 baseline 下方 2px 处
+                    val underlineY = rect.top + textHeight + underlineStroke * 0.5f
                     when (spec.underlineStyle) {
                         Highlight.UNDERLINE_STYLE_WAVY -> drawWavyUnderline(
                             nc, linePaint, rect.left, rect.right, underlineY,
+                            wavyAmplitude, wavyPeriod,
                         )
                         else -> nc.drawLine(rect.left, underlineY, rect.right, underlineY, linePaint)
                     }
@@ -558,23 +567,22 @@ private fun drawBookmarkTriangles(
  * 每次调用 new Paint：调用频率 = 下划线 spec 数（同章一般几个），可接受。
  * 若 M6 性能压测发现热点可改 remember 缓存。
  */
-private fun underlinePaintFor(argb: Int, underlineStyle: Int): Paint = Paint().apply {
+private fun underlinePaintFor(argb: Int, underlineStyle: Int, strokeWidth: Float): Paint = Paint().apply {
     color = argb
-    strokeWidth = 3f
+    this.strokeWidth = strokeWidth
     style = Paint.Style.STROKE
+    strokeCap = Paint.Cap.ROUND
     isAntiAlias = true
     pathEffect = when (underlineStyle) {
-        Highlight.UNDERLINE_STYLE_DASHED -> DashPathEffect(floatArrayOf(12f, 6f), 0f)
-        Highlight.UNDERLINE_STYLE_DOTTED -> DashPathEffect(floatArrayOf(2f, 6f), 0f)
+        Highlight.UNDERLINE_STYLE_DASHED -> DashPathEffect(floatArrayOf(strokeWidth * 4f, strokeWidth * 2f), 0f)
+        Highlight.UNDERLINE_STYLE_DOTTED -> DashPathEffect(floatArrayOf(strokeWidth * 0.7f, strokeWidth * 2f), 0f)
         else -> null
     }
 }
 
 /**
  * 波浪下划线 —— 用 quadraticTo 二次贝塞尔曲线段拼接 sin 波形。
- *
- * 振幅 ≈ 3px，周期 ≈ 12px（每周期 = 1 个完整 sin 波）。每半周期一段贝塞尔，
- * 控制点交替在 baseline 上下 amplitude 处，达到平滑波浪视觉。
+ * 振幅 / 周期由调用方按字号传入，保证大字号下波形足够起伏。
  */
 private fun drawWavyUnderline(
     canvas: android.graphics.Canvas,
@@ -582,10 +590,10 @@ private fun drawWavyUnderline(
     left: Float,
     right: Float,
     baselineY: Float,
+    amplitude: Float,
+    period: Float,
 ) {
     if (right - left <= 0f) return
-    val amplitude = 3f
-    val period = 12f
     val halfPeriod = period / 2f
     val path = Path()
     path.moveTo(left, baselineY)

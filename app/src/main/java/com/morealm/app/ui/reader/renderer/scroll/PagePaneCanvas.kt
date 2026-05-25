@@ -336,13 +336,20 @@ fun PagePaneCanvas(
             }
 
             // ─── 层 3：下划线 ───
+            // 用 rect.top + (ascent + descent) 锚到字符底沿，避开 lineSpacingExtra 的影响。
+            val underlineStroke = (contentPaint.textSize * 0.1f).coerceAtLeast(2.5f)
+            val fm = contentPaint.fontMetrics
+            val textHeight = -fm.ascent + fm.descent
+            val wavyAmplitude = (contentPaint.textSize * 0.12f).coerceAtLeast(4f)
+            val wavyPeriod = (contentPaint.textSize * 0.6f).coerceAtLeast(12f)
             for (spec in underlineSpecs) {
-                val linePaint = underlinePaintFor(spec.argb, spec.underlineStyle)
+                val linePaint = underlinePaintFor(spec.argb, spec.underlineStyle, underlineStroke)
                 for (rect in spec.rects) {
-                    val underlineY = rect.bottom - 2f
+                    val underlineY = rect.top + textHeight + underlineStroke * 0.5f
                     when (spec.underlineStyle) {
                         Highlight.UNDERLINE_STYLE_WAVY -> drawWavyUnderline(
                             nc, linePaint, rect.left, rect.right, underlineY,
+                            wavyAmplitude, wavyPeriod,
                         )
                         else -> nc.drawLine(rect.left, underlineY, rect.right, underlineY, linePaint)
                     }
@@ -581,29 +588,30 @@ private fun drawCpRangeRectsInPage(
 }
 
 /** 与 ChapterPaneCanvas 同款 paint 工厂，本地 private 避免跨文件 visibility。 */
-private fun underlinePaintFor(argb: Int, underlineStyle: Int): Paint = Paint().apply {
+private fun underlinePaintFor(argb: Int, underlineStyle: Int, strokeWidth: Float): Paint = Paint().apply {
     color = argb
-    strokeWidth = 3f
+    this.strokeWidth = strokeWidth
     style = Paint.Style.STROKE
+    strokeCap = Paint.Cap.ROUND
     isAntiAlias = true
     pathEffect = when (underlineStyle) {
-        Highlight.UNDERLINE_STYLE_DASHED -> DashPathEffect(floatArrayOf(12f, 6f), 0f)
-        Highlight.UNDERLINE_STYLE_DOTTED -> DashPathEffect(floatArrayOf(2f, 6f), 0f)
+        Highlight.UNDERLINE_STYLE_DASHED -> DashPathEffect(floatArrayOf(strokeWidth * 4f, strokeWidth * 2f), 0f)
+        Highlight.UNDERLINE_STYLE_DOTTED -> DashPathEffect(floatArrayOf(strokeWidth * 0.7f, strokeWidth * 2f), 0f)
         else -> null
     }
 }
 
-/** 波浪下划线（与 ChapterPaneCanvas 同款，振幅 3px / 周期 12px）。 */
+/** 波浪下划线（与 ChapterPaneCanvas 同款；振幅 / 周期由调用方按字号传入）。 */
 private fun drawWavyUnderline(
     canvas: android.graphics.Canvas,
     paint: Paint,
     left: Float,
     right: Float,
     baselineY: Float,
+    amplitude: Float,
+    period: Float,
 ) {
     if (right - left <= 0f) return
-    val amplitude = 3f
-    val period = 12f
     val halfPeriod = period / 2f
     val path = Path()
     path.moveTo(left, baselineY)

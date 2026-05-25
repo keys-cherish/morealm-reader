@@ -560,9 +560,11 @@ fun drawPageContent(
             val lineStart = line.chapterPosition
             val lineCharCount = line.charSize
             val lineEnd = lineStart + lineCharCount
-            // 下划线 Y：lineBottom 上方 ~descent 的位置，刚好压在字符底部。
-            val underlineY = lineBottom - paint.fontMetrics.descent * 0.35f
-            val strokeWidth = (paint.textSize * 0.07f).coerceAtLeast(1.5f)
+            // 下划线 Y：从 lineTop 下移整个字符高度 (-ascent + descent)，刚好到字底沿。
+            // 不能用 lineBottom — 它含 lineSpacingExtra，会把线推到行距底部，远离文字。
+            val fm = paint.fontMetrics
+            val strokeWidth = (paint.textSize * 0.1f).coerceAtLeast(2.5f)
+            val underlineY = lineTop + (-fm.ascent + fm.descent) + strokeWidth * 0.5f
             for (u in underlines) {
                 if (u.startChapterPos >= lineEnd || u.endChapterPos <= lineStart) continue
                 var charPos = lineStart

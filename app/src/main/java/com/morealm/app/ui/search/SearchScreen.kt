@@ -19,6 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -181,39 +183,76 @@ fun SearchScreen(
                 focusManager.clearFocus(force = true)
             }
         }
+        // **2026-05-25** —— mockup #14 设计：单胶囊容器内嵌 放大镜 icon + 输入框 + 「搜索」按钮
+        // 不再用独立 Button + 间距 8dp 的两件套；改为 Surface(圆角 18) 整体外壳，内含 Row 自布局
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.weight(1f).height(48.dp).focusRequester(focusRequester),
-                placeholder = { Text("搜索书名、作者…", style = MaterialTheme.typography.bodySmall) },
-                shape = MaterialTheme.shapes.medium,
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodySmall,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-                    cursorColor = MaterialTheme.colorScheme.primary,
-                ),
-                keyboardActions = KeyboardActions(
-                    onSearch = { viewModel.search(query) }
-                ),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            )
-            Button(
-                onClick = { viewModel.search(query) },
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.height(48.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
+            Surface(
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
                 ),
             ) {
-                Text("搜索", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    modifier = Modifier.fillMaxSize().padding(start = 12.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = MaterialTheme.colorScheme.onSurface,
+                        ),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                        keyboardActions = KeyboardActions(onSearch = { viewModel.search(query) }),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        decorationBox = { inner ->
+                            if (query.isEmpty()) {
+                                Text(
+                                    "搜索书名、作者或关键词",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                )
+                            }
+                            inner()
+                        },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .padding(vertical = 4.dp)
+                            .clickable { viewModel.search(query) },
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(horizontal = 18.dp).fillMaxHeight(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "搜索",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -919,20 +958,18 @@ private fun SearchHistorySection(
                         // 单条删除：用 close 图标做 trailingIcon，让 chip 既可点搜也可删；
                         // 不引入长按手势是因为 chip 本身没 onLongClick 接口，且 trailing X
                         // 在密集列表里更易点中。
-                        // UX-7: 触摸热区 ≥40dp，图标视觉仍是 12dp，外层 Box 拓展可点区域。
-                        androidx.compose.foundation.layout.Box(
+                        // **2026-05-25 修垂直居中**：之前 Box.size(40.dp) 撑高 chip，
+                        // label Text 被默认包在 chip 顶部，视觉文字偏上。改 padding 扩热区
+                        // 不指定 size，让 chip 高度自适应内容（32dp），label 自然垂直居中。
+                        Icon(
+                            Icons.Default.Close,
+                            "删除",
                             modifier = Modifier
-                                .size(40.dp)
-                                .clickable { onDelete(kw.word) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                "删除",
-                                modifier = Modifier.size(12.dp),
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                            )
-                        }
+                                .clickable { onDelete(kw.word) }
+                                .padding(8.dp)
+                                .size(12.dp),
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        )
                     },
                 )
             }
