@@ -81,10 +81,15 @@ data class BookSource(
     @ColumnInfo(defaultValue = "0")
     var lastCheckTime: Long = 0,
 ) {
-    override fun hashCode(): Int = bookSourceUrl.hashCode()
-
-    override fun equals(other: Any?): Boolean =
-        if (other is BookSource) other.bookSourceUrl == bookSourceUrl else false
+    // 历史上这里有 PK-only equals/hashCode override（只比 bookSourceUrl），
+    // 设计意图是让 Set<BookSource> 按 url 去重。2026-05-18 审计：全项目零处依赖
+    // （无 Set<BookSource> / HashSet<BookSource> / HashMap<BookSource,*> /.distinct
+    // on List<BookSource>），反而触发 Compose dedup 三处错判（mutableStateOf /
+    // derivedStateOf / remember keys 都走 equals → toggle 后 url 全相同 → 判
+    // "无变化" → UI 永不刷新）。2026-05-17/18 跨 2 天修了 4 次的根因。
+    // 现已删除 override，用 data class 默认全字段 equals。如未来需要 PK 比较，
+    // 改用显式 [getKey] 或 `a.bookSourceUrl == b.bookSourceUrl`，不要 override equals。
+    // 详 [[source-toggle-no-recompose]] / [[entity-equals-audit-findings]]。
 
     fun getKey(): String = bookSourceUrl
 

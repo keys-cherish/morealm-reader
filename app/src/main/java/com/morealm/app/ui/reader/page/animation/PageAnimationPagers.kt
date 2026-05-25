@@ -50,7 +50,11 @@ fun String.toPageAnimType(): PageAnimType = when (this.lowercase()) {
     "slide_vertical", "vertical_slide", "上下翻页" -> PageAnimType.SLIDE_VERTICAL
     "cover" -> PageAnimType.COVER
     "simulation" -> PageAnimType.SIMULATION
-    "scroll", "vertical" -> PageAnimType.SCROLL
+    // "scroll" / "vertical" 偏好残留 —— v1.5 起 SCROLL 模式由 PageTurnMode=SCROLL
+    // 触发 ScrollCanvasReaderHost 独立接管，不走翻页路径。PageAnim 偏好里残留
+    // "scroll" 字符串映射成 NONE 避免进 CanvasRenderer SCROLL safety net 崩溃
+    // (commit b176ec3 V1 删除时遗留)。
+    "scroll", "vertical" -> PageAnimType.NONE
     else -> PageAnimType.SLIDE
 }
 
@@ -135,12 +139,44 @@ fun AnimatedPageReader(
      */
     simulationViewRef: androidx.compose.runtime.MutableState<com.morealm.app.ui.reader.renderer.SimulationReadView?>? = null,
     onPageSettled: (Int) -> Unit = {},
+    /**
+     * **P3-3a/3c**：动画 ↔ 渲染契约线入口（详见 [com.morealm.app.ui.reader.page.PageBitmapProvider]）。
+     *
+     * P3-3c 起：SLIDE / SLIDE_VERTICAL / COVER 三种动画在 `bitmapProvider != null`
+     * 时改走 [com.morealm.app.ui.reader.page.BitmapPageContent]（异步 load bitmap +
+     * Image），否则保持现 [pageContent] 兜底。SIMULATION 暂时不接（它有自己一套
+     * bitmap pipeline 由 [SimulationParams.pageForTurn] + `renderPageToBitmap` 驱动），
+     * P3-3d 单独适配。
+     *
+     * 默认 `null` = 现有 caller 完全不受影响（pageContent 路径）。当前
+     * `CanvasRenderer` / `VerticalReaderView` 都不传，零行为变化；P3-5 起 caller
+     * 才会传真正的 [com.morealm.app.ui.reader.page.PageBitmapProvider] 实现。
+     */
+    bitmapProvider: com.morealm.app.ui.reader.page.PageBitmapProvider? = null,
     pageContent: @Composable (Int) -> Unit,
 ) {
     when (animType) {
-        PageAnimType.SLIDE -> SlidePager(pagerState, modifier, onPageSettled, pageContent)
-        PageAnimType.SLIDE_VERTICAL -> VerticalSlidePager(pagerState, modifier, onPageSettled, pageContent)
-        PageAnimType.COVER -> CoverPager(pagerState, modifier, onPageSettled, pageContent)
+        PageAnimType.SLIDE -> SlidePager(
+            pagerState = pagerState,
+            modifier = modifier,
+            onPageSettled = onPageSettled,
+            pageContent = pageContent,
+            bitmapProvider = bitmapProvider,
+        )
+        PageAnimType.SLIDE_VERTICAL -> VerticalSlidePager(
+            pagerState = pagerState,
+            modifier = modifier,
+            onPageSettled = onPageSettled,
+            pageContent = pageContent,
+            bitmapProvider = bitmapProvider,
+        )
+        PageAnimType.COVER -> CoverPager(
+            pagerState = pagerState,
+            modifier = modifier,
+            onPageSettled = onPageSettled,
+            pageContent = pageContent,
+            bitmapProvider = bitmapProvider,
+        )
         PageAnimType.SIMULATION -> {
             if (simulationParams != null) {
                 SimulationPager(
@@ -150,6 +186,7 @@ fun AnimatedPageReader(
                     modifier = modifier,
                     simulationViewRef = simulationViewRef,
                     pageContent = pageContent,
+                    bitmapProvider = bitmapProvider,
                 )
             } else {
                 // Diagnostic [3w] — simulationParams==null fallback. simulationParams
@@ -168,7 +205,13 @@ fun AnimatedPageReader(
                 SlidePager(pagerState, modifier, onPageSettled, pageContent)
             }
         }
-        PageAnimType.SCROLL -> ScrollPager(pagerState, modifier, pageContent)
+        PageAnimType.SCROLL -> {
+            // safety net：用户偏好残留 PageAnim="scroll" 时 toPageAnimType 已映射成 NONE，
+            // 理论上不进本分支；保险起见 fallback 到 NONE 行为（HorizontalPager userScrollEnabled=false）
+            // 避免直接崩溃。SCROLL 真正路径在 ScrollCanvasReaderHost。
+            LaunchedEffect(pagerState.currentPage) { onPageSettled(pagerState.currentPage) }
+            HorizontalPager(state = pagerState, modifier = modifier.fillMaxSize(), userScrollEnabled = false) { pageContent(it) }
+        }
         PageAnimType.NONE -> {
             LaunchedEffect(pagerState.currentPage) {
                 onPageSettled(pagerState.currentPage)
@@ -178,7 +221,15 @@ fun AnimatedPageReader(
                 modifier = modifier.fillMaxSize(),
                 userScrollEnabled = false,
             ) { pageIndex ->
-                pageContent(pageIndex)
+                // P3-5a NONE 接入：bitmapProvider != null 时改走 BitmapPageContent
+                // （bitmap 静态文字 + 主题 paint）。pageContent 路径保留兜底兼容，
+                // caller 不传 bitmapProvider 时回到 PageContentBox（含选区 / cursor /
+                // autoPage overlay）旧行为。
+                if (bitmapProvider != null) {
+                    com.morealm.app.ui.reader.page.BitmapPageContent(bitmapProvider, pageIndex)
+                } else {
+                    pageContent(pageIndex)
+                }
             }
         }
     }

@@ -14,6 +14,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import com.morealm.app.ui.reader.page.BitmapPageContent
+import com.morealm.app.ui.reader.page.PageBitmapProvider
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -67,6 +69,12 @@ internal fun CoverPager(
      * 是否允许用户拖动。详见 [SlidePager] 同名参数。
      */
     userScrollEnabled: Boolean = false,
+    /**
+     * **P3-3c**：动画↔渲染契约线。非 null 时本 pager 把每页 slot 的 `pageContent`
+     * 调用替换成 [BitmapPageContent]（异步 load bitmap + Image），COVER 动画的
+     * graphicsLayer / 阴影包装层不动。null 时维持旧 [pageContent] 行为，零差异。
+     */
+    bitmapProvider: PageBitmapProvider? = null,
 ) {
     // LaunchedEffect(pagerState) 只在 pagerState 变化时重启，而 pagerState 整个
     // Reader 共享 → 跨章时 effect 不重启，其闭包里 collect 的 onPageSettled 还是
@@ -134,7 +142,11 @@ internal fun CoverPager(
                     }
                 }
         ) {
-            pageContent(pageIndex)
+            if (bitmapProvider != null) {
+                BitmapPageContent(bitmapProvider, pageIndex)
+            } else {
+                pageContent(pageIndex)
+            }
         }
     }
 }

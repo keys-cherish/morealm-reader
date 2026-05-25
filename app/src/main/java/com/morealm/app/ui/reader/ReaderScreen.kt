@@ -149,12 +149,16 @@ fun ReaderScreen(
     // 当帧重写。CanvasRenderer 的 syncPrev/NextTextChapter prop 优先于 prelayoutCache 派生。
     val syncPrevTextChapterValue by viewModel.chapter.prevTextChapter.collectAsStateWithLifecycle()
     val syncNextTextChapterValue by viewModel.chapter.nextTextChapter.collectAsStateWithLifecycle()
+    // 2026-05-18 跨章闪烁根治：commit chapter shift 主线程当帧 _curTextChapter.value=nextCh
+    // （已排好版的 TextChapter），让 CanvasRenderer.chapter 跳过 ReflowEngine 异步层
+    // （主线程 StateFlow → State fast path，跟 syncPrev/Next 同款 ~1 帧 latency），
+    // 跨章瞬间 factory.currentChapter 立即是新章，零错位帧。
+    val syncCurTextChapterValue by viewModel.chapter.curTextChapter.collectAsStateWithLifecycle()
     val showControls by viewModel.isControlsVisible.collectAsStateWithLifecycle()
     val showTtsPanel by viewModel.isTtsPanelVisible.collectAsStateWithLifecycle()
     val showSettings by viewModel.isSettingsPanelVisible.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
-    val scrollCanvasV2Enabled by viewModel.settings.scrollCanvasV2.collectAsStateWithLifecycle()
     // ── 排版方向偏好 ──
     // 唯一被 ReaderScreen 关心的用法：在下方挑选 CanvasRenderer (横排)
     // 还是 VerticalReaderView (竖排) 渲染。绝不传给 CanvasRenderer——
@@ -634,12 +638,11 @@ fun ReaderScreen(
                 } else {
                     com.morealm.app.domain.render.ReadingDirection.VERTICAL_RL
                 },
+                bgImageUri = readerBgImage,
             )
-        } else if (scrollCanvasV2Enabled && pageTurnMode == PageTurnMode.SCROLL && hasReaderTarget) {
-            // ── M6 实验：SCROLL Canvas V2 引擎（独立排版 + 三块面板 + pixelOffset） ──
-            // feature flag scrollCanvasV2 默认 false 走旧 LazyScrollRenderer 路径；
-            // 用户在阅读设置打开 V2 toggle 走本分支验证跳章 bug 是否根治。
-            // 旧 LazyScrollRenderer 保留至用户测试通过后再删（用户决策 2026-05-17）。
+        } else if (pageTurnMode == PageTurnMode.SCROLL && hasReaderTarget) {
+            // SCROLL 模式专用 V2 Canvas 引擎（独立排版 + 三块面板 + pixelOffset）。
+            // V1 LazyScrollRenderer 已在 1.5 删除。
             val density = LocalDensity.current
             val configuration = LocalConfiguration.current
             val viewWidthPx = with(density) { configuration.screenWidthDp.dp.toPx().toInt() }
@@ -656,7 +659,10 @@ fun ReaderScreen(
                     // 用 fetchAndPrepareChapter 统一入口：内部自动 isWebBook 分流
                     // web/local + applyReplaceRules + ChineseConverter，与旧引擎完全等价。
                     // 修复用户反馈：V2 直接调 loadWebChapterContent 让本地 EPUB 拿不到内容。
-                    val content = viewModel.chapter.fetchAndPrepareChapter(idx) ?: return@loadFn null
+                    // **D1.b**：传 visibleWidth (viewWidth - paddingH*2) 让 EPUB % margin 解析按
+                    // 真实可排版宽算（某 EPUB `table.vol-title { margin: 20% 0 0 auto }`）。
+                    val cbwPx = (viewWidthPx - paddingHPx * 2).coerceAtLeast(0)
+                    val content = viewModel.chapter.fetchAndPrepareChapter(idx, cbwPx) ?: return@loadFn null
                     ScrollChapterContent(
                         chapterIndex = idx,
                         title = chap.title,
@@ -684,8 +690,11 @@ fun ReaderScreen(
                 titleAlign = effectiveReaderStyle?.titleMode?.takeIf { it != 0 } ?: 0,  // titleMode 1=center → titleAlign 1
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
                 // 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer jumpToken/jumpChapterPosition 等价）：
-                // renderedChapter.restoreToken 由 ReaderChapterController.loadChapter 每次 nanoTime 换新值。
+                // renderedChapter.restoreToken 由 ReaderChapterController.loadChapter / seekProgressInPlace
+                // 每次 nanoTime 换新值。initialProgress 用于「Slider 拖动 in-place seek」路径
+                // （cp == 0 时按章内 progress 算 pixelOffset）。
                 initialChapterPosition = renderedChapter.initialChapterPosition,
+                initialProgress = renderedChapter.initialProgress,
                 restoreToken = renderedChapter.restoreToken,
                 onProgressRestored = { viewModel.clearNavigateDirection() },
                 bgImageUri = readerBgImage,
@@ -724,7 +733,14 @@ fun ReaderScreen(
                         }
                     }
                 },
-                onChapterIndexChange = { newIdx -> viewModel.loadChapter(newIdx) },
+                onChapterIndexChange = { newIdx ->
+                    // Page-level swap 反向通知 VM（不是用户主动 jump）—— 走轻量 API：
+                    // 仅同步 _currentChapterIndex.value，不 trigger restoreToken / 不重 load
+                    // chapter content / 不动 _renderedChapter。如果误调 loadChapter 会让
+                    // ChapterController 内部 trigger restoreToken 反传到 Host LaunchedEffect
+                    // 形成 race（日志 MoRealm_log_20260519_160147.txt line 257/297/359 复现）。
+                    viewModel.chapter.setCurrentChapterIndexFromScroll(newIdx)
+                },
                 onTapCenter = {
                     if (toolbarEditing) {
                         toolBarViewModel.exitEditMode()
@@ -791,13 +807,167 @@ fun ReaderScreen(
                     footerRight = ftrRight,
                 ),
             )
+        } else if (
+            (pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.NONE ||
+                pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.COVER ||
+                pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.SLIDE) &&
+            hasReaderTarget
+        ) {
+            // NONE / COVER / SLIDE 三种横向翻页全走新 PageLevelReaderHost（page-level）。
+            // SIMULATION 仍走旧 CanvasRenderer (Legado 仿真翻页 P5 不动)。
+            val density = LocalDensity.current
+            val configuration = LocalConfiguration.current
+            val viewWidthPx = with(density) { configuration.screenWidthDp.dp.toPx().toInt() }
+            val viewHeightPx = with(density) { configuration.screenHeightDp.dp.toPx().toInt() }
+            val paddingHPx = with(density) { marginHorizontal.dp.toPx().toInt() }
+            val paddingTopPx = with(density) { marginTopVal.dp.toPx().toInt() }
+            val paddingBottomPx = with(density) { marginBottomVal.dp.toPx().toInt() }
+            val fontSizePx = with(density) { readerFontSize.sp.toPx().toInt() }
+            com.morealm.app.ui.reader.page.animhorizontal.PageLevelReaderHost(
+                currentChapterIndex = currentIndex,
+                chapterCount = chapters.size,
+                animType = pageAnim.toPageAnimType(),
+                loadChapterContent = loadFn@{ idx ->
+                    val chap = chapters.getOrNull(idx) ?: return@loadFn null
+                    // **D1.b**：见 ScrollCanvasReaderHost 同位注释
+                    val cbwPx = (viewWidthPx - paddingHPx * 2).coerceAtLeast(0)
+                    val content = viewModel.chapter.fetchAndPrepareChapter(idx, cbwPx) ?: return@loadFn null
+                    com.morealm.app.domain.reader.scroll.ScrollChapterContent(
+                        chapterIndex = idx,
+                        title = chap.title,
+                        content = content,
+                    )
+                },
+                viewWidth = viewWidthPx,
+                viewHeight = viewHeightPx,
+                paddingLeft = paddingHPx,
+                paddingRight = paddingHPx,
+                paddingTop = paddingTopPx,
+                paddingBottom = paddingBottomPx,
+                fontSize = fontSizePx,
+                textColorArgb = readerFg.toArgb(),
+                typeface = readerTypeface,
+                isNight = isNight,
+                letterSpacing = effectiveReaderStyle?.letterSpacing ?: 0f,
+                textBold = effectiveReaderStyle?.textBold ?: 0,
+                lineSpacingExtra = readerLineHeight,
+                paragraphSpacing = effectiveReaderStyle?.paragraphSpacing ?: 8,
+                titleMode = effectiveReaderStyle?.titleMode ?: 0,
+                titleAlign = effectiveReaderStyle?.titleMode?.takeIf { it != 0 } ?: 0,
+                textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
+                bgColorArgb = readerBg.toArgb(),
+                bgImageUri = readerBgImage,
+                restoreToken = renderedChapter.restoreToken,
+                initialChapterPosition = renderedChapter.initialChapterPosition,
+                initialProgress = renderedChapter.initialProgress,
+                onProgressRestored = { viewModel.clearNavigateDirection() },
+                onChapterProgressLive = { _, prog -> viewModel.updateScrollProgress(prog) },
+                onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
+                // P4.4 选区 / 高亮 / 长按（与 V2 SCROLL Host 同款 callback 配置）
+                chapterHighlightsRaw = viewModel.highlights.collectAsStateWithLifecycle().value,
+                selectionMenuConfig = selectionMenuConfig,
+                onCopyText = { text -> viewModel.copyTextToClipboard(text) },
+                onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
+                onTranslateText = { text -> openTranslate(text) },
+                onLookupWord = { text -> openWebSearch(text) },
+                onShareQuote = { text ->
+                    runCatching {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(android.content.Intent.EXTRA_TEXT, text)
+                        }
+                        context.startActivity(android.content.Intent.createChooser(intent, "分享"))
+                    }
+                },
+                onAddHighlight = { start, end, content, argb ->
+                    viewModel.highlight.add(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                    )
+                },
+                onEraseHighlight = { start, end ->
+                    viewModel.highlight.eraseInRange(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                    )
+                },
+                onAddTextColor = { start, end, content, argb ->
+                    viewModel.highlight.add(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                        kind = com.morealm.app.domain.entity.Highlight.KIND_TEXT_COLOR,
+                    )
+                },
+                onAddUnderline = { start, end, content, argb, style ->
+                    viewModel.highlight.add(
+                        chapterIndex = currentIndex,
+                        startChapterPos = start,
+                        endChapterPos = end,
+                        content = content,
+                        colorArgb = argb,
+                        kind = com.morealm.app.domain.entity.Highlight.KIND_UNDERLINE,
+                        underlineStyle = style,
+                    )
+                },
+                onDeleteHighlight = { id -> viewModel.highlight.delete(id) },
+                onShareHighlight = { highlight ->
+                    val ok = com.morealm.app.ui.reader.share.HighlightShareCard.shareAsImage(context, highlight)
+                    if (!ok) {
+                        runCatching {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(
+                                    android.content.Intent.EXTRA_TEXT,
+                                    "${highlight.content}\n\n— 《${highlight.bookTitle}》· ${highlight.chapterTitle}",
+                                )
+                            }
+                            context.startActivity(android.content.Intent.createChooser(intent, "分享高亮"))
+                        }
+                    }
+                },
+                // P4.5 TTS 跟随 / 高亮 / 书签
+                ttsChapterIndex = currentIndex,
+                ttsChapterPosition = viewModel.tts.ttsChapterPosition
+                    .collectAsStateWithLifecycle(initialValue = -1).value,
+                bookmarks = viewModel.bookmarks.collectAsStateWithLifecycle().value,
+                infoBar = ScrollCanvasInfoBarConfig(
+                    chaptersSize = chapters.size,
+                    textColor = readerFg,
+                    backgroundColor = readerBg,
+                    hasBgImage = readerBgImage.isNotBlank(),
+                    paddingHorizontal = marginHorizontal,
+                    showChapterName = showChapterNameSetting,
+                    showTimeBattery = showTimeBatterySetting,
+                    headerLeft = hdrLeft,
+                    headerCenter = hdrCenter,
+                    headerRight = hdrRight,
+                    footerLeft = ftrLeft,
+                    footerCenter = ftrCenter,
+                    footerRight = ftrRight,
+                ),
+                onChapterIndexChange = { newIdx ->
+                    viewModel.chapter.setCurrentChapterIndexFromScroll(newIdx)
+                },
+                onTapCenter = {
+                    if (toolbarEditing) toolBarViewModel.exitEditMode()
+                    else viewModel.toggleControls()
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
         } else if (hasReaderTarget) {
             // 把 ttsChapterPosition 的 collect 收敛进这个 leaf composable —— 段切
             // 时只重组 [ReadAloudPositionScope] 自己 + 内部 lambda 里的 CanvasRenderer
             // 调用，不再让外层 ReaderScreen 整体 recompose。CanvasRenderer 自身的
             // stable check 会进一步把更新缩窄到 readAloudChapterPosition 一个参数。
             ReadAloudPositionScope(viewModel.tts.ttsChapterPosition) { ttsChapterPosition ->
-            com.morealm.app.ui.reader.renderer.CanvasRenderer(
+            com.morealm.app.ui.reader.renderer.Reader(
                 content = displayContent,
                 chapterTitle = chapters.getOrNull(currentIndex)?.displayTitle(book) ?: renderedChapter.title,
                 chapterIndex = renderedChapter.index,
@@ -964,6 +1134,7 @@ fun ReaderScreen(
                 onNextTextChapterReady = { idx, ch -> viewModel.chapter.publishNextTextChapter(idx, ch) },
                 syncPrevTextChapter = syncPrevTextChapterValue,
                 syncNextTextChapter = syncNextTextChapterValue,
+                syncCurTextChapter = syncCurTextChapterValue,
                 // Phase 2e: 滚动模式跨章 commit 优先走同步腾挪——成功则 ChapterController
                 // 当帧已更新所有相关 StateFlow，CanvasRenderer 跳过 onNextChapter()/onPrevChapter()
                 // 避免老 loadChapter 异步路径覆盖。返回 false 时回退老路径。
@@ -978,10 +1149,6 @@ fun ReaderScreen(
                     }
                 },
                 omitChapterTitleBlock = isAutoSplitTxt,
-                // SCROLL 模式专用：把 ViewModel 的 ChapterWindowSource 透传下去，
-                // CanvasRenderer 会在 SCROLL 路径下旁路 commitChapterShift / restoreProgress
-                // JUMP 链路。命门定位见 `C:/Users/test/.claude/plans/glittery-dancing-swing.md`。
-                chapterWindow = viewModel.chapterWindow,
                 modifier = Modifier.fillMaxSize(),
             )
             } // end ReadAloudPositionScope lambda
@@ -1086,13 +1253,17 @@ fun ReaderScreen(
                 onExitEdit = toolBarViewModel::exitEditMode,
                 onToggleToolVisibility = toolBarViewModel::toggleToolVisibility,
                 onReorder = toolBarViewModel::reorder,
-                // #3 全书拖动：(章号, 章内%) → loadChapter restoreProgress
+                // #3 全书拖动：(章号, 章内%) → 同章 in-place seek / 跨章 loadChapter
                 // 不在这里 hideControls：onSeekFullBook 在拖动期间会被「跨章预览」
                 // (ReaderControlBar 内的 conflate worker) 反复触发，每次都 hide 会让
                 // 整个浮层（菜单栏 + slider）拖到一半消失，用户彻底没法继续拖。
                 // 用户拖完想关 controls 自己点屏幕中央就行。
+                //
+                // 改用 seekProgressInPlace：同 idx 走轻量 in-place（仅写 _renderedChapter copy
+                // + nanoTime token），跨章 fallback loadChapter。让拖动期间「所见所得」
+                // 实时跟随阅读区像素位置而非永远停在章首。
                 onSeekFullBook = { idx, withinPct ->
-                    viewModel.loadChapter(idx, restoreProgress = withinPct)
+                    viewModel.seekProgressInPlace(idx, withinPct)
                 },
                 // #3 拖动预览：取目标章节标题（包含 TXT 自动分章 displayTitle 逻辑）
                 getChapterTitle = { idx ->
@@ -1315,15 +1486,13 @@ fun ReaderScreen(
             onChapterClick = { chapterIndex ->
                 showChapterList = false
                 val clicked = chapters.getOrNull(chapterIndex)
-                val windowDump = viewModel.chapterWindow.loadedChapters.toList()
                 com.morealm.app.core.log.AppLog.info(
                     "ChapterIdxDebug",
                     "onChapterClick listIdx=$chapterIndex" +
                         " pageTurnMode=$pageTurnMode" +
                         " currentIndex=$currentIndex visiblePage.chIdx=${visiblePage.chapterIndex}" +
                         " ch.index=${clicked?.index} ch.title=\"${clicked?.title}\"" +
-                        " ch.url=${clicked?.url}" +
-                        " window.loaded=$windowDump",
+                        " ch.url=${clicked?.url}",
                 )
                 viewModel.loadChapter(chapterIndex)
             },

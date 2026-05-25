@@ -61,8 +61,8 @@ android {
         applicationId = "com.morealm.app"
         minSdk = 21
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.4"
+        versionCode = 9
+        versionName = "1.5"
 
         // Room schema export
         ksp {
@@ -72,6 +72,9 @@ android {
         // QQ 群号注入到 BuildConfig.QQ_GROUP_ID。
         // 注意 escape：BuildConfig 字符串字面量要包含双引号，外层 Kotlin 字符串再 escape 一次。
         buildConfigField("String", "QQ_GROUP_ID", "\"${qqGroupId}\"")
+
+        // androidTest（Compose UI test）—— P3-2 引入；默认 AndroidJUnit4Runner
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -191,6 +194,15 @@ dependencies {
     // 引入 cash QuickJS / dokar3 quickjs-kt 这类 ES2020+ JS runtime。
     implementation("org.mozilla:rhino:1.8.1")
 
+    // 自研 EPUB 解析库（KMP）—— 通过 ../epub-lib composite build 引入（详 settings.gradle.kts）。
+    // 阶段 1 仅接入验证编译通路，EpubParser 仍走 Jsoup 旧路径并存；后续阶段切换 +
+    // 验证覆盖率后再删 Jsoup。
+    implementation("com.morealm.epub:epub-core")
+    implementation("com.morealm.epub:epub-compat")
+    // R1 (阶段 R1)：核心 layout 算法迁移到独立仓库 epub-layout。Android 端只调用 entry point +
+    // 引用 public data class；内部 marker parser / cell stride 算法 / row offset 全 internal。
+    implementation("com.morealm.epub:epub-layout")
+
     // Image
     implementation(libs.coil.compose)
     implementation("io.coil-kt:coil-svg:2.7.0")
@@ -235,8 +247,16 @@ dependencies {
     // Archive — 7z/rar/tar support beyond java.util.zip
     implementation("me.zhanghai.android.libarchive:library:1.1.6")
 
-    // Testing
+    // Testing (jvmTest / Robolectric)
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation(libs.coroutines.test)
+
+    // Compose UI test (androidTest) —— P3-2 引入，验证 4 翻页动画手势行为不依赖
+    // 真实渲染数据。需要 emulator / 真机跑。
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

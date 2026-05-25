@@ -7,7 +7,7 @@ import android.system.Os
 import android.system.OsConstants
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookChapter
-import me.ag2s.epublib.util.zip.AndroidZipFile
+import com.morealm.app.util.zip.AndroidZipFile
 import me.zhanghai.android.libarchive.Archive
 import me.zhanghai.android.libarchive.ArchiveEntry
 import me.zhanghai.android.libarchive.ArchiveException

@@ -18,8 +18,8 @@
 	url(res:///ebook/fonts/DroidSansFallback.ttf),
 	url(res:///fonts/ttf/zw.ttf),
 	url(res:///../../media/mmcblk0p1/fonts/zw.ttf),
-	url(file:///mnt/us/LegacyFontSys/system/fonts/zw.ttf),				/*SysFont Old Path*/
-	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/zw.ttf),		/*SysFont 2012 Path*/
+	url(file:///mnt/us/LegacyFontSys/system/fonts/zw.ttf),				/* Legacy fallback */
+	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/zw.ttf),		/* Legacy fallback */
 	url(res:///abook/fonts/zw.ttf),
 	url(res:///system/fonts/zw.ttf),
 	url(res:///system/media/sdcard/fonts/zw.ttf),
@@ -55,8 +55,8 @@
 	url(res:///ebook/fonts/DroidSansFallback.ttf),
 	url(res:///fonts/ttf/fs.ttf),
 	url(res:///../../media/mmcblk0p1/fonts/fs.ttf),
-	url(file:///mnt/us/LegacyFontSys/system/fonts/fs.ttf),				/*SysFont Old Path*/
-	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/fs.ttf),		/*SysFont 2012 Path*/
+	url(file:///mnt/us/LegacyFontSys/system/fonts/fs.ttf),				/* Legacy fallback */
+	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/fs.ttf),		/* Legacy fallback */
 	url(res:///abook/fonts/fs.ttf),
 	url(res:///system/fonts/fs.ttf),
 	url(res:///system/media/sdcard/fonts/fs.ttf),
@@ -93,8 +93,8 @@
 	url(res:///ebook/fonts/DroidSansFallback.ttf),
 	url(res:///fonts/ttf/kt.ttf),
 	url(res:///../../media/mmcblk0p1/fonts/kt.ttf),
-	url(file:///mnt/us/LegacyFontSys/system/fonts/kt.ttf),				/*SysFont Old Path*/
-	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/kt.ttf),		/*SysFont 2012 Path*/
+	url(file:///mnt/us/LegacyFontSys/system/fonts/kt.ttf),				/* Legacy fallback */
+	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/kt.ttf),		/* Legacy fallback */
 	url(res:///abook/fonts/kt.ttf),
 	url(res:///system/fonts/kt.ttf),
 	url(res:///system/media/sdcard/fonts/kt.ttf),
@@ -131,8 +131,8 @@
 	url(res:///ebook/fonts/DroidSansFallback.ttf),
 	url(res:///fonts/ttf/ht.ttf),
 	url(res:///../../media/mmcblk0p1/fonts/ht.ttf),
-	url(file:///mnt/us/LegacyFontSys/system/fonts/ht.ttf),				/*SysFont Old Path*/
-	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/ht.ttf),		/*SysFont 2012 Path*/
+	url(file:///mnt/us/LegacyFontSys/system/fonts/ht.ttf),				/* Legacy fallback */
+	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/ht.ttf),		/* Legacy fallback */
 	url(res:///abook/fonts/ht.ttf),
 	url(res:///system/fonts/ht.ttf),
 	url(res:///system/media/sdcard/fonts/ht.ttf),
@@ -168,8 +168,8 @@
 	url(res:///ebook/fonts/DroidSansFallback.ttf),
 	url(res:///fonts/ttf/h1.ttf),
 	url(res:///../../media/mmcblk0p1/fonts/h1.ttf),
-	url(file:///mnt/us/LegacyFontSys/system/fonts/h1.ttf),				/*SysFont Old Path*/
-	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/h1.ttf),		/*SysFont 2012 Path*/
+	url(file:///mnt/us/LegacyFontSys/system/fonts/h1.ttf),				/* Legacy fallback */
+	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/h1.ttf),		/* Legacy fallback */
 	url(res:///abook/fonts/h1.ttf),
 	url(res:///system/fonts/h1.ttf),
 	url(res:///system/media/sdcard/fonts/h1.ttf),
@@ -204,8 +204,8 @@
 	url(res:///ebook/fonts/DroidSansFallback.ttf),
 	url(res:///fonts/ttf/h2.ttf),
 	url(res:///../../media/mmcblk0p1/fonts/h2.ttf),
-	url(file:///mnt/us/LegacyFontSys/system/fonts/h2.ttf),				/*SysFont Old Path*/
-	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/h2.ttf),		/*SysFont 2012 Path*/
+	url(file:///mnt/us/LegacyFontSys/system/fonts/h2.ttf),				/* Legacy fallback */
+	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/h2.ttf),		/* Legacy fallback */
 	url(res:///abook/fonts/h2.ttf),
 	url(res:///system/fonts/h2.ttf),
 	url(res:///system/media/sdcard/fonts/h2.ttf),
@@ -240,8 +240,8 @@
 	url(res:///ebook/fonts/DroidSansFallback.ttf),
 	url(res:///fonts/ttf/h3.ttf),
 	url(res:///../../media/mmcblk0p1/fonts/h3.ttf),
-	url(file:///mnt/us/LegacyFontSys/system/fonts/h3.ttf),				/*SysFont Old Path*/
-	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/h3.ttf),		/*SysFont 2012 Path*/
+	url(file:///mnt/us/LegacyFontSys/system/fonts/h3.ttf),				/* Legacy fallback */
+	url(file:///mnt/us/LegacyFontSys/xKindle/res/userfonts/h3.ttf),		/* Legacy fallback */
 	url(res:///abook/fonts/h3.ttf),
 	url(res:///system/fonts/h3.ttf),
 	url(res:///system/media/sdcard/fonts/h3.ttf),

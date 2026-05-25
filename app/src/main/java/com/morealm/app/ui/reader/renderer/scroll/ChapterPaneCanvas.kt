@@ -12,9 +12,11 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
-import com.morealm.app.domain.render.scroll.ScrollChapterLayout
-import com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec
-import com.morealm.app.domain.render.scroll.findColumnAt
+import com.morealm.app.domain.render.layout.ScrollChapterLayout
+import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
+import com.morealm.app.domain.render.layout.ScrollLine
+import com.morealm.app.domain.render.layout.findColumnAt
+import com.morealm.epub.compat.BlockStyle
 
 /**
  * 单章 Canvas 子树 —— [ScrollCanvasRenderer] 三块面板的子组件。
@@ -32,7 +34,7 @@ import com.morealm.app.domain.render.scroll.findColumnAt
  * 当前 paint hardcoded；M2.7 接入 ReaderStyle / 主题切换时替换为 ViewModel 注入。
  *
  * @param chapter 整章已排版结果
- * @param highlightSpecs 高亮 spec 列表（由 [com.morealm.app.domain.render.scroll.ScrollHighlightProjector]
+ * @param highlightSpecs 高亮 spec 列表（由 [com.morealm.app.domain.render.layout.ScrollHighlightProjector]
  *                       投影得到）；该章不含高亮传 emptyList
  * @param viewportTop 当前 viewport 上界（相对章顶 y）—— M2.7 视口剔除用
  * @param viewportBottom 当前 viewport 下界（相对章顶 y）—— M2.7 视口剔除用
@@ -41,7 +43,7 @@ import com.morealm.app.domain.render.scroll.findColumnAt
 fun ChapterPaneCanvas(
     chapter: ScrollChapterLayout,
     /**
-     * 正文 paint —— 必须与排版时 [com.morealm.app.domain.render.scroll.ScrollLayoutEngine]
+     * 正文 paint —— 必须与排版时 [com.morealm.app.domain.render.layout.ScrollLayoutEngine]
      * 使用的 contentPaint 是同一份（同 fontSize / typeface / letterSpacing / bold），
      * 否则字符宽度与 ScrollColumn.start/end 错位，画出来的字会偏移甚至吃字。
      */
@@ -190,6 +192,13 @@ fun ChapterPaneCanvas(
                 // 视口剔除：page 完全在 viewport 之上 / 之下 → 整页 skip
                 if (pageBottom < viewportTop || pageTop > viewportBottom) continue
                 for (line in page.lines) {
+                    // P3-5b Phase 3：CSS box 装饰（圆角背景 / 边框）必须画在文字 / 图片之前
+                    // **阶段 2-H bugfix v3**：fontSizeScale = contentPaint.textSize / 16f
+                    val visibleW = (chapter.viewWidth - chapter.paddingLeft * 2).toFloat()
+                    drawScrollLineBlockStyle(
+                        nc, line, pageTop, 0f, visibleW,
+                        fontSizeScale = contentPaint.textSize / 16f,
+                    )
                     if (line.isImage) {
                         // ── 图片段（V1 PageContentDrawer.drawImageColumn 等价路径）──
                         // V2 image line：columns 空，imageSrc 非空，lineHeight = imgHeight
@@ -235,30 +244,116 @@ fun ChapterPaneCanvas(
                             defaultColor = paint.color
                         }
                     }
+                    // EPUB 自带字体：block 级 fontFamily → Typeface swap
+                    val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
+                    val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
+
                     val baselineY = pageTop + line.lineTop + ascent
+                    // P3-5b Step 2a：段落统一字体色（同 PagePaneCanvas 同位逻辑）
+                    val paragraphColor = line.blockStyle.textColor
+                    if (paragraphColor != null) paint.color = paragraphColor
+                    // P3-5b Step 2b：text-shadow（c-shadow-* 彩色描边光晕，详 PagePaneCanvas 同位）
+                    // **bugfix 2026-05-22**：blur < 1px 跳过 setShadowLayer（某 EPUB vol-text
+                    // 0.5px 锐影 Android setShadowLayer 渲染异常成大白底），详 PagePaneCanvas
+                    val ts = line.blockStyle.textShadow
+                    val shadowApplied = ts != null && ts.blurRadius >= 1f
+                    if (shadowApplied) {
+                        paint.setShadowLayer(ts!!.blurRadius, ts.offsetX, ts.offsetY, ts.color)
+                    }
+                    // **D1.a DIAG**：仅当本行 line 有 textShadow 时打 log
+                    if (ts != null) {
+                        com.morealm.app.core.log.AppLog.info(
+                            "D1a/Shadow",
+                            "ChapterPane ts blur=${ts.blurRadius} dx=${ts.offsetX} dy=${ts.offsetY} " +
+                                "color=0x${ts.color.toUInt().toString(16)} applied=$shadowApplied " +
+                                "lineText='${line.text.take(15)}'",
+                        )
+                    }
+                    // **D 模型 (阶段 1 重构)** 分发优先级：cells != null → drawCellsRow (table line)
+                    // > atoms != null → drawAtomsRow (普通段 atom 路径) > columns 路径
+                    val lineCells = line.cells
+                    val lineAtoms = line.atoms
+                    if (lineCells != null) {
+                        drawCellsRow(
+                            nc, lineCells, line, paint, pageOffsetY,
+                            textColorByCp = textColorByCp,
+                            defaultColor = defaultColor,
+                        )
+                        if (paragraphColor != null) paint.color = defaultColor
+                        if (shadowApplied) paint.clearShadowLayer()
+                        if (savedTypeface != null) paint.typeface = savedTypeface
+                        continue
+                    }
+                    if (lineAtoms != null) {
+                        drawAtomsRow(
+                            nc, lineAtoms, line, paint, baselineY, pageOffsetY,
+                            textColorByCp = textColorByCp,
+                            defaultColor = defaultColor,
+                        )
+                        if (paragraphColor != null) paint.color = defaultColor
+                        if (shadowApplied) paint.clearShadowLayer()
+                        if (savedTypeface != null) paint.typeface = savedTypeface
+                        continue
+                    }
                     for (col in line.columns) {
-                        val overrideColor = textColorByCp[col.chapterPosition]
+                        // A4b：inline image 占位列（charData = U+FFFC）→ ImageCache + drawBitmap
+                        if (col.inlineImageSrc != null) {
+                            val bmp = com.morealm.app.domain.render.ImageCache.get(
+                                col.inlineImageSrc, (col.end - col.start).toInt(),
+                            )
+                            if (bmp != null) {
+                                val bmpW = bmp.width.toFloat()
+                                val bmpH = bmp.height.toFloat()
+                                val slotW = col.end - col.start
+                                val slotH = line.lineBottom - line.lineTop
+                                val scale = minOf(slotW / bmpW, slotH / bmpH)
+                                val drawW = bmpW * scale
+                                val drawH = bmpH * scale
+                                val offX = col.start + (slotW - drawW) / 2f
+                                val offY = pageOffsetY + line.lineTop + (slotH - drawH) / 2f
+                                nc.drawBitmap(
+                                    bmp, null,
+                                    android.graphics.RectF(offX, offY, offX + drawW, offY + drawH),
+                                    null,
+                                )
+                            }
+                            continue
+                        }
+                        // 优先级：用户高亮 > col.colorArgb（CSS char-level） > 段落 paragraphColor > paint 默认
+                        val overrideColor = textColorByCp[col.chapterPosition] ?: col.colorArgb
                         if (overrideColor != null) {
                             paint.color = overrideColor
                             nc.drawText(col.charData, col.start, baselineY, paint)
-                            paint.color = defaultColor
+                            paint.color = paragraphColor ?: defaultColor
                         } else {
                             nc.drawText(col.charData, col.start, baselineY, paint)
                         }
                     }
+                    if (paragraphColor != null) paint.color = defaultColor
+                    if (shadowApplied) paint.clearShadowLayer()
+                    if (savedTypeface != null) paint.typeface = savedTypeface
                 }
                 // pageOffsetY 已在循环顶累加（move 到顶为视口剔除提前）
             }
 
             // ─── 层 3：下划线（4 种线型：SOLID / DASHED / DOTTED / WAVY），按 viewport 剔除 ───
+            // **关键**：rect.top/bottom = line.lineTop/lineBottom，含 lineSpacingExtra。
+            // 直接用 rect.bottom 会把线画到行距底部（远离字符）。改用 rect.top + ascent + descent
+            // = 字符底沿，让下划线紧贴文字本体而不是行距。
+            val underlineStroke = (contentPaint.textSize * 0.1f).coerceAtLeast(2.5f)
+            val fm = contentPaint.fontMetrics
+            val textHeight = -fm.ascent + fm.descent  // 从 lineTop 到字底沿
+            val wavyAmplitude = (contentPaint.textSize * 0.12f).coerceAtLeast(4f)
+            val wavyPeriod = (contentPaint.textSize * 0.6f).coerceAtLeast(12f)
             for (spec in underlineSpecs) {
-                val linePaint = underlinePaintFor(spec.argb, spec.underlineStyle)
+                val linePaint = underlinePaintFor(spec.argb, spec.underlineStyle, underlineStroke)
                 for (rect in spec.rects) {
                     if (rect.bottom < viewportTop || rect.top > viewportBottom) continue
-                    val underlineY = rect.bottom - 2f  // 字符 baseline 下方 2px 处
+                    val underlineY = rect.top + textHeight + underlineStroke * 0.5f
                     when (spec.underlineStyle) {
                         Highlight.UNDERLINE_STYLE_WAVY -> drawWavyUnderline(
                             nc, linePaint, rect.left, rect.right, underlineY,
+                            wavyAmplitude, wavyPeriod,
                         )
                         else -> nc.drawLine(rect.left, underlineY, rect.right, underlineY, linePaint)
                     }
@@ -284,6 +379,162 @@ fun ChapterPaneCanvas(
  * 用 findColumnAt 一次定位到 hit.page+line，避免嵌套 for 循环。
  * 复杂度：O(bookmarks × pages) — pages 数远小于 lines。
  */
+/**
+ * **A5 atoms 骨架**（前进性双轨）：[ScrollLine.atoms] 非 null 时由本函数渲染一行 atoms。
+ *
+ * 当前阶段（A5 骨架）：所有 emit 仍走 columns 路径，line.atoms 永远 null，本函数
+ * 暂时是 dead code。A4c 起 emit 真填 atoms 时立即激活。
+ *
+ * 跟 PagePaneCanvas.drawByAtoms 的差异：本函数承载 chapter-level pageOffsetY 偏移
+ * （ChapterPaneCanvas 是 SCROLL 模式整章渲染，每条 line 的 lineTop 是 page-relative，
+ * 需要加上 pageOffsetY 拿到 chapter-relative y 坐标）。
+ */
+private fun drawAtomsRow(
+    canvas: android.graphics.Canvas,
+    atoms: List<com.morealm.app.domain.render.layout.Atom>,
+    line: com.morealm.app.domain.render.layout.ScrollLine,
+    basePaint: android.text.TextPaint,
+    baselineY: Float,
+    pageOffsetY: Float,
+    textColorByCp: Map<Int, Int> = emptyMap(),
+    defaultColor: Int = basePaint.color,
+) {
+    // **bugfix 2026-05-22**：用 line.columns[0].start 作初始 x，让 atoms 路径 honor
+    // CSS text-align cascade 算出的居中偏移（见 PagePaneCanvas.drawByAtoms 同款修复）
+    var x = line.columns.firstOrNull()?.start ?: 0f
+    var atomStartCp = line.firstChapterPos  // A5 Step 2：atom 起始 cp 用于 textColorByCp 查询
+    for (atom in atoms) {
+        when (atom) {
+            is com.morealm.app.domain.render.layout.TextRun -> {
+                val baseSize = basePaint.textSize
+                val scale = atom.sizeScale
+                if (scale != 1f) basePaint.textSize = baseSize * scale
+                // sizeScale ≠ 1 时 vertical-align: top fallback；= 1 沿用 caller baselineY
+                val effectiveBaselineY = if (scale != 1f) {
+                    pageOffsetY + line.lineTop + basePaint.textSize * 0.8f
+                } else baselineY
+                val hasOverride = if (textColorByCp.isNotEmpty()) {
+                    (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
+                } else false
+                if (hasOverride) {
+                    var cx = x
+                    val baseColor = atom.colorArgb ?: defaultColor
+                    for (ci in atom.text.indices) {
+                        val cp = atomStartCp + ci
+                        val color = textColorByCp[cp] ?: baseColor
+                        basePaint.color = color
+                        val ch = atom.text[ci].toString()
+                        canvas.drawText(ch, cx, effectiveBaselineY, basePaint)
+                        cx += basePaint.measureText(ch)
+                    }
+                    basePaint.color = defaultColor
+                } else {
+                    val origColor = basePaint.color
+                    if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                    canvas.drawText(atom.text, x, effectiveBaselineY, basePaint)
+                    if (atom.colorArgb != null) basePaint.color = origColor
+                }
+                if (scale != 1f) basePaint.textSize = baseSize
+                x += atom.width
+            }
+            is com.morealm.app.domain.render.layout.InlineImage -> {
+                val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
+                if (bmp != null) {
+                    val slotH = line.lineBottom - line.lineTop
+                    val scale = minOf(atom.width / bmp.width, slotH / bmp.height)
+                    val drawW = bmp.width * scale
+                    val drawH = bmp.height * scale
+                    val offX = x + (atom.width - drawW) / 2f
+                    val offY = pageOffsetY + line.lineTop + (slotH - drawH) / 2f
+                    canvas.drawBitmap(
+                        bmp, null,
+                        android.graphics.RectF(offX, offY, offX + drawW, offY + drawH),
+                        null,
+                    )
+                }
+                x += atom.width
+            }
+        }
+        atomStartCp += atom.cpCount
+    }
+}
+
+/**
+ * **D 模型 (阶段 1 重构)** —— ChapterPane (SCROLL 模式) 的 table line cells 路径绘制。
+ *
+ * 跟 [drawAtomsRow] 的差异：本函数承载 chapter-level pageOffsetY 偏移（每条 line.lineTop
+ * 是 page-relative，加上 pageOffsetY 拿到 chapter-relative y 坐标）。
+ *
+ * 几何关系与 [PagePaneCanvas.drawByCells] 同：
+ *  - effective atom 左 x = cell.contentLeft + cell.padding + atom.cellLocalX
+ *  - effective baseline y = pageOffsetY + line.lineTop + cell.contentTop + cell.padding +
+ *    atom.cellLocalY + atom.baseline
+ */
+private fun drawCellsRow(
+    canvas: android.graphics.Canvas,
+    cells: List<com.morealm.app.domain.render.layout.ScrollLineCell>,
+    line: com.morealm.app.domain.render.layout.ScrollLine,
+    basePaint: android.text.TextPaint,
+    pageOffsetY: Float,
+    textColorByCp: Map<Int, Int> = emptyMap(),
+    defaultColor: Int = basePaint.color,
+) {
+    val baseSize = basePaint.textSize
+    var atomStartCp = line.firstChapterPos
+    for (cell in cells) {
+        // 未来 Task 2-D：cell.backgroundColor / borderRadiusPx 装饰盒
+        for (atom in cell.atoms) {
+            when (atom) {
+                is com.morealm.app.domain.render.layout.TextRun -> {
+                    val scale = atom.sizeScale
+                    if (scale != 1f) basePaint.textSize = baseSize * scale
+                    val effectiveX = cell.contentLeft + cell.padding + atom.cellLocalX
+                    val effectiveBaselineY = pageOffsetY + line.lineTop + cell.contentTop +
+                        cell.padding + atom.cellLocalY + atom.baseline
+                    val hasOverride = if (textColorByCp.isNotEmpty()) {
+                        (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
+                    } else false
+                    if (hasOverride) {
+                        var cx = effectiveX
+                        val baseColor = atom.colorArgb ?: defaultColor
+                        for (ci in atom.text.indices) {
+                            val cp = atomStartCp + ci
+                            basePaint.color = textColorByCp[cp] ?: baseColor
+                            val ch = atom.text[ci].toString()
+                            canvas.drawText(ch, cx, effectiveBaselineY, basePaint)
+                            cx += basePaint.measureText(ch)
+                        }
+                        basePaint.color = defaultColor
+                    } else {
+                        val origColor = basePaint.color
+                        if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                        canvas.drawText(atom.text, effectiveX, effectiveBaselineY, basePaint)
+                        if (atom.colorArgb != null) basePaint.color = origColor
+                    }
+                    if (scale != 1f) basePaint.textSize = baseSize
+                }
+                is com.morealm.app.domain.render.layout.InlineImage -> {
+                    val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
+                    if (bmp != null) {
+                        val drawX = cell.contentLeft + cell.padding + atom.cellLocalX
+                        val drawY = pageOffsetY + line.lineTop + cell.contentTop + cell.padding +
+                            atom.cellLocalY
+                        val scaleF = minOf(atom.width / bmp.width, atom.height / bmp.height)
+                        val drawW = bmp.width * scaleF
+                        val drawH = bmp.height * scaleF
+                        canvas.drawBitmap(
+                            bmp, null,
+                            android.graphics.RectF(drawX, drawY, drawX + drawW, drawY + drawH),
+                            null,
+                        )
+                    }
+                }
+            }
+            atomStartCp += atom.cpCount
+        }
+    }
+}
+
 private fun drawBookmarkTriangles(
     canvas: android.graphics.Canvas,
     chapter: ScrollChapterLayout,
@@ -323,23 +574,22 @@ private fun drawBookmarkTriangles(
  * 每次调用 new Paint：调用频率 = 下划线 spec 数（同章一般几个），可接受。
  * 若 M6 性能压测发现热点可改 remember 缓存。
  */
-private fun underlinePaintFor(argb: Int, underlineStyle: Int): Paint = Paint().apply {
+private fun underlinePaintFor(argb: Int, underlineStyle: Int, strokeWidth: Float): Paint = Paint().apply {
     color = argb
-    strokeWidth = 3f
+    this.strokeWidth = strokeWidth
     style = Paint.Style.STROKE
+    strokeCap = Paint.Cap.ROUND
     isAntiAlias = true
     pathEffect = when (underlineStyle) {
-        Highlight.UNDERLINE_STYLE_DASHED -> DashPathEffect(floatArrayOf(12f, 6f), 0f)
-        Highlight.UNDERLINE_STYLE_DOTTED -> DashPathEffect(floatArrayOf(2f, 6f), 0f)
+        Highlight.UNDERLINE_STYLE_DASHED -> DashPathEffect(floatArrayOf(strokeWidth * 4f, strokeWidth * 2f), 0f)
+        Highlight.UNDERLINE_STYLE_DOTTED -> DashPathEffect(floatArrayOf(strokeWidth * 0.7f, strokeWidth * 2f), 0f)
         else -> null
     }
 }
 
 /**
  * 波浪下划线 —— 用 quadraticTo 二次贝塞尔曲线段拼接 sin 波形。
- *
- * 振幅 ≈ 3px，周期 ≈ 12px（每周期 = 1 个完整 sin 波）。每半周期一段贝塞尔，
- * 控制点交替在 baseline 上下 amplitude 处，达到平滑波浪视觉。
+ * 振幅 / 周期由调用方按字号传入，保证大字号下波形足够起伏。
  */
 private fun drawWavyUnderline(
     canvas: android.graphics.Canvas,
@@ -347,10 +597,10 @@ private fun drawWavyUnderline(
     left: Float,
     right: Float,
     baselineY: Float,
+    amplitude: Float,
+    period: Float,
 ) {
     if (right - left <= 0f) return
-    val amplitude = 3f
-    val period = 12f
     val halfPeriod = period / 2f
     val path = Path()
     path.moveTo(left, baselineY)

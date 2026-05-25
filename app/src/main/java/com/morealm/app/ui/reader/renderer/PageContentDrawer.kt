@@ -27,6 +27,7 @@ import com.morealm.app.domain.render.TextLine
 import com.morealm.app.domain.render.TextPage
 import com.morealm.app.domain.render.TextPos
 import com.morealm.app.domain.render.canvasrecorder.recordIfNeededThenDraw
+import com.morealm.epub.compat.BlockStyle
 
 /** Default highlight colors — fallbacks; prefer passing theme-derived colors at call site */
 internal val DEFAULT_SELECTION_COLOR = Color(0x4D2196F3)  // primary @ 30%
@@ -299,6 +300,89 @@ fun PageCanvas(
 }
 
 /**
+ * **P3-5b Phase 3c**：把 CSS box 装饰（圆角背景 / 边框）画到 line content 的包围盒上。
+ *
+ * 几何：以 line 的 columns 最左 start / 最右 end 算水平范围，[lineTop]/[lineBottom]
+ * 是行的垂直范围。padding 向外扩展矩形；border 占据矩形边缘（向外）。
+ *
+ * border-style 仅实现关键的 SOLID / DOUBLE：DOUBLE 用「双同心矩形」标准画法（外圈 +
+ * 内圈，各画一条 strokeWidth/3 的线，间隙 strokeWidth/3）。DASHED / DOTTED 暂回落 SOLID
+ * （视觉差异不大；Phase 3.5+ 用 PathEffect 区分）。
+ *
+ * EMPTY 时函数早 return 零开销。
+ */
+private fun drawBlockStyleDecoration(
+    canvas: android.graphics.Canvas,
+    line: TextLine,
+    lineTop: Float,
+    lineBottom: Float,
+) {
+    val bs = line.blockStyle
+    if (bs === BlockStyle.EMPTY) return
+    if (line.columns.isEmpty()) return
+
+    // 计算内容水平范围：所有 column 的最左 start ~ 最右 end
+    var leftX = Float.MAX_VALUE
+    var rightX = 0f
+    for (col in line.columns) {
+        if (col.start < leftX) leftX = col.start
+        if (col.end > rightX) rightX = col.end
+    }
+    if (leftX >= rightX) return
+
+    // 向外扩 padding + 半个 border（让 border 落在矩形边缘）
+    val halfBorder = bs.borderWidthPx / 2f
+    val rectLeft = leftX - bs.paddingLeftPx - halfBorder
+    val rectTop = lineTop - bs.paddingTopPx - halfBorder
+    val rectRight = rightX + bs.paddingRightPx + halfBorder
+    val rectBottom = lineBottom + bs.paddingBottomPx + halfBorder
+    val r = bs.borderRadiusPx
+    val paint = sharedBlockStylePaint
+
+    // 1. 背景填充
+    bs.backgroundColor?.let { bgArgb ->
+        paint.style = Paint.Style.FILL
+        paint.color = bgArgb
+        paint.strokeWidth = 0f
+        paint.pathEffect = null
+        canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
+    }
+
+    // 2. 边框描边
+    val bc = bs.borderColor
+    if (bc != null && bs.borderWidthPx > 0f) {
+        paint.style = Paint.Style.STROKE
+        paint.color = bc
+        when (bs.borderStyle) {
+            BlockStyle.BorderStyle.DOUBLE -> {
+                // CSS double 标准：3 等分 strokeWidth，外圈 + 内圈各画 1/3 实线，中间 1/3 间隙
+                val third = bs.borderWidthPx / 3f
+                paint.strokeWidth = third
+                paint.pathEffect = null
+                // 外圈
+                canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
+                // 内圈：向内缩 2*third 让中间留出 1/3 strokeWidth 的间隙
+                val innerOff = 2f * third
+                val innerR = (r - innerOff).coerceAtLeast(0f)
+                canvas.drawRoundRect(
+                    rectLeft + innerOff, rectTop + innerOff,
+                    rectRight - innerOff, rectBottom - innerOff,
+                    innerR, innerR, paint,
+                )
+            }
+            BlockStyle.BorderStyle.SOLID,
+            BlockStyle.BorderStyle.DASHED,    // Phase 3 简化为 SOLID
+            BlockStyle.BorderStyle.DOTTED,    // Phase 3 简化为 SOLID
+            -> {
+                paint.strokeWidth = bs.borderWidthPx
+                paint.pathEffect = null
+                canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
+            }
+        }
+    }
+}
+
+/**
  * 将页面内容绘制到任意 Android Canvas 上。
  * 可用于 Compose Canvas 内部，也可用于离屏 Bitmap 渲染（仿真翻页需要）。
  */
@@ -311,6 +395,16 @@ private val sharedHighlightPaint by lazy {
 }
 private val sharedSpacingPaint by lazy { TextPaint() }
 private val sharedBookmarkPath by lazy { android.graphics.Path() }
+
+/**
+ * **P3-5b Phase 3c**：CSS box 装饰用 paint —— `background-color` 填充用 FILL，
+ * `border` 描边用 STROKE。两者共用一个 Paint，绘制前重设 style + color。
+ */
+private val sharedBlockStylePaint by lazy {
+    Paint().apply {
+        isAntiAlias = true
+    }
+}
 
 /**
  * 下划线专用 paint —— STROKE 模式 + ANTI_ALIAS。strokeWidth / color / pathEffect 在每条
@@ -392,8 +486,19 @@ fun drawPageContent(
             line.isTitle -> titlePaint
             else -> contentPaint
         }
+        // EPUB 自带字体：block 级 fontFamily → Typeface swap（save/restore 包裹整行绘制）
+        val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
+        val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
+
         val lineTop = line.lineTop + paddingTop
         val lineBottom = line.lineBottom + paddingTop
+
+        // 0. **P3-5b Phase 3c**：CSS box 装饰（圆角背景 / 边框）。
+        // line.blockStyle 由 ChapterProvider 从 paragraph 透传；EMPTY 时跳过。
+        // 多行 paragraph 的情况下每条 line 独立画自己的盒子 —— Phase 3 视觉简化，
+        // Phase 3.5+ 可改按整段统一画一个大盒。
+        // 必须最先画（在文字、高亮、下划线之前），否则会覆盖到上面。
+        drawBlockStyleDecoration(canvas, line, lineTop, lineBottom)
 
         // 1. Search result highlights
         for (col in line.columns) {
@@ -459,9 +564,11 @@ fun drawPageContent(
             val lineStart = line.chapterPosition
             val lineCharCount = line.charSize
             val lineEnd = lineStart + lineCharCount
-            // 下划线 Y：lineBottom 上方 ~descent 的位置，刚好压在字符底部。
-            val underlineY = lineBottom - paint.fontMetrics.descent * 0.35f
-            val strokeWidth = (paint.textSize * 0.07f).coerceAtLeast(1.5f)
+            // 下划线 Y：从 lineTop 下移整个字符高度 (-ascent + descent)，刚好到字底沿。
+            // 不能用 lineBottom — 它含 lineSpacingExtra，会把线推到行距底部，远离文字。
+            val fm = paint.fontMetrics
+            val strokeWidth = (paint.textSize * 0.1f).coerceAtLeast(2.5f)
+            val underlineY = lineTop + (-fm.ascent + fm.descent) + strokeWidth * 0.5f
             for (u in underlines) {
                 if (u.startChapterPos >= lineEnd || u.endChapterPos <= lineStart) continue
                 var charPos = lineStart
@@ -580,9 +687,8 @@ fun drawPageContent(
                 }
             }
         }
+        if (savedTypeface != null) paint.typeface = savedTypeface
     }
-
-    // 5. Bookmark indicator
     if (hasBookmark) {
         highlightPaint.color = bmColorArgb
         sharedBookmarkPath.apply {

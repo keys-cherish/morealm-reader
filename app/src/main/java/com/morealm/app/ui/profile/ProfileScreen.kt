@@ -16,12 +16,14 @@ import com.morealm.app.presentation.profile.AnnualReport
 import com.morealm.app.presentation.appearance.GlobalBgViewModel
 import com.morealm.app.presentation.update.UpdateViewModel
 import com.morealm.app.BuildConfig
+import com.morealm.app.R
 import com.morealm.app.ui.common.LocalCardAlpha
 import com.morealm.app.ui.common.LocalCardBlur
 import com.morealm.app.ui.common.supportsBlur
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
@@ -49,7 +51,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -160,33 +164,46 @@ fun ProfileScreen(
         )
 
         // Reading stats card (real data)
+        // 白天 / 夜间各自一张插画背景（profile_card_bg_day / night）。containerColor 透明，
+        // Image 通过 Card shape 自动 clip 成 16dp 圆角。
         Card(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)),
+            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text("阅读统计", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                    StatItem(value = "$totalBooks", label = "本书")
-                    StatItem(value = formatDuration(totalReadMs), label = "总时长")
-                    StatItem(value = "$recentDays", label = "连续天数")
-                }
-                // UX-6 (亲密性): 「主指标块 (标题+3 个数字)」与「辅助块 (今日+年度报告)」
-                // 原本三个 12dp 同等间距, 视觉上四件平铺. 主→辅 拉到 18dp, 辅内紧密 4dp.
-                Spacer(Modifier.height(18.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    Text("今日已读 ${formatDuration(todayReadMs)}",
-                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                }
-                Spacer(Modifier.height(4.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    TextButton(onClick = {
-                        profileViewModel.loadAnnualReport()
-                        showAnnualReport = true
-                    }) {
-                        Text("查看年度报告 →", style = MaterialTheme.typography.labelSmall)
+            Box {
+                Image(
+                    painter = painterResource(
+                        if (moColors.isNight) R.drawable.profile_card_bg_night
+                        else R.drawable.profile_card_bg_day
+                    ),
+                    contentDescription = null,
+                    modifier = Modifier.matchParentSize(),
+                    contentScale = ContentScale.Crop,
+                )
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text("阅读统计", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                        StatItem(value = "$totalBooks", label = "本书")
+                        StatItem(value = formatDuration(totalReadMs), label = "总时长")
+                        StatItem(value = "$recentDays", label = "连续天数")
+                    }
+                    // UX-6 (亲密性): 「主指标块 (标题+3 个数字)」与「辅助块 (今日+年度报告)」
+                    // 原本三个 12dp 同等间距, 视觉上四件平铺. 主→辅 拉到 18dp, 辅内紧密 4dp.
+                    Spacer(Modifier.height(18.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        Text("今日已读 ${formatDuration(todayReadMs)}",
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        TextButton(onClick = {
+                            profileViewModel.loadAnnualReport()
+                            showAnnualReport = true
+                        }) {
+                            Text("查看年度报告 →", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
             }

@@ -106,6 +106,25 @@ class CheckSourceService : Service() {
             // 用 startService 触发 onStartCommand，避免在 service 已 stop 后 stopService 找不到目标
             context.startService(intent)
         }
+
+        /**
+         * 把 state 标记为 Idle 但**保留 _results** —— 用户关掉弹窗时调，让 StateFlow
+         * 对新订阅者重发的 Done 状态不会再触发"弹失效列表对话框"，但失效书源数据
+         * 仍在 _results 里可供 UI 角标 / 列表展示。
+         */
+        fun markStateIdle() {
+            _state.value = State.Idle
+        }
+
+        /**
+         * 状态 + 结果一并归零。用户**删完**失效书源（不再需要这份数据）时调；或
+         * 真的要从头开始时主动重置。companion 是 static，调用后 VM 重订阅拿到的
+         * 是空状态。
+         */
+        fun clear() {
+            _state.value = State.Idle
+            _results.value = emptyMap()
+        }
     }
 
     @Inject lateinit var sourceDao: BookSourceDao
@@ -142,6 +161,10 @@ class CheckSourceService : Service() {
             }
             ACTION_STOP -> {
                 checkJob?.cancel()
+                // 取消时**保留 _results** —— 用户决策 2026-05-21：半截校验结果有用
+                // （用户可决定是否删已确认的失效源）。仅 state→Idle 让 UI 停 spinner。
+                // 关弹窗 / 删完源时 ViewModel 会显式调 clear() 把 _results 清掉，
+                // 防止重进界面重弹 dialog。
                 _state.value = State.Idle
                 stopSelf()
             }
@@ -167,7 +190,9 @@ class CheckSourceService : Service() {
                 }
 
                 var doneCount = 0
-                CheckSource.checkAll(sources, concurrency = 4) { _, result ->
+                // 并发 12：1000 源 × 15s 平均 ÷ 12 ≈ 21 分钟（原 4 并发 ≈ 60 分钟）。
+                // 网络-bound，OkHttp 全局连接池能撑 64 并发，12 安全且 3x 提速。
+                CheckSource.checkAll(sources, concurrency = 12) { _, result ->
                     // onResult 在子协程里被调，每完成一源触发一次。
                     doneCount++
                     _results.update { it + (result.sourceUrl to result) }

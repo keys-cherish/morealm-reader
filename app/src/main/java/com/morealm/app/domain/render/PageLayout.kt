@@ -3,6 +3,7 @@ package com.morealm.app.domain.render
 import android.graphics.Paint
 import com.morealm.app.domain.render.canvasrecorder.CanvasRecorder
 import com.morealm.app.domain.render.canvasrecorder.CanvasRecorderFactory
+import com.morealm.epub.compat.BlockStyle
 
 /**
  * Core data models for the Canvas reading system.
@@ -185,6 +186,18 @@ class TextLine(
     var isChapterNum: Boolean = false,
     /** True for the last title line — triggers the decorative accent bar below it. */
     var isTitleEnd: Boolean = false,
+    /**
+     * **P3-5b Phase 3**：所在 paragraph 的 CSS box 装饰（圆角背景 / 边框 / padding）。
+     *
+     * 由 [ChapterProvider] 处理 `__MOREALM_BLOCK_STYLE__` inline marker 后从
+     * [com.morealm.app.domain.render.ChapterProvider.LayoutParagraph.blockStyle] 透传到
+     * 同一 paragraph 内所有 TextLine。[BlockStyle.EMPTY] = 无装饰（默认，绝大多数线）。
+     *
+     * 渲染时由 [com.morealm.app.ui.reader.renderer.PageContentDrawer] 在该行 columns
+     * 包围盒前画 `drawRoundRect`（背景 fill + 边框 stroke）。多行 paragraph 的情况下每条
+     * 线独立绘制自己的盒子 —— Phase 3 视觉简化，Phase 3.5+ 可改为按整段统一画一个大盒。
+     */
+    var blockStyle: BlockStyle = BlockStyle.EMPTY,
 ) {
     val columns = arrayListOf<BaseColumn>()
 

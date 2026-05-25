@@ -22,7 +22,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.apache.commons.text.StringEscapeUtils
@@ -75,6 +77,7 @@ class ReaderChapterController(
     private val pageTurnMode: () -> PageTurnMode,
     /** Reset TTS paragraph index on chapter load */
     private val resetTtsParagraphIndex: () -> Unit,
+    private val fontRepo: com.morealm.app.domain.font.FontRepository,
     /** Save progress after chapter loads */
     private val onChapterLoaded: () -> Unit,
     /** Notify progress controller to suppress next save */
@@ -98,6 +101,30 @@ class ReaderChapterController(
 
     private val _currentChapterIndex = MutableStateFlow(0)
     val currentChapterIndex: StateFlow<Int> = _currentChapterIndex.asStateFlow()
+
+    /**
+     * **settled chapter index**（仿 Compose PagerState `settledPage` 模型）—— fling /
+     * 跨章 swap 期间保持稳定，待 300ms 静止后才更新。
+     *
+     * 用途：低频副作用应该订阅这个而不是 [currentChapterIndex]
+     *   - `saveProgress` 持久化进度 → 用 settled（避免 fling 跨多章时反复写 DB）
+     *   - TTS `handleSeek` 跨章 → 用 settled（避免 fling 中 TTS 章节判断抖动）
+     *   - 章节元数据加载（如目录高亮当前章）→ 用 settled
+     *
+     * 高频 UI（InfoBar 章号 / page i/n 显示）仍订阅 [currentChapterIndex] (live)
+     * 以保证用户视觉即时响应。
+     *
+     * 设计参考：2026-05-19 四方 agent 验证 V2 page-level 失败根因后引入。详
+     * memory `feedback_high_freq_state_imperative.md` + `project_v2_architecture_failure_mode.md`。
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    val settledChapterIndex: StateFlow<Int> = _currentChapterIndex
+        .debounce(300L)
+        .stateIn(
+            scope,
+            kotlinx.coroutines.flow.SharingStarted.Eagerly,
+            _currentChapterIndex.value,
+        )
 
     private val _chapterContent = MutableStateFlow("")
     val chapterContent: StateFlow<String> = _chapterContent.asStateFlow()
@@ -617,14 +644,24 @@ class ReaderChapterController(
                 }
 
                 if (book.format == com.morealm.app.domain.entity.BookFormat.EPUB) {
+                    // **D1.b 已知**：reader 未 mount → cbw 未知 → preCacheChapters 内部 skip。
+                    // host fetchAndPrepareChapter 真值 cbw 走 on-demand 解析。TODO(D2)：把
+                    // ScrollLayoutEngine.visibleWidth 通过 viewModel 写回 controller，让 ReaderScreen
+                    // mount 后触发 preCacheChapters(cbw=visibleWidth)，恢复预热语义。
                     scope.launch(Dispatchers.IO) {
                         try {
                             com.morealm.app.domain.parser.EpubParser.preCacheChapters(context, uri, mapped)
-                            AppLog.info("Chapter", "EPUB chapters pre-cached")
+                            AppLog.info("Chapter", "EPUB pre-cache skipped until reader width is known (D1.b)")
                         } catch (e: Exception) {
                             AppLog.warn("Chapter", "EPUB pre-cache failed", e)
                         }
                     }
+                    // 2026-05-25 EPUB 自带字体：确保 book 在 EpubCoreBridge cache 中，
+                    // 然后 build font registry 并 setActive 让 renderer 端 resolveActive 拿到
+                    com.morealm.app.domain.parser.EpubCoreBridge.withCoreBook(context, uri) { }
+                    val registry = com.morealm.app.domain.parser.EpubCoreBridge.fontRegistryOf(uri, fontRepo)
+                    com.morealm.app.domain.font.EpubFontRegistry.setActive(registry)
+                    AppLog.info("Chapter", "EPUB font registry activated: ${registry.size} families")
                 }
                 if (book.format == com.morealm.app.domain.entity.BookFormat.CBZ) {
                     scope.launch(Dispatchers.IO) {
@@ -993,6 +1030,9 @@ class ReaderChapterController(
         val chapters = _chapters.value
         val uri = Uri.parse(localPath)
 
+        // **D1.b 已知**：EPUB 路径 cbw 不通到这里 → preCacheChapters 内部 skip（默认 cbw=0）。
+        // CBZ 不依赖 cbw 正常工作。TODO(D2)：通过 viewModel 把 reader visibleWidth 写回
+        // controller 字段，传给 EpubParser.preCacheChapters(..., cbw=visibleWidth) 恢复预热。
         scope.launch(Dispatchers.IO) {
             try {
                 when (format) {
@@ -1002,7 +1042,11 @@ class ReaderChapterController(
                         com.morealm.app.domain.parser.CbzParser.preCacheImages(context, uri, chapters, currentIndex)
                     else -> {}
                 }
-                AppLog.debug("Chapter", "Re-triggered pre-cache around chapter $currentIndex")
+                if (format == com.morealm.app.domain.entity.BookFormat.EPUB) {
+                    AppLog.debug("Chapter", "EPUB pre-cache around $currentIndex skipped (cbw unknown, D1.b TODO)")
+                } else {
+                    AppLog.debug("Chapter", "Re-triggered pre-cache around chapter $currentIndex")
+                }
             } catch (e: Exception) {
                 AppLog.warn("Chapter", "Pre-cache re-trigger failed", e)
             }
@@ -1388,7 +1432,12 @@ class ReaderChapterController(
      *
      * @param index 目标章节索引
      */
-    suspend fun fetchAndPrepareChapter(index: Int): String? {
+    suspend fun fetchAndPrepareChapter(
+        index: Int,
+        // **D1.b**：EPUB % margin 解析参考宽（host UI 计算 visibleWidth 后传入）。
+        // 0 = 旧入口（默认值兼容）/ 非 EPUB / 不接 % margin。详 LocalBookParser.readChapter。
+        epubContainingBlockWidthPx: Int = 0,
+    ): String? {
         val chapterList = _chapters.value
         if (index !in chapterList.indices) return null
         val book = _book.value ?: return null
@@ -1399,7 +1448,10 @@ class ReaderChapterController(
                     loadWebChapterContent(book, chapter, index)
                 } else {
                     val localPath = book.localPath ?: return@withContext null
-                    LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapter)
+                    LocalBookParser.readChapter(
+                        context, Uri.parse(localPath), book.format, chapter,
+                        epubContainingBlockWidthPx = epubContainingBlockWidthPx,
+                    )
                 }
                 val replaced = applyReplaceRules(raw)
                 com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
@@ -1428,6 +1480,79 @@ class ReaderChapterController(
         if (index < 0 || index >= _chapters.value.size) return
         if (_currentChapterIndex.value == index) return
         _currentChapterIndex.value = index
+
+        // 同步 visiblePageState.chapterIndex —— 防 saveProgress 用 stale chapterIndex
+        // 写错章（V2 page-level 4 方验证发现的第 4 个独立真值）。
+        // 参考 commitChapterShiftNext line 311-316 同款同步模式。
+        if (::visiblePageState.isInitialized) {
+            val cur = visiblePageState.value
+            if (cur.chapterIndex != index) {
+                val title = _chapters.value.getOrNull(index)?.title.orEmpty()
+                visiblePageState.value = cur.copy(
+                    chapterIndex = index,
+                    title = title,
+                    chapterPosition = 0,
+                )
+            }
+        }
+    }
+
+    /**
+     * 「拖动 Slider 所见所得」轻量 seek 入口（2026-05-18）。
+     *
+     * 同 [loadChapter] 的对比：
+     *   - 跨章 (index != _currentChapterIndex.value) → 直接 fallback [loadChapter]，
+     *     走完整 cancel/restart + chapterLoadJob + readChapter IO + 重排版路径。
+     *   - 同章 (index == _currentChapterIndex.value) → 不重 load 章节内容，
+     *     仅重写 [_renderedChapter] 的 (initialProgress, restoreToken) → 下游
+     *     [com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderHost] 的
+     *     LaunchedEffect(restoreToken) 监听到新 token 后按 progress / 100 算 pixelOffset
+     *     直接 placement-only 写入，**60fps 顺，无 Recompose / Measure**。
+     *
+     * 调用方：ReaderControlBar 拖动 conflate worker（高频）+ 松手 onValueChangeFinished
+     * （低频）共用。同 (idx, progress) 重复调用时 _renderedChapter.copy 仍写一遍——
+     * restoreToken 必然 nanoTime 不同，下游 LaunchedEffect 会重新执行（cancel-restart
+     * 是 Compose 协程 cheap 操作；写 pixelOffset 是 mutableFloatStateOf 也 cheap）。
+     *
+     * 注意：此方法**不**主动调 saveProgressNow——拖动期间用户位置不稳定，等
+     * onValueChangeFinished 通过 [ReaderProgressController] snapshot 收集器节流持久化。
+     */
+    fun seekProgressInPlace(index: Int, progress: Int) {
+        val curIdx = _currentChapterIndex.value
+        if (index != curIdx) {
+            // 跨章：走完整 loadChapter 路径（与现有 onSeekFullBook 同等价格）
+            com.morealm.app.core.log.AppLog.info(
+                "ProgressSeek",
+                "seekProgressInPlace CROSS-CH idx=$index progress=$progress curIdx=$curIdx → loadChapter",
+            )
+            loadChapter(index, restoreProgress = progress)
+            return
+        }
+        val clamped = progress.coerceIn(0, 100)
+        val rendered = _renderedChapter.value
+        if (rendered.index != index) {
+            // 罕见竞态：rendered 还没切到 curIdx → fallback loadChapter 强同步
+            com.morealm.app.core.log.AppLog.info(
+                "ProgressSeek",
+                "seekProgressInPlace RENDER-MISMATCH idx=$index renderedIdx=${rendered.index} curIdx=$curIdx → fallback loadChapter",
+            )
+            loadChapter(index, restoreProgress = clamped)
+            return
+        }
+        val oldToken = rendered.restoreToken
+        val newToken = System.nanoTime()
+        _renderedChapter.value = rendered.copy(
+            initialProgress = clamped,
+            initialChapterPosition = 0,
+            restoreToken = newToken,
+        )
+        if (::scrollProgressState.isInitialized) {
+            scrollProgressState.value = clamped
+        }
+        com.morealm.app.core.log.AppLog.info(
+            "ProgressSeek",
+            "seekProgressInPlace SAME-CH idx=$index progress=$clamped token=$oldToken→$newToken",
+        )
     }
 
     /** 给 ChapterWindowSource 用的章节标题查询 —— 本身就是 [chapters] flow 的薄包装。 */

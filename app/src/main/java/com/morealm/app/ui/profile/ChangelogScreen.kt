@@ -193,10 +193,37 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.5",
+        date = "2026-05-25",
+        title = "EPUB 精品排版引擎 + 翻页体验全面重做",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            ChangelogItem(ChangeType.IMPROVE, "仿真翻页（贝塞尔卷边）暂不支持 EPUB —— 阅读 EPUB 时请把翻页模式改为 平移 / 覆盖 / 滚动 / 无动画 任一项；TXT 仍可正常使用仿真翻页"),
+            ChangelogItem(ChangeType.NEW, "【重大更新】EPUB 精品排版引擎 —— 精品 EPUB 的样式现在能正确渲染：圆角彩色文字框、段落背景色、边框、对话气泡描边光晕、行内小图、表格排版、标题大字号 + 间距、段落缩进对齐，视觉效果优化"),
+            ChangelogItem(ChangeType.NEW, "EPUB 自带字体 —— 书里内嵌的字体现在能自动识别并应用到对应段落，不再全书统一用系统字体"),
+            ChangelogItem(ChangeType.NEW, "EPUB 整屏封面 —— 包成整屏的封面写法现在能正确识别并撑满整屏；普通封面仍按原比例居中"),
+            ChangelogItem(ChangeType.NEW, "阅读器搜索方向过滤 —— 阅读设置新增「搜索方向」三档：全文 / 前向（只看当前页之前）/ 后向（只看之后），想跳回前面读过的某段时不用从未来章节的命中里翻找"),
+            ChangelogItem(ChangeType.NEW, "「我的」页插画卡 —— 阅读统计卡换成日夜各一张氛围插画背景（米黄日落 / 月夜书桌），统计数字叠在插画上"),
+            ChangelogItem(ChangeType.NEW, "搜索页胶囊式输入框 —— 放大镜 + 输入框 + 搜索按钮收进一个圆角胶囊，视觉更聚焦"),
+            ChangelogItem(ChangeType.IMPROVE, "翻页引擎重做 —— 覆盖 / 平移 / 无动画三种翻页模式底层重写，根治了滚动模式下跨章闪烁、空气墙、InfoBar 闪烁三大顽疾"),
+            ChangelogItem(ChangeType.FIX, "滚动阅读真无缝 —— 滚动模式下跨章自然切换，正文不再闪烁、不再跳一下"),
+            ChangelogItem(ChangeType.FIX, "拖动进度条所见所得 —— 滚动模式下拖动底部进度条时阅读区实时跟随到对应位置；之前只显示章节开头、松手后才跳"),
+            ChangelogItem(ChangeType.FIX, "平移翻页向左滑跟手 —— 之前左滑回前一页时左侧露黑底要等完全滑完上一页才出现，现在拖动过程中前一页就跟手露出"),
+            ChangelogItem(ChangeType.FIX, "EPUB 封面按图片原比例显示 —— 之前部分 EPUB 封面被压扁只占屏幕约 1/3，现在按真实长宽比撑到阅读宽度"),
+            ChangelogItem(ChangeType.FIX, "横向翻页模式 EPUB 章节背景图显示 —— 之前覆盖 / 平移 / 无动画下看不到章节级背景图，现在跟滚动模式表现一致"),
+            ChangelogItem(ChangeType.FIX, "WebDAV 书架支持嵌套文件夹 —— 之前子文件夹里的书看不见，现在递归扫描最多 6 层"),
+            ChangelogItem(ChangeType.FIX, "竖排版可设阅读背景图 —— 之前选了背景图切到竖排版不生效，现在正常显示"),
+            ChangelogItem(ChangeType.FIX, "下划线全线型加粗 + 贴近文字 —— 线粗跟字号成比例、Y 锚到字符底沿不再受行距影响；4 种线型在所有翻页模式下表现一致"),
+            ChangelogItem(ChangeType.FIX, "老用户升级后新增的菜单项能看见 —— 老版本保存过菜单配置的用户，升级后新增项不再被补成「隐藏」"),
+            ChangelogItem(ChangeType.FIX, "搜索历史 chip 的删除按钮位置修正 —— chip 高度自适应，文字垂直居中"),
+            ChangelogItem(ChangeType.FIX, "书源规则编辑支持多行 —— 所有规则字段允许多行输入和粘贴"),
+            ChangelogItem(ChangeType.FIX, "书源 JSON 导入支持原始换行 —— Legado 等格式书源 JSON 里带原始换行的规则不再报语法错误"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.4",
         date = "2026-05-17",
         title = "滚动阅读新引擎（实验性）+ Kindle 完整支持 + 大文件夹导入加速",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             ChangelogItem(ChangeType.NEW, "滚动阅读模式新引擎（默认启用）—— 固定 prev/cur/next 三章常驻 + 像素级滚动，从根上消除老滚动引擎的跨章跳章 bug（向上翻页连续跳几章 / 章序错乱）。功能与老引擎对齐：长按选词 + handle 拖动 / 8 项选区菜单 / 高亮 + 字色 + 下划线 / 字号 + 行距 + 段距 + 字体 + 字重实时生效 / 顶底状态栏 / 背景图 / TTS 段跟随 / 续读 + 书签跳转 / 章顶三角标记 / tap 已存高亮弹删除分享菜单。如遇到滚动模式有问题可在 设置 → 阅读 → 实验性功能 关掉退回老引擎"),
             ChangelogItem(ChangeType.IMPROVE, "关于 Edge TTS（微软语音）—— Edge TTS 走微软官方接口，可能因网络环境 / 微软侧风控波动 / 频率限制等原因偶尔不可用。遇到 TTS 报错或无声音：稍候重试 / 换网络（4G ↔ WiFi）/ 或在阅读器 TTS 面板切到系统 TTS 引擎"),

@@ -152,11 +152,6 @@ class AppPreferences @Inject constructor(
         val TAP_LEFT_ACTION = stringPreferencesKey("tap_left_action") // next/prev
         val VOLUME_KEY_PAGE = booleanPreferencesKey("volume_key_page")
         val VOLUME_KEY_REVERSE = booleanPreferencesKey("volume_key_reverse")
-        /**
-         * 实验性：SCROLL 模式启用 Canvas V2 引擎（独立排版 + 三块面板 + pixelOffset
-         * 架构层面消除跳章 bug）。默认 false 走旧 LazyScrollRenderer 路径。
-         */
-        val SCROLL_CANVAS_V2 = booleanPreferencesKey("scroll_canvas_v2")
         val HEADSET_BUTTON_PAGE = booleanPreferencesKey("headset_button_page")
         val VOLUME_KEY_LONG_PRESS = stringPreferencesKey("volume_key_long_press") // off|page|chapter
         val RESUME_LAST_READ = booleanPreferencesKey("resume_last_read")
@@ -258,6 +253,17 @@ class AppPreferences @Inject constructor(
          * 章节内搜索的最近历史。换行分隔，最多 20 条；UI chip 展示。
          */
         val READER_SEARCH_HISTORY = stringPreferencesKey("reader_search_history")
+        /**
+         * 文内搜索方向模式。作用于阅读器底部搜索面板的「全书」+「当前章」两个 Tab：
+         *  - "all"      : 不过滤，所有命中都显示（默认；与历史行为一致）
+         *  - "forward"  : 只显示当前阅读位置 **之前** 的命中（含同章 qIdx < curPos）
+         *  - "backward" : 只显示当前阅读位置 **之后** 的命中（含同章 qIdx > curPos）
+         *
+         * 用户原话「前向搜索/后向搜索/全文搜索」—— "前向"=向前看（之前已经过的内容），
+         * "后向"=向后看（还没读到的内容）。精度按 chapterIndex + chapterPosition 比较，
+         * 跨章只比 chapterIndex，同章对比 queryIndexInChapter 与 visiblePage.chapterPosition。
+         */
+        val INNER_SEARCH_MODE = stringPreferencesKey("inner_search_mode")
         // ── 阅读器工具栏编辑 ──────────────────────────────────────────────
         val READER_TOOLBAR_LAYOUT = stringPreferencesKey("reader_toolbar_layout")
         val READER_TOOLBAR_EDIT_GUIDE_SEEN = booleanPreferencesKey("reader_toolbar_edit_guide_seen")
@@ -481,10 +487,6 @@ class AppPreferences @Inject constructor(
     val volumeKeyPage: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.VOLUME_KEY_PAGE] ?: true }
 
-    /** SCROLL 模式启用 Canvas V2 引擎。v1.4 起默认 true（替换老滚动引擎，根治跨章跳章 bug）。 */
-    val scrollCanvasV2: Flow<Boolean> = context.dataStore.data
-        .map { it[Keys.SCROLL_CANVAS_V2] ?: true }
-
     /**
      * 音量键方向反转。默认 false：音量下=下一页、音量上=上一页（与系统/Legado 一致）。
      * 部分用户偏好"音量上=下一页"，开启该项即翻转。仅影响音量键，不影响 MEDIA_*。
@@ -586,6 +588,10 @@ class AppPreferences @Inject constructor(
 
     val customTxtChapterRegex: Flow<String> = context.dataStore.data
         .map { it[Keys.CUSTOM_TXT_CHAPTER_REGEX] ?: "" }
+
+    /** 见 [Keys.INNER_SEARCH_MODE]。默认 "all"；异常值由 setter coerce 回 "all"。 */
+    val innerSearchMode: Flow<String> = context.dataStore.data
+        .map { it[Keys.INNER_SEARCH_MODE] ?: "all" }
 
     val ttsSkipPattern: Flow<String> = context.dataStore.data
         .map { it[Keys.TTS_SKIP_PATTERN] ?: "" }
@@ -840,8 +846,6 @@ class AppPreferences @Inject constructor(
     }
     suspend fun setVolumeKeyPage(enabled: Boolean) = update(Keys.VOLUME_KEY_PAGE, enabled)
 
-    /** 实验性：SCROLL 模式启用 Canvas V2 引擎。 */
-    suspend fun setScrollCanvasV2(enabled: Boolean) = update(Keys.SCROLL_CANVAS_V2, enabled)
     suspend fun setVolumeKeyReverse(enabled: Boolean) = update(Keys.VOLUME_KEY_REVERSE, enabled)
     suspend fun setHeadsetButtonPage(enabled: Boolean) = update(Keys.HEADSET_BUTTON_PAGE, enabled)
     suspend fun setVolumeKeyLongPress(mode: String) = update(Keys.VOLUME_KEY_LONG_PRESS, mode)
@@ -878,6 +882,9 @@ class AppPreferences @Inject constructor(
     suspend fun setGlobalBgCardAlpha(alpha: Float) = update(Keys.GLOBAL_BG_CARD_ALPHA, alpha.coerceIn(0.3f, 1.0f))
     suspend fun setGlobalBgCardBlur(blur: Float) = update(Keys.GLOBAL_BG_CARD_BLUR, blur.coerceIn(0f, 25f))
     suspend fun setCustomTxtChapterRegex(regex: String) = update(Keys.CUSTOM_TXT_CHAPTER_REGEX, regex)
+    /** 文内搜索方向：all / forward / backward；异常值回退 "all"。 */
+    suspend fun setInnerSearchMode(mode: String) =
+        update(Keys.INNER_SEARCH_MODE, if (mode == "forward" || mode == "backward") mode else "all")
     suspend fun setTtsSkipPattern(pattern: String) = update(Keys.TTS_SKIP_PATTERN, pattern)
     suspend fun setTtsVoice(voice: String) = update(Keys.TTS_VOICE, voice)
     suspend fun setTtsSystemVoice(voice: String) = update(Keys.TTS_SYSTEM_VOICE, voice)

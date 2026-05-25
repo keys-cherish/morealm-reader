@@ -581,6 +581,10 @@ class BookSourceManageViewModel @Inject constructor(
 
     fun dismissInvalidResultsDialog() {
         _isInvalidResultsDialogVisible.value = false
+        // 仅把 Service.state 标记 Idle（不清结果）—— 否则 StateFlow 对新订阅者重发
+        // Done 状态，下次重进书源管理界面会触发 collect 块重弹同一个对话框（StateFlow
+        // 语义）。失效书源数据保留在 _results 让 UI 仍能展示，用户稍后还能批量删。
+        CheckSourceService.markStateIdle()
     }
 
     /**
@@ -590,6 +594,7 @@ class BookSourceManageViewModel @Inject constructor(
     fun deleteInvalidSources(sourceUrls: Collection<String>) {
         if (sourceUrls.isEmpty()) {
             _isInvalidResultsDialogVisible.value = false
+            CheckSourceService.clear()
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -603,6 +608,8 @@ class BookSourceManageViewModel @Inject constructor(
             runCatching { sourceRepo.deleteByUrls(urlList) }
                 .onFailure { AppLog.warn("SourceManage", "deleteInvalidSources batch FAILED: ${it.message}") }
             _isInvalidResultsDialogVisible.value = false
+            // 删完后状态归零 —— 重进界面不再弹同一个 dialog（修复用户报"退出再进入还有 N 个待删除书源"）
+            CheckSourceService.clear()
             _importResult.value = "已删除 ${sourceUrls.size} 个失效书源"
             AppLog.info(
                 "SourceManage",
@@ -627,6 +634,8 @@ class BookSourceManageViewModel @Inject constructor(
                 .onFailure { AppLog.warn("SourceManage", "removeInvalidSources batch FAILED: ${it.message}") }
             _importResult.value = "已删除 ${invalidUrls.size} 个无效书源"
             _checkResults.value = emptyMap()
+            // 状态归零，重进界面不会重弹 dialog
+            CheckSourceService.clear()
             AppLog.info(
                 "SourceManage",
                 "removeInvalidSources DONE wantUrls=${invalidUrls.size} dt=${System.currentTimeMillis() - t0}ms",

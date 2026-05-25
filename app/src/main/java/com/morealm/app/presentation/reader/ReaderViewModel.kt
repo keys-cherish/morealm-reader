@@ -128,6 +128,7 @@ class ReaderViewModel @Inject constructor(
         chineseConvertMode = { settings.chineseConvertMode.value },
         pageTurnMode = { settings.pageTurnMode.value },
         resetTtsParagraphIndex = { tts.resetParagraphIndex() },
+        fontRepo = fontRepo,
         onChapterLoaded = { viewModelScope.launch(Dispatchers.IO) { progress.saveProgress() } },
         setSuppressNextProgressSave = { progress.suppressNextProgressSave = it },
         onInitialChapterLoaded = { progress.initialLoadComplete = true },
@@ -174,34 +175,6 @@ class ReaderViewModel @Inject constructor(
         context = context,
         scope = viewModelScope,
         chapter = chapter,
-    )
-
-    /**
-     * SCROLL 模式专用滑动窗口数据源 —— 接管 LazyScrollSection 的章节窗口管理。
-     *
-     * 绕开 ReaderChapterController 的 commitChapterShift / loadChapter 副作用风暴
-     * （命门见 plan：`C:/Users/test/.claude/plans/glittery-dancing-swing.md`）。
-     *
-     * **chapterLayouter 由 Compose 端注入** —— 见 [com.morealm.app.ui.reader.renderer.CanvasRenderer]
-     * 的 LaunchedEffect(layoutInputs)。在注入之前 [ChapterWindowSource.resetTo] 等
-     * 方法可以安全调用（fetch 部分先做，layouter 缺位时先保留 LOADING 占位段）。
-     */
-    val chapterWindow = com.morealm.app.presentation.reader.scroll.ChapterWindowSource(
-        scope = viewModelScope,
-        chapterFetcher = { idx -> chapter.fetchAndPrepareChapter(idx) },
-        chapterTitleProvider = { idx -> chapter.chapterTitleAt(idx) },
-        chapterCountProvider = { chapter.chaptersSize() },
-        omitChapterTitleProvider = {
-            // 整书属性：是否本地 TXT 无目录自动分章。与 ReaderScreen.omitChapterTitleBlock
-            // 派生一致 —— 见 ReaderScreen 同名变量计算。
-            val book = chapter.book.value
-            book?.localPath != null &&
-                chapter.chapters.value.isNotEmpty() &&
-                chapter.chapters.value.all {
-                    it.title.matches(Regex("^第\\d+节$"))
-                }
-        },
-        onCenterChapterChanged = { idx -> chapter.setCurrentChapterIndexFromScroll(idx) },
     )
 
     // ── Wire shared state flows between controllers ──
@@ -405,14 +378,7 @@ class ReaderViewModel @Inject constructor(
         // the click never reached the VM; check the Reader UI button wiring.
         val content = chapter.chapterContent.value
         val title = chapter.chapters.value.getOrNull(chapter.currentChapterIndex.value)?.title ?: ""
-        // SCROLL 模式下 CanvasRenderer 内部的 textChapter 可能是 placeholder，
-        // onReadAloudParagraphPositions 回调拿到空列表 → readAloudParagraphPositions 为 null。
-        // 同步从 chapterWindow.chapterByIdx 兜底取段落位置，保证 TTS host 能正确分段。
         val positions = readAloudParagraphPositions
-            ?: chapterWindow.chapterByIdx[chapter.currentChapterIndex.value]
-                ?.getParagraphs(pageSplit = false)
-                ?.map { it.chapterPosition }
-                ?.also { readAloudParagraphPositions = it }
         AppLog.info(
             "TTS",
             "VM.ttsPlayPause: isPlaying=${tts.ttsPlaying.value}, " +
@@ -536,6 +502,13 @@ class ReaderViewModel @Inject constructor(
     fun loadChapter(index: Int, restoreProgress: Int = 0, restoreChapterPosition: Int = 0) =
         chapter.loadChapter(index, restoreProgress, restoreChapterPosition)
 
+    /**
+     * 「拖动 Slider 所见所得」轻量 seek 入口。同章 in-place（不重 load 内容），
+     * 跨章 fallback [loadChapter]。详见 [ReaderChapterController.seekProgressInPlace]。
+     */
+    fun seekProgressInPlace(index: Int, progress: Int) =
+        chapter.seekProgressInPlace(index, progress)
+
     fun updateScrollProgress(pct: Int) = progress.updateScrollProgress(pct)
     fun onVisiblePageChanged(index: Int, title: String, readProgress: String, chapterPosition: Int = 0) =
         progress.onVisiblePageChanged(index, title, readProgress, chapterPosition)
@@ -588,17 +561,31 @@ class ReaderViewModel @Inject constructor(
     fun onScrollNearBottom() = chapter.onScrollNearBottom()
     fun onScrollReachedBottom() = navigation.onScrollReachedBottom()
 
-    fun searchFullText(query: String) = search.searchFullText(query)
+    /**
+     * 全文搜索。同时把 [AppPreferences.innerSearchMode] 与当前阅读位置传给
+     * SearchController 做方向过滤；mode = "all" 时与旧行为完全等价。
+     */
+    fun searchFullText(query: String) = viewModelScope.launch {
+        val mode = prefs.innerSearchMode.first()
+        val cur = chapter.currentChapterIndex.value
+        val pos = progress.visiblePage.value.chapterPosition.coerceAtLeast(0)
+        search.searchFullText(query, mode, cur, pos)
+    }
     /**
      * 章内搜索：用已加载的当前章节内容做关键词扫描，列出**所有**命中位置。比
      * [searchFullText] 瞬时（无 IO，不下载其它章节），命中无 50 条上限。
      * 复用 `_searchResults`，UI 端共用 [FullTextSearchPanel] 渲染——区别由 Tab 决定。
+     *
+     * 同样应用 [AppPreferences.innerSearchMode] 方向过滤：前向只列当前页前的命中，
+     * 后向只列之后的（同章内按 queryIndexInChapter 与 chapterPosition 比较）。
      */
-    fun searchInChapter(query: String) {
+    fun searchInChapter(query: String) = viewModelScope.launch {
+        val mode = prefs.innerSearchMode.first()
         val plain = chapter.chapterContent.value.stripHtml()
         val idx = chapter.currentChapterIndex.value
+        val pos = progress.visiblePage.value.chapterPosition.coerceAtLeast(0)
         val title = chapter.chapters.value.getOrNull(idx)?.title ?: ""
-        search.searchCurrentChapter(query, plain, idx, title)
+        search.searchCurrentChapter(query, plain, idx, title, mode, pos)
     }
     fun clearSearchResults() = search.clearSearchResults()
     fun openSearchResult(result: ReaderSearchController.SearchResult) = search.openSearchResult(result)
@@ -641,10 +628,6 @@ class ReaderViewModel @Inject constructor(
 
     fun readAloudFromPosition(chapterPosition: Int) {
         val positions = readAloudParagraphPositions
-            ?: chapterWindow.chapterByIdx[chapter.currentChapterIndex.value]
-                ?.getParagraphs(pageSplit = false)
-                ?.map { it.chapterPosition }
-                ?.also { readAloudParagraphPositions = it }
         tts.readAloudFrom(
             displayedContent = chapter.chapterContent.value.cleanContentForTts(),
             bookTitle = chapter.book.value?.title ?: "",
@@ -662,18 +645,8 @@ class ReaderViewModel @Inject constructor(
         readAloudParagraphPositions = positions.takeIf { it.isNotEmpty() }
     }
 
-    /**
-     * 获取当前章节的段落总数（用于 TTS 面板显示）。
-     * 优先返回已缓存的 readAloudParagraphPositions.size；
-     * 若为 null 则尝试从 chapterWindow 实时计算。
-     */
-    fun getCurrentChapterParagraphCount(): Int {
-        return readAloudParagraphPositions?.size
-            ?: chapterWindow.chapterByIdx[chapter.currentChapterIndex.value]
-                ?.getParagraphs(pageSplit = false)
-                ?.size
-            ?: 0
-    }
+    /** 获取当前章节的段落总数（用于 TTS 面板显示）。 */
+    fun getCurrentChapterParagraphCount(): Int = readAloudParagraphPositions?.size ?: 0
 
     fun updateVisibleReadAloudPosition(chapterIndex: Int, chapterPosition: Int) {
         if (chapterIndex == chapter.currentChapterIndex.value) {
@@ -804,6 +777,7 @@ class ReaderViewModel @Inject constructor(
         super.onCleared()
         progress.stop()
         tts.shutdown()
+        com.morealm.app.domain.font.EpubFontRegistry.clearActive()
         val sessionMs = System.currentTimeMillis() - progress.readingStartTime
         @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
         kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {

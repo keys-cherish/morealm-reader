@@ -2,6 +2,7 @@ package com.morealm.app.domain.parser
 
 import android.content.Context
 import android.net.Uri
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.TxtTocRule
@@ -59,20 +60,30 @@ object LocalBookParser {
         uri: Uri,
         format: BookFormat,
         chapter: BookChapter,
+        // **D1.b**：EPUB % margin 解析参考宽（host 传 ScrollLayoutEngine.visibleWidth 一致值）。
+        // 0 = 旧路径 / 非 EPUB / search 等 — % margin fallback 0；不影响其他 format。
+        epubContainingBlockWidthPx: Int = 0,
     ): String = withContext(Dispatchers.IO) {
         val raw = when (format) {
             BookFormat.TXT -> readTxtChapter(context, uri, chapter)
-            BookFormat.EPUB -> EpubParser.readChapter(context, uri, chapter)
+            BookFormat.EPUB -> EpubParser.readChapter(context, uri, chapter, epubContainingBlockWidthPx)
             BookFormat.MOBI, BookFormat.AZW3 -> MobiParser.readChapter(context, uri, chapter)
             BookFormat.PDF -> PdfParser.readChapter(context, uri, chapter)
             BookFormat.CBZ -> CbzParser.readChapter(context, uri, chapter)
             BookFormat.UMD -> UmdParser.readChapter(context, uri, chapter)
             else -> ""
         }
+        val empty = raw.isEmptyChapter()
+        AppLog.info(
+            "ChapterRaw",
+            "format=$format title='${chapter.title}' rawLen=${raw.length} empty=$empty " +
+                "sample='${raw.take(40).replace("\n", "\\n")}'",
+        )
         // 空章节兜底：解析失败 / 真分隔页 / NCX 链接断了等情况，给用户清晰提示，
-        // 而不是显示一片空白让人以为 reader 卡死。判定：trim 后字符串长度 < 8
-        // 且不含 <img>（保护漫画/插图章节，它们文本极少但有图）。
-        if (raw.isEmptyChapter()) {
+        // 而不是显示一片空白让人以为 reader 卡死。仅 trim 后**完全为空**时兜底；
+        // 单字符 / 短文本（如某 EPUB toc 嵌套人物名"样本人物"3 字符）保留显示，避免
+        // 误判为「本章暂无内容」。
+        if (empty) {
             "（本章暂无内容）\n\n该章节可能是分隔页、版权页或源文件解析未拿到正文。" +
                 "如多个章节都空白，请尝试重新导入文件或换源。"
         } else {
@@ -84,6 +95,12 @@ object LocalBookParser {
         val t = this.trim()
         if (t.isEmpty()) return true
         if (this.contains("<img", ignoreCase = true)) return false
+        // < 8 字符兜底为「本章暂无内容」占位。
+        //
+        // 历史争议：某 EPUB人物志 toc 嵌套结构里"样本人物"3 字符章节会被误判 → 占位。
+        // 但**某 EPUB人物志的设计就是只有人物名 + 没正文**（人物章节 = 标题页 ↔ 真正
+        // 章节在 spine 后续），所以让用户看到「本章暂无内容」占位反而比看到「3 字符
+        // 占整页」更直观知道为什么空。保留 < 8 阈值。
         return t.length < 8
     }
 

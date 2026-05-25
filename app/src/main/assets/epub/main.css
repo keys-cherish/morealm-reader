@@ -1,8 +1,8 @@
 @charset "utf-8";
 @import url("../Styles/fonts.css");
 
-/* 精简自 Legado main.css —— 只保留 cover.html / intro.html / chapter.html 用到的选择器，
-   去掉了参考弹注、版权页、版本说明页等本应用不会生成的样式。 */
+/* 自研 main.css —— 只保留 cover.html / intro.html / chapter.html 用到的选择器，
+   去掉了弹注 / 版权页 / 版本说明页等本应用不会生成的样式。 */
 
 body {
     padding: 0%;

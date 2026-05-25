@@ -1,9 +1,9 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
 import com.morealm.app.domain.entity.Highlight
-import com.morealm.app.domain.render.scroll.ScrollChapterLayout
-import com.morealm.app.domain.render.scroll.ScrollHighlightDrawSpec
-import com.morealm.app.domain.render.scroll.ScrollHighlightProjector
+import com.morealm.app.domain.render.layout.ScrollChapterLayout
+import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
+import com.morealm.app.domain.render.layout.ScrollHighlightProjector
 
 /**
  * 选区 → 高亮 spec 转换 —— 复用 [ScrollHighlightProjector] 投影路径绘制选区背景。
