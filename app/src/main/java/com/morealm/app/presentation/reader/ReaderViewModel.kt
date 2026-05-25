@@ -128,6 +128,7 @@ class ReaderViewModel @Inject constructor(
         chineseConvertMode = { settings.chineseConvertMode.value },
         pageTurnMode = { settings.pageTurnMode.value },
         resetTtsParagraphIndex = { tts.resetParagraphIndex() },
+        fontRepo = fontRepo,
         onChapterLoaded = { viewModelScope.launch(Dispatchers.IO) { progress.saveProgress() } },
         setSuppressNextProgressSave = { progress.suppressNextProgressSave = it },
         onInitialChapterLoaded = { progress.initialLoadComplete = true },
@@ -776,6 +777,7 @@ class ReaderViewModel @Inject constructor(
         super.onCleared()
         progress.stop()
         tts.shutdown()
+        com.morealm.app.domain.font.EpubFontRegistry.clearActive()
         val sessionMs = System.currentTimeMillis() - progress.readingStartTime
         @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
         kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {

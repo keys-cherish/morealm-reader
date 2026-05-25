@@ -180,10 +180,10 @@ fun PagePaneCanvas(
             for (line in page.lines) {
                 if (line.isImage) {
                     val src = line.imageSrc ?: continue
-                    // **fullpage cover 整屏渲染**：某 EPUB等 EPUB 用 `<svg width="100%" height="100%">`
+                    // **fullpage cover 整屏渲染**：某仙侠等 EPUB 用 `<svg width="100%" height="100%">`
                     // 包裹的封面 image 通过 [com.morealm.app.domain.render.layout.ScrollLine.isFullPageImage]
                     // 透传到本层，slot 用整屏宽（chapterViewWidth）+ 绕过 paddingLeft translate 让
-                    // 封面图占满屏（视觉效果优化 cover）。普通 `<p><img/></p>`（示例 LN B 01 等）
+                    // 封面图占满屏（视觉效果优化 cover）。普通 `<p><img/></p>`（某轻小说 01 等）
                     // isFullPageImage=false 仍走 visibleWidthF 段落图行为。
                     val isFullPage = line.isFullPageImage
                     val slotW: Float
@@ -209,7 +209,7 @@ fun PagePaneCanvas(
                     val drawH = bmpH * scale
                     val offsetX = baseX + (slotW - drawW) / 2f
                     val offsetY = line.lineTop + (slotH - drawH) / 2f
-                    // 诊断日志（某 EPUB全屏 vs 示例 LN B 01 非全屏，看渲染层数据差异）：
+                    // 诊断日志（某仙侠全屏 vs 某轻小说 01 非全屏，看渲染层数据差异）：
                     // page 上下文 + isFullPage + slot 大小 + bmp 大小 + scale + 最终 draw 区域。
                     com.morealm.app.core.log.AppLog.info(
                         "PagePane/Image",
@@ -248,10 +248,14 @@ fun PagePaneCanvas(
                         defaultColor = paint.color
                     }
                 }
+                // EPUB 自带字体：block 级 fontFamily → Typeface swap
+                val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
+                val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
+
                 val baselineY = line.lineTop + ascent
                 // P3-5b Step 2a：段落统一字体色 —— RichText 所有 span 共享同色时
-                // (`<span class="c-co-lan1">[ 角色 A [</span>` 之类) flattenToString 已经把
-                // 颜色合并到 blockStyle.textColor，这里读出来当 paint 默认色，让角色 A 4 字带
+                // (`<span class="c-co-lan1">[ 某角色 [</span>` 之类) flattenToString 已经把
+                // 颜色合并到 blockStyle.textColor，这里读出来当 paint 默认色，让某角色 4 字带
                 // c-co-lan1 蓝色。优先级：用户高亮 (textColorByCp) > paragraph textColor > paint 默认
                 val paragraphColor = line.blockStyle.textColor
                 if (paragraphColor != null) paint.color = paragraphColor
@@ -259,10 +263,10 @@ fun PagePaneCanvas(
                 // **bugfix 2026-05-22**：blur < 1px 跳过 setShadowLayer ——
                 // Android 在 radius < 1f 小数 blur 下渲染异常（截图显示整字宽度白色矩形覆盖
                 // 文字，根因 hardware-accelerated Canvas + setShadowLayer 小数边界）。
-                // 某 EPUB `text-shadow: 0.5px 0.5px 0 white` 这种"锐影"完美方案是 stroke 描边
+                // 某仙侠 `text-shadow: 0.5px 0.5px 0 white` 这种"锐影"完美方案是 stroke 描边
                 // 二次 drawText（先 paint.style=STROKE strokeWidth=max(|dx|,|dy|) 描边色，
                 // 后正常字），但本次 D1.a margin scope 仅做防御：blur < 1 跳过不画。
-                // 视觉效果优化（参考实现也没画 0.5px 描边）。示例 LN B c-shadow-* `0 0 3px ...`
+                // 视觉效果优化（参考实现也没画 0.5px 描边）。某轻小说 c-shadow-* `0 0 3px ...`
                 // blur=3 不受影响仍画彩色光晕。
                 val ts = line.blockStyle.textShadow
                 if (ts != null && ts.blurRadius >= 1f) {
@@ -286,12 +290,14 @@ fun PagePaneCanvas(
                     drawByCells(nc, lineCells, line, paint, defaultColor, textColorByCp)
                     if (paragraphColor != null) paint.color = defaultColor
                     if (shadowApplied) paint.clearShadowLayer()
+                    if (savedTypeface != null) paint.typeface = savedTypeface
                     continue
                 }
                 if (lineAtoms != null) {
                     drawByAtoms(nc, lineAtoms, line, paint, baselineY, defaultColor, textColorByCp)
                     if (paragraphColor != null) paint.color = defaultColor
                     if (shadowApplied) paint.clearShadowLayer()
+                    if (savedTypeface != null) paint.typeface = savedTypeface
                     continue
                 }
                 for (col in line.columns) {
@@ -330,9 +336,10 @@ fun PagePaneCanvas(
                         nc.drawText(col.charData, col.start, baselineY, paint)
                     }
                 }
-                // 还原 paint —— 避免段落色 / shadow 污染下一 line 共享 paint
+                // 还原 paint —— 避免段落色 / shadow / typeface 污染下一 line 共享 paint
                 if (paragraphColor != null) paint.color = defaultColor
                 if (shadowApplied) paint.clearShadowLayer()
+                if (savedTypeface != null) paint.typeface = savedTypeface
             }
 
             // ─── 层 3：下划线 ───
@@ -405,7 +412,7 @@ private fun drawByAtoms(
 ) {
     // **bugfix 2026-05-22**：用 line.columns[0].start 作初始 x（emit 阶段算的对齐起点，
     // 含 CSS text-align center/right 居中偏移）。之前 var x = 0f 让 atoms 路径无视
-    // startX，CENTER 段（如某 EPUB h2.head「惊蛰」）退化成 left-aligned。
+    // startX，CENTER 段（如某仙侠 h2.head「惊蛰」）退化成 left-aligned。
     var x = line.columns.firstOrNull()?.start ?: 0f
     val baseSize = basePaint.textSize
     var atomStartCp = line.firstChapterPos  // A5 Step 2：atom 起始 cp 用于 textColorByCp 查询
@@ -415,7 +422,7 @@ private fun drawByAtoms(
                 val scale = atom.sizeScale
                 if (scale != 1f) basePaint.textSize = baseSize * scale
                 // sizeScale ≠ 1 时 vertical-align: top fallback 让小字号字符顶贴 line 顶。
-                // sizeScale = 1 → 沿用 caller baselineY 兼容现有路径（H2/SampleLN em15 等）。
+                // sizeScale = 1 → 沿用 caller baselineY 兼容现有路径（H2/某日轻 em15 等）。
                 val effectiveBaselineY = if (scale != 1f) {
                     line.lineTop + basePaint.textSize * 0.8f
                 } else baselineY

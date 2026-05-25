@@ -486,6 +486,10 @@ fun drawPageContent(
             line.isTitle -> titlePaint
             else -> contentPaint
         }
+        // EPUB 自带字体：block 级 fontFamily → Typeface swap（save/restore 包裹整行绘制）
+        val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
+        val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
+
         val lineTop = line.lineTop + paddingTop
         val lineBottom = line.lineBottom + paddingTop
 
@@ -683,9 +687,8 @@ fun drawPageContent(
                 }
             }
         }
+        if (savedTypeface != null) paint.typeface = savedTypeface
     }
-
-    // 5. Bookmark indicator
     if (hasBookmark) {
         highlightPaint.color = bmColorArgb
         sharedBookmarkPath.apply {
