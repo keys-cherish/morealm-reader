@@ -219,18 +219,18 @@ class ScrollLayoutEngine(
         // 重复 → 视觉跟参考图 38 / 16 不一致。
         //
         // 条件 1：title 是常见的"非内容章节"关键字（精确匹配 trim 后的 title）→
-        //   覆盖 SampleLN BookName/cover/封面 等 toc navLabel 是 generic tag 的场景。
-        //   (SampleLN 5 sibling tables 被 TableMergeVisitor merge 成普通 RichText paragraph
+        //   覆盖 某日轻 BookName/cover/封面 等 toc navLabel 是 generic tag 的场景。
+        //   (某日轻 5 sibling tables 被 TableMergeVisitor merge 成普通 RichText paragraph
         //    不产 table marker，所以走条件 1 而非条件 2。)
         //
-        // 条件 2：paragraphs 前 3 段任意段含 table marker → 覆盖某 EPUB chapter-1 卷扉页
+        // 条件 2：paragraphs 前 3 段任意段含 table marker → 覆盖某仙侠 chapter-1 卷扉页
         //   (toc navLabel "第一卷 剑起风云" 不是 generic tag，但内容是 vol-title table)。
         val titleTrimmed = title.trim()
         val isSpecialChapterTitle = titleTrimmed in SPECIAL_CHAPTER_TITLES
         val firstFewParas = paragraphs.asSequence().filter { it.isNotBlank() }.take(3).toList()
         val hasEarlyTableMarker = firstFewParas.any { hasTableMarker(it) }
         // **Step 7 v7 (2026-05-24)**: 条件 3 — image-only 章 (第 1 段是纯 <img src="...">) →
-        // 视为 "封面 / 卷首页" → skip self-draw title。SampleLN cover.xhtml 内容只 1 个
+        // 视为 "封面 / 卷首页" → skip self-draw title。某日轻 cover.xhtml 内容只 1 个
         // ChapterBlock.Image，flatten 后 paragraph = "<img src=\"img:Images/cover.jpg\">"
         // (单 line 含 img tag)。caller 传 title="Cover" (或其他) 都该 skip。
         val imgOnlyPattern = Regex("^\\s*<img(?:fp)?\\s+[^>]*>\\s*$")
@@ -537,11 +537,11 @@ class ScrollLayoutEngine(
             val imgHeight: Int
             val origW = dims?.first ?: -1
             val origH = dims?.second ?: -1
-            // **fullpage 整屏渲染分支**：某 EPUB等 EPUB 用 `<svg width="100%" height="100%">`
+            // **fullpage 整屏渲染分支**：某仙侠等 EPUB 用 `<svg width="100%" height="100%">`
             // 包裹封面 image，[SvgImageRewriteVisitor] 把 svg 容器转 `<imgfp>` marker；
             // 调用方设 isFullPage=true 后，slot 用 viewWidth (整屏宽，不减 padding) 替代
             // visibleWidth，让封面图占满整个屏幕宽度（视觉效果优化 cover）。
-            // 普通 `<img>` (示例 LN B 01 等) isFullPage=false 走原 visibleWidth 段落图行为。
+            // 普通 `<img>` (某轻小说 01 等) isFullPage=false 走原 visibleWidth 段落图行为。
             val baseW = if (isFullPage) viewWidth else visibleWidth
             if (dims != null && dims.first > 0 && dims.second > 0) {
                 val (intW, intH) = dims
@@ -756,7 +756,7 @@ class ScrollLayoutEngine(
             // **Step 7 bugfix v2 (2026-05-24)**: 不 fallback to cell.textColor (首字 color)。
             // ContentRun.Text.style.color 已携带 per-cp color (parseInlineMarkers 出的 colorPerCp
             // coalesced 进 InlineStyle)。null = 用默认色 (黑)，不应被首字色污染。
-            // SampleLN sibling table 「为美好的」cell 内 "为" "的" color=null (默认黑) vs
+            // 某日轻 sibling table 「某标题」cell 内 "为" "的" color=null (默认黑) vs
             // "美""好" color=粉/橙 — 之前 fallback cellLevelColor 让 "为" 也粉色 (bug)。
             val out = ArrayList<List<CellGlyph>>()
             val fontScale = contentPaint.textSize / 16f
@@ -779,7 +779,7 @@ class ScrollLayoutEngine(
                         is ContentRun.Image -> {
                             // **Step 7 bugfix v2**: chibi 占 cell.widthPx × fontScale (CSS img
                             // width:100% inherits cell width)。无 cell.widthPx 时 fallback
-                            // contentLineHeight × 1.5。 SampleLN sibling 2 chibi sy2.png 在
+                            // contentLineHeight × 1.5。 某日轻 sibling 2 chibi sy2.png 在
                             // cell style="width:4em" → cell.widthPx=64 → image width = 64*4.5 ≈ 288。
                             val imgW = cell.widthPx?.let { it * fontScale } ?: (contentLineHeight * 1.5f)
                             glyphs.add(CellGlyph(text = "￼", width = imgW, color = null, imageSrc = run.src, sizeScale = 1f))
@@ -815,7 +815,7 @@ class ScrollLayoutEngine(
         // line i 的字符横排组成（cell 间用 cellWidth 偏移 startX）。
         //
         // table 整体水平对齐：CSS margin auto 检测 ——
-        //  - margin-left auto + margin-right 非 auto → table 整体右贴（某 EPUB vol-title
+        //  - margin-left auto + margin-right 非 auto → table 整体右贴（某仙侠 vol-title
         //    margin: 20% 0 0 auto 把 table 推到右边）
         //  - margin-left 非 auto + margin-right auto → 左对齐
         //  - 双 auto → 居中
@@ -828,7 +828,7 @@ class ScrollLayoutEngine(
                 if (row.cells.isEmpty()) continue
                 val cellLines: List<List<List<CellGlyph>>> = row.cells.map { layoutCellLines(it) }
                 // **D2.a Commit 2d fix**：CSS spec — td.width 是最小宽度；实际 cell width =
-                // max(declared widthPx, actual content max line width)。某 EPUB td.width=1.2em
+                // max(declared widthPx, actual content max line width)。某仙侠 td.width=1.2em
                 // ≈ 19.2px < CJK 字符 ~24-30px → 字符会溢出 + cellCursorX 累加用 19.2 让
                 // 相邻 cell 字符重叠（视觉看到两 cell 字符叠在一起）。修：cellWidths 取
                 // max(declared, content max)。
@@ -840,9 +840,9 @@ class ScrollLayoutEngine(
                     maxOf(declared, contentMax)
                 }
                 // **D2.b**：cell 之间间距 = CSS `border-spacing` 默认 2px（border-collapse: separate
-                // 默认值）。某 EPUB table.vol-title 未声明 border-spacing 也未声明 border-collapse →
+                // 默认值）。某仙侠 table.vol-title 未声明 border-spacing 也未声明 border-collapse →
                 // 走 CSS spec 默认 2px。不硬编 0.3em（之前 hack）— 真按 CSS 解析。
-                // TODO(D3.a)：解析 CSS `border-spacing` 当 caller 显式设时（某 EPUB场景默认即可）。
+                // TODO(D3.a)：解析 CSS `border-spacing` 当 caller 显式设时（某仙侠场景默认即可）。
                 val cellGap: Float = 2f
                 val maxLines = cellLines.maxOfOrNull { it.size } ?: 0
                 if (maxLines == 0) continue
@@ -910,7 +910,7 @@ class ScrollLayoutEngine(
                             val globalX = cellCursorX + localX
                             // **Step 7 bugfix v2**: 不 fallback cell.textColor (首字色)。
                             // ContentRun 已 per-cp 携带 color；首字 fallback 会污染 cell 内非首字
-                            // (如 SampleLN「为美好的」"为""的" 是 null 应该默认黑而非粉首字色)。
+                            // (如 某日轻「某标题」"为""的" 是 null 应该默认黑而非粉首字色)。
                             val effColor = g.color
                             val effScale = if (g.sizeScale != 1f) g.sizeScale else cell.sizeScale
                             allColumns.add(
@@ -1098,7 +1098,7 @@ class ScrollLayoutEngine(
                     }
 
                     // **阶段 2-A**：layoutTable 接 CSS margin-top / margin-bottom（之前固定加
-                    // paragraphSpacingPx 当尾距，吞了 SampleLN 5 sibling table 的 margin-top:
+                    // paragraphSpacingPx 当尾距，吞了 某日轻 5 sibling table 的 margin-top:
                     // -1em / -1.5em / -10em 让视觉层叠失效）。
                     //
                     // CSS spec：margin-top/bottom 不参与 collapse（table 元素的 margin 跟普通
@@ -1128,7 +1128,7 @@ class ScrollLayoutEngine(
             val processedText = cleanedText
 
             // ── D1.a margin-top（段前间距 / 段重叠）──
-            // CSS `margin-top: 2em` → 段前留白；`margin-top: -1em` → 段往上偏移（SampleLN
+            // CSS `margin-top: 2em` → 段前留白；`margin-top: -1em` → 段往上偏移（某日轻
             // 章首 table 重叠效果）。NaN = AUTO（垂直方向 CSS spec 等同 0，跳过）；0 = 未设置
             // 或显式 0，沿用 paragraphSpacingPx 默认（不改 currentY）。
             // 注：CSS margin collapse 简化 —— 不与上段 margin-bottom 取 max，纯累加（视觉
@@ -1362,7 +1362,7 @@ class ScrollLayoutEngine(
                         // D1.a margin: auto 检测 —— marginLeft AUTO && marginRight AUTO。
                         // **bugfix 2026-05-22**：CSS spec 真值 —— margin: auto 仅当块有显式
                         // width 时才居中；无 width 时 margin:auto 失效，text-align 才生效。
-                        // 某 EPUB h2.head1 是 `text-align: left; margin: 0 auto 0 auto` —— 应该
+                        // 某仙侠 h2.head1 是 `text-align: left; margin: 0 auto 0 auto` —— 应该
                         // 走 text-align:left 而非 margin-center。让 cssAlign 优先于 marginCenter，
                         // 仅当 cssAlign null（CSS 没显式 text-align）时 marginCenter 兜底。
                         val marginLeftAuto = currentBlockStyle.marginLeftPx.isNaN()
@@ -1374,7 +1374,7 @@ class ScrollLayoutEngine(
                                        else currentBlockStyle.marginLeftPx
                         // P3-5b Step 2c：startX 计算按 CSS text-align + D1.a margin
                         // **阶段 2-I (2026-05-23)**：marginLeftAuto + mrNonAuto → 段右贴（CSS spec：
-                        // `<table style="margin:-10em 0 0 auto">` 让 table 推到右边）。SampleLN 作者名
+                        // `<table style="margin:-10em 0 0 auto">` 让 table 推到右边）。某日轻 作者名
                         // 表 `margin: -10em 0 0 auto` 让段从 visibleWidth - desiredWidth - mrPx 开始，
                         // 不再跟 qipao 重叠。修反对称：marginLeftAuto only → 右贴；mrAuto only → 左对齐
                         // 不动；双 auto → 居中保留旧逻辑。
@@ -1399,7 +1399,7 @@ class ScrollLayoutEngine(
                             !marginLeftAuto && marginRightAuto -> {
                                 mlIndent + (if (isFirstLine && currentParaHeadingLevel == 0) effectiveFirstLineIndent else 0f)
                             }
-                            // cssAlign null（CSS 没显式 text-align）→ marginCenter 兜底（某 EPUB惊蛰
+                            // cssAlign null（CSS 没显式 text-align）→ marginCenter 兜底（某仙侠惊蛰
                             // h2.head 实际有 text-align:center 走上面分支；此分支留给纯 margin:auto
                             // 居中场景如 table.vol-title）
                             marginCenter -> ((visibleWidth - desiredWidth) / 2f).coerceAtLeast(0f)
@@ -1853,7 +1853,7 @@ class ScrollLayoutEngine(
          * (不是真正的章节标题)，不应在正文画大字 chapter title。
          *
          * 精确匹配 trim 后的 title (不做 substring 模糊匹配，避免"第三卷：剑起风云"含"卷"
-         * 被误判)。覆盖 SampleLN "书名" / "封面" / EPUB 通用 "目录" / "前言" / "后记" 等。
+         * 被误判)。覆盖 某日轻 "书名" / "封面" / EPUB 通用 "目录" / "前言" / "后记" 等。
          */
         private val SPECIAL_CHAPTER_TITLES: Set<String> = setOf(
             // 中文

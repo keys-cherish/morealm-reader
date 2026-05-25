@@ -3,6 +3,8 @@ package com.morealm.app.domain.parser
 import android.content.Context
 import android.net.Uri
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.domain.font.EpubFontRegistry
+import com.morealm.app.domain.font.FontRepository
 import com.morealm.epub.EpubBook
 import java.io.File
 
@@ -37,8 +39,16 @@ object EpubCoreBridge {
      * （单次模式），某 EPUB这种 ~10MB EPUB + 474 章 spine 每次开销 ~7-10s。host 翻章
      * cache MISS 时多个 worker 同时触发 → 并发争 IO → SHIFT-NEXT-FAIL 卡死。修：
      * content:// 也走 LRU cache，cache key 用 uri.toString() 让 caller 共享同一 book。
+     *
+     * **2026-05-25 EPUB 自带字体**：lazy [fontRegistry] 字段缓存本书 @font-face 解析结果。
+     * 首次 [fontRegistryOf] 调用时按需 build，evict 时跟 book 一并丢弃；落盘的字体文件
+     * 留在 cacheDir/epub_fonts/ 由 cache key 复用避免重 IO。
      */
-    private data class Entry(val book: EpubBook, val tmpFile: File?)
+    private data class Entry(
+        val book: EpubBook,
+        val tmpFile: File?,
+        @Volatile var fontRegistry: EpubFontRegistry? = null,
+    )
 
     private val cache: LinkedHashMap<String, Entry> =
         object : LinkedHashMap<String, Entry>(CACHE_CAPACITY, 0.75f, true) {
@@ -114,6 +124,26 @@ object EpubCoreBridge {
                 runCatching { it.book.close() }
                 it.tmpFile?.let { f -> runCatching { f.delete() } }
             }
+        }
+    }
+
+    /**
+     * **2026-05-25 EPUB 自带字体**：拿 [uri] 对应的 [EpubFontRegistry]，按需 lazy build。
+     *
+     * 命中 cache 但 fontRegistry==null 时 build 一次；book 不在 cache 时返回 EMPTY
+     * （caller 应先用 [withCoreBook] 触发 book load）。
+     *
+     * 线程安全：Entry.fontRegistry 写时持 [lock]，避免并发 build 重复 IO。
+     */
+    fun fontRegistryOf(uri: Uri, fontRepo: FontRepository): EpubFontRegistry {
+        val cacheKey = uri.toString()
+        synchronized(lock) {
+            val entry = cache[cacheKey] ?: return EpubFontRegistry.EMPTY
+            entry.fontRegistry?.let { return it }
+            // build 在 lock 内 ——单本 EPUB 的 @font-face 扫描 + 落盘通常 < 200ms（某 EPUB 4 字体）
+            val built = EpubFontRegistry.build(entry.book, cacheKey, fontRepo)
+            entry.fontRegistry = built
+            return built
         }
     }
 

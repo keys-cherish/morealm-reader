@@ -45,7 +45,7 @@ object EpubParser {
     // 共用 cache 文件 → 第二个 navPoint 起永远返回首次内容（用户报"无论跳哪章都显示首章"
     // 的根因，2026-05-18）。v4 起 cache key 用 chapter.url 完整 url 含 fragment，
     // 旧 v3 cache 全部失效，第一次打开重新解析。
-    // v9 = LocalBookParser.isEmptyChapter 阈值放宽（< 8 → < 1）。之前某 EPUB toc
+    // v9 = LocalBookParser.isEmptyChapter 阈值放宽（< 8 → < 1）。之前某仙侠 toc
     // 嵌套人物名 "样本人物"3 char 被误判 empty 兜底；现允许任意 trim 后非空内容
     // 通过。v8 cache 内某些 chapter 已被错存为占位字符串，bump 失效。
     // v15：P3-5b Step 2c text-align + text-indent 解析 + ta=/ti= 编码。还修
@@ -70,15 +70,15 @@ object EpubParser {
     // 仍走 inline 分支。bump 让 v18 误判 cache 失效重写。
     // v20：A4c sizeScale 通路 — flattenToString 编码 VT/FF/SO sizeScale marker（嵌套
     // 在 SOH/STX/ETX color 内）+ ScrollLayoutEngine.parseInlineMarkers 解析 → emit atoms
-    // 路径携带 sizeScale → drawByAtoms 缩放 paint.textSize。让 SampleLN `em25/em30/em35`
+    // 路径携带 sizeScale → drawByAtoms 缩放 paint.textSize。让 某日轻 `em25/em30/em35`
     // 标题大字号生效。bump 让 v19 cache 失效重 flatten 出新 marker。
     // v21：C1/C2 chapter bg image 通路 — epub-compat 解析 `<body class="qmpN">` cascade
     // background-image → flattenToString 加 __MOREALM_CH_BG__<src>__/MOREALM_CH_BG__
     // header marker → ScrollLayoutEngine.layoutChapter strip + 提取 src 写到 ScrollChapterLayout
-    // .chapterBgImageSrc 字段。让某 EPUB / 仙侠类章节级背景图能透传到 reader。bump 让 v20
+    // .chapterBgImageSrc 字段。让某仙侠 / 仙侠类章节级背景图能透传到 reader。bump 让 v20
     // cache 失效重 flatten 出 chapter bg marker。
     // v22：H1+H2 Heading styling — Heading.text → spans (List<RichSpan>) 保留 heading
-    // 内嵌 span 颜色/字号（某 EPUB .head1 内 .txtu/.txtu2 红绿）。flattenToString 加
+    // 内嵌 span 颜色/字号（某仙侠 .head1 内 .txtu/.txtu2 红绿）。flattenToString 加
     // heading-level prefix marker <level> + spans 走 richTextToBody。bump 让
     // v21 cache 失效重 flatten 出 heading marker + spans styling。H3 commit 接渲染对齐。
     // v23：D1.a margin 通路 — CssBlockStyleParser 加 margin-top/right/bottom/left 解析
@@ -91,21 +91,21 @@ object EpubParser {
     // 字段 + overlay 显式判断（非 0f 或 NaN 即采用 overlay 整组）后 cascade 路径打通。
     // bump 让 v23 已固化的"无 margin" cache 失效重 flatten。
     // v25：修 body 的 box 装饰透传给子段的 bug —— CSS spec background-color/border 不继承，
-    // body.bg 是页面背景而非段背景。某 EPUB `body.head { background: #fff url(...) }` 之前让
+    // body.bg 是页面背景而非段背景。某仙侠 `body.head { background: #fff url(...) }` 之前让
     // vol-text 子段都画白底矩形（payload `bg=ffffffff`）。修：body push blockStyleStack 时
     // 清掉 bg/border/padding/margin 字段，仅保留文字属性（textColor/textAlign/textShadow 等）
     // 让子段继承。bump 让 v24 已固化的"含 body bg 透传" cache 失效。
     // v26：D1.b — % 单位 margin 解析接 containing block width。host (ReaderScreen) 传
     // visibleWidth = viewWidth - paddingHorizontal*2 → ReaderChapterController.fetchAndPrepareChapter
     // → LocalBookParser.readChapter → EpubParser.readChapter → ChapterReader.readTree →
-    // ChapterBlockBuilder → CssBlockStyleParser.parse。% margin 按 cbwPx 真值算（某 EPUB
+    // ChapterBlockBuilder → CssBlockStyleParser.parse。% margin 按 cbwPx 真值算（某仙侠
     // `table.vol-title { margin: 20% 0 0 auto }` 之前 fallback 0 让 vol-title 紧贴章首）。
     // chapterCacheFile 加 `__cbw${cbw}` 后缀避免不同 viewport 共享同一 cache（横竖屏切换）。
     // bump 让 v25 已固化的"无 % margin" cache 失效。
     // v27：D2.a Commit 2a — table marker 启用。epub-compat encodeTable 把 ChapterBlock.Table
     // 编成 `__MOREALM_TBL__/TR/TD/TD_W` 嵌套 marker，cell content \n escape 成 U+0010。host
     // 端 ScrollLayoutEngine.expandTableMarkersStub 识别 marker 段剥 + 还原平铺（视觉对齐
-    // v26 soft launch，某 EPUB vol-title 仍横排但数据通路真过 marker）。Commit 2b 加真
+    // v26 soft launch，某仙侠 vol-title 仍横排但数据通路真过 marker）。Commit 2b 加真
     // layoutTable 算法仅改 renderer 不 bump cache。bump 让 v26 旧"平铺纯文本"cache 失效
     // 重 flatten 出 marker 结构，下次 Commit 2b 渲染层接管时 cache 复用。
     // v28：DIAG bump — Commit 2a 装机测后 user 反馈"无变化"，cache HIT 显示
@@ -116,57 +116,60 @@ object EpubParser {
     // v29：D2.a Commit 2c 真根因修 — TableMergeVisitor 默认把所有 <table> merge 成单段
     // paragraph 吞掉 onOpen TABLE 事件，ChapterBlockBuilder 看不到 table 元素 → Table
     // block 永远 emit=0。加 class-based opt-out：`<table class="vol-title">` 等数据表
-    // 透传到 delegate 让 ChapterBlock.Table 真 emit。SampleLN BookName 多 sibling table
+    // 透传到 delegate 让 ChapterBlock.Table 真 emit。某日轻 BookName 多 sibling table
     // 拼标题字 merge 行为保留（class 不含 vol-title 关键字）不破坏视觉。
     // v28 cache 失效让 chapter-1.xhtml 重 flatten 拿到 __MOREALM_TBL__ marker。
     // 单测 SampleEpubVolTitleTableTest 验证 emit Table OK。
     // v30：task #14 (阶段 2-A 续) — TableMergeVisitor merge 模式不再 merge sibling tables
     // 成单段，改为每 outer table forward DIV(attrs) → 每 sibling 独立 paragraph 各自含
     // outer table 的 BlockStyle (margin-top: -1em / -1.5em / -10em 等)。ScrollLayoutEngine
-    // D1.a margin path 应用 negative margin → SampleLN BookName 5 sibling tables 视觉层叠
+    // D1.a margin path 应用 negative margin → 某日轻 BookName 5 sibling tables 视觉层叠
     // (匹配参考图 38)。v29 cache 是 merged 单段格式不含 margin 必须重 flatten。
     // v31：task #14 bugfix — DIV 后再 forward SPAN inline frame，让 sibling table 内首字符
-    // 位置的 <img> (SampleLN chibi 巫女) frameStack 顶判断为 inline phrasing tag → 走
+    // 位置的 <img> (某日轻 chibi 巫女) frameStack 顶判断为 inline phrasing tag → 走
     // InlineImageSpan 小尺寸 (匹配参考图 41)。v30 cache 是 chibi 全屏 block-level 格式
     // (regression 严重) 必须 bump 失效。
     // v32：task #14 bugfix v3 — TableMergeVisitor forward DIV 加 `data-merge-wrapper=true`
     // marker，ChapterBlockBuilder.computeBlockStyle 识别后清掉 BlockStyle.textAlign。
     // CSS spec：text-align: center 在 <table class="center"> 上仅控制 td 内 inline 字符
     // 居中，不让 table 自身水平居中。MoRealm 把 textAlign 当 paragraph 整体水平位置控制 →
-    // SampleLN BookName 5 sibling tables 整段居中跟参考实现左对齐 (图 45) 不一致。修后 sibling
+    // 某日轻 BookName 5 sibling tables 整段居中跟参考实现左对齐 (图 45) 不一致。修后 sibling
     // 都左对齐，margin 仍生效让 negative mt 视觉层叠。
     // v33：阶段 2-D — CSS border-radius: 100% 解析成 BORDER_RADIUS_CIRCLE sentinel
     // (Float.POSITIVE_INFINITY)，encode "br=CIRCLE" 字面。renderer ScrollBlockStyleDrawer
-    // 识别 sentinel → 用 minOf(rectW, rectH)/2 当 radius 让 box 成圆/椭圆。SampleLN
+    // 识别 sentinel → 用 minOf(rectW, rectH)/2 当 radius 让 box 成圆/椭圆。某日轻
     // .qipao { border-radius: 100% } 「啊啊, 没用的女神大人」橙底椭圆气泡 (匹配参考图 41)。
     // v32 cache 的 br=16 错算值必须 bump 失效。
     // v34：阶段 2-H — element-specific width/height 支持。BlockStyle 加 widthPx/heightPx
     // (nullable, null = auto)，CssBlockStyleParser 解析 CSS width/height (em/px/%)，
     // encode "w=" / "h=" 协议。ScrollBlockStyleDrawer 识别非 null widthPx/heightPx 用
     // element-specific 尺寸算 rect (中心对齐 line columns + line center)。配合
-    // BORDER_RADIUS_CIRCLE 让 SampleLN qipao 真成 56×56 圆 (而非 v33 胶囊形)。v33 cache
+    // BORDER_RADIUS_CIRCLE 让 某日轻 qipao 真成 56×56 圆 (而非 v33 胶囊形)。v33 cache
     // 不含 w=/h= 必须 bump 失效。
     // v37：Step 5 / Plan B-1+B-2 re-apply (2026-05-24) — TableMergeVisitor thin pass-through，
-    // 所有 outer table 走 ChapterBlock.Table 路径保留 row × cell × content 结构。SampleLN
+    // 所有 outer table 走 ChapterBlock.Table 路径保留 row × cell × content 结构。某日轻
     // 5 sibling → 5 独立 Table 段；qipao div → Table + ancestor BlockStyle 含装饰 → 主仓
     // hasTableMarker 内 widthPx 非 null 走 emitInlineBlockContainer (圆球 + 切行)；作者名 →
     // Table 含 nested Table in cell[3,0].content (Step 7 完整渲染前 strip 避免 marker 字面)。
     // + ArenaBuilder selfClosing fix + isInlineImageContext TD/TH (cell 内 img 走 inline)。
     // ChapterBlock 树结构变化 + cache 必须 bump。
     // v38：Step 7 v8 (2026-05-24) — ChapterBlockBuilder.inHeadDepth 让 <head> 内 events 不
-    // 产 content。SampleLN cover.xhtml `<head><title>Cover</title></head>` 之前让 "Cover"
+    // 产 content。某日轻 cover.xhtml `<head><title>Cover</title></head>` 之前让 "Cover"
     // 成为 Paragraph 段，cover 章 content="Cover\n<img...>"。修后只剩 Image 段。
     // 所有 chapter 受影响 — head 内 metadata 不再污染 body content。v37 cache 必须 bump。
     // v39：fullpage cover (2026-05-24) — epub-lib SvgImageRewriteVisitor 给 svg 容器内的
     // image 注入 `data-morealm-fullpage="1"` attr，ChapterBlockBuilder 透传到
     // ChapterBlock.Image.isFullPage，flattenToString 输出 `<imgfp src="...">` marker。
-    // 某 EPUB等 svg-wrap cover 章节 cache 内容从 `<img>` 变成 `<imgfp>` 必须 bump 失效。
+    // 某仙侠等 svg-wrap cover 章节 cache 内容从 `<img>` 变成 `<imgfp>` 必须 bump 失效。
     // 渲染端 PagePaneCanvas 根据 ScrollLine.isFullPageImage 整屏渲染（视觉效果优化 cover）。
     // v40：epub-lib ImgRewriteVisitor 透传 data-morealm-fullpage attr 修复 (2026-05-24 23:xx)。
     // v39 引入时 ImgRewriteVisitor 还在 strip 此 attr → cover.xhtml 在 v39 dir 第一次装机
     // 跑出 `<img>` 旧 marker 被缓存。第二次装机即使 epub-lib 修了，cache HIT len=223 直接
     // 用旧内容跳过 epub-lib parse → isFullPage 永远 false。bump v40 强制 re-flatten。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v40"
+    // v41：EPUB 自带字体 (2026-05-25) — flattenToString 新增 `ff=<base64>` marker 编码
+    // BlockStyle.fontFamily。v40 cache 不含 ff= → 打开带自定义字体的书不会触发 font swap。
+    // bump v41 强制 re-flatten 让 fontFamily 信息进入 cache。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v41"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
@@ -356,7 +359,7 @@ object EpubParser {
      * 命中条件：`N_html < N_img && htmlTotalBytes/N_img < TINY_HTML_PER_IMG_THRESHOLD`
      *
      * **样本量保护**：`N_img < MIN_COMIC_IMAGE_COUNT (10)` 直接判 Novel —— 文字小说
-     * 带几张彩页不应误判漫画。「魔女の旅々 N_img=15、N_html=200+」属于这种 case：
+     * 带几张彩页不应误判漫画。「某轻小说 N_img=15、N_html=200+」属于这种 case：
      * 指纹 1 ratio=13 不在范围、指纹 2 N_html>N_img → fall-through 判 Novel ✓
      */
     internal fun classifyByStructure(nHtml: Int, nImg: Int, htmlTotalBytes: Long): Boolean {
@@ -962,7 +965,7 @@ object EpubParser {
      *
      * 阈值历史：
      *  - v1.3：300KB —— 覆盖普通插图 EPUB
-     *  - v1.3.1：768KB —— 漫画 EPUB 单页图常 400KB-700KB（如《镖人》699px×988px），
+     *  - v1.3.1：768KB —— 漫画 EPUB 单页图常 400KB-700KB（如《某漫画》699px×988px），
      *    300KB 阈值挡不住它们，每张都走 bounds decode + 写盘（即使最终判定 raw-smallpx
      *    回写原字节），100+ 张图 zip seek + bounds decode 累计 5-15 秒。
      *    提到 768KB 让大部分漫画图直接 short-circuit。
@@ -979,7 +982,7 @@ object EpubParser {
      *
      * 失败兜底（如非位图格式 / 解码异常）：写原字节，不破坏既有功能。
      *
-     * 适合大型精品 EPUB（69MB 《某 EPUB》量级）—— 70+ 张 1-2MB 插图压缩后 cacheDir 占用降 80%，
+     * 适合大型精品 EPUB（69MB 《某仙侠》量级）—— 70+ 张 1-2MB 插图压缩后 cacheDir 占用降 80%，
      * 翻页时 Bitmap 解码内存压力降 4x。
      */
     private fun writeImageCompressed(bytes: ByteArray, target: File) {

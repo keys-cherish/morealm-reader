@@ -53,6 +53,48 @@ class ScrollLayoutEngineTest {
         paragraphSpacing = paragraphSpacing,
     )
 
+    // ── 寻仙山 cover 字面 `<img>` 文本 repro (2026-05-25) ─────────
+
+    @Test
+    fun `cover 段 含 img tag 应 emit isImage line 不应当文本渲染`() {
+        // Repro：寻仙山 Section0001.xhtml flatten 后 content = `<img src="file:///.../x73.png">`
+        // 单段，imgRegex 应识别 → emitImage → ScrollLine.isImage=true。
+        // 若假设错（regex 未匹配），line 将是含 36 字符 columns 的纯文本 line。
+        val eng = engine()
+        val src = "file:///data/user/0/com.morealm.app/cache/epub_images/189552498/Images_x73.png"
+        val content = "<img src=\"$src\">"
+        val layout = eng.layoutChapter(chapterIndex = 0, title = "封面", content = content, omitChapterTitleBlock = true)
+        assertEquals(1, layout.pages.size)
+        val page = layout.pages[0]
+        assertTrue("至少 1 line", page.lines.isNotEmpty())
+        val imageLine = page.lines.firstOrNull { it.isImage }
+        assertNotNull("应有 isImage line（imgRegex 应匹配 <img src=...>）", imageLine)
+        assertEquals("imageSrc 应等于原 src", src, imageLine!!.imageSrc)
+        // 反向断言：没有任何文本 line 含 `<img` 字面字符（如果走 emitTextChunk 会有）
+        val literalImgLine = page.lines.firstOrNull { l -> l.columns.any { it.charData == "<" } }
+        assertNull("不应有以 `<` 开头的文本 column（说明 emitTextChunk 误处理）", literalImgLine)
+    }
+
+    @Test
+    fun `cover 段 带 BLOCK_STYLE marker 前缀 仍应 emit isImage line`() {
+        // Repro 变体：div.duokan-image-single2 把装饰 merge 给单 child Image →
+        // flatten 输出 `__MOREALM_BLOCK_STYLE__<payload>__/MOREALM_BLOCK_STYLE__<img src="...">`。
+        // BS marker 应被 strip，余下 imgRegex 仍匹配 <img>。
+        val eng = engine()
+        val src = "file:///fake/cover.png"
+        // 用真 marker 字面 + 一个最小合法 payload（仅 paddingTop=0 字段）。
+        val payload = com.morealm.epub.compat.StructuredChapterContent.encodeBlockStyle(
+            com.morealm.epub.compat.BlockStyle(paddingTopPx = 8f),
+        )
+        val content = com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_MARKER +
+            payload + com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END +
+            "<img src=\"$src\">"
+        val layout = eng.layoutChapter(chapterIndex = 0, title = "封面", content = content, omitChapterTitleBlock = true)
+        val imageLine = layout.pages[0].lines.firstOrNull { it.isImage }
+        assertNotNull("BS-prefix 段仍应识别 img tag", imageLine)
+        assertEquals(src, imageLine!!.imageSrc)
+    }
+
     // ── M1.2 启用 case ────────────────────────────────────────────
 
     @Test

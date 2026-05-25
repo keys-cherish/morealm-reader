@@ -36,10 +36,11 @@ import kotlinx.coroutines.launch
  * tap/长按/选区由 [PageLevelReaderHost] 共享层处理（Transition 不接 pointerInput tap）。
  *
  * - 手势：detectHorizontalDragGestures + settle-to-edge fling（无 animateDecay 卡半空 bug）
- * - placement：3 个 PagePaneCanvas 横向排列（cur / next / nextPlus）
- *   cur 在 -offset，next 在 -offset + W，nextPlus 在 -offset + 2W
+ * - placement：4 个 PagePaneCanvas 横向排列（prev / cur / next / nextPlus）
+ *   prev 在 -offset - W，cur 在 -offset，next 在 -offset + W，nextPlus 在 -offset + 2W
+ *   PREV 方向拖动时 (offset<0) prev 从屏幕左侧滑入，否则被裁到 viewport 外不可见。
  *
- * pageOffset 解释：state.pageOffset 在 SLIDE 模式表 X 方向 px（[0, viewportW]）。
+ * pageOffset 解释：state.pageOffset 在 SLIDE 模式表 X 方向 px（[-viewportW, +viewportW]）。
  */
 @Composable
 fun SlidePageTransition(
@@ -59,9 +60,11 @@ fun SlidePageTransition(
     curPageHighlightSpecs: List<ScrollHighlightDrawSpec> = emptyList(),
     nextPageHighlightSpecs: List<ScrollHighlightDrawSpec> = emptyList(),
     nextPlusPageHighlightSpecs: List<ScrollHighlightDrawSpec> = emptyList(),
+    prevPageHighlightSpecs: List<ScrollHighlightDrawSpec> = emptyList(),
     curPageBookmarkCps: List<Int> = emptyList(),
     nextPageBookmarkCps: List<Int> = emptyList(),
     nextPlusPageBookmarkCps: List<Int> = emptyList(),
+    prevPageBookmarkCps: List<Int> = emptyList(),
     /** Host 注入：zone tap → 走 animateAndCommit 平移动画；null = Host fallback 瞬切 */
     turnCtrl: PageTurnAnimController? = null,
     modifier: Modifier = Modifier,
@@ -194,6 +197,7 @@ fun SlidePageTransition(
             val curPage = pageFactory.curPage
             val nextPage = pageFactory.nextPage
             val nextPlusPage = pageFactory.nextPlusPage
+            val prevPage = pageFactory.prevPage
             val chapterViewWidth = state.currentChapter?.viewWidth
                 ?: state.nextChapter?.viewWidth ?: 1080
             val chapterPaddingLeft = state.currentChapter?.paddingLeft
@@ -244,18 +248,31 @@ fun SlidePageTransition(
                 bookmarkCps = nextPlusPageBookmarkCps,
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
+            PagePaneCanvas(
+                page = prevPage,
+                chapterViewWidth = chapterViewWidth,
+                chapterPaddingLeft = chapterPaddingLeft,
+                contentPaint = contentPaint,
+                titlePaint = titlePaint,
+                chapterNumPaint = chapterNumPaint,
+                highlightSpecs = prevPageHighlightSpecs,
+                bookmarkCps = prevPageBookmarkCps,
+                modifier = Modifier.fillMaxSize().background(backgroundColor),
+            )
         },
     ) { measurables, constraints ->
-        check(measurables.size == 3) { "SlidePageTransition expects 3 measurables (cur/next/nextPlus)" }
+        check(measurables.size == 4) { "SlidePageTransition expects 4 measurables (cur/next/nextPlus/prev)" }
         val viewWidth = constraints.maxWidth
         val viewHeight = constraints.maxHeight
         val pageConstraints = Constraints.fixed(width = viewWidth, height = viewHeight.coerceAtLeast(1))
         val curPlaceable = measurables[0].measure(pageConstraints)
         val nextPlaceable = measurables[1].measure(pageConstraints)
         val nextPlusPlaceable = measurables[2].measure(pageConstraints)
+        val prevPlaceable = measurables[3].measure(pageConstraints)
         layout(viewWidth, viewHeight) {
             val offset = state.pageOffset.toInt()
-            // SLIDE：cur / next / nextPlus 同步横向滑动
+            // SLIDE：prev / cur / next / nextPlus 同步横向滑动
+            prevPlaceable.placeRelative(-offset - viewWidth, 0)
             curPlaceable.placeRelative(-offset, 0)
             nextPlaceable.placeRelative(-offset + viewWidth, 0)
             nextPlusPlaceable.placeRelative(-offset + 2 * viewWidth, 0)

@@ -77,6 +77,7 @@ class ReaderChapterController(
     private val pageTurnMode: () -> PageTurnMode,
     /** Reset TTS paragraph index on chapter load */
     private val resetTtsParagraphIndex: () -> Unit,
+    private val fontRepo: com.morealm.app.domain.font.FontRepository,
     /** Save progress after chapter loads */
     private val onChapterLoaded: () -> Unit,
     /** Notify progress controller to suppress next save */
@@ -655,6 +656,12 @@ class ReaderChapterController(
                             AppLog.warn("Chapter", "EPUB pre-cache failed", e)
                         }
                     }
+                    // 2026-05-25 EPUB 自带字体：确保 book 在 EpubCoreBridge cache 中，
+                    // 然后 build font registry 并 setActive 让 renderer 端 resolveActive 拿到
+                    com.morealm.app.domain.parser.EpubCoreBridge.withCoreBook(context, uri) { }
+                    val registry = com.morealm.app.domain.parser.EpubCoreBridge.fontRegistryOf(uri, fontRepo)
+                    com.morealm.app.domain.font.EpubFontRegistry.setActive(registry)
+                    AppLog.info("Chapter", "EPUB font registry activated: ${registry.size} families")
                 }
                 if (book.format == com.morealm.app.domain.entity.BookFormat.CBZ) {
                     scope.launch(Dispatchers.IO) {

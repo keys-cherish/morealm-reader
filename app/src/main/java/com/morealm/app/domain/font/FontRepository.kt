@@ -266,6 +266,35 @@ class FontRepository @Inject constructor(
         AppLog.warn("FontRepository", "加载字体 $path 失败: ${it.localizedMessage}", it)
     }.getOrNull()
 
+    /**
+     * **2026-05-25 EPUB 自带字体**：把字节流落到 cacheDir 临时文件再 [Typeface.createFromFile]。
+     *
+     * Android Typeface 没原生接口直接接 byte[]（API 26+ 有 [Typeface.Builder.setSourceFromMemory]
+     * 但需要 AssetFileDescriptor），最简单稳健做法是落盘走 createFromFile。
+     *
+     * @param cacheKey 落盘文件名前缀（通常 = book id + font family hash），同 key 复用同文件
+     *   避免重复落盘。caller 自己保证 key 唯一
+     * @param bytes 字体字节流（ttf/otf real bytes）。woff/woff2 caller 应先过滤
+     * @return Typeface 或 null（落盘失败 / Typeface.createFromFile 抛异常）
+     */
+    fun tryLoadFontBytes(cacheKey: String, bytes: ByteArray): Typeface? {
+        if (bytes.isEmpty()) return null
+        val dir = File(context.cacheDir, "epub_fonts").apply { if (!exists()) mkdirs() }
+        val sanitizedKey = sanitizeFileName(cacheKey)
+        val file = File(dir, "$sanitizedKey.ttf")
+        return try {
+            // 同 key 已落盘则复用，避免重复 I/O（同一本书同字体多章共享）
+            if (!file.exists() || file.length() != bytes.size.toLong()) {
+                file.outputStream().use { it.write(bytes) }
+            }
+            Typeface.createFromFile(file)
+        } catch (t: Throwable) {
+            AppLog.warn("FontRepository", "tryLoadFontBytes key=$cacheKey 失败: ${t.localizedMessage}", t)
+            file.delete()
+            null
+        }
+    }
+
     // ─── 工具 ──────────────────────────────────────────────────────────────
 
     /** 防穿越：去掉路径分隔符 + 危险字符；仅保留文件名部分。 */

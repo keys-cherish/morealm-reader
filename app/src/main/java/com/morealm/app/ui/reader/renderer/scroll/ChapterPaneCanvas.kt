@@ -244,6 +244,10 @@ fun ChapterPaneCanvas(
                             defaultColor = paint.color
                         }
                     }
+                    // EPUB 自带字体：block 级 fontFamily → Typeface swap
+                    val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
+                    val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
+
                     val baselineY = pageTop + line.lineTop + ascent
                     // P3-5b Step 2a：段落统一字体色（同 PagePaneCanvas 同位逻辑）
                     val paragraphColor = line.blockStyle.textColor
@@ -277,6 +281,7 @@ fun ChapterPaneCanvas(
                         )
                         if (paragraphColor != null) paint.color = defaultColor
                         if (shadowApplied) paint.clearShadowLayer()
+                        if (savedTypeface != null) paint.typeface = savedTypeface
                         continue
                     }
                     if (lineAtoms != null) {
@@ -287,6 +292,7 @@ fun ChapterPaneCanvas(
                         )
                         if (paragraphColor != null) paint.color = defaultColor
                         if (shadowApplied) paint.clearShadowLayer()
+                        if (savedTypeface != null) paint.typeface = savedTypeface
                         continue
                     }
                     for (col in line.columns) {
@@ -325,6 +331,7 @@ fun ChapterPaneCanvas(
                     }
                     if (paragraphColor != null) paint.color = defaultColor
                     if (shadowApplied) paint.clearShadowLayer()
+                    if (savedTypeface != null) paint.typeface = savedTypeface
                 }
                 // pageOffsetY 已在循环顶累加（move 到顶为视口剔除提前）
             }

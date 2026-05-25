@@ -127,7 +127,7 @@ fun PageLevelReaderHost(
     /**
      * 阅读区背景图 uri；空串 = 纯色背景。来自 ReaderScreen 的 readerBgImage。
      * 优先级：当前章节 EPUB body 背景图 (state.currentChapter.chapterBgImageSrc) >
-     * 本参数 (阅读器全局) > 纯色 [bgColorArgb]。某 EPUB / 仙侠类章节级背景图通过此通路透传。
+     * 本参数 (阅读器全局) > 纯色 [bgColorArgb]。某仙侠 / 仙侠类章节级背景图通过此通路透传。
      */
     bgImageUri: String = "",
     restoreToken: Long = 0L,
@@ -262,7 +262,7 @@ fun PageLevelReaderHost(
             titleAlign = titleAlign,
             textFullJustify = textFullJustify,
             // 注入真实 dims 解析器 — 让 emitImage 拿到原图 aspect ratio 不走 4:3 fallback。
-            // 修「示例 LN B 01 cover 1000x1333 被算成 798x598 (4:3 压扁) 视觉只占视口 1/3」根因
+            // 修「某轻小说 01 cover 1000x1333 被算成 798x598 (4:3 压扁) 视觉只占视口 1/3」根因
             // (resolver 默认 NoOp → dims=null → fallback `visibleWidth*0.75=598`)。
             imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
             pageLevelMode = true,
@@ -686,9 +686,11 @@ fun PageLevelReaderHost(
                         curPageHighlightSpecs = curPageHighlightSpecs,
                         nextPageHighlightSpecs = nextPageHighlightSpecs,
                         nextPlusPageHighlightSpecs = nextPlusPageHighlightSpecs,
+                        prevPageHighlightSpecs = prevPageHighlightSpecs,
                         curPageBookmarkCps = curPageBookmarkCps,
                         nextPageBookmarkCps = nextPageBookmarkCps,
                         nextPlusPageBookmarkCps = nextPlusPageBookmarkCps,
+                        prevPageBookmarkCps = prevPageBookmarkCps,
                         turnCtrl = turnCtrl,
                         modifier = Modifier.fillMaxSize(),
                     )
