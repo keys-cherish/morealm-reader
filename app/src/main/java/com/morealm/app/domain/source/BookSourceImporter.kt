@@ -54,6 +54,51 @@ object BookSourceImporter {
         "data", "list", "items", "result", "results",
     )
 
+    /**
+     * **2026-05-25** —— preprocess raw JSON：把 string value 内部的未 escape 的
+     * `\n / \r / \t` ASCII control char 替换成 `\\n / \\r / \\t` JSON-legal escape。
+     *
+     * 状态机扫一遍 raw 字符：
+     *  - 不在 `"..."` 内：所有字符（含 `\n / \r / \t`）原样保留（JSON 允许 key/value 间 \n）
+     *  - 在 `"..."` 内：遇 `\` 跳过下个字符（escape sequence）；遇 `\n / \r / \t` 替换成 escape；
+     *    遇 `"` 离开 string mode
+     *
+     * 不破坏现有合法 JSON：已 escape 的 `\\n`（ASCII `\` + `n`，2 字符）会被当 escape sequence
+     * skip 不动；raw `\n`（ASCII 0x0A，1 字符）才被转。
+     */
+    private fun preprocessRawJsonStrings(raw: String): String {
+        val sb = StringBuilder(raw.length + 16)
+        var inString = false
+        var i = 0
+        while (i < raw.length) {
+            val c = raw[i]
+            if (!inString) {
+                if (c == '"') inString = true
+                sb.append(c)
+            } else {
+                when (c) {
+                    '\\' -> {
+                        // escape sequence — 原样保留含下个 char
+                        sb.append(c)
+                        if (i + 1 < raw.length) {
+                            sb.append(raw[++i])
+                        }
+                    }
+                    '"' -> {
+                        inString = false
+                        sb.append(c)
+                    }
+                    '\n' -> sb.append("\\n")
+                    '\r' -> sb.append("\\r")
+                    '\t' -> sb.append("\\t")
+                    else -> sb.append(c)
+                }
+            }
+            i++
+        }
+        return sb.toString()
+    }
+
     fun importFromJson(jsonString: String): List<BookSource> {
         lastImportError = null
         val raw = jsonString.trim().removePrefix("\uFEFF")  // 去掉 BOM
@@ -75,8 +120,14 @@ object BookSourceImporter {
         }
 
         // 先用低层 JsonElement 解析，方便分辨数组 / 对象 / 包装。
+        // **2026-05-25 fix**：preprocess raw 把 string value 内部的 raw \n / \r / \t escape 成
+        // \\n / \\r / \\t —— JSON spec 规定 string 内 control char 必须 escape；很多 Legado
+        // 书源 JSON 文件原样写了多行 selector / JS / exploreUrl 含 raw \n，标准 JSON parser
+        // (即使 isLenient=true) 也会 fail。状态机只在 `"..."` string 内部 escape，不动
+        // key/value 间空白换行（JSON 允许）。
+        val preprocessed = preprocessRawJsonStrings(raw)
         val element = try {
-            json.parseToJsonElement(raw)
+            json.parseToJsonElement(preprocessed)
         } catch (e: Exception) {
             val msg = "JSON 语法错误: ${e.message}"
             AppLog.warn("SourceImport", msg)

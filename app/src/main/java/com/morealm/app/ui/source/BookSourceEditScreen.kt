@@ -392,6 +392,12 @@ private fun RuleField(
     onValueChange: (String) -> Unit,
     mono: Boolean = false,
     placeholder: String = "",
+    /**
+     * **2026-05-25 fix**：`singleLine = true` 让粘贴含 \n 的书源规则 (Legado ruleChapterList /
+     * exploreUrl 多分类块 / JS / 多步 selector) 时换行被过滤导致内容截断或粘贴失败。
+     * 默认改 false 让 RuleField 多行；short field (书源名称 / URL / 分组) 调用方可显式传 true。
+     */
+    singleLine: Boolean = false,
 ) {
     val moColors = LocalMoRealmColors.current
     OutlinedTextField(
@@ -400,7 +406,9 @@ private fun RuleField(
         label = { Text(label, style = MaterialTheme.typography.labelSmall) },
         placeholder = if (placeholder.isNotEmpty()) {{ Text(placeholder, style = MaterialTheme.typography.bodySmall) }} else null,
         modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
+        singleLine = singleLine,
+        // 非 single-line 时给 maxLines 限制让超长 rule (含很多 \n) 不挤爆屏幕；用户可滚动 TextField 看完
+        maxLines = if (singleLine) 1 else 8,
         textStyle = MaterialTheme.typography.bodySmall.let {
             if (mono) it.copy(fontFamily = FontFamily.Monospace) else it
         },
