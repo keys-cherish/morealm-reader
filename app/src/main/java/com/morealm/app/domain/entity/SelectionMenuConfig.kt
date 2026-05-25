@@ -84,9 +84,18 @@ data class SelectionMenuConfig(
         val seen = mutableSetOf<SelectionMenuItem>()
         val deduped = items.filter { seen.add(it.item) }
 
-        // 补齐缺失项
+        // **2026-05-25 fix**：缺失项按 DEFAULT 位置补，而不是 HIDDEN。
+        // 老用户 DataStore 里早期版本保存的 config 不含后加的 UNDERLINE / TEXT_COLOR
+        // 等 enum 值；若补成 HIDDEN，popup 主行 / 展开行永远看不到，用户反馈
+        // 「点更多也看不到下划线」根因即此。改走 DEFAULT.position 让新加的项
+        // 默认按 DEFAULT 设计的位置（如 UNDERLINE → MAIN）显示。
         val missing = SelectionMenuItem.ALL - seen
-        val withMissing = deduped + missing.map { SelectionMenuEntry(it, SelectionMenuPosition.HIDDEN) }
+        val withMissing = deduped + missing.map { item ->
+            SelectionMenuEntry(item, DEFAULT.position(item).let {
+                // 兜底：DEFAULT 也没收录的项（理论不存在，防御性）退化为 HIDDEN
+                if (it == SelectionMenuPosition.HIDDEN) SelectionMenuPosition.EXPANDED else it
+            })
+        }
 
         // 限制 MAIN 数量为 3
         var mainCount = 0
@@ -122,19 +131,24 @@ data class SelectionMenuConfig(
 
     companion object {
         /**
-         * 默认配置 —— 复制 / 朗读 / 高亮上主行（用频率最高的 3 个），翻译 / 分享 /
-         * 查词进展开行。HIGHLIGHT 在主行更顺手，因为高亮调色板是阅读时高频操作。
+         * 默认配置 —— 复制 / 高亮 / 下划线 上主行（用频率最高的 3 个），其余进展开行。
+         *
+         * **2026-05-25 调整**：UNDERLINE 从 EXPANDED 升到 MAIN，LOOKUP 从 MAIN 降到
+         * EXPANDED。原因：用户反馈「长按 popup 没有下划线选择」—— 实际是 UNDERLINE
+         * 默认在 EXPANDED 行需要点展开按钮才看到，主行不可见容易被误以为缺失。
+         * 高亮+下划线是阅读时最高频的"留痕"操作，主行直显更顺手。LOOKUP（查词）相对
+         * 低频，进展开行；用户仍可在阅读设置 → 选区菜单按钮自定义重排。
          */
         val DEFAULT: SelectionMenuConfig = SelectionMenuConfig(
             listOf(
                 SelectionMenuEntry(SelectionMenuItem.COPY, SelectionMenuPosition.MAIN),
                 SelectionMenuEntry(SelectionMenuItem.HIGHLIGHT, SelectionMenuPosition.MAIN),
-                SelectionMenuEntry(SelectionMenuItem.LOOKUP, SelectionMenuPosition.MAIN),
+                SelectionMenuEntry(SelectionMenuItem.UNDERLINE, SelectionMenuPosition.MAIN),
+                SelectionMenuEntry(SelectionMenuItem.LOOKUP, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.SPEAK, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.TRANSLATE, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.SHARE, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.TEXT_COLOR, SelectionMenuPosition.EXPANDED),
-                SelectionMenuEntry(SelectionMenuItem.UNDERLINE, SelectionMenuPosition.EXPANDED),
             )
         )
 
