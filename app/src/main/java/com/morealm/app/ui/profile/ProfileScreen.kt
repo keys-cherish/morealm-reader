@@ -150,43 +150,121 @@ fun ProfileScreen(
         modifier = Modifier.fillMaxSize()
             .verticalScroll(rememberScrollState())
     ) {
-        TopAppBar(
-            title = { Text("我的", fontWeight = FontWeight.Bold) },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = Color.Transparent,
-                scrolledContainerColor = Color.Transparent,
-            ),
-            windowInsets = WindowInsets(0, 0, 0, 0),
+        // **2026-05-25 ProfileScreen 重设计**：「我的」TopAppBar → "MoRealm" 大字标题
+        // + 大卡片（沙漠日落背景图 + 圆形 icon + 我的书房标题副标题 + 4 列含 icon 统计）。
+        // 年度报告入口使用统一设置卡片样式。
+        // day/night drawable 切换走 LocalMoRealmColors.current.isNight。
+        val moColorsHeader = LocalMoRealmColors.current
+        val avatarDrawable = if (moColorsHeader.isNight) com.morealm.app.R.drawable.profile_avatar_night
+            else com.morealm.app.R.drawable.profile_avatar_day
+        val cardBgDrawable = if (moColorsHeader.isNight) com.morealm.app.R.drawable.profile_card_bg_night
+            else com.morealm.app.R.drawable.profile_card_bg_day
+
+        Text(
+            "MoRealm",
+            modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 4.dp),
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
         )
 
-        // Reading stats card (real data)
+        // 大卡片：背景图 + 圆形 icon + 标题副标题 + 4 列统计
         Card(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text("阅读统计", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                    StatItem(value = "$totalBooks", label = "本书")
-                    StatItem(value = formatDuration(totalReadMs), label = "总时长")
-                    StatItem(value = "$recentDays", label = "连续天数")
-                }
-                // UX-6 (亲密性): 「主指标块 (标题+3 个数字)」与「辅助块 (今日+年度报告)」
-                // 原本三个 12dp 同等间距, 视觉上四件平铺. 主→辅 拉到 18dp, 辅内紧密 4dp.
-                Spacer(Modifier.height(18.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    Text("今日已读 ${formatDuration(todayReadMs)}",
-                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                }
-                Spacer(Modifier.height(4.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    TextButton(onClick = {
-                        profileViewModel.loadAnnualReport()
-                        showAnnualReport = true
-                    }) {
-                        Text("查看年度报告 →", style = MaterialTheme.typography.labelSmall)
+            Box(modifier = Modifier.fillMaxWidth()) {
+                // 背景图（沙漠日落 illustration）— day/night 双版本自动切换
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.res.painterResource(cardBgDrawable),
+                    contentDescription = null,
+                    modifier = Modifier.matchParentSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    alpha = 0.92f,
+                )
+
+                Column(modifier = Modifier.padding(20.dp)) {
+                    // 顶部 row：圆形 icon + 我的书房标题 + 副标题
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.foundation.Image(
+                            painter = androidx.compose.ui.res.painterResource(avatarDrawable),
+                            contentDescription = "MoRealm avatar",
+                            modifier = Modifier
+                                .size(72.dp)
+                                .clip(CircleShape),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "我的书房",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                "在书海中探索无限可能",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(20.dp))
+
+                    // 4 列统计 with icons —— 半透明白底让背景图透出
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceAround,
+                        ) {
+                            StatColumnWithIcon(
+                                icon = Icons.Default.MenuBook,
+                                value = "$totalBooks",
+                                label = "本地书籍",
+                            )
+                            StatColumnWithIcon(
+                                icon = Icons.Default.Schedule,
+                                value = formatDuration(totalReadMs),
+                                label = "阅读时长",
+                            )
+                            StatColumnWithIcon(
+                                icon = Icons.Default.EditNote,
+                                // TODO 接 HighlightRepository.count() 拿真实笔记数；当前 placeholder
+                                value = "—",
+                                label = "笔记/想法",
+                            )
+                            StatColumnWithIcon(
+                                icon = Icons.Default.CalendarMonth,
+                                value = "$recentDays",
+                                label = "连续阅读",
+                            )
+                        }
+                    }
+
+                    // 今日已读 + 查看年度报告（保留）
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        Text(
+                            "今日已读 ${formatDuration(todayReadMs)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        TextButton(onClick = {
+                            profileViewModel.loadAnnualReport()
+                            showAnnualReport = true
+                        }) {
+                            Text("查看年度报告 →", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
             }
@@ -579,6 +657,43 @@ private fun StatItem(value: String, label: String) {
         Text(value, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary)
         Text(label, style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+    }
+}
+
+/**
+ * **2026-05-25** —— 含 icon 的统计列项，用于 ProfileScreen 顶部大卡片 4 列布局：
+ * 本地书籍 / 阅读时长 / 笔记/想法 / 连续阅读。icon tint 跟随主题（`primary`），夜间日间自动切换。
+ */
+@Composable
+private fun StatColumnWithIcon(
+    icon: ImageVector,
+    value: String,
+    label: String,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(horizontal = 4.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(28.dp),
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            value,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+        )
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            maxLines = 1,
+        )
     }
 }
 
