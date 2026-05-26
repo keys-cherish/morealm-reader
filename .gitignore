@@ -17,6 +17,9 @@ local.properties
 .worktrees/
 /temp/
 /openspec/
+.trellis/
+.cursor/
+AGENTS.md
 
 # docs 只保留 user-guide.md / app-icon.png / release-setup.md
 /docs/*
