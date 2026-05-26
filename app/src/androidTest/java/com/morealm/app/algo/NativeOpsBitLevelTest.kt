@@ -93,4 +93,15 @@ class NativeOpsBitLevelTest {
             NativeOps.generateSecMsGec(base + 5 * 60_000L),
         )
     }
+
+    @Test
+    fun trusted_identifier_is_32_char_uppercase_hex() {
+        val id = NativeOps.trustedClientIdentifier()
+        assertEquals(32, id.length)
+        assertTrue("uppercase hex only: $id", id.all {
+            it in '0'..'9' || it in 'A'..'F'
+        })
+        // 稳定性 —— 同一进程多次调用得相同值
+        assertEquals(id, NativeOps.trustedClientIdentifier())
+    }
 }

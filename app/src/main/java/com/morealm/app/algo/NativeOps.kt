@@ -29,4 +29,10 @@ internal object NativeOps {
      * @return 64 字符大写 hex 串
      */
     external fun generateSecMsGec(nowMillis: Long): String
+
+    /**
+     * Trusted client identifier —— Edge TTS query string 必填的 32 字符 hex 串。
+     * 字符串由 native 在调用瞬间从 obfuscated 表解码,返回后 Kotlin 端不应长期缓存。
+     */
+    external fun trustedClientIdentifier(): String
 }

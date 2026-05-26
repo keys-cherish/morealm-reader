@@ -215,3 +215,13 @@ jstring morealm_op_generate_sec_ms_gec(JNIEnv* env, jclass /*clazz*/, jlong now_
 
     return env->NewStringUTF(hex);
 }
+
+// Trusted client identifier accessor —— 返回 32 字符大写 hex。
+// 每次调用都从 obfuscated 表解码一次,不在 .so 内持久存明文。
+jstring morealm_op_trusted_client_identifier(JNIEnv* env, jclass /*clazz*/) {
+    char token_buf[33];
+    decodeToken(token_buf);
+    jstring result = env->NewStringUTF(token_buf);
+    memset(token_buf, 0, sizeof(token_buf));
+    return result;
+}
