@@ -55,3 +55,9 @@
 
 # ── R8 full mode compatibility ──
 -dontwarn java.lang.invoke.StringConcatFactory
+
+# ── Native algo loader ──
+# 保留 native 方法签名，避免 R8 重命名导致 JNI RegisterNatives 找不到 Java 端方法。
+-keepclasseswithmembernames class * {
+    native <methods>;
+}

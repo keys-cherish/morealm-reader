@@ -51,6 +51,7 @@ val qqGroupId: String = providers.gradleProperty("qqGroupId").orNull
 android {
     namespace = "com.morealm.app"
     compileSdk = 35
+    ndkVersion = "27.0.12077973"
 
     lint {
         checkReleaseBuilds = false
@@ -70,11 +71,26 @@ android {
         }
 
         // QQ 群号注入到 BuildConfig.QQ_GROUP_ID。
-        // 注意 escape：BuildConfig 字符串字面量要包含双引号，外层 Kotlin 字符串再 escape 一次。
+        // 注意 escape：BuildConfig 字符串字面量要包含双引号,外层 Kotlin 字符串再 escape 一次。
         buildConfigField("String", "QQ_GROUP_ID", "\"${qqGroupId}\"")
 
         // androidTest（Compose UI test）—— P3-2 引入；默认 AndroidJUnit4Runner
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Native ABI 过滤：覆盖现代 arm64 / 老设备 arm32 / 模拟器 + Chromebook。
+        // x86 已淘汰（NDK r17+ Google 弃用 32-bit x86）。
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+
+        // CMake 编译选项：-O3 优化、隐藏符号、关 RTTI / 异常以缩减 .so 体积 +
+        // 抬高静态分析门槛；c++_static 让 libc++ 静态链接避免运行时 .so 依赖。
+        externalNativeBuild {
+            cmake {
+                cppFlags("-O3", "-fvisibility=hidden", "-fno-rtti", "-fno-exceptions")
+                arguments("-DANDROID_STL=c++_static")
+            }
+        }
     }
 
     signingConfigs {
@@ -130,6 +146,15 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
+    }
+
+    // CMake 入口：源码位于 app/src/main/cpp/CMakeLists.txt。
+    // AGP 8.7.x 默认 CMake 3.22.1，与此声明对齐避免本地 / CI 差异。
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 }
 
