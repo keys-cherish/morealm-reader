@@ -170,6 +170,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SIBLING_DEPLOY_KEY }}
+
+      - name: Clone sibling composite build
+        env:
+          URL: ${{ secrets.SIBLING_GIT_URL }}
+        run: git clone --depth 1 "$URL" ../epub-lib
+
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -211,6 +221,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SIBLING_DEPLOY_KEY }}
+
+      - name: Clone sibling composite build
+        env:
+          URL: ${{ secrets.SIBLING_GIT_URL }}
+        run: git clone --depth 1 "$URL" ../epub-lib
+
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -247,6 +267,16 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SIBLING_DEPLOY_KEY }}
+
+      - name: Clone sibling composite build
+        env:
+          URL: ${{ secrets.SIBLING_GIT_URL }}
+        run: git clone --depth 1 "$URL" ../epub-lib
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
