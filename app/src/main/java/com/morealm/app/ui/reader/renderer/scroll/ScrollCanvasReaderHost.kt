@@ -216,6 +216,16 @@ fun ScrollCanvasReaderHost(
     selectionMenuConfig: com.morealm.app.domain.entity.SelectionMenuConfig =
         com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
     infoBar: ScrollCanvasInfoBarConfig? = null,
+    /**
+     * 外部派发的翻页指令（音量键 / TTS 推进 / 蓝牙翻页器 / 顶栏按钮）。
+     * SCROLL 模式语义：滚动一页 = pageFactory.moveToNext/Prev + state.pageOffset = 0
+     * （与 ScrollCanvasReaderHost 内 auto-snap 路径同款瞬切，不跑 fling 动画）。
+     *
+     * 历史：v1.5 page-level 重构遗留的桥梁缺失 — pageTurnCommand 仅 legacy Reader()
+     * 在 SIMULATION 模式消费且对 SCROLL 早退（Reader.kt:1385），新引擎彻底丢失响应。
+     */
+    pageTurnCommand: com.morealm.app.ui.reader.renderer.ReaderPageDirection? = null,
+    onPageTurnCommandConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // ── M6.5 paint 派生（与 V1 CanvasRenderer line 393-433 同源算法）──
@@ -529,6 +539,35 @@ fun ScrollCanvasReaderHost(
                     }
                 }
             }
+    }
+
+    // ── pageTurnCommand 桥梁（音量键 / TTS / 蓝牙 / 顶栏按钮 → 滚动一页）──
+    // SCROLL 模式语义：直接 moveToNext / moveToPrev + reset state.pageOffset = 0。
+    // 与 ScrollCanvas 内 auto-snap 同款瞬切（不跑 fling 动画 — fling 由用户 drag 主动产生才有意义；
+    // 音量键单击应像 Legado scroll 模式直接跳一屏）。立即 onPageTurnCommandConsumed() 把 state
+    // 写回 null，防同方向连按 enum 值不变 LaunchedEffect 被去重吞掉。
+    LaunchedEffect(pageTurnCommand) {
+        val dir = pageTurnCommand ?: return@LaunchedEffect
+        val isNext = dir == com.morealm.app.ui.reader.renderer.ReaderPageDirection.NEXT
+        com.morealm.app.core.log.AppLog.info(
+            "ScrollHost",
+            "pageTurnCommand received dir=$dir hasNext=${pageFactory.hasNext()} hasPrev=${pageFactory.hasPrev()}",
+        )
+        if (isNext && !pageFactory.hasNext()) {
+            com.morealm.app.core.log.AppLog.info("ScrollHost", "pageTurnCommand NEXT at boundary, consume + skip")
+            onPageTurnCommandConsumed()
+            return@LaunchedEffect
+        }
+        if (!isNext && !pageFactory.hasPrev()) {
+            com.morealm.app.core.log.AppLog.info("ScrollHost", "pageTurnCommand PREV at boundary, consume + skip")
+            onPageTurnCommandConsumed()
+            return@LaunchedEffect
+        }
+        onPageTurnCommandConsumed()
+        val moveOk = if (isNext) pageFactory.moveToNext() else pageFactory.moveToPrev()
+        if (moveOk) {
+            state.pageOffset = 0f
+        }
     }
 
     // ── TTS 段自动跟随（V1 LazyScrollRenderer line 348-382 同款）──
