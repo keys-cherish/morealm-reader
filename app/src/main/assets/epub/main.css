@@ -9,7 +9,7 @@ body {
     margin: 0% 0.5%;
     line-height: 130%;
     text-align: justify;
-    font-family: "SongtiLegacy", "st", "宋体", "zw", sans-serif;
+    font-family: "st", "宋体", "zw", sans-serif;
 }
 
 p {
@@ -17,7 +17,7 @@ p {
     text-indent: 2em;
     line-height: 130%;
     margin: 0 0.5%;
-    font-family: "SongtiLegacy", "st", "宋体", "zw", sans-serif;
+    font-family: "st", "宋体", "zw", sans-serif;
 }
 
 div {
@@ -30,7 +30,7 @@ div {
 
 /* 章节标题（chapter.html 的 <h2 class="head">） */
 h2.head {
-    font-family: "小标宋", "XiaobiaosongLegacy";
+    font-family: "小标宋";
     text-align: left;
     font-weight: bold;
     font-size: 1.1em;
@@ -47,12 +47,12 @@ h1.head {
     color: #BA2213;
     font-weight: bold;
     margin: 2em 0 1em 0;
-    font-family: "方正小标宋_GBK", "XiaobiaosongLegacy";
+    font-family: "方正小标宋_GBK";
 }
 
 /* 封面页作者署名（cover.html 的 .author） */
 .author {
-    font-family: "FangsongLegacy", 仿宋, "fs", "fangsong", sans-serif;
+    font-family: 仿宋, "fs", "fangsong", sans-serif;
     text-align: center;
     color: #000;
     font-size: 90%;
