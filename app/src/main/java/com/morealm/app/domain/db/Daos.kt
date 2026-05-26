@@ -561,7 +561,7 @@ interface ReplaceRuleDao {
      * 与 Legado `findEnabledByContentScope` 同语义：
      *
      * 1. **scope 包含匹配** —— `LIKE '%name%'` / `LIKE '%origin%'` / NULL / 空串均放行。
-     *    Legado scope 字段允许换行 `\n` 分隔多书名 / 多源 URL（如 `示例书 C\nhttp://x.com`），
+     *    Legado scope 字段允许换行 `\n` 分隔多书名 / 多源 URL（如 `示例书\nhttp://x.com`），
      *    必须用 LIKE 才能命中；早先 `=` 精确匹配会让一键搬家来的多 scope 规则全部漏掉。
      * 2. **excludeScope 反向排除** —— Legado 用同一字段做"排除清单"，被排除的书 / 源
      *    不应用规则。NULL / 空串视为"不排除任何书"。

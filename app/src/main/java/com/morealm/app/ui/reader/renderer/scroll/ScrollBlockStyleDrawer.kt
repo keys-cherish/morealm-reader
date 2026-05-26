@@ -36,7 +36,7 @@ internal fun drawScrollLineBlockStyle(
     fallbackLeft: Float = 0f,
     fallbackRight: Float = 0f,
     /**
-     * **阶段 2-H bugfix v3 (user 参考图样验证 + image 52 验证)**：仅对 box 装饰字段缩放。
+     * **阶段 2-H bugfix v3 (参考图样验证)**：仅对 box 装饰字段缩放。
      *
      * 设计基线：epub-compat ChapterReader.readTree 用 rootFontSizePx=16f 解析 CSS em
      * (cache 稳定不跟随 user 字号变；ScrollLayoutEngine 主循环按设计 px 算 margin

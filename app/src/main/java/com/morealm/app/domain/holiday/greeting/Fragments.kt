@@ -120,7 +120,7 @@ internal object DimensionPools {
      * 顺序在 [GreetingEngine] 的 [Genre.values] 中固定，命中越靠前越优先。
      */
     val GENRE_KEYWORDS: Map<Genre, Set<String>> = mapOf(
-        Genre.SCI_FI to setOf("示例书 A", "宇宙", "星", "银河", "科幻", "量子", "未来", "末日", "机甲", "赛博"),
+        Genre.SCI_FI to setOf("宇宙", "星", "银河", "科幻", "量子", "未来", "末日", "机甲", "赛博"),
         Genre.WUXIA to setOf("剑", "侠", "江湖", "武", "仙", "道", "门派", "录", "诀", "派"),
         Genre.HISTORY to setOf("史", "记", "传", "朝", "国", "战", "唐", "宋", "明", "清", "汉"),
         Genre.ROMANCE to setOf("恋", "爱", "婚", "心动", "暗恋", "情", "甜", "宠", "夫人", "总裁"),

@@ -54,7 +54,7 @@ class StreamingChainIntegrationTest {
                 "</svg>",
         )
         // svg-wrapper 触发 SvgImageRewriteVisitor 注入 `data-morealm-fullpage="1"` attr，
-        // ImgRewriteVisitor 透传，ChapterBlockBuilder 据此设 isFullPage=true。某 EPUB等 svg-wrap
+        // ImgRewriteVisitor 透传，ChapterBlockBuilder 据此设 isFullPage=true。某 EPUB 等 svg-wrap
         // cover 整屏渲染通路所需 (SvgFullPageRegressionTest Test 2/3 covers this case)。
         assertEquals(
             listOf(ChapterBlock.Image(src = "file:///cover.jpg", isFullPage = true)),

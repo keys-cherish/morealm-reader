@@ -55,7 +55,7 @@ data class ScrollLine(
      */
     val imageSrc: String? = null,
     /**
-     * true = 该图片占整页（某 EPUB等 EPUB 用 `<svg width="100%" height="100%"><image .../></svg>`
+     * true = 该图片占整页（某 EPUB 等用 `<svg width="100%" height="100%"><image .../></svg>`
      * 包裹封面 image 的标准写法）。来源链：epub-lib [SvgImageRewriteVisitor] svg→img 转换
      * 时注入 `data-morealm-fullpage="1"` attr → [ChapterBlockBuilder] emit
      * [ChapterBlock.Image.isFullPage]=true → [StructuredChapterContent.flattenToString] 用专属

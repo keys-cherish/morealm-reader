@@ -28,7 +28,7 @@ import javax.inject.Inject
  * Three pieces of state:
  *  - [files]:    the listing fetched on screen open / refresh
  *  - [loading]:  show CircularProgressIndicator while loading / downloading
- *  - [status]:   transient one-line feedback ("已导入 示例书 A.epub" /
+ *  - [status]:   transient one-line feedback ("已导入 示例.epub" /
  *                "下载失败：401 …") consumed by the screen as a Snackbar /
  *                inline text. Cleared automatically on the next action.
  *

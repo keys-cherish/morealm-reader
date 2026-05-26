@@ -1,7 +1,7 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
 /**
- * **Soft fix B** SHIFT-NEXT-FAIL 时允许 pageOffset 越界的 buffer 像素数。某 EPUB短章节
+ * **Soft fix B** SHIFT-NEXT-FAIL 时允许 pageOffset 越界的 buffer 像素数。某 EPUB 短章节
  * (totalHeight=868px) 滚到末时 next 还在异步加载（~550ms），hard clamp 让 user 感觉
  * 卡死。soft clamp 允许越界 200px，next ready 后由 ScrollCanvasReaderHost 的
  * LaunchedEffect auto-snap 触发 moveToNext。
@@ -82,7 +82,7 @@ internal fun applyPageScrollDelta(
                     )
                 }
             } else {
-                // **Soft fix B**：next 加载未就绪时不 hard clamp 在 curPageH（某 EPUB短章节
+                // **Soft fix B**：next 加载未就绪时不 hard clamp 在 curPageH（某 EPUB 短章节
                 // 触发：cur totalHeight=868 < view=1848，user 滚到末瞬间 next 还在异步加载
                 // 中，hard clamp 让 user 感觉"卡死无法往下"）。改为 soft clamp 允许越界
                 // BUFFER_NEXT_PX，让 user 感知"等待加载"而非"无响应"。ScrollCanvasReaderHost

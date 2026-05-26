@@ -46,6 +46,6 @@ object AppPattern {
     // 符号(\p{S}) 组成，朗读出来不是"什么都不读"就是"读出 '破折号 破折号'" 这种
     // 让人困惑的字符名 —— 都不是用户想要的。段级跳转时遇到这种段直接跳过。
     //
-    // 规则规则参考 Legado AppPattern.notReadAloudRegex（同款 Unicode 类）。
+    // 规则参考 Legado AppPattern.notReadAloudRegex（同款 Unicode 类）。
     val notReadAloudRegex = Regex("^(\\s|\\p{C}|\\p{P}|\\p{Z}|\\p{S})+$")
 }

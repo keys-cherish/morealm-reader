@@ -255,8 +255,8 @@ class ChapterProvider(
         val rawParagraphs = if (isHtml) parseHtmlParagraphs(content) else {
             content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
         }
-        // EPUB 章首常有正文级 h1-h6 章节标题段（如《某 EPUB》的
-        // `<h2 class="head1">第一章</h2><h2 class="head">惊蛰</h2>`）。ChapterProvider
+        // EPUB 章首常有正文级 h1-h6 章节标题段（典型形如
+        // `<h2 class="head1">第一章</h2><h2 class="head">小节名</h2>`）。ChapterProvider
         // 下面会用 chapter.title 自画一份「chapter num 小字 + 主标题大字 + 装饰横线」
         // 的好看标题块——这是我们刻意保留的视觉亮点；如果正文 h 段再渲染一次就是双份。
         //
@@ -1108,8 +1108,8 @@ class ChapterProvider(
         val markedHtml = html
             .replace(chapterNumOpenRegex, "\n$chapterTitleMarker$chapterNumMarker")
             .replace(chapterSubOpenRegex, "\n$chapterTitleMarker$chapterSubMarker")
-            // 兼容 EPUB 用 h1-h6 表达章节大小标题：某 EPUB EPUB 的
-            // `<h2 class="head1">第一章</h2><h2 class="head">惊蛰</h2>` 走这条。
+            // 兼容 EPUB 用 h1-h6 表达章节大小标题：典型如
+            // `<h2 class="head1">第一章</h2><h2 class="head">小节名</h2>` 走这条。
             // 不细分 head1/head（class 名因 EPUB 作者而异），统一标 chapterTitle —
             // 真章节标题与 chapter.title 通常匹配，contentProvidesChapterTitle 会
             // 检测并跳过 ChapterProvider 自画的标题块。
@@ -1263,8 +1263,8 @@ class ChapterProvider(
         private const val chapterSubMarker = "__MOREALM_CHAPTER_SUB__"
         private val chapterNumOpenRegex = Regex("<div\\s+class=[\"']chapter-num[\"']\\s*>", RegexOption.IGNORE_CASE)
         private val chapterSubOpenRegex = Regex("<div\\s+class=[\"']chapter-sub[\"']\\s*>", RegexOption.IGNORE_CASE)
-        // h1-h6 通用章标题识别：覆盖 EPUB 用 `<h2 class="head1">第一章</h2><h2 class="head">惊蛰</h2>`
-        // 这种结构作章节大小标题的写法（如《某 EPUB》），避免 ChapterProvider 自画一遍标题块
+        // h1-h6 通用章标题识别：覆盖 EPUB 用 `<h2 class="head1">第一章</h2><h2 class="head">小节名</h2>`
+        // 这种结构作章节大小标题的写法（部分 EPUB），避免 ChapterProvider 自画一遍标题块
         // 后正文里 h2 文本再渲染一遍 → 双份标题。
         private val hTagOpenRegex = Regex("<h[1-6](?:\\s[^>]*)?>", RegexOption.IGNORE_CASE)
         private val hTagCloseRegex = Regex("</h[1-6]>", RegexOption.IGNORE_CASE)

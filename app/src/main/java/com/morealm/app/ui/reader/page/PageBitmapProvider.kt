@@ -36,7 +36,7 @@ import android.graphics.Bitmap
  *  1. **选区命中（hitTest）走独立 interface** —— PageBitmapProvider 只负责画
  *     Bitmap，**不**返回 char position / line rect。settled 状态下用户长按 →
  *     hitTest 通过独立 `PageHitTester`（P3-3+ 引入）查 char 位置。这跟 Bitmap
- *     化无关，主流阅读器 / iBooks 都是 settled 后才允许选词
+ *     化无关，主流阅读器都是 settled 后才允许选词
  *  2. **TalkBack 无障碍** —— Bitmap 本身是哑的，需要在 `Image(bitmap)` 旁挂
  *     `Modifier.semantics { contentDescription = pageText }`（pageText 由
  *     [com.morealm.epub.compat.StructuredChapterContent.flattenToString] 提供）。

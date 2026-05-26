@@ -14,7 +14,7 @@ import javax.inject.Singleton
  * file regex is exposed in the cloud-bookshelf UI for one-tap download.
  */
 data class RemoteBookFile(
-    /** Display filename (e.g. `示例书 A.epub`). */
+    /** Display filename (e.g. `示例.epub`). */
     val name: String,
     /** Remote relative path used by [WebDavClient.download]. */
     val remotePath: String,

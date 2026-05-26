@@ -183,7 +183,7 @@ fun PagePaneCanvas(
                     // **fullpage cover 整屏渲染**：某仙侠等 EPUB 用 `<svg width="100%" height="100%">`
                     // 包裹的封面 image 通过 [com.morealm.app.domain.render.layout.ScrollLine.isFullPageImage]
                     // 透传到本层，slot 用整屏宽（chapterViewWidth）+ 绕过 paddingLeft translate 让
-                    // 封面图占满屏（视觉效果优化 cover）。普通 `<p><img/></p>`（某轻小说 01 等）
+                    // 封面图占满屏（封面整屏渲染通路）。普通 `<p><img/></p>`（某轻小说 01 等）
                     // isFullPageImage=false 仍走 visibleWidthF 段落图行为。
                     val isFullPage = line.isFullPageImage
                     val slotW: Float
@@ -266,7 +266,7 @@ fun PagePaneCanvas(
                 // 某仙侠 `text-shadow: 0.5px 0.5px 0 white` 这种"锐影"完美方案是 stroke 描边
                 // 二次 drawText（先 paint.style=STROKE strokeWidth=max(|dx|,|dy|) 描边色，
                 // 后正常字），但本次 D1.a margin scope 仅做防御：blur < 1 跳过不画。
-                // 视觉效果优化（参考实现也没画 0.5px 描边）。某轻小说 c-shadow-* `0 0 3px ...`
+                // 视觉效果对齐参考实现（参考实现也没画 0.5px 描边）。某轻小说 c-shadow-* `0 0 3px ...`
                 // blur=3 不受影响仍画彩色光晕。
                 val ts = line.blockStyle.textShadow
                 if (ts != null && ts.blurRadius >= 1f) {
