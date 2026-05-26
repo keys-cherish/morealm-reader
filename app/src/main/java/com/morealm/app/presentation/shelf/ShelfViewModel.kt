@@ -24,13 +24,28 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
+/**
+ * 文件夹导入 UI 状态。v1.6 由 [com.morealm.app.domain.sync.ImportStateBus] 单向回填，
+ * Banner UI 仍订阅此 [FolderImportState] StateFlow 不变。
+ *
+ * 新增字段 [imported] / [total] / [phase] 用于显示 `LinearProgressIndicator` + 数字进度
+ * （AC5）。旧字段 [running] / [folderName] / [importedCount] / [message] / [error] 保留
+ * 让旧 UI 文案路径继续工作，方便分阶段迁移。
+ */
 data class FolderImportState(
     val running: Boolean = false,
     val folderName: String = "",
     val importedCount: Int = 0,
     val message: String = "",
     val error: String? = null,
+    // ── v1.6 新增 ──
+    val imported: Int = 0,
+    val total: Int = 0,
+    val phase: ImportPhase = ImportPhase.Idle,
 )
+
+/** 文件夹导入阶段，给 UI 决定显示哪种 progress 样式 / 文案。 */
+enum class ImportPhase { Idle, Scanning, Phase1, Phase2, Done, Error }
 
 @HiltViewModel
 class ShelfViewModel @Inject constructor(
@@ -84,6 +99,70 @@ class ShelfViewModel @Inject constructor(
                 AppLog.warn("Shelf", "Tag seeder failed: ${e.message}")
             }
         }
+        // ── ImportStateBus → FolderImportState 单向回填 ──
+        //
+        // ImportService 通过 ImportStateBus 广播 Phase1/Phase2/Done 进度。这里把
+        // bus 状态映射回 controller 的 FolderImportState，让 ShelfScreen 现有
+        // Banner 订阅不变。bus.state 是 StateFlow 默认从 Idle 开始；用户从未触发
+        // 过导入时 mapBusToFolderImportState 走 Idle 分支保留 controller 现状
+        // （比如 importLocalBook 留下的"已导入 xxx"文案不会被覆盖）。
+        viewModelScope.launch {
+            com.morealm.app.domain.sync.ImportStateBus.state.collect { busState ->
+                val mapped = mapBusToFolderImportState(busState) ?: return@collect
+                import.setFolderImportState(mapped)
+            }
+        }
+    }
+
+    /**
+     * Bus state → UI state 映射。返回 null 表示"别覆盖当前 FolderImportState"
+     * （Idle 在用户没主动触发文件夹导入时不该 reset 单本 import 留下的提示）。
+     */
+    private fun mapBusToFolderImportState(busState: com.morealm.app.domain.sync.ImportState): FolderImportState? {
+        return when (busState) {
+            is com.morealm.app.domain.sync.ImportState.Idle -> null
+            is com.morealm.app.domain.sync.ImportState.Scanning -> FolderImportState(
+                running = true,
+                folderName = busState.folderName,
+                phase = ImportPhase.Scanning,
+                message = "正在扫描：${busState.folderName}",
+            )
+            is com.morealm.app.domain.sync.ImportState.Phase1 -> FolderImportState(
+                running = !busState.cancelled,
+                folderName = busState.folderName,
+                imported = busState.imported,
+                total = busState.total,
+                importedCount = busState.imported,
+                phase = ImportPhase.Phase1,
+                message = if (busState.cancelled) "正在取消…" else "已导入 ${busState.imported} / ${busState.total} 本",
+            )
+            is com.morealm.app.domain.sync.ImportState.Phase2 -> FolderImportState(
+                running = true,
+                folderName = busState.folderName,
+                imported = busState.total, // Phase1 已全部入库，imported 锁定在终值
+                total = busState.total,
+                importedCount = busState.total,
+                phase = ImportPhase.Phase2,
+                message = "补元数据：${busState.enriched} / ${busState.total}",
+            )
+            is com.morealm.app.domain.sync.ImportState.Done -> FolderImportState(
+                running = false,
+                folderName = busState.folderName,
+                imported = busState.imported,
+                total = busState.imported,
+                importedCount = busState.imported,
+                phase = ImportPhase.Done,
+                message = if (busState.cancelled) "已取消，共导入 ${busState.imported} 本"
+                else "导入完成：${busState.imported} 本（耗时 ${busState.durationMs / 1000}s）",
+            )
+            is com.morealm.app.domain.sync.ImportState.Error -> FolderImportState(
+                running = false,
+                folderName = busState.folderName,
+                phase = ImportPhase.Error,
+                message = "导入失败",
+                error = busState.message,
+            )
+        }
     }
 
     val resumeLastRead: StateFlow<Boolean> = prefs.resumeLastRead
@@ -116,6 +195,23 @@ class ShelfViewModel @Inject constructor(
 
     val folderImportState: StateFlow<FolderImportState> = import.folderImportState
     fun clearFolderImportMessage() = import.clearFolderImportMessage()
+
+    /**
+     * 用户点"取消导入"调用。设置 cancel flag → ImportEngine 在 chunk 边界消费 →
+     * 当前 chunk 跑完后 emit Phase1(cancelled=true) → 切到 Done(cancelled=true)。
+     */
+    fun requestCancelFolderImport() {
+        com.morealm.app.domain.sync.ImportStateBus.requestCancel()
+    }
+
+    /**
+     * Done / Error 状态停留 N 秒后清状态，让 Banner 自动隐藏。UI 用 LaunchedEffect
+     * 配 delay 调本函数即可。
+     */
+    fun resetFolderImportState() {
+        com.morealm.app.domain.sync.ImportStateBus.reset()
+        import.setFolderImportState(FolderImportState())
+    }
 
     val allGroups: StateFlow<List<BookGroup>> = groupRepo.getAllGroups()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
