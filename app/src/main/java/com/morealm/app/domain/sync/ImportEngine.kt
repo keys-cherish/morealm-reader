@@ -1,0 +1,306 @@
+package com.morealm.app.domain.sync
+
+import android.content.Context
+import android.net.Uri
+import com.morealm.app.core.log.AppLog
+import com.morealm.app.domain.entity.Book
+import com.morealm.app.domain.entity.BookFormat
+import com.morealm.app.domain.parser.ComicBookDetector
+import com.morealm.app.domain.parser.EpubParser
+import com.morealm.app.domain.parser.LocalBookStorage
+import com.morealm.app.domain.parser.MobiParser
+import com.morealm.app.domain.parser.PdfParser
+import com.morealm.app.domain.repository.AutoGroupClassifier
+import com.morealm.app.domain.repository.BookRepository
+import com.morealm.app.domain.storage.BookFileHealthChecker
+import com.morealm.app.domain.storage.FastFileScanner
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import java.util.UUID
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * SAF 批量导入核心引擎 —— 纯逻辑、可单测、无 Service / ViewModel 依赖。
+ *
+ * ## 与 ShelfImportController 的责任分工
+ *
+ * - **ShelfImportController**（Step 4 改造后）：
+ *   - 接收用户 SAF 选 folder 的 intent → 调 startForegroundService(ImportService)
+ *   - 单本 importLocalBook（< 50ms 任务）仍直接 ApplicationScope.launch 不上 Service
+ *   - 处理 sub-folder 递归 + group 创建（importAsGroup / importSubFolders / importDeepScan）
+ *   - 把每批扫描出的 List<ScanItem> 喂给 [importBatch]
+ *
+ * - **ImportEngine**（本 class）：
+ *   - 只暴露 [importBatch] 一个 suspend 公开 API
+ *   - chunked(50) 内部循环：每 chunk 跑完 save + bulkInsert 立刻 emit Bus 进度
+ *   - chunk 边界消费 [ImportStateBus.consumeCancelFlag] —— 取消请求立即生效
+ *   - Phase 2 enrich 并发 worker = [MAX_ENRICH_PARALLELISM]
+ *
+ * ## 与原 importFilesWithDeferredCovers 的关键差异
+ *
+ * 原实现：所有 `saveAsLocal` 串行完成（5-20 分钟）→ 单次 `bulkInsert(全部)`
+ * → emit 一次"已导入 X 本"。中途 cancel / 进程被杀 → 4.35 GB 文件已落盘，
+ * 但 Book row 全丢。
+ *
+ * 新实现：每 50 个 `saveAsLocal` 完成 → `bulkInsert(这 50 个)` → emit Phase1
+ * (imported=Σ)。中途 cancel 立刻停后续 chunk，已 insert 的本数保留在书架。
+ *
+ * ## 短期 helper 复制
+ *
+ * [detectFormat] / [parseBookFilename] / [isValidFileHeader] / [enrichBookMetadata] /
+ * [applyAutoGroup] 复制自 ShelfImportController，**Step 4 controller 路由改造时
+ * 会删 controller 内同名 private 函数**，避免长期 duplication。
+ */
+@Singleton
+class ImportEngine @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val bookRepo: BookRepository,
+    private val autoGroupClassifier: AutoGroupClassifier,
+) {
+
+    private companion object {
+        private const val TAG = "ImportEngine"
+
+        /** Phase 1 chunk 大小。与 [BookRepository.bulkInsert] 默认 batchSize 一致。 */
+        const val PHASE1_CHUNK_SIZE = 50
+
+        /**
+         * Phase 2 enrichment 并发上限。每本要 EpubParser.withEpubBook + 封面解码 + bitmap
+         * scale，CPU + IO 都占。4 个 worker 在中端机上是甜区（再多触发 IO 队列拥塞 +
+         * GC 抖动）。
+         */
+        const val MAX_ENRICH_PARALLELISM = 4
+    }
+
+    /**
+     * 给一批已扫描的可导入 file，做 Phase 1 incremental insert + Phase 2 并发 enrich。
+     *
+     * **不**emit 起始 [ImportState.Scanning]（caller 已 emit）；**不**emit [ImportState.Done]
+     * (caller 在所有 batch 完成后 emit，因为可能多次调 importBatch 处理 sub-folder)。
+     * 本函数只在内部 emit [ImportState.Phase1] 和 [ImportState.Phase2] 实时进度。
+     *
+     * @param files       已通过 FastFileScanner 扫出的可导入 file
+     * @param folderId    关联的 BookGroup id（caller 已创建 group），null = 不入 group
+     * @param folderName  显示用文件夹名（emit Bus state 用）
+     * @param progressOffset 已入库本数偏移（多次调本函数累积 imported 用）
+     * @return Pair<Phase1 入库本数, Phase2 enriched 本数>。失败 file 不算入。
+     */
+    suspend fun importBatch(
+        files: List<FastFileScanner.ScanItem>,
+        folderId: String?,
+        folderName: String,
+        progressOffset: Int = 0,
+        totalForProgress: Int = files.size,
+    ): BatchResult = coroutineScope {
+        if (files.isEmpty()) return@coroutineScope BatchResult(0, 0)
+        AppLog.info(TAG, "importBatch start files=${files.size} folder=$folderName")
+
+        // ── Phase 1: chunked(50) save + bulkInsert + emit ──
+        //
+        // 每 chunk = 1 DB 事务 = 用户书架 +50 本立即可见。chunk 边界消费 cancel
+        // 信号让取消"立刻"生效（不打断已在跑的 saveAsLocal，但跑完不再进下一 chunk）。
+        var importedInBatch = 0
+        val pendingForEnrich = ArrayList<PendingBook>(files.size)
+
+        for (chunk in files.chunked(PHASE1_CHUNK_SIZE)) {
+            // chunk 边界：消费取消请求。返回 true 则停止后续 chunk。
+            if (ImportStateBus.consumeCancelFlag()) {
+                AppLog.info(TAG, "cancel requested at chunk boundary, stopping")
+                ImportStateBus.update(
+                    ImportState.Phase1(
+                        folderName = folderName,
+                        imported = progressOffset + importedInBatch,
+                        total = totalForProgress,
+                        cancelled = true,
+                    )
+                )
+                break
+            }
+
+            val chunkPending = processChunk(chunk, folderId)
+            if (chunkPending.isEmpty()) continue
+
+            bookRepo.bulkInsert(chunkPending.map { it.book }, batchSize = PHASE1_CHUNK_SIZE)
+            importedInBatch += chunkPending.size
+            pendingForEnrich.addAll(chunkPending)
+
+            ImportStateBus.update(
+                ImportState.Phase1(
+                    folderName = folderName,
+                    imported = progressOffset + importedInBatch,
+                    total = totalForProgress,
+                )
+            )
+            AppLog.info(TAG, "Phase1 chunk done +${chunkPending.size} (total imported=$importedInBatch)")
+        }
+
+        // ── Phase 2: 并发 enrich + bulkUpdate ──
+        //
+        // Phase 2 不消费 cancel flag —— Phase 1 已入库的书 enrich 失败也不回滚，
+        // 让用户立刻能看到书在书架，metadata/cover 是次要的（[BookFormatProbeViewModel]
+        // 兜底 detect）。
+        if (pendingForEnrich.isEmpty()) return@coroutineScope BatchResult(importedInBatch, 0)
+
+        val enrichDispatcher = Dispatchers.IO.limitedParallelism(MAX_ENRICH_PARALLELISM)
+        val enrichJobs = pendingForEnrich.map { pb ->
+            async(enrichDispatcher) {
+                runCatching {
+                    enrichBookMetadata(pb.book, Uri.parse(pb.book.localPath), pb.format)
+                        ?.let { applyAutoGroup(it) }
+                }.onFailure { t ->
+                    AppLog.warn(TAG, "enrich failed ${pb.book.title}: ${t.message}")
+                }.getOrNull()
+            }
+        }
+        val enriched = enrichJobs.awaitAll().filterNotNull()
+        if (enriched.isNotEmpty()) {
+            bookRepo.bulkUpdate(enriched, batchSize = PHASE1_CHUNK_SIZE)
+            AppLog.info(TAG, "Phase2 enriched ${enriched.size}/${pendingForEnrich.size}")
+        }
+        BatchResult(importedInBatch, enriched.size)
+    }
+
+    /**
+     * 处理单个 chunk：format 检测 + header 校验 + saveAsLocal + 文件路径 dedup +
+     * 文件名解析 + applyAutoGroup → 返回待 bulkInsert 的 [PendingBook] 列表。
+     *
+     * 失败 file `continue` skip（跟原 controller 行为一致）。
+     */
+    private suspend fun processChunk(
+        chunk: List<FastFileScanner.ScanItem>,
+        folderId: String?,
+    ): List<PendingBook> {
+        val result = ArrayList<PendingBook>(chunk.size)
+        for ((idx, item) in chunk.withIndex()) {
+            val format = detectFormat(item.name)
+            if (format == BookFormat.UNKNOWN) continue
+            if (!isValidFileHeader(item.uri, format)) {
+                AppLog.warn(TAG, "Rejected invalid $format header: ${item.name}")
+                continue
+            }
+            val ext = item.name.substringAfterLast('.', "").lowercase()
+            val localUri = LocalBookStorage.saveAsLocal(context, item.uri, ext)
+            if (localUri == null) {
+                AppLog.warn(TAG, "saveAsLocal failed for ${item.name}")
+                continue
+            }
+            // 跨 chunk dedup：之前 chunk 已 insert / 历史已有相同 hash file → 跳过
+            if (bookRepo.findByLocalPath(localUri.toString()) != null) continue
+
+            val parsed = parseBookFilename(item.name)
+            val book = applyAutoGroup(
+                Book(
+                    id = UUID.randomUUID().toString(),
+                    title = parsed.first,
+                    author = parsed.second,
+                    localPath = localUri.toString(),
+                    format = format,
+                    folderId = folderId,
+                    addedAt = System.currentTimeMillis() + idx,
+                )
+            )
+            result.add(PendingBook(book, item, format))
+        }
+        return result
+    }
+
+    // ── Helper（短期复制自 ShelfImportController，Step 4 dedup） ──
+
+    private fun isValidFileHeader(uri: Uri, format: BookFormat): Boolean =
+        BookFileHealthChecker.isValid(context, uri, format)
+
+    private fun detectFormat(filename: String): BookFormat {
+        val ext = filename.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "txt" -> BookFormat.TXT
+            "epub" -> BookFormat.EPUB
+            "pdf" -> BookFormat.PDF
+            "mobi" -> BookFormat.MOBI
+            "azw3", "azw" -> BookFormat.AZW3
+            "zip" -> BookFormat.CBZ
+            "umd" -> BookFormat.UMD
+            else -> BookFormat.UNKNOWN
+        }
+    }
+
+    private fun parseBookFilename(fileName: String): Pair<String, String> {
+        val base = fileName.substringBeforeLast('.').trim()
+
+        val bracketMatch = Regex("^[\\[【](.+?)[\\]】]\\s*(.+)$").find(base)
+        if (bracketMatch != null) {
+            return bracketMatch.groupValues[2].trim() to bracketMatch.groupValues[1].trim()
+        }
+        val parenMatch = Regex("^(.+?)[（(](.+?)[）)]$").find(base)
+        if (parenMatch != null) {
+            return parenMatch.groupValues[1].trim() to parenMatch.groupValues[2].trim()
+        }
+        val sepMatch = Regex("^(.+?)\\s*[-_—]\\s*(.+)$").find(base)
+        if (sepMatch != null) {
+            val left = sepMatch.groupValues[1].trim()
+            val right = sepMatch.groupValues[2].trim()
+            return if (left.length <= right.length && left.length <= 6) {
+                right to left
+            } else {
+                left to right
+            }
+        }
+        return base to ""
+    }
+
+    private suspend fun applyAutoGroup(book: Book): Book {
+        val groupId = autoGroupClassifier.classify(book)
+        return if (groupId != null && book.folderId == null) book.copy(folderId = groupId) else book
+    }
+
+    private fun enrichBookMetadata(book: Book, uri: Uri, format: BookFormat): Book? {
+        return when (format) {
+            BookFormat.EPUB -> {
+                val bundle = try {
+                    EpubParser.extractAllForImport(context, uri)
+                } catch (e: Exception) {
+                    AppLog.warn(TAG, "EPUB extractAll failed: ${e.message}")
+                    EpubParser.ImportBundle()
+                }
+                book.copy(
+                    title = bundle.metadata.title.takeIf { it.isNotBlank() } ?: book.title,
+                    author = bundle.metadata.author.takeIf { it.isNotBlank() } ?: book.author,
+                    description = bundle.metadata.description.takeIf { it.isNotBlank() } ?: book.description,
+                    kind = bundle.metadata.subject.takeIf { it.isNotBlank() } ?: book.kind,
+                    coverUrl = bundle.coverPath ?: book.coverUrl,
+                    isComic = bundle.isComic,
+                )
+            }
+            BookFormat.PDF -> {
+                val cover = try { PdfParser.extractCover(context, uri) } catch (_: Exception) { null }
+                book.copy(coverUrl = cover ?: book.coverUrl)
+            }
+            BookFormat.MOBI, BookFormat.AZW3 -> {
+                val cover = try {
+                    MobiParser.extractCover(context, uri)
+                } catch (_: Exception) { null }
+                val isComic = try {
+                    ComicBookDetector.detect(context, uri, format)
+                } catch (_: Exception) { false }
+                book.copy(coverUrl = cover ?: book.coverUrl, isComic = isComic)
+            }
+            else -> null
+        }
+    }
+
+    /** chunk 内本次成功 save+pending 的 book 元组。Phase 2 enrich 用。 */
+    private data class PendingBook(
+        val book: Book,
+        val item: FastFileScanner.ScanItem,
+        val format: BookFormat,
+    )
+
+    /** [importBatch] 返回值。 */
+    data class BatchResult(
+        val phase1Inserted: Int,
+        val phase2Enriched: Int,
+    )
+}
