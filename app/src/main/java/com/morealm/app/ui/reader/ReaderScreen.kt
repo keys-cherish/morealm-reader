@@ -814,11 +814,13 @@ fun ReaderScreen(
         } else if (
             (pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.NONE ||
                 pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.COVER ||
-                pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.SLIDE) &&
+                pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.SLIDE ||
+                pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.SIMULATION) &&
             hasReaderTarget
         ) {
-            // NONE / COVER / SLIDE 三种横向翻页全走新 PageLevelReaderHost（page-level）。
-            // SIMULATION 仍走旧 CanvasRenderer (Legado 仿真翻页 P5 不动)。
+            // NONE / COVER / SLIDE / SIMULATION 横向翻页全走新 PageLevelReaderHost
+            // (page-level)；SIMULATION 接入后 EPUB 章背景 / 段装饰 / 整屏封面 / 自带字体
+            // 一并生效，与 NONE/COVER/SLIDE 同源富排版。
             val density = LocalDensity.current
             val configuration = LocalConfiguration.current
             val viewWidthPx = with(density) { configuration.screenWidthDp.dp.toPx().toInt() }

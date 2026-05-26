@@ -66,36 +66,6 @@ fun PagePaneCanvas(
     bookmarkArgb: Int = 0xFFD32F2F.toInt(),
     modifier: Modifier = Modifier,
 ) {
-    val contentAscent = remember(contentPaint) { -contentPaint.fontMetrics.ascent }
-    val titleAscent = remember(titlePaint) { -titlePaint.fontMetrics.ascent }
-    val chapterNumAscent = remember(chapterNumPaint) { -chapterNumPaint.fontMetrics.ascent }
-
-    val bgSpecs = remember(highlightSpecs) { highlightSpecs.filter { it.kind == Highlight.KIND_BACKGROUND } }
-    val textColorSpecs = remember(highlightSpecs) { highlightSpecs.filter { it.kind == Highlight.KIND_TEXT_COLOR } }
-    val underlineSpecs = remember(highlightSpecs) { highlightSpecs.filter { it.kind == Highlight.KIND_UNDERLINE } }
-
-    val textColorByCp = remember(textColorSpecs) {
-        val map = HashMap<Int, Int>()
-        for (spec in textColorSpecs) {
-            for (cp in spec.cpRangeFirst..spec.cpRangeLast) {
-                map[cp] = spec.argb
-            }
-        }
-        map
-    }
-
-    val bgFillPaint = remember {
-        Paint().apply {
-            style = Paint.Style.FILL
-            isAntiAlias = true
-        }
-    }
-
-    // 提前算 page cp 范围（用于 search / selection / reveal 与 page 求交，page 外不画）
-    val pageFirstCp = page.lines.firstOrNull()?.firstChapterPos ?: -1
-    val pageLastCp = page.lines.lastOrNull()?.lastChapterPos ?: -1
-    val visibleWidthF = (chapterViewWidth - chapterPaddingLeft * 2).toFloat()
-
     // 字体颜色诊断（EPUB CharColor / 段落 textColor / atom.colorArgb / col.colorArgb）
     // —— 每 page 切换打 1 行 INFO，列前 3 行关键字段。便于对比 SCROLL vs page-level
     // 横向模式渲染时颜色是否一致。开销可忽略：page 切换才 fire。
@@ -118,282 +88,301 @@ fun PagePaneCanvas(
 
     Canvas(modifier) {
         drawIntoCanvas { canvas ->
-            val nc = canvas.nativeCanvas
-            nc.save()
-            nc.translate(chapterPaddingLeft.toFloat(), 0f)
-            // **渲染层 clip 兜底**（rendering invariant）：translate 后 nativeCanvas
-            // 不自动 clip 到 layout bounds，让 ScrollLayoutEngine emit 端的极端边界
-            // （CSS 负 margin / inline-block 越界 / 行末 exceed 压缩让首字 start<0 等）
-            // 有可能 drawText 到 page bounds 之外。COVER 翻页静止状态 prev 在
-            // placeRelative(-viewWidth, 0)，prev 内 x = viewWidth + N 的越界字会被
-            // layout 平移到屏幕 x = N（viewport 左缘出现"上一页字片段"残影，用户
-            // 实测样本：某 EPUB 章节左缘半字"京 / 人记载 / 好绘"等）。
-            // clipRect 是 page bound 的固有不变量，不依赖排版层 100% 正确。
-            nc.clipRect(0f, 0f, visibleWidthF, size.height)
+            drawScrollPageOnCanvas(
+                nc = canvas.nativeCanvas,
+                page = page,
+                viewHeightF = size.height,
+                contentPaint = contentPaint,
+                titlePaint = titlePaint,
+                chapterNumPaint = chapterNumPaint,
+                chapterViewWidth = chapterViewWidth,
+                chapterPaddingLeft = chapterPaddingLeft,
+                highlightSpecs = highlightSpecs,
+                bookmarkCps = bookmarkCps,
+                revealHighlight = revealHighlight,
+                searchHighlightCpRange = searchHighlightCpRange,
+                searchHighlightArgb = searchHighlightArgb,
+                selectionCpRange = selectionCpRange,
+                selectionArgb = selectionArgb,
+                bookmarkArgb = bookmarkArgb,
+            )
+        }
+    }
+}
 
-            // ─── 层 0：P3-5b Phase 3 块装饰（圆角背景 / 边框） ───
-            // 最底层 —— 用户高亮 / 选区 / 搜索高亮 / 文字都画在装饰之上
-            // **阶段 2-H bugfix v3**：fontSizeScale = contentPaint.textSize / 16f 让 BlockStyle 内
-            // 设计 px (16f base) 的 box 装饰字段 (widthPx/heightPx/padding/borderRadius/borderWidth)
-            // 缩放到 user 字号下的真实 px (margin 不缩放，保持设计微间距 layout)。
-            val bsScale = contentPaint.textSize / 16f
-            for (line in page.lines) {
-                drawScrollLineBlockStyle(
-                    nc, line, pageTop = 0f,
-                    fallbackLeft = 0f, fallbackRight = visibleWidthF,
-                    fontSizeScale = bsScale,
-                )
+/**
+ * 纯函数版 page 绘制 —— 把 [PagePaneCanvas] 内 `drawIntoCanvas { ... }` 块抽出，方便
+ * 离屏 [Bitmap] 渲染共用（仿真翻页 BitmapProvider 用这条路径生成位图）。
+ *
+ * 调用方负责传入 native [android.graphics.Canvas]（无论来源是 Compose Canvas 还是
+ * `Canvas(bitmap)`）以及视图高度（Compose 内取 `size.height`；Bitmap 内取 `bitmap.height`）。
+ *
+ * 函数内部完整保留 PagePaneCanvas 的 4 层绘制（块装饰 / 背景高亮 / 文字 / 下划线 / 书签）
+ * + paddingLeft translate + clipRect 兜底；调用方画完之后 nativeCanvas state 无残留
+ * （函数末尾 `nc.restore()` 与开头 `nc.save()` 配对）。
+ */
+internal fun drawScrollPageOnCanvas(
+    nc: android.graphics.Canvas,
+    page: ScrollPage,
+    viewHeightF: Float,
+    contentPaint: TextPaint,
+    titlePaint: TextPaint,
+    chapterNumPaint: TextPaint,
+    chapterViewWidth: Int,
+    chapterPaddingLeft: Int,
+    highlightSpecs: List<ScrollHighlightDrawSpec> = emptyList(),
+    bookmarkCps: List<Int> = emptyList(),
+    revealHighlight: com.morealm.app.ui.reader.renderer.RevealHighlight? = null,
+    searchHighlightCpRange: IntRange = IntRange.EMPTY,
+    searchHighlightArgb: Int = 0x55FFFF00.toInt(),
+    selectionCpRange: IntRange = IntRange.EMPTY,
+    selectionArgb: Int = 0x4D5B6CFE.toInt(),
+    bookmarkArgb: Int = 0xFFD32F2F.toInt(),
+) {
+    val contentAscent = -contentPaint.fontMetrics.ascent
+    val titleAscent = -titlePaint.fontMetrics.ascent
+    val chapterNumAscent = -chapterNumPaint.fontMetrics.ascent
+
+    val bgSpecs = highlightSpecs.filter { it.kind == Highlight.KIND_BACKGROUND }
+    val textColorSpecs = highlightSpecs.filter { it.kind == Highlight.KIND_TEXT_COLOR }
+    val underlineSpecs = highlightSpecs.filter { it.kind == Highlight.KIND_UNDERLINE }
+
+    val textColorByCp = HashMap<Int, Int>().apply {
+        for (spec in textColorSpecs) {
+            for (cp in spec.cpRangeFirst..spec.cpRangeLast) {
+                this[cp] = spec.argb
             }
+        }
+    }
 
-            // ─── 层 1：背景高亮 rect ───
-            for (spec in bgSpecs) {
-                bgFillPaint.color = spec.argb
-                for (rect in spec.rects) {
-                    nc.drawRect(rect.left, rect.top, rect.right, rect.bottom, bgFillPaint)
-                }
-            }
+    val bgFillPaint = Paint().apply {
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
 
-            // ─── 层 1.5：搜索高亮（动态 cp 范围 → page 内 rect） ───
-            if (!searchHighlightCpRange.isEmpty() && rangeIntersectsPage(searchHighlightCpRange, pageFirstCp, pageLastCp)) {
-                bgFillPaint.color = searchHighlightArgb
+    val pageFirstCp = page.lines.firstOrNull()?.firstChapterPos ?: -1
+    val pageLastCp = page.lines.lastOrNull()?.lastChapterPos ?: -1
+    val visibleWidthF = (chapterViewWidth - chapterPaddingLeft * 2).toFloat()
+
+    nc.save()
+    nc.translate(chapterPaddingLeft.toFloat(), 0f)
+    // **渲染层 clip 兜底**（rendering invariant）：translate 后 nativeCanvas
+    // 不自动 clip 到 layout bounds，让 ScrollLayoutEngine emit 端的极端边界
+    // （CSS 负 margin / inline-block 越界 / 行末 exceed 压缩让首字 start<0 等）
+    // 有可能 drawText 到 page bounds 之外。COVER 翻页静止状态 prev 在
+    // placeRelative(-viewWidth, 0)，prev 内 x = viewWidth + N 的越界字会被
+    // layout 平移到屏幕 x = N（viewport 左缘出现"上一页字片段"残影，用户
+    // 实测样本：某 EPUB 章节左缘半字"京 / 人记载 / 好绘"等）。
+    // clipRect 是 page bound 的固有不变量，不依赖排版层 100% 正确。
+    nc.clipRect(0f, 0f, visibleWidthF, viewHeightF)
+
+    // ─── 层 0：P3-5b Phase 3 块装饰（圆角背景 / 边框） ───
+    val bsScale = contentPaint.textSize / 16f
+    for (line in page.lines) {
+        drawScrollLineBlockStyle(
+            nc, line, pageTop = 0f,
+            fallbackLeft = 0f, fallbackRight = visibleWidthF,
+            fontSizeScale = bsScale,
+        )
+    }
+
+    // ─── 层 1：背景高亮 rect ───
+    for (spec in bgSpecs) {
+        bgFillPaint.color = spec.argb
+        for (rect in spec.rects) {
+            nc.drawRect(rect.left, rect.top, rect.right, rect.bottom, bgFillPaint)
+        }
+    }
+
+    if (!searchHighlightCpRange.isEmpty() && rangeIntersectsPage(searchHighlightCpRange, pageFirstCp, pageLastCp)) {
+        bgFillPaint.color = searchHighlightArgb
+        drawCpRangeRectsInPage(
+            nc, page, searchHighlightCpRange.first, searchHighlightCpRange.last + 1,
+            visibleWidthF, bgFillPaint,
+        )
+    }
+
+    revealHighlight?.let { rev ->
+        if (rev.chapterIndex == page.chapterIndex && rev.endChapterPos >= pageFirstCp && rev.startChapterPos <= pageLastCp) {
+            val argb = rev.currentArgb()
+            if ((argb ushr 24) > 0) {
+                bgFillPaint.color = argb
                 drawCpRangeRectsInPage(
-                    nc, page, searchHighlightCpRange.first, searchHighlightCpRange.last + 1,
+                    nc, page, rev.startChapterPos, rev.endChapterPos,
                     visibleWidthF, bgFillPaint,
                 )
             }
+        }
+    }
 
-            // ─── 层 1.6：RevealHighlight 跳转后呼吸高亮 ───
-            revealHighlight?.let { rev ->
-                if (rev.chapterIndex == page.chapterIndex && rev.endChapterPos >= pageFirstCp && rev.startChapterPos <= pageLastCp) {
-                    val argb = rev.currentArgb()
-                    if ((argb ushr 24) > 0) {
-                        bgFillPaint.color = argb
-                        drawCpRangeRectsInPage(
-                            nc, page, rev.startChapterPos, rev.endChapterPos,
-                            visibleWidthF, bgFillPaint,
-                        )
-                    }
-                }
+    if (!selectionCpRange.isEmpty() && rangeIntersectsPage(selectionCpRange, pageFirstCp, pageLastCp)) {
+        bgFillPaint.color = selectionArgb
+        drawCpRangeRectsInPage(
+            nc, page, selectionCpRange.first, selectionCpRange.last + 1,
+            visibleWidthF, bgFillPaint,
+        )
+    }
+
+    // ─── 层 2：文字 ───
+    for (line in page.lines) {
+        if (line.isImage) {
+            val src = line.imageSrc ?: continue
+            val isFullPage = line.isFullPageImage
+            val slotW: Float
+            val baseX: Float
+            val cacheTargetW: Int
+            if (isFullPage) {
+                slotW = chapterViewWidth.toFloat()
+                baseX = -chapterPaddingLeft.toFloat()
+                cacheTargetW = chapterViewWidth.coerceAtLeast(1)
+            } else {
+                slotW = visibleWidthF
+                baseX = 0f
+                cacheTargetW = slotW.toInt().coerceAtLeast(1)
             }
+            val slotH = line.lineBottom - line.lineTop
+            val bitmap = com.morealm.app.domain.render.ImageCache.get(
+                src, cacheTargetW,
+            ) ?: continue
+            val bmpW = bitmap.width.toFloat()
+            val bmpH = bitmap.height.toFloat()
+            val scale = minOf(slotW / bmpW, slotH / bmpH)
+            val drawW = bmpW * scale
+            val drawH = bmpH * scale
+            val offsetX = baseX + (slotW - drawW) / 2f
+            val offsetY = line.lineTop + (slotH - drawH) / 2f
+            nc.drawBitmap(
+                bitmap,
+                null,
+                android.graphics.RectF(offsetX, offsetY, offsetX + drawW, offsetY + drawH),
+                null,
+            )
+            continue
+        }
+        val paint: TextPaint
+        val ascent: Float
+        val defaultColor: Int
+        when {
+            line.isChapterNum -> {
+                paint = chapterNumPaint
+                ascent = chapterNumAscent
+                defaultColor = paint.color
+            }
+            line.isTitle -> {
+                paint = titlePaint
+                ascent = titleAscent
+                defaultColor = paint.color
+            }
+            else -> {
+                paint = contentPaint
+                ascent = contentAscent
+                defaultColor = paint.color
+            }
+        }
+        val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
+        val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
 
-            // ─── 层 1.7：选区背景 ───
-            if (!selectionCpRange.isEmpty() && rangeIntersectsPage(selectionCpRange, pageFirstCp, pageLastCp)) {
-                bgFillPaint.color = selectionArgb
-                drawCpRangeRectsInPage(
-                    nc, page, selectionCpRange.first, selectionCpRange.last + 1,
-                    visibleWidthF, bgFillPaint,
+        val baselineY = line.lineTop + ascent
+        val paragraphColor = line.blockStyle.textColor
+        if (paragraphColor != null) paint.color = paragraphColor
+        val ts = line.blockStyle.textShadow
+        if (ts != null && ts.blurRadius >= 1f) {
+            paint.setShadowLayer(ts.blurRadius, ts.offsetX, ts.offsetY, ts.color)
+        }
+        val shadowApplied = ts != null && ts.blurRadius >= 1f
+        val lineCells = line.cells
+        val lineAtoms = line.atoms
+        if (lineCells != null) {
+            drawByCells(nc, lineCells, line, paint, defaultColor, textColorByCp)
+            if (paragraphColor != null) paint.color = defaultColor
+            if (shadowApplied) paint.clearShadowLayer()
+            if (savedTypeface != null) paint.typeface = savedTypeface
+            continue
+        }
+        if (lineAtoms != null) {
+            drawByAtoms(nc, lineAtoms, line, paint, baselineY, defaultColor, textColorByCp)
+            if (paragraphColor != null) paint.color = defaultColor
+            if (shadowApplied) paint.clearShadowLayer()
+            if (savedTypeface != null) paint.typeface = savedTypeface
+            continue
+        }
+        for (col in line.columns) {
+            if (col.inlineImageSrc != null) {
+                val bmp = com.morealm.app.domain.render.ImageCache.get(
+                    col.inlineImageSrc, (col.end - col.start).toInt(),
                 )
-            }
-
-            // ─── 层 2：文字 ───
-            for (line in page.lines) {
-                if (line.isImage) {
-                    val src = line.imageSrc ?: continue
-                    // **fullpage cover 整屏渲染**：某仙侠等 EPUB 用 `<svg width="100%" height="100%">`
-                    // 包裹的封面 image 通过 [com.morealm.app.domain.render.layout.ScrollLine.isFullPageImage]
-                    // 透传到本层，slot 用整屏宽（chapterViewWidth）+ 绕过 paddingLeft translate 让
-                    // 封面图占满屏（封面整屏渲染通路）。普通 `<p><img/></p>`（某轻小说 01 等）
-                    // isFullPageImage=false 仍走 visibleWidthF 段落图行为。
-                    val isFullPage = line.isFullPageImage
-                    val slotW: Float
-                    val baseX: Float
-                    val cacheTargetW: Int
-                    if (isFullPage) {
-                        slotW = chapterViewWidth.toFloat()
-                        baseX = -chapterPaddingLeft.toFloat()  // 抵消外层 nc.translate(chapterPaddingLeft, 0)
-                        cacheTargetW = chapterViewWidth.coerceAtLeast(1)
-                    } else {
-                        slotW = visibleWidthF
-                        baseX = 0f
-                        cacheTargetW = slotW.toInt().coerceAtLeast(1)
-                    }
+                if (bmp != null) {
+                    val bmpW = bmp.width.toFloat()
+                    val bmpH = bmp.height.toFloat()
+                    val slotW = col.end - col.start
                     val slotH = line.lineBottom - line.lineTop
-                    val bitmap = com.morealm.app.domain.render.ImageCache.get(
-                        src, cacheTargetW,
-                    ) ?: continue
-                    val bmpW = bitmap.width.toFloat()
-                    val bmpH = bitmap.height.toFloat()
                     val scale = minOf(slotW / bmpW, slotH / bmpH)
                     val drawW = bmpW * scale
                     val drawH = bmpH * scale
-                    val offsetX = baseX + (slotW - drawW) / 2f
-                    val offsetY = line.lineTop + (slotH - drawH) / 2f
-                    // 诊断日志（某仙侠全屏 vs 某轻小说 01 非全屏，看渲染层数据差异）：
-                    // page 上下文 + isFullPage + slot 大小 + bmp 大小 + scale + 最终 draw 区域。
-                    com.morealm.app.core.log.AppLog.info(
-                        "PagePane/Image",
-                        "ch=${page.chapterIndex} pg=${page.pageIndex} pageH=${page.height} " +
-                            "isFullPage=$isFullPage pageLines=${page.lines.size} " +
-                            "lineTop=${line.lineTop.toInt()} lineBottom=${line.lineBottom.toInt()} " +
-                            "src='${src.takeLast(40)}' slot=${slotW.toInt()}x${slotH.toInt()} " +
-                            "bmp=${bmpW.toInt()}x${bmpH.toInt()} scale=${"%.3f".format(scale)} " +
-                            "draw=${drawW.toInt()}x${drawH.toInt()} offset=(${offsetX.toInt()},${offsetY.toInt()})",
-                    )
+                    val offX = col.start + (slotW - drawW) / 2f
+                    val offY = line.lineTop + (slotH - drawH) / 2f
                     nc.drawBitmap(
-                        bitmap,
-                        null,
-                        android.graphics.RectF(offsetX, offsetY, offsetX + drawW, offsetY + drawH),
+                        bmp, null,
+                        android.graphics.RectF(offX, offY, offX + drawW, offY + drawH),
                         null,
                     )
-                    continue
                 }
-                val paint: TextPaint
-                val ascent: Float
-                val defaultColor: Int
-                when {
-                    line.isChapterNum -> {
-                        paint = chapterNumPaint
-                        ascent = chapterNumAscent
-                        defaultColor = paint.color
-                    }
-                    line.isTitle -> {
-                        paint = titlePaint
-                        ascent = titleAscent
-                        defaultColor = paint.color
-                    }
-                    else -> {
-                        paint = contentPaint
-                        ascent = contentAscent
-                        defaultColor = paint.color
-                    }
-                }
-                // EPUB 自带字体：block 级 fontFamily → Typeface swap
-                val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
-                val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
-
-                val baselineY = line.lineTop + ascent
-                // P3-5b Step 2a：段落统一字体色 —— RichText 所有 span 共享同色时
-                // (`<span class="c-co-lan1">[ 某角色 [</span>` 之类) flattenToString 已经把
-                // 颜色合并到 blockStyle.textColor，这里读出来当 paint 默认色，让某角色 4 字带
-                // c-co-lan1 蓝色。优先级：用户高亮 (textColorByCp) > paragraph textColor > paint 默认
-                val paragraphColor = line.blockStyle.textColor
-                if (paragraphColor != null) paint.color = paragraphColor
-                // P3-5b Step 2b：text-shadow（c-shadow-* 的彩色描边光晕）
-                // **bugfix 2026-05-22**：blur < 1px 跳过 setShadowLayer ——
-                // Android 在 radius < 1f 小数 blur 下渲染异常（截图显示整字宽度白色矩形覆盖
-                // 文字，根因 hardware-accelerated Canvas + setShadowLayer 小数边界）。
-                // 某仙侠 `text-shadow: 0.5px 0.5px 0 white` 这种"锐影"完美方案是 stroke 描边
-                // 二次 drawText（先 paint.style=STROKE strokeWidth=max(|dx|,|dy|) 描边色，
-                // 后正常字），但本次 D1.a margin scope 仅做防御：blur < 1 跳过不画。
-                // 视觉效果对齐参考实现（参考实现也没画 0.5px 描边）。某轻小说 c-shadow-* `0 0 3px ...`
-                // blur=3 不受影响仍画彩色光晕。
-                val ts = line.blockStyle.textShadow
-                if (ts != null && ts.blurRadius >= 1f) {
-                    paint.setShadowLayer(ts.blurRadius, ts.offsetX, ts.offsetY, ts.color)
-                }
-                val shadowApplied = ts != null && ts.blurRadius >= 1f
-                // **D1.a DIAG**：仅当本行 line 有 textShadow 时打 log
-                if (ts != null) {
-                    com.morealm.app.core.log.AppLog.info(
-                        "D1a/Shadow",
-                        "PagePane ts blur=${ts.blurRadius} dx=${ts.offsetX} dy=${ts.offsetY} " +
-                            "color=0x${ts.color.toUInt().toString(16)} applied=$shadowApplied " +
-                            "lineText='${line.text.take(15)}'",
-                    )
-                }
-                // **D 模型 (阶段 1 重构)** 分发优先级：cells != null → drawByCells (table line)
-                // > atoms != null → drawByAtoms (普通段 atom 路径) > columns 路径（旧 char-level）
-                val lineCells = line.cells
-                val lineAtoms = line.atoms
-                if (lineCells != null) {
-                    drawByCells(nc, lineCells, line, paint, defaultColor, textColorByCp)
-                    if (paragraphColor != null) paint.color = defaultColor
-                    if (shadowApplied) paint.clearShadowLayer()
-                    if (savedTypeface != null) paint.typeface = savedTypeface
-                    continue
-                }
-                if (lineAtoms != null) {
-                    drawByAtoms(nc, lineAtoms, line, paint, baselineY, defaultColor, textColorByCp)
-                    if (paragraphColor != null) paint.color = defaultColor
-                    if (shadowApplied) paint.clearShadowLayer()
-                    if (savedTypeface != null) paint.typeface = savedTypeface
-                    continue
-                }
-                for (col in line.columns) {
-                    // A4b：inline image 占位列（charData = U+FFFC）→ 调 ImageCache + drawBitmap
-                    // 替代 drawText。bitmap 缓存命中是 O(1)，未命中第一次解码会阻塞但走 LRU 后续 free。
-                    if (col.inlineImageSrc != null) {
-                        val bmp = com.morealm.app.domain.render.ImageCache.get(
-                            col.inlineImageSrc, (col.end - col.start).toInt(),
-                        )
-                        if (bmp != null) {
-                            val bmpW = bmp.width.toFloat()
-                            val bmpH = bmp.height.toFloat()
-                            val slotW = col.end - col.start
-                            val slotH = line.lineBottom - line.lineTop
-                            val scale = minOf(slotW / bmpW, slotH / bmpH)
-                            val drawW = bmpW * scale
-                            val drawH = bmpH * scale
-                            val offX = col.start + (slotW - drawW) / 2f
-                            val offY = line.lineTop + (slotH - drawH) / 2f
-                            nc.drawBitmap(
-                                bmp, null,
-                                android.graphics.RectF(offX, offY, offX + drawW, offY + drawH),
-                                null,
-                            )
-                        }
-                        // bitmap=null（未加载/失败）→ 不画任何东西（U+FFFC 占位字符位置留空）
-                        continue
-                    }
-                    // 优先级：用户高亮 textColorByCp > col.colorArgb（CSS char-level） > 段落 paragraphColor > paint 默认
-                    val overrideColor = textColorByCp[col.chapterPosition] ?: col.colorArgb
-                    if (overrideColor != null) {
-                        paint.color = overrideColor
-                        nc.drawText(col.charData, col.start, baselineY, paint)
-                        paint.color = paragraphColor ?: defaultColor
-                    } else {
-                        nc.drawText(col.charData, col.start, baselineY, paint)
-                    }
-                }
-                // 还原 paint —— 避免段落色 / shadow / typeface 污染下一 line 共享 paint
-                if (paragraphColor != null) paint.color = defaultColor
-                if (shadowApplied) paint.clearShadowLayer()
-                if (savedTypeface != null) paint.typeface = savedTypeface
+                continue
             }
-
-            // ─── 层 3：下划线 ───
-            // 用 rect.top + (ascent + descent) 锚到字符底沿，避开 lineSpacingExtra 的影响。
-            val underlineStroke = (contentPaint.textSize * 0.1f).coerceAtLeast(2.5f)
-            val fm = contentPaint.fontMetrics
-            val textHeight = -fm.ascent + fm.descent
-            val wavyAmplitude = (contentPaint.textSize * 0.12f).coerceAtLeast(4f)
-            val wavyPeriod = (contentPaint.textSize * 0.6f).coerceAtLeast(12f)
-            for (spec in underlineSpecs) {
-                val linePaint = underlinePaintFor(spec.argb, spec.underlineStyle, underlineStroke)
-                for (rect in spec.rects) {
-                    val underlineY = rect.top + textHeight + underlineStroke * 0.5f
-                    when (spec.underlineStyle) {
-                        Highlight.UNDERLINE_STYLE_WAVY -> drawWavyUnderline(
-                            nc, linePaint, rect.left, rect.right, underlineY,
-                            wavyAmplitude, wavyPeriod,
-                        )
-                        else -> nc.drawLine(rect.left, underlineY, rect.right, underlineY, linePaint)
-                    }
-                }
+            val overrideColor = textColorByCp[col.chapterPosition] ?: col.colorArgb
+            if (overrideColor != null) {
+                paint.color = overrideColor
+                nc.drawText(col.charData, col.start, baselineY, paint)
+                paint.color = paragraphColor ?: defaultColor
+            } else {
+                nc.drawText(col.charData, col.start, baselineY, paint)
             }
+        }
+        if (paragraphColor != null) paint.color = defaultColor
+        if (shadowApplied) paint.clearShadowLayer()
+        if (savedTypeface != null) paint.typeface = savedTypeface
+    }
 
-            // ─── 层 4：书签三角 ───
-            if (bookmarkCps.isNotEmpty()) {
-                bgFillPaint.color = bookmarkArgb
-                val triSize = contentPaint.textSize * 0.5f
-                val path = Path()
-                for (bmCp in bookmarkCps) {
-                    val line = page.lines.firstOrNull { line ->
-                        bmCp >= line.firstChapterPos && bmCp <= line.lastChapterPos
-                    } ?: continue
-                    val rectTop = line.lineTop
-                    path.reset()
-                    path.moveTo(-triSize, rectTop)
-                    path.lineTo(0f, rectTop)
-                    path.lineTo(-triSize, rectTop + triSize)
-                    path.close()
-                    nc.drawPath(path, bgFillPaint)
-                }
+    // ─── 层 3：下划线 ───
+    val underlineStroke = (contentPaint.textSize * 0.1f).coerceAtLeast(2.5f)
+    val fm = contentPaint.fontMetrics
+    val textHeight = -fm.ascent + fm.descent
+    val wavyAmplitude = (contentPaint.textSize * 0.12f).coerceAtLeast(4f)
+    val wavyPeriod = (contentPaint.textSize * 0.6f).coerceAtLeast(12f)
+    for (spec in underlineSpecs) {
+        val linePaint = underlinePaintFor(spec.argb, spec.underlineStyle, underlineStroke)
+        for (rect in spec.rects) {
+            val underlineY = rect.top + textHeight + underlineStroke * 0.5f
+            when (spec.underlineStyle) {
+                Highlight.UNDERLINE_STYLE_WAVY -> drawWavyUnderline(
+                    nc, linePaint, rect.left, rect.right, underlineY,
+                    wavyAmplitude, wavyPeriod,
+                )
+                else -> nc.drawLine(rect.left, underlineY, rect.right, underlineY, linePaint)
             }
-
-            nc.restore()
         }
     }
+
+    // ─── 层 4：书签三角 ───
+    if (bookmarkCps.isNotEmpty()) {
+        bgFillPaint.color = bookmarkArgb
+        val triSize = contentPaint.textSize * 0.5f
+        val path = Path()
+        for (bmCp in bookmarkCps) {
+            val line = page.lines.firstOrNull { line ->
+                bmCp >= line.firstChapterPos && bmCp <= line.lastChapterPos
+            } ?: continue
+            val rectTop = line.lineTop
+            path.reset()
+            path.moveTo(-triSize, rectTop)
+            path.lineTo(0f, rectTop)
+            path.lineTo(-triSize, rectTop + triSize)
+            path.close()
+            nc.drawPath(path, bgFillPaint)
+        }
+    }
+
+    nc.restore()
 }
 
 /**

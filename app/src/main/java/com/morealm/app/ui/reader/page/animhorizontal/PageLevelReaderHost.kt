@@ -573,13 +573,54 @@ fun PageLevelReaderHost(
         if (bgBitmap != null) androidx.compose.ui.graphics.Color.Transparent
         else androidx.compose.ui.graphics.Color(bgColorArgb)
 
-    Box(
-        modifier
-            .fillMaxSize()
-            .background(androidx.compose.ui.graphics.Color(bgColorArgb))
-            // Host 共享层 tap + 长按（NONE 模式 zone tap 也在这；SLIDE/COVER 后续接入时
-            // drag 在 Transition 内自管，tap 仍由本层处理）。
-            .pointerInput(animType, selection.isActive, highlightActionTarget != null, chapterHighlightsRaw) {
+    // 优先级 3: tap-on-highlight 命中已存高亮 → 弹删除/分享菜单（NONE/COVER/SLIDE 走
+    // pointerInput.detectTapGestures；SIMULATION 走 SimulationReadView.onSingleTap）。
+    // 抽成 lambda 让两条路径共用。
+    val resolveTapOnHighlight: (Offset) -> Boolean = { offset ->
+        val layout = core.state.currentChapter
+        var consumed = false
+        if (layout != null && chapterHighlightsRaw.isNotEmpty()) {
+            val hit = layout.findColumnByPixel(
+                offset.x - layout.paddingLeft,
+                offset.y,
+            )
+            val cp = hit?.column?.chapterPosition ?: hit?.line?.firstChapterPos
+            if (cp != null) {
+                val highlight = chapterHighlightsRaw.firstOrNull { h ->
+                    h.chapterIndex == layout.chapterIndex &&
+                        cp >= h.startChapterPos && cp < h.endChapterPos
+                }
+                if (highlight != null) {
+                    highlightActionAnchor = offset
+                    highlightActionTarget = highlight
+                    consumed = true
+                }
+            }
+        }
+        consumed
+    }
+    // 优先级 5：长按 → 算选区（NONE/COVER/SLIDE 走 detectTapGestures.onLongPress；
+    // SIMULATION 走 SimulationReadView.onLongPress）。
+    val resolveLongPress: (Offset) -> Unit = { offset ->
+        val layout = core.state.currentChapter
+        if (layout != null) {
+            val sel = handleLongPress(
+                layout = layout,
+                chapterIndex = layout.chapterIndex,
+                x = offset.x - layout.paddingLeft,
+                yInChapter = offset.y,
+                anchorInBox = offset,
+            )
+            if (sel.isActive) selection = sel
+        }
+    }
+
+    // SIMULATION 路径下 SimulationReadView 接管所有触摸，Box 顶层 pointerInput 不工作。
+    // 用 modifier.then(if...) 在 SIMULATION 时跳过 detectTapGestures，避免 Compose 多余
+    // pointerInput 注册（虽然事件到不了它，但 modifier 链路本身不浪费再好）。
+    val hostTapModifier =
+        if (animType != PageAnimType.SIMULATION) {
+            Modifier.pointerInput(animType, selection.isActive, highlightActionTarget != null, chapterHighlightsRaw) {
                 detectTapGestures(
                     onTap = { offset ->
                         // 优先级 1: 选区 active → tap 取消选区
@@ -592,26 +633,8 @@ fun PageLevelReaderHost(
                             highlightActionTarget = null
                             return@detectTapGestures
                         }
-                        // 优先级 3: tap-on-highlight 命中已存高亮 → 弹删除/分享菜单
-                        val layout = core.state.currentChapter
-                        if (layout != null && chapterHighlightsRaw.isNotEmpty()) {
-                            val hit = layout.findColumnByPixel(
-                                offset.x - layout.paddingLeft,
-                                offset.y,
-                            )
-                            val cp = hit?.column?.chapterPosition ?: hit?.line?.firstChapterPos
-                            if (cp != null) {
-                                val highlight = chapterHighlightsRaw.firstOrNull { h ->
-                                    h.chapterIndex == layout.chapterIndex &&
-                                        cp >= h.startChapterPos && cp < h.endChapterPos
-                                }
-                                if (highlight != null) {
-                                    highlightActionAnchor = offset
-                                    highlightActionTarget = highlight
-                                    return@detectTapGestures
-                                }
-                            }
-                        }
+                        // 优先级 3: tap-on-highlight 命中已存高亮 → 弹菜单
+                        if (resolveTapOnHighlight(offset)) return@detectTapGestures
                         // 优先级 4: zone tap 翻页（所有横向 page-level 模式）。
                         // NONE / COVER / SLIDE 都通过 Host 共享层 zone tap 翻页（瞬切语义）。
                         // drag 期间的动画由各 Transition 内部 own (settle-to-edge)。
@@ -624,8 +647,6 @@ fun PageLevelReaderHost(
                         com.morealm.app.core.log.AppLog.info("PageLvlHost", "DIAG onTap zone=$zone animType=$animType x=${offset.x} w=$w")
                         when {
                             offset.x < w * 0.33f -> {
-                                // 边界保护：全书首章首页 hasPrev=false 时不触发动画
-                                // （否则 COVER 等动画白动一次还是停在原位，视觉"持续弹动画"困扰）
                                 if (!core.pageFactory.hasPrev()) {
                                     com.morealm.app.core.log.AppLog.info(
                                         "PageLvlHost",
@@ -643,7 +664,6 @@ fun PageLevelReaderHost(
                                 } else core.pageFactory.moveToPrev()
                             }
                             offset.x > w * 0.67f -> {
-                                // 边界保护：全书末章末页 hasNext=false 时不触发动画
                                 if (!core.pageFactory.hasNext()) {
                                     com.morealm.app.core.log.AppLog.info(
                                         "PageLvlHost",
@@ -663,21 +683,18 @@ fun PageLevelReaderHost(
                             else -> onTapCenter()
                         }
                     },
-                    onLongPress = { offset ->
-                        // 共享层长按 → 算选区。横向 page-level cur page 顶贴 view y=0，
-                        // 所以 y 直接传 offset.y 当 chapter-Y 用（不需 pageOffset 累加）。
-                        val layout = core.state.currentChapter ?: return@detectTapGestures
-                        val sel = handleLongPress(
-                            layout = layout,
-                            chapterIndex = layout.chapterIndex,
-                            x = offset.x - layout.paddingLeft,
-                            yInChapter = offset.y,
-                            anchorInBox = offset,
-                        )
-                        if (sel.isActive) selection = sel
-                    },
+                    onLongPress = { offset -> resolveLongPress(offset) },
                 )
             }
+        } else {
+            Modifier
+        }
+
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(androidx.compose.ui.graphics.Color(bgColorArgb))
+            .then(hostTapModifier)
     ) {
         // 背景图层（固定不滚动，z-order 在 Transition 文字下方）：
         // 在 Box 内但在各 Transition 之前先画 → 与 ScrollCanvasReaderHost.kt:629-642 同款。
@@ -739,6 +756,45 @@ fun PageLevelReaderHost(
                         nextPageBookmarkCps = nextPageBookmarkCps,
                         nextPlusPageBookmarkCps = nextPlusPageBookmarkCps,
                         prevPageBookmarkCps = prevPageBookmarkCps,
+                        turnCtrl = turnCtrl,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                PageAnimType.SIMULATION -> {
+                    // SIMULATION 路径：让 ScrollLayoutEngine 富排版直接喂给 SimulationReadView。
+                    // BitmapProvider 内部按 page.chapterIndex 路由到 prev/cur/next layout 渲染，
+                    // 跨章 SimulationView setBitmaps 自然无缝。
+                    val bitmapProvider = com.morealm.app.ui.reader.page.rememberScrollPagePageBitmapProvider(
+                        state = core.state,
+                        titlePaint = titlePaint,
+                        contentPaint = contentPaint,
+                        chapterNumPaint = chapterNumPaint,
+                        bgColor = bgColorArgb,
+                        bgBitmap = bgBitmap,
+                        chapterHighlightsRaw = chapterHighlightsRaw,
+                        bookmarksRaw = bookmarks,
+                        revealHighlight = revealHighlight,
+                        searchHighlightChapterIndex = searchHighlightChapterIndex,
+                        searchHighlightCpRange = searchHighlightCpRange,
+                        searchHighlightArgb = searchHighlightArgb,
+                        selectionChapterIndex = selectionChapterIndex,
+                        selectionCpRange = selectionCpRange,
+                    )
+                    SimulationPageTransition(
+                        state = core.state,
+                        pageFactory = core.pageFactory,
+                        bitmapProvider = bitmapProvider,
+                        backgroundColor = bgColorArgb,
+                        bgMeanColor = bgColorArgb,
+                        onTapCenter = onTapCenter,
+                        onTapOnHighlight = resolveTapOnHighlight,
+                        onLongPress = resolveLongPress,
+                        // popup 弹出门控：选区 / 高亮 action menu 任一活跃即视为 popup 弹出。
+                        isSelectionActive = { selection.isActive || highlightActionTarget != null },
+                        onDismissPopup = {
+                            if (selection.isActive) selection = handleCancelSelection()
+                            if (highlightActionTarget != null) highlightActionTarget = null
+                        },
                         turnCtrl = turnCtrl,
                         modifier = Modifier.fillMaxSize(),
                     )
