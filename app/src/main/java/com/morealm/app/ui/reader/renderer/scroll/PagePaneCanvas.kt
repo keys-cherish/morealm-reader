@@ -121,6 +121,15 @@ fun PagePaneCanvas(
             val nc = canvas.nativeCanvas
             nc.save()
             nc.translate(chapterPaddingLeft.toFloat(), 0f)
+            // **渲染层 clip 兜底**（rendering invariant）：translate 后 nativeCanvas
+            // 不自动 clip 到 layout bounds，让 ScrollLayoutEngine emit 端的极端边界
+            // （CSS 负 margin / inline-block 越界 / 行末 exceed 压缩让首字 start<0 等）
+            // 有可能 drawText 到 page bounds 之外。COVER 翻页静止状态 prev 在
+            // placeRelative(-viewWidth, 0)，prev 内 x = viewWidth + N 的越界字会被
+            // layout 平移到屏幕 x = N（viewport 左缘出现"上一页字片段"残影，用户
+            // 实测样本：某 EPUB 章节左缘半字"京 / 人记载 / 好绘"等）。
+            // clipRect 是 page bound 的固有不变量，不依赖排版层 100% 正确。
+            nc.clipRect(0f, 0f, visibleWidthF, size.height)
 
             // ─── 层 0：P3-5b Phase 3 块装饰（圆角背景 / 边框） ───
             // 最底层 —— 用户高亮 / 选区 / 搜索高亮 / 文字都画在装饰之上
