@@ -172,6 +172,17 @@ fun PageLevelReaderHost(
     revealHighlight: com.morealm.app.ui.reader.renderer.RevealHighlight? = null,
     /** 全书所有书签 —— Host 内按 cur page 范围过滤画三角。 */
     bookmarks: List<com.morealm.app.domain.entity.Bookmark> = emptyList(),
+    /**
+     * 外部派发的翻页指令（音量键 / TTS 推进 / 蓝牙翻页器 / 顶栏按钮）。
+     * non-null 时本 Host 监听并触发翻页（COVER/SLIDE 走 turnCtrl 动画，NONE 直接瞬切）。
+     * 触发后立刻调 [onPageTurnCommandConsumed] 清空，防同方向连按 enum 值不变被去重。
+     *
+     * 历史：v1.5 page-level 重构遗留的桥梁缺失 — `pageTurnCommand` 仅 legacy Reader()
+     * 在 SIMULATION 模式消费，COVER/SLIDE/NONE 走本 Host 没有任何监听器，
+     * 导致音量键 / 蓝牙键在新引擎下完全不响应。
+     */
+    pageTurnCommand: com.morealm.app.ui.reader.renderer.ReaderPageDirection? = null,
+    onPageTurnCommandConsumed: () -> Unit = {},
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -473,6 +484,43 @@ fun PageLevelReaderHost(
     val turnCtrl = remember { PageTurnAnimController() }
     val tapScope = rememberCoroutineScope()
     var currentAnimJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+    // ── pageTurnCommand 桥梁（音量键 / TTS / 蓝牙 / 顶栏按钮 → 翻页）──
+    // 与 zone tap 共用 turnCtrl + currentAnimJob 串行化路径：COVER/SLIDE 跑动画 commit，
+    // NONE 模式 turnCtrl callback 未注入 → fallback 瞬切。
+    // 立即调 onPageTurnCommandConsumed() 把 state 写回 null，避免 enum 相同值不重启
+    // LaunchedEffect 导致同方向连按吞掉。
+    LaunchedEffect(pageTurnCommand) {
+        val dir = pageTurnCommand ?: return@LaunchedEffect
+        val isNext = dir == com.morealm.app.ui.reader.renderer.ReaderPageDirection.NEXT
+        com.morealm.app.core.log.AppLog.info(
+            "PageLvlHost",
+            "pageTurnCommand received dir=$dir animType=$animType hasNext=${core.pageFactory.hasNext()} hasPrev=${core.pageFactory.hasPrev()}",
+        )
+        // 边界保护：到头不触发动画（与 zone tap 同款语义，避免空白动画）
+        if (isNext && !core.pageFactory.hasNext()) {
+            com.morealm.app.core.log.AppLog.info("PageLvlHost", "pageTurnCommand NEXT at boundary, consume + skip")
+            onPageTurnCommandConsumed()
+            return@LaunchedEffect
+        }
+        if (!isNext && !core.pageFactory.hasPrev()) {
+            com.morealm.app.core.log.AppLog.info("PageLvlHost", "pageTurnCommand PREV at boundary, consume + skip")
+            onPageTurnCommandConsumed()
+            return@LaunchedEffect
+        }
+        val animate = if (isNext) turnCtrl.animateToNext else turnCtrl.animateToPrev
+        onPageTurnCommandConsumed()
+        if (animate != null) {
+            val prev = currentAnimJob
+            currentAnimJob = tapScope.launch {
+                prev?.cancelAndJoin()
+                animate()
+            }
+        } else {
+            // NONE 模式 turnCtrl 未注入 → 瞬切 (与 zone tap fallback 同款)
+            if (isNext) core.pageFactory.moveToNext() else core.pageFactory.moveToPrev()
+        }
+    }
 
     // ── 选区 / 长按 / tap-on-highlight 状态（P4.4 接入）──
     // 共享在 Host 层（Legado ReadView 模型）：长按检测 + 选区状态 + 高亮 action 弹窗
