@@ -806,6 +806,10 @@ fun ReaderScreen(
                     footerCenter = ftrCenter,
                     footerRight = ftrRight,
                 ),
+                // v1.5 page-level 重构遗留桥梁缺失修复：SCROLL 模式之前由 Reader.kt:1385 SCROLL
+                // 早退直接吞掉音量键，新引擎走 Host 内 LaunchedEffect 桥到 pageFactory.moveToNext/Prev 瞬切。
+                pageTurnCommand = pageTurnCommand,
+                onPageTurnCommandConsumed = { pageTurnCommand = null },
             )
         } else if (
             (pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.NONE ||
@@ -959,6 +963,10 @@ fun ReaderScreen(
                     if (toolbarEditing) toolBarViewModel.exitEditMode()
                     else viewModel.toggleControls()
                 },
+                // v1.5 page-level 重构遗留桥梁缺失修复：音量键 / 蓝牙 / TTS / 顶栏按钮路径
+                // 在 COVER/SLIDE/NONE 模式下通过 Host 内 LaunchedEffect 桥到 turnCtrl 动画 / fallback 瞬切
+                pageTurnCommand = pageTurnCommand,
+                onPageTurnCommandConsumed = { pageTurnCommand = null },
                 modifier = Modifier.fillMaxSize(),
             )
         } else if (hasReaderTarget) {
