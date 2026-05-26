@@ -123,7 +123,7 @@ internal fun drawScrollLineBlockStyle(
         rectBottom = lineBottom + padBottom + halfBorder
     }
     // **阶段 2-D**：BORDER_RADIUS_CIRCLE (POSITIVE_INFINITY) sentinel → 自适应圆角 = box 边长 50%。
-    // SampleLN qipao `border-radius: 100%` 让 box 成圆/椭圆。配合 widthPx/heightPx 后 box 真成圆。
+    // 某轻小说 qipao `border-radius: 100%` 让 box 成圆/椭圆。配合 widthPx/heightPx 后 box 真成圆。
     val rectW = rectRight - rectLeft
     val rectH = rectBottom - rectTop
     val r = if (bs.borderRadiusPx.isInfinite()) minOf(rectW, rectH) / 2f
