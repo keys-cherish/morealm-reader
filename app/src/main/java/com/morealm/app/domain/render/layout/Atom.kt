@@ -31,7 +31,7 @@ package com.morealm.app.domain.render.layout
  * ## 现状对比（P3-5b Phase 3 起步）
  *
  * 当前 [ScrollLine] 整行级承载图片（[ScrollLine.isImage] + 空 columns），同一行内
- * 不能 text + image 混排。SampleLN 封面那种 chibi 小图夹在标题字之间、章首大字旁
+ * 不能 text + image 混排。某轻小说封面那种 chibi 小图夹在标题字之间、章首大字旁
  * 配饰图等场景做不到。Atom 把"行内 token"抽出来：一行 = List<Atom>，TextRun 跟
  * InlineImage 可以**任意交错**。
  *

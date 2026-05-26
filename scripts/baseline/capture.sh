@@ -4,8 +4,8 @@
 # 装机后翻到目标页 → 跑此 script → adb 截屏 → 入仓 current/。
 #
 # 用法（单页）：
-#   scripts/baseline/capture.sh 04-sample-epub-vol-title
-#   → 调 `adb shell screencap` 截当前屏 → 存 temp/baseline-snapshots/current/04-sample-epub-vol-title.png
+#   scripts/baseline/capture.sh 04-sample-vol-title
+#   → 调 `adb shell screencap` 截当前屏 → 存 temp/baseline-snapshots/current/04-sample-vol-title.png
 #
 # 用法（批量后 freeze 为 baseline）：
 #   scripts/baseline/capture.sh --freeze v1.5-pre-d-refactor
@@ -59,7 +59,7 @@ case "${1:-}" in
         echo "Example workflow:"
         echo "  1. Install APK + open MoRealm on device"
         echo "  2. Manually navigate to target chapter/page"
-        echo "  3. Run: $0 04-sample-epub-vol-title"
+        echo "  3. Run: $0 04-sample-vol-title"
         echo "  4. Repeat for all 12 representative pages"
         echo "  5. Run: $0 --freeze v1.5-pre-d-refactor  (only once, after all 12 captured)"
         exit 0

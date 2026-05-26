@@ -119,7 +119,6 @@ object EpubParser {
     // 透传到 delegate 让 ChapterBlock.Table 真 emit。某日轻 BookName 多 sibling table
     // 拼标题字 merge 行为保留（class 不含 vol-title 关键字）不破坏视觉。
     // v28 cache 失效让 chapter-1.xhtml 重 flatten 拿到 __MOREALM_TBL__ marker。
-    // 单测 SampleEpubVolTitleTableTest 验证 emit Table OK。
     // v30：task #14 (阶段 2-A 续) — TableMergeVisitor merge 模式不再 merge sibling tables
     // 成单段，改为每 outer table forward DIV(attrs) → 每 sibling 独立 paragraph 各自含
     // outer table 的 BlockStyle (margin-top: -1em / -1.5em / -10em 等)。ScrollLayoutEngine
