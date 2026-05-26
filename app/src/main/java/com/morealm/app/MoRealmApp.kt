@@ -53,6 +53,12 @@ class MoRealmApp : Application(), ImageLoaderFactory {
         super.onCreate()
         instance = this
         AppLog.init(this)
+        // 预 load native algo lib —— 触发 NativeOps.<clinit> 内的 System.loadLibrary，
+        // 让首次 Edge TTS / 其他用到 NativeOps 的调用不必在热路径阻塞 IO。
+        // 老旧 ABI / 系统极端情况下 UnsatisfiedLinkError 不致命，调用点自行兜底。
+        runCatching {
+            Class.forName(com.morealm.app.algo.NativeOps::class.java.name)
+        }.onFailure { AppLog.warn("App", "NativeOps preload failed: ${it.message}") }
         CacheManager.init(cacheDao)
         CookieStore.init(cookieDao)
         CacheBook.init(cacheDao)
