@@ -45,6 +45,7 @@ import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.BookGroup
 import com.morealm.app.presentation.shelf.FolderImportState
+import com.morealm.app.presentation.shelf.ImportPhase
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.shelf.ShelfViewModel
 import com.morealm.app.ui.widget.ShelfGridSkeleton
@@ -170,8 +171,16 @@ fun ShelfScreen(
         if (!showSearch) viewModel.setSearchQuery("")
     }
 
-    LaunchedEffect(folderImportState.running, folderImportState.message, folderImportState.error) {
-        if (!folderImportState.running && folderImportState.message.isNotBlank()) {
+    LaunchedEffect(folderImportState.running, folderImportState.phase, folderImportState.message, folderImportState.error) {
+        // 终态停留 3.5s 让用户看清"完成 N 本"再自动隐藏；Bus state 同步 reset 防止
+        // 重进书架还残留旧的 Done 状态。
+        val terminal = !folderImportState.running &&
+            (folderImportState.phase == com.morealm.app.presentation.shelf.ImportPhase.Done ||
+                folderImportState.phase == com.morealm.app.presentation.shelf.ImportPhase.Error)
+        if (terminal) {
+            delay(3500)
+            viewModel.resetFolderImportState()
+        } else if (!folderImportState.running && folderImportState.message.isNotBlank()) {
             delay(3500)
             viewModel.clearFolderImportMessage()
         }
@@ -510,6 +519,7 @@ fun ShelfScreen(
             FolderImportBanner(
                 state = folderImportState,
                 onDismiss = viewModel::clearFolderImportMessage,
+                onCancel = viewModel::requestCancelFolderImport,
             )
         }
 
@@ -973,7 +983,10 @@ fun ShelfScreen(
 private fun FolderImportBanner(
     state: FolderImportState,
     onDismiss: () -> Unit,
+    onCancel: () -> Unit = {},
 ) {
+    val showProgressBar = state.total > 0 &&
+        (state.phase == ImportPhase.Phase1 || state.phase == ImportPhase.Phase2)
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -986,46 +999,64 @@ private fun FolderImportBanner(
         },
         tonalElevation = 2.dp,
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (state.running) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            } else {
-                Icon(
-                    if (state.error == null) Icons.Default.CheckCircle else Icons.Default.Error,
-                    null,
-                    tint = if (state.error == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    state.message.ifBlank { if (state.running) "正在导入文件夹…" else "导入完成" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                val detail = when {
-                    state.error != null -> state.error
-                    state.running && state.importedCount > 0 -> "已加入 ${state.importedCount} 本，正在继续处理封面/元数据"
-                    state.running -> "请稍候，正在后台扫描和导入"
-                    state.importedCount > 0 -> "共导入 ${state.importedCount} 本书"
-                    else -> "可以换个文件夹再试"
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (state.running) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    Icon(
+                        if (state.error == null) Icons.Default.CheckCircle else Icons.Default.Error,
+                        null,
+                        tint = if (state.error == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    )
                 }
-                Text(
-                    detail,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        state.message.ifBlank { if (state.running) "正在导入文件夹…" else "导入完成" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    val detail = when {
+                        state.error != null -> state.error
+                        // 新进度路径：有 total 时给"X / Y 本"，比通用"正在继续处理"信息量大
+                        showProgressBar -> "已导入 ${state.imported} / ${state.total} 本"
+                        state.running && state.importedCount > 0 -> "已加入 ${state.importedCount} 本，正在继续处理封面/元数据"
+                        state.running -> "请稍候，正在后台扫描和导入"
+                        state.importedCount > 0 -> "共导入 ${state.importedCount} 本书"
+                        else -> "可以换个文件夹再试"
+                    }
+                    Text(
+                        detail,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    )
+                }
+                if (!state.running) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, "关闭")
+                    }
+                }
             }
-            if (!state.running) {
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, "关闭")
+            // ── 进度条 + 取消按钮（仅 Phase1/Phase2 有 total 时显示） ──
+            if (showProgressBar) {
+                Spacer(Modifier.height(10.dp))
+                LinearProgressIndicator(
+                    progress = {
+                        if (state.total > 0) state.imported.toFloat() / state.total else 0f
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onCancel) { Text("取消导入") }
                 }
             }
         }
