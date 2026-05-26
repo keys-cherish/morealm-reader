@@ -15,7 +15,7 @@ import java.nio.charset.Charset
 /**
  * MOBI / AZW3 parser —— 两条路径：
  *
- * 1. **主路径（NCX 真章节）**：用 `mobi/` 子包内参考 Legado 的完整 [MobiReader]
+ * 1. **主路径（NCX 真章节）**：用 `mobi/` 子包内参考 Legado 实现的完整 [MobiReader]
  *    打开 PDB → [KF6Book] / [KF8Book]，从 NCX index 拿真实章节列表 + 通过
  *    `kindle:pos:fid:xxxx:off:yyyy` 定位每章 HTML 内容（HUFF/CDIC 解压 / KF8 fragment 拼装
  *    都在 Legado lib 内完成）。

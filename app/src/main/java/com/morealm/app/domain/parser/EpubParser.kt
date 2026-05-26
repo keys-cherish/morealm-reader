@@ -46,7 +46,7 @@ object EpubParser {
     // 的根因，2026-05-18）。v4 起 cache key 用 chapter.url 完整 url 含 fragment，
     // 旧 v3 cache 全部失效，第一次打开重新解析。
     // v9 = LocalBookParser.isEmptyChapter 阈值放宽（< 8 → < 1）。之前某仙侠 toc
-    // 嵌套人物名 "样本人物"3 char 被误判 empty 兜底；现允许任意 trim 后非空内容
+    // 嵌套 3 char 人物名章节被误判 empty 兜底；现允许任意 trim 后非空内容
     // 通过。v8 cache 内某些 chapter 已被错存为占位字符串，bump 失效。
     // v15：P3-5b Step 2c text-align + text-indent 解析 + ta=/ti= 编码。还修
     // ChapterBlockBuilder effectiveBlockStyle 改为逐层 merge，让 kuang1+p.center 的
@@ -161,7 +161,7 @@ object EpubParser {
     // image 注入 `data-morealm-fullpage="1"` attr，ChapterBlockBuilder 透传到
     // ChapterBlock.Image.isFullPage，flattenToString 输出 `<imgfp src="...">` marker。
     // 某仙侠等 svg-wrap cover 章节 cache 内容从 `<img>` 变成 `<imgfp>` 必须 bump 失效。
-    // 渲染端 PagePaneCanvas 根据 ScrollLine.isFullPageImage 整屏渲染（视觉效果优化 cover）。
+    // 渲染端 PagePaneCanvas 根据 ScrollLine.isFullPageImage 整屏渲染（封面整屏渲染通路）。
     // v40：epub-lib ImgRewriteVisitor 透传 data-morealm-fullpage attr 修复 (2026-05-24 23:xx)。
     // v39 引入时 ImgRewriteVisitor 还在 strip 此 attr → cover.xhtml 在 v39 dir 第一次装机
     // 跑出 `<img>` 旧 marker 被缓存。第二次装机即使 epub-lib 修了，cache HIT len=223 直接

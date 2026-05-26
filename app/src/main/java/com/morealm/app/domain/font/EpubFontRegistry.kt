@@ -23,7 +23,7 @@ import java.net.URI
  * caller 命中 family 但 typeface=null 时 fallback 系统字体，跟没声明 font-family 等价。
  *
  * ## 性能 / 内存
- * - 字体字节 ≈ 1-5 MB / 个，某 EPUB 4 个 zdy + 多个常规 = ~20 MB。落盘到 cacheDir/epub_fonts/
+ * - 字体字节 ≈ 1-5 MB / 个，某 EPUB 4 个自定义 + 多个常规 = ~20 MB。落盘到 cacheDir/epub_fonts/
  *   (FontRepository.tryLoadFontBytes)，不常驻 RAM
  * - Typeface 自身是 native handle 不占多少 Java heap
  * - registry 实例本身只持 family→Typeface map (几十 KB)

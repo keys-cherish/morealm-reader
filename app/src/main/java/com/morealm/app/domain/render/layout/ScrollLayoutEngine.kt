@@ -214,8 +214,8 @@ class ScrollLayoutEngine(
         //
         // **阶段 2-F**：双条件检测"封面 / 卷首页 / BookName" 等特殊章 → 跳过自画 title 大字。
         //
-        // 参考实现 不在这些章正文画 toc navLabel，仅 InfoBar 显示。MoRealm 之前自画
-        // toc navLabel ("书名" / "封面" / "第一卷 剑起风云") 让封面页顶部多出小字与大字布局
+        // 参考实现不在这些章正文画 toc navLabel，仅 InfoBar 显示。MoRealm 之前自画
+        // toc navLabel ("书名" / "封面" / "第一卷 卷起风云") 让封面页顶部多出小字与大字布局
         // 重复 → 视觉跟参考图 38 / 16 不一致。
         //
         // 条件 1：title 是常见的"非内容章节"关键字（精确匹配 trim 后的 title）→
@@ -540,7 +540,7 @@ class ScrollLayoutEngine(
             // **fullpage 整屏渲染分支**：某仙侠等 EPUB 用 `<svg width="100%" height="100%">`
             // 包裹封面 image，[SvgImageRewriteVisitor] 把 svg 容器转 `<imgfp>` marker；
             // 调用方设 isFullPage=true 后，slot 用 viewWidth (整屏宽，不减 padding) 替代
-            // visibleWidth，让封面图占满整个屏幕宽度（视觉效果优化 cover）。
+            // visibleWidth，让封面图占满整个屏幕宽度（封面整屏渲染）。
             // 普通 `<img>` (某轻小说 01 等) isFullPage=false 走原 visibleWidth 段落图行为。
             val baseW = if (isFullPage) viewWidth else visibleWidth
             if (dims != null && dims.first > 0 && dims.second > 0) {

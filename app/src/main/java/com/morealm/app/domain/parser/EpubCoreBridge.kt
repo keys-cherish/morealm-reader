@@ -36,7 +36,7 @@ object EpubCoreBridge {
      * evict 时 close book + delete tmp（防止 cacheDir 增长无界）。
      *
      * **D1.b bugfix**：content:// 路径之前每次 withCoreBook 都 copyToTmp + open + close
-     * （单次模式），某 EPUB这种 ~10MB EPUB + 474 章 spine 每次开销 ~7-10s。host 翻章
+     * （单次模式），某 EPUB（~10MB + 474 章 spine）每次开销 ~7-10s。host 翻章
      * cache MISS 时多个 worker 同时触发 → 并发争 IO → SHIFT-NEXT-FAIL 卡死。修：
      * content:// 也走 LRU cache，cache key 用 uri.toString() 让 caller 共享同一 book。
      *
@@ -65,7 +65,7 @@ object EpubCoreBridge {
 
     /**
      * Per-URI inflight lock —— 同一 URI 多 caller 同时 cache MISS 时让 opener 串行（其他
-     * caller 等结果后从 cache 直读）。否则某 EPUB场景多个 worker 都会触发 copyToTmp + open
+     * caller 等结果后从 cache 直读）。否则大 EPUB 场景多个 worker 都会触发 copyToTmp + open
      * （~7-10s 每次） → IO 资源耗尽 + 重复开销让翻章卡死。entry 永不清，每本书 1 个
      * 微小对象，开销可忽略。
      */

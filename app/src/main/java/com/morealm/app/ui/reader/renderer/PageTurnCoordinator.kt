@@ -300,7 +300,7 @@ internal class PageTurnCoordinator(
         // （旧章 1 页）+ moveToNext=null 判定 → 误判为 boundary → 又一次 CHAPTER ADVANCE
         // → 跳过中间章节。
         //
-        // 日志命中实例：某 EPUB卷首页 pages=1，第一次 tap NEXT 把 coord 推到 17，913ms 后
+        // 日志命中实例：某 EPUB 卷首页 pages=1，第一次 tap NEXT 把 coord 推到 17，913ms 后
         // 第二次 tap 时 factory.curChIdx 仍是 16、pageCount 仍是 1，又 boundary advance
         // 到 18，用户感受「点了第一卷直接跳第二章」。
         //
