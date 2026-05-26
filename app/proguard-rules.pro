@@ -1,7 +1,7 @@
 # MoRealm ProGuard / R8 Rules
 
-# ── Disable obfuscation (keep class/method names readable) ──
--dontobfuscate
+# Release APK 启用 R8 obfuscation（类名 / 方法名 / 字段重命名为 a/b/c）。
+# crash log 需配合 app/build/outputs/mapping/release/mapping.txt retrace 还原。
 
 # ── Room entities (domain.entity package) ──
 -keep class com.morealm.app.domain.entity.** { *; }
