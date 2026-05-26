@@ -5,6 +5,7 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
+  workflow_dispatch:    # 手动触发任意分支验证 CI 配置改动
 
 concurrency:
   group: ci-${{ github.ref }}
