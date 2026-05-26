@@ -8,6 +8,7 @@
 // symbols.ver 把所有非 JNI_OnLoad 符号限定为 local，所以跨 TU 链接成功后
 // 二进制内仍看不到此函数名。
 jstring morealm_op_generate_sec_ms_gec(JNIEnv* env, jclass clazz, jlong now_millis);
+jstring morealm_op_trusted_client_identifier(JNIEnv* env, jclass clazz);
 
 namespace {
 
@@ -18,6 +19,11 @@ const JNINativeMethod kNativeOpsMethods[] = {
         const_cast<char*>("generateSecMsGec"),
         const_cast<char*>("(J)Ljava/lang/String;"),
         reinterpret_cast<void*>(morealm_op_generate_sec_ms_gec),
+    },
+    {
+        const_cast<char*>("trustedClientIdentifier"),
+        const_cast<char*>("()Ljava/lang/String;"),
+        reinterpret_cast<void*>(morealm_op_trusted_client_identifier),
     },
 };
 

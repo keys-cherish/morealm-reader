@@ -3,6 +3,8 @@ package com.morealm.app.algo
 import com.morealm.app.domain.tts.EdgeTtsAuth
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assume.assumeTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -11,9 +13,23 @@ import org.junit.Test
  * 这些 expected 值由独立工具（Python `hashlib.sha256`）算出，与 Kotlin /
  * cpp 实现完全解耦，能 catch 算法整段被改写或常量漂移。
  *
- * 真机 instrumented test [NativeOpsBitLevelTest] 用同样 oracle 跟 native 对比。
+ * Step 4 后 [EdgeTtsAuth.generateSecMsGec] 已 delegate 到 native，Robolectric
+ * 不能 load `.so`，本测试在 host JVM 上 [assumeTrue] skip；真机 / emulator
+ * instrumented test [NativeOpsBitLevelTest] 跑同样语义。
  */
 class PinnedGroundTruthTest {
+
+    private var nativeAvailable = false
+
+    @Before
+    fun probeNative() {
+        nativeAvailable = try {
+            NativeOps.generateSecMsGec(0L)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
 
     @After
     fun teardown() {
@@ -22,6 +38,7 @@ class PinnedGroundTruthTest {
 
     @Test
     fun kotlin_implementation_matches_python_ground_truth() {
+        assumeTrue("native lib not available in this JVM (Robolectric)", nativeAvailable)
         // 由 Python hashlib.sha256 算出，作为算法 spec 的不可变锚点。
         val cases = listOf(
             0L to "7ECB79D14E3AA576D2D79E6D487A1388156D91E614B1BE11C64226A29BC8DD8C",

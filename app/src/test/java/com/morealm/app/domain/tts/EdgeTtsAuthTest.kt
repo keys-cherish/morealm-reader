@@ -1,10 +1,13 @@
 package com.morealm.app.domain.tts
 
+import com.morealm.app.algo.NativeOps
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -23,13 +26,28 @@ import org.junit.Test
  */
 class EdgeTtsAuthTest {
 
+    private var nativeAvailable = false
+
+    @Before
+    fun probeNative() {
+        // EdgeTtsAuth.generateSecMsGec 现 delegate NativeOps, Robolectric JVM 无 .so 加载
+        // 走不通; 真机 / emulator instrumented test 跑等价语义。
+        nativeAvailable = try {
+            NativeOps.generateSecMsGec(0L)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     @After
     fun teardown() {
-        EdgeTtsAuth.resetClockSkew()
+        if (nativeAvailable) EdgeTtsAuth.resetClockSkew()
     }
 
     @Test
     fun `hash output is 64-char uppercase hex`() {
+        assumeTrue("native lib not available", nativeAvailable)
         val token = EdgeTtsAuth.generateSecMsGec(nowMillis = 1_700_000_000_000L)
         assertEquals(64, token.length)
         assertTrue("expected uppercase hex only, got: $token", token.all {
@@ -39,6 +57,7 @@ class EdgeTtsAuthTest {
 
     @Test
     fun `same 5 minute window produces stable token`() {
+        assumeTrue("native lib not available", nativeAvailable)
         // 选一个落在 5 分钟边界的时间戳，确保 +0~299s 都在同一窗口内。
         // 1_700_000_100_000 ms = 1700000100 s，1700000100 % 300 = 0 ✓
         val base = 1_700_000_100_000L
@@ -53,6 +72,7 @@ class EdgeTtsAuthTest {
 
     @Test
     fun `crossing 5 minute window changes token`() {
+        assumeTrue("native lib not available", nativeAvailable)
         // 选一个落在 5 分钟边界的时刻，让 +5min 跨入下一个窗口
         // base = 0 是 1970-01-01 00:00:00 UTC，是 5 分钟边界
         val base = 0L
@@ -63,6 +83,7 @@ class EdgeTtsAuthTest {
 
     @Test
     fun `clock skew shifts effective time forward`() {
+        assumeTrue("native lib not available", nativeAvailable)
         val base = 1_700_000_000_000L
         // base 时点，未调整偏移
         val t1 = EdgeTtsAuth.generateSecMsGec(nowMillis = base)
@@ -91,6 +112,7 @@ class EdgeTtsAuthTest {
 
     @Test
     fun `adjustClockSkew with malformed date is silent`() {
+        assumeTrue("native lib not available", nativeAvailable)
         // 不抛异常，且不改变后续 token
         EdgeTtsAuth.adjustClockSkew("not a real date")
         EdgeTtsAuth.adjustClockSkew(null)
