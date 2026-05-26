@@ -36,3 +36,25 @@ AGENTS.md
 .junie/
 .golutra/
 skills-lock.json
+
+# 日志 / 环境变量（项目级与子模块通用）
+*.log
+*.env
+.env.*
+
+# 证书 / 私钥扩展名（防御性，意外 add 兜底）
+*.pem
+*.p12
+*.cer
+*.crt
+*.key
+
+# 编辑器 / 系统临时文件（跨平台协作防 add）
+*.bak
+*.swp
+*~
+Thumbs.db
+desktop.ini
+
+# 冗余源代码备份（vim / IDE 重构遗留）
+old_vm_*.txt
