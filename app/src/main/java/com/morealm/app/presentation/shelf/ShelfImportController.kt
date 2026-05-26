@@ -1,13 +1,16 @@
 package com.morealm.app.presentation.shelf
 
+import android.Manifest
 import android.content.Context
-import android.database.Cursor
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
-import android.provider.DocumentsContract
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
-import com.morealm.app.domain.entity.BookGroup
 import com.morealm.app.domain.parser.ComicBookDetector
 import com.morealm.app.domain.parser.EpubParser
 import com.morealm.app.domain.parser.MobiParser
@@ -16,42 +19,48 @@ import com.morealm.app.domain.repository.AutoGroupClassifier
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.BookGroupRepository
 import com.morealm.app.domain.storage.BookFileHealthChecker
-import com.morealm.app.domain.storage.FastFileScanner
-import com.morealm.app.core.log.AppLog
+import com.morealm.app.service.ImportService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+/**
+ * 书架导入控制器 —— 两条路径不同语义：
+ *
+ * - **[importLocalBook]**（单本）：< 50ms 任务，直接 `scope.launch(Dispatchers.IO)`
+ *   原地秒入库。不上 Service —— 启动 Foreground Service 的 IPC 开销比导入还久。
+ *   生命周期跟 [scope]（通常 viewModelScope），但单本任务时间极短，丢失风险可忽略。
+ *
+ * - **[importFolder]**（批量）：N 千本任务 5-20 分钟，必须挂 [ImportService] 前台
+ *   保活，否则用户切走 / OEM 杀进程 → 已落盘的 GB 级文件 + 一个空书架。详见
+ *   [ImportService] KDoc。
+ *
+ * UI 仍订阅 [folderImportState] 拿进度，本 controller 自己只代表"老 UI 文案"
+ * 兼容层；真实进度由 [com.morealm.app.domain.sync.ImportStateBus] 广播，
+ * [ShelfViewModel] 负责把 bus 映射到 [_folderImportState]（Step 5 接线）。
+ */
 class ShelfImportController(
     private val bookRepo: BookRepository,
-    private val groupRepo: BookGroupRepository,
+    @Suppress("unused") private val groupRepo: BookGroupRepository,
     private val autoGroupClassifier: AutoGroupClassifier,
     private val context: Context,
     private val scope: CoroutineScope,
 ) {
-    private companion object {
-        const val MAX_FOLDER_IMPORT_DEPTH = 10
-
-        /**
-         * Phase 2 enrichment 并发上限。每本要 EpubParser.withEpubBook + 封面解码 + bitmap
-         * scale，CPU + IO 都占。4 个 worker 在中端机上是甜区（再多触发 IO 队列拥塞 +
-         * GC 抖动）。
-         */
-        const val MAX_ENRICH_PARALLELISM = 4
-
-        /** 批量入库 chunk 大小。50 是 SQLite SQL 文本长度 / 单事务时长的折中。 */
-        const val DB_BATCH_SIZE = 50
-    }
 
     private val _folderImportState = MutableStateFlow(FolderImportState())
     val folderImportState: StateFlow<FolderImportState> = _folderImportState.asStateFlow()
+
+    /**
+     * 让 [ShelfViewModel] / [com.morealm.app.domain.sync.ImportStateBus] 反向写状态，
+     * UI 现有订阅点不动。Step 5 接 bus 时使用。
+     */
+    fun setFolderImportState(state: FolderImportState) {
+        _folderImportState.value = state
+    }
 
     fun clearFolderImportMessage() {
         val current = _folderImportState.value
@@ -109,7 +118,7 @@ class ShelfImportController(
             // 老路径同步等 metadata + 封面解码 + 漫画检测才入库，对 50MB 漫画 EPUB / 大型
             // 精品书来说这一步要数秒到十几秒，用户卡在「正在导入：xxx」无任何反馈。
             //
-            // 与文件夹路径 importFilesWithDeferredCovers 对齐 —— 先 placeholder 入库，
+            // 与文件夹路径 ImportEngine.importBatch 对齐 —— 先 placeholder 入库，
             // 再后台补 metadata/cover/isComic；BookFormatProbeViewModel 的兜底 detect
             // 路径保证 Phase 2 没完成前用户点开也能走对应路由。
             val parsed = parseBookFilename(name)
@@ -161,67 +170,58 @@ class ShelfImportController(
         }
     }
 
+    /**
+     * 批量导入文件夹 —— v1.6 改造：dispatch 到 [ImportService] 前台服务跑，让导入
+     * 跨 APP 切走 / 进程压力都不掉。详细行为见 ImportService.kt KDoc。
+     *
+     * Android 13+ POST_NOTIFICATIONS：服务能起，但没授权时通知栏看不到 progress，
+     * OEM 杀进程概率上升。这里**不阻断**，只 warn —— 弹权限对话框由 UI 层做
+     * （ShelfScreen 在用户首次按"导入文件夹"前 prompt）。
+     */
     fun importFolder(uri: Uri) {
-        _folderImportState.value = FolderImportState(running = true, message = "正在打开文件夹…")
-        scope.launch(Dispatchers.IO) {
-            val startTime = System.currentTimeMillis()
-            tryGrantPermission(uri)
-            try {
-                // ── 用 FastFileScanner 替代 DocumentFile.listFiles ──
-                //
-                // 有 All-Files-Access → File API 直读（1000 文件 < 500ms）；
-                // 无权限 → SAF DocumentsContract.query（比 DocumentFile.listFiles 快 3-5x）。
-                val folderName = resolveTreeName(uri)
-                _folderImportState.value = FolderImportState(
-                    running = true,
-                    folderName = folderName,
-                    message = "正在扫描：$folderName",
-                )
-                AppLog.info("Import", "Scanning folder: $folderName")
-
-                val topChildren = FastFileScanner.listImmediateChildren(context, uri)
-                val subFolders = topChildren.filter { it.isDirectory }
-                val directFiles = topChildren
-                    .filter { !it.isDirectory && detectFormat(it.name) != BookFormat.UNKNOWN }
-                    .map { ch -> FastFileScanner.ScanItem(uri = ch.uri, name = ch.name, filePath = ch.filePath) }
-                AppLog.info("Import", "Found ${subFolders.size} sub-folders, ${directFiles.size} direct files")
-
-                val importedCount = when {
-                    subFolders.isNotEmpty() -> {
-                        _folderImportState.value = _folderImportState.value.copy(
-                            message = "正在导入 ${subFolders.size} 个子文件夹…",
-                        )
-                        val subCount = importSubFolders(subFolders)
-                        val directCount = if (directFiles.isNotEmpty()) importAsGroup(directFiles, folderName) else 0
-                        subCount + directCount
-                    }
-                    directFiles.isNotEmpty() -> importAsGroup(directFiles, folderName)
-                    else -> importDeepScan(uri, folderName)
-                }
-
-                _folderImportState.value = FolderImportState(
-                    folderName = folderName,
-                    importedCount = importedCount,
-                    message = if (importedCount > 0) "已导入 $importedCount 本书" else "没有发现可导入的书籍",
-                )
-                AppLog.info(
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                AppLog.warn(
                     "Import",
-                    "Folder import '$folderName' completed: $importedCount books in ${System.currentTimeMillis() - startTime}ms",
+                    "POST_NOTIFICATIONS not granted — Service will run but no progress notification (OEM kill risk ↑)",
                 )
-            } catch (e: Exception) {
-                _folderImportState.value = FolderImportState(message = "导入失败", error = e.message ?: "未知错误")
-                AppLog.error("Import", "Folder import failed: ${e.message}", e)
             }
         }
+        // 立刻给 UI 一个"正在准备…"提示，避免用户点完按钮以为没反应
+        _folderImportState.value = FolderImportState(
+            running = true,
+            message = "正在准备导入…",
+        )
+        val intent = Intent(context, ImportService::class.java).apply {
+            putExtra(ImportService.EXTRA_TREE_URI, uri)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
+        AppLog.info("Import", "Dispatched folder import to ImportService: $uri")
     }
 
-    /** 拿用户选的根 tree 文件夹名 —— File API 失败 fallback 到 DocumentFile.fromTreeUri。 */
-    private fun resolveTreeName(treeUri: Uri): String {
-        com.morealm.app.domain.storage.StorageAccessHelper.treeUriToFilePath(treeUri)?.let { path ->
-            return java.io.File(path).name.ifBlank { "导入文件夹" }
+    /** 文件后缀 → BookFormat。详见 [importLocalBook] / [ImportService] 内同款实现。 */
+    fun detectFormat(filename: String): BookFormat {
+        val ext = filename.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "txt" -> BookFormat.TXT
+            "epub" -> BookFormat.EPUB
+            "pdf" -> BookFormat.PDF
+            "mobi" -> BookFormat.MOBI
+            "azw3", "azw" -> BookFormat.AZW3
+            "zip" -> BookFormat.CBZ   // 仅保留 .zip，cbz/cbr/rar/7z 不再识别
+            "umd" -> BookFormat.UMD
+            else -> BookFormat.UNKNOWN
         }
-        return DocumentFile.fromTreeUri(context, treeUri)?.name ?: "导入文件夹"
     }
+
+    // ── Single-book helpers（importLocalBook 专用，批量路径已搬到 ImportEngine） ──
 
     /** 按 [BookFileHealthChecker] 校验文件头。耗时 < 5ms。详细规则见该 helper 注释。 */
     private fun isValidFileHeader(uri: Uri, format: BookFormat): Boolean =
@@ -229,140 +229,10 @@ class ShelfImportController(
 
     private fun tryGrantPermission(uri: Uri) {
         try {
-            context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } catch (e: Exception) {
             AppLog.warn("Import", "Permission grant failed: ${e.message}")
         }
-    }
-
-    private suspend fun importSubFolders(subFolders: List<FastFileScanner.ChildItem>, depth: Int = 0): Int {
-        if (depth > MAX_FOLDER_IMPORT_DEPTH) return 0
-        var importedCount = 0
-        for (folder in subFolders) {
-            val folderName = folder.name
-            // 该子文件夹下所有可导入文件（递归到 FastFileScanner 内部，免去手写递归）
-            val descendants = FastFileScanner.scanFolder(
-                context = context,
-                treeUri = folder.uri,
-                isWanted = { detectFormat(it) != BookFormat.UNKNOWN },
-                maxDepth = MAX_FOLDER_IMPORT_DEPTH,
-            )
-            if (descendants.isNotEmpty()) {
-                importedCount += importAsGroup(descendants, folderName)
-                _folderImportState.value = _folderImportState.value.copy(importedCount = importedCount)
-            }
-        }
-        return importedCount
-    }
-
-    private suspend fun importAsGroup(files: List<FastFileScanner.ScanItem>, groupName: String): Int {
-        if (files.isEmpty()) return 0
-
-        _folderImportState.value = _folderImportState.value.copy(
-            message = "正在导入：$groupName（${files.size} 个文件）",
-        )
-        val groupId = UUID.randomUUID().toString()
-        groupRepo.insert(BookGroup(id = groupId, name = groupName))
-        val importedCount = importFilesWithDeferredCovers(files, groupId)
-        if (importedCount == 0) {
-            groupRepo.deleteById(groupId)
-        }
-        _folderImportState.value = _folderImportState.value.copy(importedCount = importedCount)
-        return importedCount
-    }
-
-    private suspend fun importDeepScan(treeUri: Uri, folderName: String): Int {
-        _folderImportState.value = _folderImportState.value.copy(message = "正在深度扫描：$folderName")
-        val allFiles = FastFileScanner.scanFolder(
-            context = context,
-            treeUri = treeUri,
-            isWanted = { detectFormat(it) != BookFormat.UNKNOWN },
-            maxDepth = MAX_FOLDER_IMPORT_DEPTH,
-        )
-        if (allFiles.isEmpty()) return 0
-        return importAsGroup(allFiles, folderName)
-    }
-
-    /**
-     * Phase 1：批量 placeholder 入库（一次事务）。
-     * Phase 2：并发 enrichBookMetadata（[MAX_ENRICH_PARALLELISM] worker），收集后批量 update。
-     *
-     * 与旧实现对比（1000 文件量级）：
-     * - 入库：1000 次单独 insert → 20 次批量 insertAll（5s → < 500ms）
-     * - enrich：串行 for 循环 → 4 并发（数分钟 → 数十秒）
-     * - UI 状态：每本一次 emit → 每批一次 emit（避免 recomposition 风暴）
-     */
-    private suspend fun importFilesWithDeferredCovers(
-        files: List<FastFileScanner.ScanItem>,
-        folderId: String,
-    ): Int = coroutineScope {
-        if (files.isEmpty()) return@coroutineScope 0
-        AppLog.info("Import", "Processing ${files.size} files for group $folderId")
-
-        data class PendingBook(
-            val book: Book,
-            val item: FastFileScanner.ScanItem,
-            val format: BookFormat,
-        )
-
-        // ── Phase 1: header 预检 + 落地到私有目录 + 文件名解析 → placeholder Book → 批量 insert ──
-        val pending = ArrayList<PendingBook>(files.size)
-        for ((idx, item) in files.withIndex()) {
-            val format = detectFormat(item.name)
-            if (format == BookFormat.UNKNOWN) continue
-            if (!isValidFileHeader(item.uri, format)) {
-                AppLog.warn("Import", "Rejected invalid $format header: ${item.name}")
-                continue
-            }
-            val ext = item.name.substringAfterLast('.', "").lowercase()
-            val localUri = com.morealm.app.domain.parser.LocalBookStorage
-                .saveAsLocal(context, item.uri, ext)
-            if (localUri == null) {
-                AppLog.warn("Import", "saveAsLocal failed for ${item.name}")
-                continue
-            }
-            if (bookRepo.findByLocalPath(localUri.toString()) != null) continue
-
-            val parsed = parseBookFilename(item.name)
-            val book = applyAutoGroup(
-                Book(
-                    id = UUID.randomUUID().toString(),
-                    title = parsed.first,
-                    author = parsed.second,
-                    localPath = localUri.toString(),
-                    format = format,
-                    folderId = folderId,
-                    addedAt = System.currentTimeMillis() + idx,
-                )
-            )
-            pending.add(PendingBook(book, item, format))
-        }
-        if (pending.isEmpty()) return@coroutineScope 0
-
-        bookRepo.bulkInsert(pending.map { it.book }, batchSize = DB_BATCH_SIZE)
-        _folderImportState.value = _folderImportState.value.copy(
-            importedCount = pending.size,
-            message = "已导入 ${pending.size} 本，正在后台补元数据…",
-        )
-        AppLog.info("Import", "Phase 1: bulk-inserted ${pending.size} placeholders")
-
-        // ── Phase 2: 并发 enrich (MAX_ENRICH_PARALLELISM worker) + 批量 update ──
-        val enrichDispatcher = Dispatchers.IO.limitedParallelism(MAX_ENRICH_PARALLELISM)
-        val enrichJobs = pending.map { pb ->
-            async(enrichDispatcher) {
-                runCatching {
-                    enrichBookMetadata(pb.book, Uri.parse(pb.book.localPath), pb.format)?.let { applyAutoGroup(it) }
-                }.onFailure { t ->
-                    AppLog.warn("Import", "enrich failed ${pb.book.title}: ${t.message}")
-                }.getOrNull()
-            }
-        }
-        val enriched = enrichJobs.awaitAll().filterNotNull()
-        if (enriched.isNotEmpty()) {
-            bookRepo.bulkUpdate(enriched, batchSize = DB_BATCH_SIZE)
-            AppLog.info("Import", "Phase 2: bulk-updated ${enriched.size} books")
-        }
-        pending.size
     }
 
     /**
@@ -432,65 +302,6 @@ class ShelfImportController(
         }
 
         return base to ""
-    }
-
-    /**
-     * 文件后缀 → BookFormat。
-     *
-     * MoRealm 定位为电子书（文字）阅读器，不发展为漫画 archive 解压器。下列 archive
-     * 后缀在 v1.3 之后**不再识别**：
-     * - `.cbz` / `.cbr` / `.rar` / `.7z` —— 漫画专用 archive，去掉对应解析路径
-     * - 仅保留 `.zip` —— 给小部分用户的 ZIP-as-CBZ 历史习惯留一条入库通道（不做专门优化）
-     *
-     * 实际漫画支持靠 EPUB 内嵌 image 的检测（[EpubParser.detectIsComic]），不再
-     * 解析外挂 archive。
-     */
-    fun detectFormat(filename: String): BookFormat {
-        val ext = filename.substringAfterLast('.', "").lowercase()
-        return when (ext) {
-            "txt" -> BookFormat.TXT
-            "epub" -> BookFormat.EPUB
-            "pdf" -> BookFormat.PDF
-            "mobi" -> BookFormat.MOBI
-            "azw3", "azw" -> BookFormat.AZW3
-            "zip" -> BookFormat.CBZ   // 仅保留 .zip，cbz/cbr/rar/7z 不再识别
-            "umd" -> BookFormat.UMD
-            else -> BookFormat.UNKNOWN
-        }
-    }
-
-    data class FileInfo(val uri: Uri, val name: String, val isDir: Boolean)
-
-    fun listFilesFast(treeUri: Uri): List<FileInfo> {
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-            treeUri, DocumentsContract.getDocumentId(treeUri)
-        )
-        val results = mutableListOf<FileInfo>()
-        var cursor: Cursor? = null
-        try {
-            cursor = context.contentResolver.query(
-                childrenUri,
-                arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE,
-                ),
-                null, null, null
-            )
-            cursor?.use {
-                while (it.moveToNext()) {
-                    val docId = it.getString(0)
-                    val name = it.getString(1) ?: continue
-                    val mime = it.getString(2) ?: ""
-                    val isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR
-                    val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-                    results.add(FileInfo(docUri, name, isDir))
-                }
-            }
-        } catch (e: Exception) {
-            AppLog.error("Import", "Fast list failed, falling back", e)
-        }
-        return results
     }
 
     private suspend fun applyAutoGroup(book: Book): Book {

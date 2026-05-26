@@ -111,7 +111,8 @@ class BookFormatProbeViewModel @Inject constructor(
             // 大型 EPUB 数秒到数十秒；又是 object 单例 @Synchronized，会与同时打开的其他
             // EPUB 串行死锁，导致路由黑屏（用户 220ms 内连点两本 EPUB 时已复现）。
             //
-            // EPUB 漫画检测已在 [ShelfImportController.enrichBookMetadata] (Phase 2) 跑过，
+            // EPUB 漫画检测已在 [ShelfImportController.enrichBookMetadata] (单本) /
+            // [com.morealm.app.domain.sync.ImportEngine.enrichBookMetadata] (批量 Phase 2) 跑过，
             // 结果落 book.isComic。Phase 2 未完用户就点开 → 走文字阅读器（不黑屏），
             // 下次点开 isComic 已写回，路由自动到漫画阅读器。
             if (book.format in setOf(BookFormat.MOBI, BookFormat.AZW3)) {
