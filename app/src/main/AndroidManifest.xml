@@ -100,6 +100,16 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!--
+            SAF 批量导入前台服务 — v1.6 修复"6000 本一次性导入书架为空"。
+            前台化保证导入 10-20 分钟内不被 OEM / 系统 OOM 杀掉；通知栏可见 progress。
+            详见 service/ImportService.kt KDoc。
+        -->
+        <service
+            android:name=".service.ImportService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
