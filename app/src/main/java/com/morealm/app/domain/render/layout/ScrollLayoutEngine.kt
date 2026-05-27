@@ -181,6 +181,13 @@ class ScrollLayoutEngine(
         contentPaint.typeface = swapTypeface
         var diag: StringBuilder? = null
         var diagTrunc = false
+        // **EpubW5H/GlyphBounds diag (2026-05-27)** — 比对 advance (measureText) vs visual bounds
+        // (getTextBounds.right)，识别描边伸出 advance 范围的字符（maker 等 outlined 字体常见）。
+        // overhang > 2px 才记。clipRect 切 visual 不切 advance → 若 line 末字 overhang 大且
+        // col.end + overhang > visibleWidth，描边右沿被切（"P 被吃" 嫌疑根因）。
+        var boundsDiag: StringBuilder? = null
+        var boundsDiagTrunc = false
+        val tmpBounds = android.graphics.Rect()
         try {
             for (i in chars.indices) {
                 val ch = chars[i]
@@ -199,6 +206,18 @@ class ScrollLayoutEngine(
                         diagTrunc = true
                     }
                 }
+                // glyph bounds vs advance overhang 检测
+                contentPaint.getTextBounds(ch, 0, ch.length, tmpBounds)
+                val overhang = tmpBounds.right - swapW
+                if (overhang > 2f && !boundsDiagTrunc) {
+                    if (boundsDiag == null) boundsDiag = StringBuilder()
+                    if (boundsDiag.length < 400) {
+                        boundsDiag.append("[i=$i ch='${ch.take(2)}' adv=$swapW boundsR=${tmpBounds.right} +$overhang]")
+                    } else {
+                        boundsDiag.append("[...]")
+                        boundsDiagTrunc = true
+                    }
+                }
             }
         } finally {
             contentPaint.typeface = origTypeface
@@ -207,6 +226,12 @@ class ScrollLayoutEngine(
             AppLog.info(
                 "EpubW5H/CustomFontWidth",
                 "family='$fontFamily' swap-measure=$diag",
+            )
+        }
+        if (boundsDiag != null) {
+            AppLog.info(
+                "EpubW5H/GlyphBounds",
+                "family='$fontFamily' overhang=$boundsDiag",
             )
         }
         return chars to widths
@@ -1455,7 +1480,8 @@ class ScrollLayoutEngine(
                 // 视觉效果：字符间距微缩，相邻 column 略重叠，行末刚好齐 visibleWidth。
                 val lastEnd = cols.last().end
                 val excess = lastEnd - visibleWidth.toFloat()
-                if (excess > 0f && cols.size >= 2) {
+                val excessFired = excess > 0f && cols.size >= 2
+                if (excessFired) {
                     val cc = excess / cols.size
                     for (i in cols.indices) {
                         // i=0 (first col) 位移 cc * 1；i=last 位移 cc * size = excess
@@ -1463,6 +1489,38 @@ class ScrollLayoutEngine(
                         val c = cols[i]
                         cols[i] = c.copy(start = c.start - py, end = c.end - py)
                     }
+                }
+
+                // **EpubW5H/LineEnd diag (2026-05-27)** — 每行末字位置 + visual bounds 对比，
+                // 用于排查 "P 被吃" 等 clipRect 切字嫌疑。仅自带字体段或 col.end 接近 / 超
+                // visibleWidth 时 fire（正文短行零噪声）。
+                val finalLastEnd = cols.last().end
+                if (currentBlockStyle.fontFamily != null ||
+                    finalLastEnd > visibleWidth.toFloat() * 0.95f
+                ) {
+                    val lastCol = cols.last()
+                    val swapTf = currentBlockStyle.fontFamily?.let {
+                        com.morealm.app.domain.font.EpubFontRegistry.resolveActive(it)
+                    }
+                    val savedTf = contentPaint.typeface
+                    if (swapTf != null) contentPaint.typeface = swapTf
+                    val visualBounds = android.graphics.Rect()
+                    contentPaint.getTextBounds(lastCol.charData, 0, lastCol.charData.length, visualBounds)
+                    contentPaint.typeface = savedTf
+                    val advance: Float = lastCol.end - lastCol.start
+                    val visualRightOffset: Float = visualBounds.right.toFloat() - advance  // > 0 = 描边伸出 advance
+                    val visualRightAbs: Float = lastCol.end + maxOf(0f, visualRightOffset)
+                    val clipPotential = visualRightAbs > visibleWidth.toFloat()
+                    com.morealm.app.core.log.AppLog.info(
+                        "EpubW5H/LineEnd",
+                        "family='${currentBlockStyle.fontFamily}' " +
+                            "lastCh='${lastCol.charData.take(2)}' " +
+                            "lastStart=${lastCol.start} lastEnd=${lastCol.end} adv=$advance " +
+                            "boundsR=${visualBounds.right} visualOverhang=$visualRightOffset " +
+                            "visualRightAbs=$visualRightAbs visibleWidth=$visibleWidth " +
+                            "excessFired=$excessFired clipPotential=$clipPotential " +
+                            "lineText40='${sb.toString().take(40).replace("\n", "\\n")}'",
+                    )
                 }
 
                 emitLine(
