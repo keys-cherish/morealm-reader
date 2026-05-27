@@ -128,6 +128,19 @@ internal fun drawScrollLineBlockStyle(
     val rectH = rectBottom - rectTop
     val r = if (bs.borderRadiusPx.isInfinite()) minOf(rectW, rectH) / 2f
             else bs.borderRadiusPx * fontSizeScale
+    // **EpubW5H/CircleBox/Draw diag (2026-05-27)** — 装饰盒最终几何：rect + radius + scale 来源。
+    // 配 EpubW5H/CircleBox/Emit 对比 emit 阶段算出的 boxW/H 与 drawer 阶段的 rectW/H 是否一致，
+    // 以及圆 sentinel 是否生效。仅装饰段（widthPx 非 null 或 borderRadius CIRCLE）fire。
+    if (bs.widthPx != null || bs.borderRadiusPx.isInfinite()) {
+        com.morealm.app.core.log.AppLog.info(
+            "EpubW5H/CircleBox/Draw",
+            "rect=($rectLeft,$rectTop)-($rectRight,$rectBottom) " +
+                "size=${rectW}x${rectH} r=$r isCircleSentinel=${bs.borderRadiusPx.isInfinite()} " +
+                "fontSizeScale=$fontSizeScale ibCell=${ibCell != null} " +
+                "padL=$padLeft padT=$padTop borderW=$borderWidthScaled " +
+                "family='${bs.fontFamily}'",
+        )
+    }
     val paint = Paint().apply { isAntiAlias = true }
 
     bs.backgroundColor?.let { bgArgb ->

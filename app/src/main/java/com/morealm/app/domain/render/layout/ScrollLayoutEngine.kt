@@ -95,6 +95,55 @@ class ScrollLayoutEngine(
     private val contentLineHeight: Float = contentTextHeight * lineSpacingExtra
 
     /**
+     * 自带字体（@font-face）段 ASCII 空格视觉宽度兜底 —— 默认字体度量 ASCII space 约 0.25em，
+     * 但自带字体（如某 EPUB w2 字体把 `[` 字符 glyph 设计成花苞 ❀ 装饰图标）的 space glyph
+     * 经常被设计师压缩到极窄甚至 0 宽（期待手动控制间距）。emit 阶段不知道渲染层会 swap 到
+     * w2 字体，按默认字体度量出窄空格 → column.start 序列紧凑 → 渲染时「❀角色 A❀」紧贴。
+     *
+     * 修法：当 [currentBlockStyle.fontFamily] 非空时把 ASCII space 字符 width boost 到至少
+     * 半个 CJK 字宽（~0.5em），还原参考实现的「❀ 角色 A ❀」对称间距。仅 fontFamily 非空段
+     * fire，TXT / 系统字体段无回归。
+     */
+    private val asciiSpaceMinWidthWithCustomFont: Float = contentPaint.measureText("一") * 0.5f
+
+    private fun boostAsciiSpaceForCustomFont(
+        fontFamily: String?,
+        chars: ArrayList<String>,
+        widths: ArrayList<Float>,
+    ) {
+        if (fontFamily == null) return
+        val minW = asciiSpaceMinWidthWithCustomFont
+        // **EpubW5H/CustomFontWidth diag (2026-05-27)** — 自带字体 swap 后 `[` `]` `{` `}` 等
+        // 装饰 ASCII 标点可能被设计成 ❀ 花苞 glyph (实际宽 25-35px)，但 measureTextSplit 用默认
+        // paint 算 ~5px 窄宽 → column.start 紧凑 → 渲染时花瓣距离失真（"❀角色 A❀" 间距偏差）。
+        // 当前 boost 只动 ASCII space；日志列出可疑装饰字符 raw width 便于核对是否要扩 boost。
+        var diag: StringBuilder? = null
+        for (i in chars.indices) {
+            val ch = chars[i]
+            if (ch.isEmpty()) continue
+            val firstCh = ch[0]
+            if (ch == " " && widths[i] < minW) {
+                if (diag == null) diag = StringBuilder()
+                diag.append("[i=$i SP raw=${widths[i]}->boost=$minW]")
+                widths[i] = minW
+                continue
+            }
+            // 可疑装饰字符：ASCII 标点 0x21..0x7E 且非字母数字（` [ ] { } < > ~ * 等）
+            val cp = firstCh.code
+            if (cp in 0x21..0x7E && !firstCh.isLetterOrDigit()) {
+                if (diag == null) diag = StringBuilder()
+                diag.append("[i=$i ch='$ch' raw=${widths[i]}]")
+            }
+        }
+        if (diag != null) {
+            AppLog.info(
+                "EpubW5H/CustomFontWidth",
+                "family='$fontFamily' minW=$minW asciiPunctScan=$diag",
+            )
+        }
+    }
+
+    /**
      * 章首块 title 主行用 paint / 测量器 / 行高。复用 [titlePaint]。
      * 章首块行高直接用 textHeight（**不**乘 lineSpacingExtra），与旧
      * [com.morealm.app.domain.render.ChapterProvider] 对齐——标题行紧凑。
@@ -450,6 +499,27 @@ class ScrollLayoutEngine(
             val innerLH = contentTextHeight * 0.95f
             val contentH = ibLines.size * innerLH
             val lineH = maxOf(boxH, contentH + 2f * padScaled)
+
+            // **EpubW5H/CircleBox/Emit diag (2026-05-27)** — 圆形容器 padding 不足时文字超
+            // 内切正方形边界 → 视觉被圆边截。内切正方形边长 = 直径 / √2 ≈ 0.707D。
+            // CSS spec qipao 多写 padding:0.2em；圆形容器要求 padding ≥ 0.146×boxW 才不溢出。
+            // 仅 inline-block container 段 fire（每段最多一次，零正文章节噪声）。
+            run {
+                val isCircle = currentBlockStyle.borderRadiusPx.isInfinite()
+                val inscribedSide = minOf(boxW, boxH) / 1.41421356f
+                val widthOverflow = innerW > inscribedSide
+                val heightOverflow = contentH > inscribedSide
+                com.morealm.app.core.log.AppLog.info(
+                    "EpubW5H/CircleBox/Emit",
+                    "para#$paragraphCounter isCircle=$isCircle designW=$designW designH=$designH " +
+                        "fontScale=$fontScale padScaled=$padScaled " +
+                        "innerW=$innerW boxW=$boxW boxH=$boxH " +
+                        "lines=${ibLines.size} contentH=$contentH lineH=$lineH " +
+                        "inscribedSide=$inscribedSide " +
+                        "widthOverflow=$widthOverflow heightOverflow=$heightOverflow " +
+                        "family='${currentBlockStyle.fontFamily}'",
+                )
+            }
 
             val mlRaw = currentBlockStyle.marginLeftPx
             val mlScaled = if (mlRaw.isNaN()) 0f else mlRaw * fontScale
@@ -848,14 +918,20 @@ class ScrollLayoutEngine(
                 if (maxLines == 0) continue
 
                 // table 整体水平 offset（基于 currentBlockStyle margin auto 检测）
+                // **2026-05-26 fix**：marginLeftPx > 0 (非 auto) 时应用为水平左偏移
+                // 之前 else 分支固定 0f → `<div class="qipao" style="margin-left:6em">` 和
+                // `<table style="margin:-1em 0 0 7em">` 的 marginLeftPx 数值被吞，table 紧贴左边
+                // 而不是参考实现的居中偏右 / 右侧。也覆盖原 mrAuto+mlNumeric 场景：之前 ml 数值
+                // 被吞，表"左贴"实为"左缘 0"，参考实现是"距左 N em"。
                 val totalWidth = cellWidths.sum() + cellGap * (cellWidths.size - 1)
                 val mlAuto = currentBlockStyle.marginLeftPx.isNaN()
                 val mrAuto = currentBlockStyle.marginRightPx.isNaN()
+                val mlValue = if (!mlAuto && currentBlockStyle.marginLeftPx > 0f) currentBlockStyle.marginLeftPx else 0f
                 val tableXOffset = when {
                     mlAuto && !mrAuto -> (visibleWidth - totalWidth).coerceAtLeast(0f)  // 右贴
-                    !mlAuto && mrAuto -> 0f  // 左贴
+                    !mlAuto && mrAuto -> mlValue  // 左偏 marginLeftPx
                     mlAuto && mrAuto -> ((visibleWidth - totalWidth) / 2f).coerceAtLeast(0f)  // 居中
-                    else -> 0f
+                    else -> mlValue  // 双非 auto: 应用 marginLeftPx 数值（CSS spec 标准）
                 }
 
                 // **D 模型 (阶段 1 重构)** —— layoutTable emit D 模型：每 cell 是子 box
@@ -1303,6 +1379,8 @@ class ScrollLayoutEngine(
                 if (textChunk.isEmpty()) return
                 val (chars, rawWidths) = contentTextMeasure.measureTextSplit(textChunk)
                 if (chars.isEmpty()) return
+                // 自带字体段 ASCII space 视觉间距兜底（见 [boostAsciiSpaceForCustomFont] kdoc）
+                boostAsciiSpaceForCustomFont(currentBlockStyle.fontFamily, chars, rawWidths)
 
                 // **A4c+ 字体跨页修**：把 sizeScale 反映到 widths 让 ZhLayout 按真实缩放后
                 // 宽度算行打断。否则 em30 大字按基础字号算「10 字一行」，emit 时实际占 25
@@ -1356,6 +1434,7 @@ class ScrollLayoutEngine(
                         val lineText = textChunk.substring(lineStart, lineEnd)
                         val (lineChars, lineWidths) = contentTextMeasure.measureTextSplit(lineText)
                         if (lineChars.isEmpty()) continue
+                        boostAsciiSpaceForCustomFont(currentBlockStyle.fontFamily, lineChars, lineWidths)
                         val isFirstLine = isFirstChunkOfPara && lineIndex == 0
                         val isLastLine = lineIndex == layout.lineCount - 1
                         val desiredWidth = lineWidths.sum()

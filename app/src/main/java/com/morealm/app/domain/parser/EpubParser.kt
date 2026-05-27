@@ -168,7 +168,12 @@ object EpubParser {
     // v41：EPUB 自带字体 (2026-05-25) — flattenToString 新增 `ff=<base64>` marker 编码
     // BlockStyle.fontFamily。v40 cache 不含 ff= → 打开带自定义字体的书不会触发 font swap。
     // bump v41 强制 re-flatten 让 fontFamily 信息进入 cache。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v41"
+    // v42：epub-lib ChapterBlockBuilder.mergeOnTop 修 fontFamily 字段漏 merge bug
+    // (2026-05-26)。修复前 RichText 段 `<p class="w2"><span>X</span></p>` flatten 后
+    // payload 无 ff= marker（祖先 BlockStyle.fontFamily 被 mergeOnTop 默认 null 吞）。
+    // v41 cache 已固化"无 ff="payload，必须 bump v42 重 flatten 让花苞 ❀ 等装饰字体
+    // 真正生效。装机用户每章首次打开重新解析一次（cost 通常 < 200ms 可接受）。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v42"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
