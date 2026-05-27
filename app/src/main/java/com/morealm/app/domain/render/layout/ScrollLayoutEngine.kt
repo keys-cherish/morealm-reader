@@ -109,8 +109,8 @@ class ScrollLayoutEngine(
     /**
      * **P3 fix (2026-05-27)** — 自带字体段窄 ASCII 字符宽度对齐（fallback 路径）。
      *
-     * 仅用作 [swapTypefaceMeasureForAscii] swap typeface 解析失败时的 fallback。优先用
-     * [swapTypefaceMeasureForAscii] 真实测量；本函数只是兜底防止失败时位置全乱。
+     * 仅用作 [swapTypefaceMeasure] swap typeface 解析失败时的 fallback。优先用
+     * [swapTypefaceMeasure] 真实测量；本函数只是兜底防止失败时位置全乱。
      *
      * 修法：window 内将 ASCII 标点宽度拉到至少 [asciiSpaceMinWidthWithCustomFont]（0.5 × CJK）。
      * 字母数字不动避免破坏英文段排版。
@@ -152,13 +152,19 @@ class ScrollLayoutEngine(
      * 20px）。改用 [com.morealm.app.domain.font.EpubFontRegistry] 查 swap typeface，
      * 直接 measureText 拿真实 glyph advance —— 不管 ❀ 是 20 还是 50 都能对上渲染。
      *
-     * 范围：仅 ASCII 标点 (0x20..0x7E 且非字母数字) 用 swap typeface 测量；CJK 与字母数字
-     * 仍用默认 contentTextMeasure（避免 w2 等自带字体不覆盖 CJK 时 fallback 到系统字体造成
-     * CJK 宽度跳变）。swap typeface 解析失败时 fallback 到 [boostNarrowAsciiForCustomFont]。
+     * **v3 (2026-05-27 升级)**：范围从仅 ASCII 标点扩到**所有字符**，包括 CJK。
+     * v2 限定 ASCII 时漏掉了一个症状：纯 CJK 段配自带描边字体时，
+     * CJK glyph 比默认字宽 5-10%，ZhLayout 按窄宽算「N 字一行」实际占 N+0.5 字宽 →
+     * 末字超 visibleWidth 被 clipRect 吃掉（用户实测 P / 效 被截）。
+     * v3 让 CJK 也走 swap typeface measureText：若 swap 字体覆盖 CJK，拿真实 glyph
+     * advance；若不覆盖，Android 自动 fallback 到 Noto Sans CJK 等，renderer 端 swap
+     * 也走同 fallback → measure-render 一致不跳变。
      *
-     * Caller: [emitInlineBlockContainer.runsToGlyphs]（pill / qipao 装饰盒）。
+     * swap typeface 解析失败时 fallback 到 [boostNarrowAsciiForCustomFont]（兜底 ASCII 标点）。
+     *
+     * Caller：[emitInlineBlockContainer.runsToGlyphs]（pill / qipao）+ [emitTextChunk]（正文段）。
      */
-    private fun swapTypefaceMeasureForAscii(
+    private fun swapTypefaceMeasure(
         text: String,
         fontFamily: String?,
     ): Pair<ArrayList<String>, ArrayList<Float>> {
@@ -174,6 +180,7 @@ class ScrollLayoutEngine(
         val origTypeface = contentPaint.typeface
         contentPaint.typeface = swapTypeface
         var diag: StringBuilder? = null
+        var diagTrunc = false
         try {
             for (i in chars.indices) {
                 val ch = chars[i]
@@ -181,18 +188,16 @@ class ScrollLayoutEngine(
                     widths.add(defWidths[i])
                     continue
                 }
-                val firstCh = ch[0]
-                val cp = firstCh.code
-                val useSwap = cp in 0x20..0x7E && !firstCh.isLetterOrDigit()
-                if (useSwap) {
-                    val swapW = contentPaint.measureText(ch)
-                    widths.add(swapW)
-                    if (swapW != defWidths[i]) {
-                        if (diag == null) diag = StringBuilder()
-                        diag.append("[i=$i ch='$ch' def=${defWidths[i]}->swap=$swapW]")
+                val swapW = contentPaint.measureText(ch)
+                widths.add(swapW)
+                if (kotlin.math.abs(swapW - defWidths[i]) > 1f && !diagTrunc) {
+                    if (diag == null) diag = StringBuilder()
+                    if (diag.length < 400) {
+                        diag.append("[i=$i ch='${ch.take(2)}' def=${defWidths[i]}->swap=$swapW]")
+                    } else {
+                        diag.append("[...]")
+                        diagTrunc = true
                     }
-                } else {
-                    widths.add(defWidths[i])
                 }
             }
         } finally {
@@ -525,8 +530,8 @@ class ScrollLayoutEngine(
                         is ContentRun.Text -> {
                             // **P3 v2 (2026-05-27)** — 自带字体段用 swap typeface 真实测量 ASCII
                             // 标点宽度。取代 P3 v1 的「boost 到 0.5×CJK」(实测过松散)。详
-                            // [swapTypefaceMeasureForAscii] kdoc。
-                            val (chars, rawWidths) = swapTypefaceMeasureForAscii(run.text, currentBlockStyle.fontFamily)
+                            // [swapTypefaceMeasure] kdoc。
+                            val (chars, rawWidths) = swapTypefaceMeasure(run.text, currentBlockStyle.fontFamily)
                             val effScale = run.style.fontSizeEm ?: 1f
                             val effColor = run.style.color ?: cellLevelColor
                             for (i in chars.indices) {
@@ -1476,10 +1481,11 @@ class ScrollLayoutEngine(
             // isFirstChunkOfPara=true → 段首 chunk 的首行用 indentWidth 起；续行 / 后续 chunk = 0 起。
             fun emitTextChunk(textChunk: String, isFirstChunkOfPara: Boolean) {
                 if (textChunk.isEmpty()) return
-                val (chars, rawWidths) = contentTextMeasure.measureTextSplit(textChunk)
+                // **P3 v3 (2026-05-27)** — 自带字体段所有字符（含 CJK）走 swap typeface 测量，
+                // 修复纯 CJK 段 ZhLayout 按窄宽算行末字超 visibleWidth 被切（末字
+                // P 被吃实测）。详 [swapTypefaceMeasure] kdoc v3 注释。
+                val (chars, rawWidths) = swapTypefaceMeasure(textChunk, currentBlockStyle.fontFamily)
                 if (chars.isEmpty()) return
-                // 自带字体段 ASCII space 视觉间距兜底（见 [boostNarrowAsciiForCustomFont] kdoc）
-                boostNarrowAsciiForCustomFont(currentBlockStyle.fontFamily, chars, rawWidths)
 
                 // **A4c+ 字体跨页修**：把 sizeScale 反映到 widths 让 ZhLayout 按真实缩放后
                 // 宽度算行打断。否则 em30 大字按基础字号算「10 字一行」，emit 时实际占 25
@@ -1531,9 +1537,10 @@ class ScrollLayoutEngine(
                         val lineEnd = layout.getLineEnd(lineIndex)
                         if (lineEnd <= lineStart) continue
                         val lineText = textChunk.substring(lineStart, lineEnd)
-                        val (lineChars, lineWidths) = contentTextMeasure.measureTextSplit(lineText)
+                        // **P3 v3** — 同 emitTextChunk 入口的 swapTypefaceMeasure，保持
+                        // ZhLayout 算行后的 emit 测量与 wrap 测量一致（避免拼凑跨字体的位置序列）
+                        val (lineChars, lineWidths) = swapTypefaceMeasure(lineText, currentBlockStyle.fontFamily)
                         if (lineChars.isEmpty()) continue
-                        boostNarrowAsciiForCustomFont(currentBlockStyle.fontFamily, lineChars, lineWidths)
                         val isFirstLine = isFirstChunkOfPara && lineIndex == 0
                         val isLastLine = lineIndex == layout.lineCount - 1
                         val desiredWidth = lineWidths.sum()
