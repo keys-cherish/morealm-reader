@@ -106,41 +106,105 @@ class ScrollLayoutEngine(
      */
     private val asciiSpaceMinWidthWithCustomFont: Float = contentPaint.measureText("一") * 0.5f
 
-    private fun boostAsciiSpaceForCustomFont(
+    /**
+     * **P3 fix (2026-05-27)** — 自带字体段窄 ASCII 字符宽度对齐（fallback 路径）。
+     *
+     * 仅用作 [swapTypefaceMeasureForAscii] swap typeface 解析失败时的 fallback。优先用
+     * [swapTypefaceMeasureForAscii] 真实测量；本函数只是兜底防止失败时位置全乱。
+     *
+     * 修法：window 内将 ASCII 标点宽度拉到至少 [asciiSpaceMinWidthWithCustomFont]（0.5 × CJK）。
+     * 字母数字不动避免破坏英文段排版。
+     */
+    private fun boostNarrowAsciiForCustomFont(
         fontFamily: String?,
         chars: ArrayList<String>,
         widths: ArrayList<Float>,
     ) {
         if (fontFamily == null) return
         val minW = asciiSpaceMinWidthWithCustomFont
-        // **EpubW5H/CustomFontWidth diag (2026-05-27)** — 自带字体 swap 后 `[` `]` `{` `}` 等
-        // 装饰 ASCII 标点可能被设计成 ❀ 花苞 glyph (实际宽 25-35px)，但 measureTextSplit 用默认
-        // paint 算 ~5px 窄宽 → column.start 紧凑 → 渲染时花瓣距离失真（"❀角色 A❀" 间距偏差）。
-        // 当前 boost 只动 ASCII space；日志列出可疑装饰字符 raw width 便于核对是否要扩 boost。
         var diag: StringBuilder? = null
         for (i in chars.indices) {
             val ch = chars[i]
             if (ch.isEmpty()) continue
             val firstCh = ch[0]
-            if (ch == " " && widths[i] < minW) {
-                if (diag == null) diag = StringBuilder()
-                diag.append("[i=$i SP raw=${widths[i]}->boost=$minW]")
-                widths[i] = minW
-                continue
-            }
-            // 可疑装饰字符：ASCII 标点 0x21..0x7E 且非字母数字（` [ ] { } < > ~ * 等）
             val cp = firstCh.code
-            if (cp in 0x21..0x7E && !firstCh.isLetterOrDigit()) {
-                if (diag == null) diag = StringBuilder()
-                diag.append("[i=$i ch='$ch' raw=${widths[i]}]")
-            }
+            if (cp !in 0x20..0x7E) continue
+            if (firstCh.isLetterOrDigit()) continue
+            if (widths[i] >= minW) continue
+            if (diag == null) diag = StringBuilder()
+            val rawW = widths[i]
+            widths[i] = minW
+            diag.append("[i=$i ch='$ch' raw=$rawW->boost=$minW]")
         }
         if (diag != null) {
             AppLog.info(
                 "EpubW5H/CustomFontWidth",
-                "family='$fontFamily' minW=$minW asciiPunctScan=$diag",
+                "family='$fontFamily' minW=$minW boostScan=$diag",
             )
         }
+    }
+
+    /**
+     * **P3 v2 (2026-05-27)** — 自带字体段用 swap typeface 真实测量 ASCII 标点宽度。
+     *
+     * 取代 [boostNarrowAsciiForCustomFont] 拍脑袋 boost 到 0.5×CJK 的写法。装机实测 P3 v1
+     * 的 boost 让 `❀ 角色 A ❀` 速记 pill 视觉间距过大（27px boost 但 ❀ glyph 渲染可能只
+     * 20px）。改用 [com.morealm.app.domain.font.EpubFontRegistry] 查 swap typeface，
+     * 直接 measureText 拿真实 glyph advance —— 不管 ❀ 是 20 还是 50 都能对上渲染。
+     *
+     * 范围：仅 ASCII 标点 (0x20..0x7E 且非字母数字) 用 swap typeface 测量；CJK 与字母数字
+     * 仍用默认 contentTextMeasure（避免 w2 等自带字体不覆盖 CJK 时 fallback 到系统字体造成
+     * CJK 宽度跳变）。swap typeface 解析失败时 fallback 到 [boostNarrowAsciiForCustomFont]。
+     *
+     * Caller: [emitInlineBlockContainer.runsToGlyphs]（pill / qipao 装饰盒）。
+     */
+    private fun swapTypefaceMeasureForAscii(
+        text: String,
+        fontFamily: String?,
+    ): Pair<ArrayList<String>, ArrayList<Float>> {
+        val (chars, defWidths) = contentTextMeasure.measureTextSplit(text)
+        if (fontFamily == null) return chars to defWidths
+        val swapTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(fontFamily)
+        if (swapTypeface == null) {
+            // fallback：swap 字体没注册或加载失败 → 用 boost 兜底防位置全乱
+            boostNarrowAsciiForCustomFont(fontFamily, chars, defWidths)
+            return chars to defWidths
+        }
+        val widths = ArrayList<Float>(chars.size)
+        val origTypeface = contentPaint.typeface
+        contentPaint.typeface = swapTypeface
+        var diag: StringBuilder? = null
+        try {
+            for (i in chars.indices) {
+                val ch = chars[i]
+                if (ch.isEmpty()) {
+                    widths.add(defWidths[i])
+                    continue
+                }
+                val firstCh = ch[0]
+                val cp = firstCh.code
+                val useSwap = cp in 0x20..0x7E && !firstCh.isLetterOrDigit()
+                if (useSwap) {
+                    val swapW = contentPaint.measureText(ch)
+                    widths.add(swapW)
+                    if (swapW != defWidths[i]) {
+                        if (diag == null) diag = StringBuilder()
+                        diag.append("[i=$i ch='$ch' def=${defWidths[i]}->swap=$swapW]")
+                    }
+                } else {
+                    widths.add(defWidths[i])
+                }
+            }
+        } finally {
+            contentPaint.typeface = origTypeface
+        }
+        if (diag != null) {
+            AppLog.info(
+                "EpubW5H/CustomFontWidth",
+                "family='$fontFamily' swap-measure=$diag",
+            )
+        }
+        return chars to widths
     }
 
     /**
@@ -441,13 +505,16 @@ class ScrollLayoutEngine(
             // **Step 7 v6 (2026-05-24)**: CSS box-sizing: content-box (default) — padding 加在
             // width 外。box rect 视觉宽高 = inner content 宽高 + 2 × padding。
             // 之前 (v5) `innerW = boxW - 2 × pad` 把 padding 算 box 内 (border-box)，让
-            // innerW = 252 - 28.8 = 223 不够「女神大人」(234px) 1 行 → "人" 折行。
+            // innerW = 252 - 28.8 = 223 不够装一行字 → 末字折行。
             // CSS spec: .qipao { width:3.5em; padding:0.2em } → content width = 3.5em，
             // box visual width = 3.5em + 2×0.2em = 3.9em。
+            //
+            // **P2 fix (2026-05-27)**：var 而非 val，下方圆形溢出检测时可动态扩 padding 让
+            // 内切正方形装下内文（详 contentH 计算后的 isCircle 分支注释）。
             val innerW = designW * fontScale
-            val padScaled = currentBlockStyle.paddingLeftPx * fontScale
-            val boxW = innerW + 2f * padScaled
-            val boxH = designH * fontScale + 2f * padScaled
+            var padScaled = currentBlockStyle.paddingLeftPx * fontScale
+            var boxW = innerW + 2f * padScaled
+            var boxH = designH * fontScale + 2f * padScaled
 
             // **Step 7 v5**: 每 row 独立 wrap。row 内 runs 拼成 glyphs，按 innerW 贪心切行
             // (单 row 太宽时仍 wrap)。row 间强制新 line。
@@ -456,7 +523,10 @@ class ScrollLayoutEngine(
                 for (run in runs) {
                     when (run) {
                         is ContentRun.Text -> {
-                            val (chars, rawWidths) = contentTextMeasure.measureTextSplit(run.text)
+                            // **P3 v2 (2026-05-27)** — 自带字体段用 swap typeface 真实测量 ASCII
+                            // 标点宽度。取代 P3 v1 的「boost 到 0.5×CJK」(实测过松散)。详
+                            // [swapTypefaceMeasureForAscii] kdoc。
+                            val (chars, rawWidths) = swapTypefaceMeasureForAscii(run.text, currentBlockStyle.fontFamily)
                             val effScale = run.style.fontSizeEm ?: 1f
                             val effColor = run.style.color ?: cellLevelColor
                             for (i in chars.indices) {
@@ -498,12 +568,41 @@ class ScrollLayoutEngine(
 
             val innerLH = contentTextHeight * 0.95f
             val contentH = ibLines.size * innerLH
+
+            // **P2 fix (2026-05-27)** — 圆形容器 (border-radius:100%) padding 不足时文字超内
+            // 切正方形边界 → 视觉被圆边截。CSS spec：圆形容器要求 padding ≥ (1-1/√2)×D/2 ≈
+            // 0.146 D 才不溢出，但 EPUB 作者通常只给 0.05 D。修法：检测 (innerW × contentH)
+            // 是否塞得进内切正方形 (D/√2)，不行则按需扩 padding 把圆放大让 (innerW × contentH)
+            // 装入。5% 安全余量避边界字符 anti-alias 像素被截。同步覆盖 currentBlockStyle.padding
+            // 让 ScrollBlockStyleDrawer 画放大后的圆。仅 isCircle 段 fire，pill / 矩形装饰盒不受影响。
+            val isCircleForP2 = currentBlockStyle.borderRadiusPx.isInfinite()
+            if (isCircleForP2) {
+                val initialInscribed = minOf(boxW, boxH) / 1.41421356f
+                val needed = maxOf(innerW, contentH)
+                if (needed > initialInscribed) {
+                    val requiredD = needed * 1.05f * 1.41421356f
+                    val targetD = maxOf(requiredD, boxW)
+                    val newPad = padScaled + (targetD - boxW) / 2f
+                    currentBlockStyle = currentBlockStyle.copy(
+                        paddingLeftPx = newPad / fontScale,
+                        paddingRightPx = newPad / fontScale,
+                        paddingTopPx = newPad / fontScale,
+                        paddingBottomPx = newPad / fontScale,
+                    )
+                    com.morealm.app.core.log.AppLog.info(
+                        "EpubW5H/CircleBox/Emit",
+                        "P2 enlarge: oldBoxW=$boxW oldInscribed=$initialInscribed " +
+                            "needed=$needed → newBoxW=$targetD newPad=$newPad",
+                    )
+                    padScaled = newPad
+                    boxW = targetD
+                    boxH = targetD
+                }
+            }
+
             val lineH = maxOf(boxH, contentH + 2f * padScaled)
 
-            // **EpubW5H/CircleBox/Emit diag (2026-05-27)** — 圆形容器 padding 不足时文字超
-            // 内切正方形边界 → 视觉被圆边截。内切正方形边长 = 直径 / √2 ≈ 0.707D。
-            // CSS spec qipao 多写 padding:0.2em；圆形容器要求 padding ≥ 0.146×boxW 才不溢出。
-            // 仅 inline-block container 段 fire（每段最多一次，零正文章节噪声）。
+            // **EpubW5H/CircleBox/Emit diag** — 排版后最终几何（含 P2 enlarge 后），用于验证。
             run {
                 val isCircle = currentBlockStyle.borderRadiusPx.isInfinite()
                 val inscribedSide = minOf(boxW, boxH) / 1.41421356f
@@ -1379,8 +1478,8 @@ class ScrollLayoutEngine(
                 if (textChunk.isEmpty()) return
                 val (chars, rawWidths) = contentTextMeasure.measureTextSplit(textChunk)
                 if (chars.isEmpty()) return
-                // 自带字体段 ASCII space 视觉间距兜底（见 [boostAsciiSpaceForCustomFont] kdoc）
-                boostAsciiSpaceForCustomFont(currentBlockStyle.fontFamily, chars, rawWidths)
+                // 自带字体段 ASCII space 视觉间距兜底（见 [boostNarrowAsciiForCustomFont] kdoc）
+                boostNarrowAsciiForCustomFont(currentBlockStyle.fontFamily, chars, rawWidths)
 
                 // **A4c+ 字体跨页修**：把 sizeScale 反映到 widths 让 ZhLayout 按真实缩放后
                 // 宽度算行打断。否则 em30 大字按基础字号算「10 字一行」，emit 时实际占 25
@@ -1434,7 +1533,7 @@ class ScrollLayoutEngine(
                         val lineText = textChunk.substring(lineStart, lineEnd)
                         val (lineChars, lineWidths) = contentTextMeasure.measureTextSplit(lineText)
                         if (lineChars.isEmpty()) continue
-                        boostAsciiSpaceForCustomFont(currentBlockStyle.fontFamily, lineChars, lineWidths)
+                        boostNarrowAsciiForCustomFont(currentBlockStyle.fontFamily, lineChars, lineWidths)
                         val isFirstLine = isFirstChunkOfPara && lineIndex == 0
                         val isLastLine = lineIndex == layout.lineCount - 1
                         val desiredWidth = lineWidths.sum()

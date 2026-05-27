@@ -282,20 +282,24 @@ internal fun drawScrollPageOnCanvas(
         val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
         val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
 
-        // **EpubW5H/FontSwap diag (2026-05-27)** — 自带字体 swap 后 paint.fontMetrics 变了，
-        // 但本函数顶部预算的 ascent / contentAscent 已用「默认 paint」常量化 → baseline 不重算 →
-        // swap 字体 descent 更大时 glyph 底部跨过 line.lineBottom，被 clipRect 切（"上" 字
-        // 下横切症状）。仅在发生 swap 时 fire（INFO）。
+        // **P1 fix (2026-05-27)** — swap 后用 swap 字体的 ascent 重算 baselineY，避免 columns
+        // path 用 fontMetrics 函数顶部预算的「默认 paint」ascent 常量让自带字体 descent 超出
+        // lineBottom 余量被 clipRect 切。cells/atoms path 的 baseline 是 emit 时按 innerLH×0.8
+        // 算好的（atom 局部坐标），不受此修影响。
+        val effectiveAscent: Float = if (savedTypeface != null) -paint.fontMetrics.ascent else ascent
+
+        // **EpubW5H/FontSwap diag** — swap 前后 metrics 对比，用于验证 P1 修复
         if (savedTypeface != null) {
             val fm = paint.fontMetrics
             val newDescent = fm.descent
             val newAscent = -fm.ascent
-            val baselineYDbg = line.lineTop + ascent
+            val baselineYDbg = line.lineTop + effectiveAscent
             val roomBelow = line.lineBottom - baselineYDbg
             com.morealm.app.core.log.AppLog.info(
                 "EpubW5H/FontSwap",
                 "family='${line.blockStyle.fontFamily}' " +
                     "oldAscent=$ascent newAscent=$newAscent newDescent=$newDescent " +
+                    "effAscent=$effectiveAscent " +
                     "lineTop=${line.lineTop} lineBottom=${line.lineBottom} " +
                     "baselineY=$baselineYDbg roomBelow=$roomBelow " +
                     "overflow=${newDescent > roomBelow} " +
@@ -303,7 +307,7 @@ internal fun drawScrollPageOnCanvas(
             )
         }
 
-        val baselineY = line.lineTop + ascent
+        val baselineY = line.lineTop + effectiveAscent
         val paragraphColor = line.blockStyle.textColor
         if (paragraphColor != null) paint.color = paragraphColor
         val ts = line.blockStyle.textShadow
