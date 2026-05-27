@@ -20,6 +20,7 @@ local.properties
 .trellis/
 .cursor/
 AGENTS.md
+.pre-commit-config.yaml
 
 # docs 只保留 user-guide.md / app-icon.png / release-setup.md
 /docs/*
