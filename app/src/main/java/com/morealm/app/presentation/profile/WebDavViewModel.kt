@@ -92,8 +92,10 @@ class WebDavViewModel @Inject constructor(
             prefs.update(
                 androidx.datastore.preferences.core.stringPreferencesKey("webdav_pass"), pass)
             // Bug fix 2026-05-28：之前 saveWebDav 不动任何 status flow，
-            // 用户点保存按钮看似无反应。复用 _webDavStatus（备份/恢复同渠道），
-            // UI 已有"成功"色 (primary) 区分态。
+            // 用户点保存按钮看似无反应。写 _testResult（保存按钮正下方，与
+            // "连接成功" 同位置），用户立刻能看到；同时 _webDavStatus 下方
+            // 整页 status 区域也回显，备份/恢复反馈渠道一致。
+            _testResult.value = "✓ 配置已保存"
             _webDavStatus.value = "配置已保存"
         }
     }
