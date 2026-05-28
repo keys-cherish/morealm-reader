@@ -1,5 +1,7 @@
 package com.morealm.app.domain.render.layout
 
+import com.morealm.epub.compat.BlockStyle
+
 /**
  * 单页排版结果 —— [ScrollChapterLayout] 的子结构。
  *
@@ -21,4 +23,15 @@ data class ScrollPage(
     val height: Float,
     /** 所属章 idx —— 跨章拼装时识别归属，调试 / 进度上报用。 */
     val chapterIndex: Int,
+    /**
+     * **2026-05-28 Container box group** —— 章级 groupId -> 装饰 [BlockStyle] 字典快照。
+     *
+     * 每页持有同一 chapter 的同一份 map reference（layout 阶段一次性构建后所有 page 共享），
+     * 让 [com.morealm.app.ui.reader.renderer.scroll.PagePaneCanvas] 单 page 渲染时无需访问
+     * 整 [ScrollChapterLayout]。空 map = 该章无装饰容器（默认）。
+     *
+     * Drawer 端：[com.morealm.app.ui.reader.renderer.scroll.drawScrollContainerBoxes]
+     * 按 [ScrollLine.boxGroupId] 查本字典拿装饰 style。
+     */
+    val boxGroupStyles: Map<Int, BlockStyle> = emptyMap(),
 )

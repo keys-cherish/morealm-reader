@@ -178,6 +178,12 @@ internal fun drawScrollPageOnCanvas(
 
     // ─── 层 0：P3-5b Phase 3 块装饰（圆角背景 / 边框） ───
     val bsScale = contentPaint.textSize / 16f
+    // **2026-05-28 Container box group** —— 先画外层装饰容器 box，让 per-line box 叠在 group box 上。
+    drawScrollContainerBoxes(
+        nc, page.lines, page.boxGroupStyles, pageTop = 0f,
+        fallbackLeft = 0f, fallbackRight = visibleWidthF,
+        fontSizeScale = bsScale,
+    )
     for (line in page.lines) {
         drawScrollLineBlockStyle(
             nc, line, pageTop = 0f,
