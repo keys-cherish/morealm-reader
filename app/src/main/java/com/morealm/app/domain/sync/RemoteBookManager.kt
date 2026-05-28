@@ -203,6 +203,28 @@ class RemoteBookManager @Inject constructor(
         return "$root/books"
     }
 
+    /**
+     * 确保 [booksDir] 在 WebDav 上已存在 —— 首次进入远程书架时调一次。
+     *
+     * Phase 1 重写 [listOneLevel] 时丢失了 V1 [listBooks] 内的 mkdir 兜底
+     * (2026-05-28 user 真机回归)：若 `<webDavDir>/books/` 不存在，PROPFIND
+     * 直接 404 → 空列表 → 用户看到「没有可显示的内容」。
+     *
+     * mkdir 对已存在 collection 是 no-op，所以反复调用安全；放在 VM
+     * `openRoot` 一次性触发，避免每次 [listOneLevel] 都打这个请求。
+     */
+    suspend fun ensureBooksDir() {
+        val client = createClient() ?: return
+        val dir = booksDir()
+        runCatching { client.mkdir(dir) }
+            .onFailure {
+                AppLog.warn(
+                    "RemoteShelfV2",
+                    "ensureBooksDir($dir) failed: ${it.message?.take(80)}",
+                )
+            }
+    }
+
     private suspend fun createClient(): WebDavClient? {
         val url = prefs.webDavUrl.first()
         val user = prefs.webDavUser.first()
