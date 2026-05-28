@@ -89,6 +89,35 @@ class WebDavClient(
         }
     }
 
+    /**
+     * Stream a remote file into [outFile] without holding the full payload in
+     * memory. Replaces [download] for large book files (50MB EPUB ×
+     * 4 concurrent downloads = 200MB+ peak with the byte[] path) — see
+     * design.md "Atomic download".
+     *
+     * Atomicity: on any non-2xx or exception we [java.io.File.delete] [outFile]
+     * so the caller never sees a half-written file masquerading as a complete
+     * book. The caller wrapper in [RemoteBookManager.downloadStream] also
+     * deletes on its outer catch as belt-and-suspenders.
+     */
+    suspend fun downloadStream(remotePath: String, outFile: java.io.File) = withContext(Dispatchers.IO) {
+        val resp = client.newCall(Request.Builder().url(resolveUrl(remotePath)).get().build()).execute()
+        resp.use {
+            if (!it.isSuccessful) {
+                runCatching { outFile.delete() }
+                throw WebDavException(describeError(it, "Download"))
+            }
+            try {
+                outFile.outputStream().use { os ->
+                    it.body!!.byteStream().copyTo(os)
+                }
+            } catch (e: Throwable) {
+                runCatching { outFile.delete() }
+                throw e
+            }
+        }
+    }
+
     suspend fun mkdir(remotePath: String) = withContext(Dispatchers.IO) {
         client.newCall(Request.Builder().url(resolveUrl(remotePath))
             .method("MKCOL", null).build()).execute().close()
