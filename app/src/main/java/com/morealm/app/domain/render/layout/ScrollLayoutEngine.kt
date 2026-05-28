@@ -437,6 +437,33 @@ class ScrollLayoutEngine(
         var nextBoxGroupId: Int = 0
         val boxGroupStyles: MutableMap<Int, com.morealm.epub.compat.BlockStyle> = mutableMapOf()
 
+        // **2026-05-28 Step 9.X — Container box scope awareness**：
+        //
+        // box 内 emit paragraph 时 line 应排在 box 内侧（box.paddingLeft / borderWidth /
+        // marginLeft 三层之后），而非 0..visibleWidth。这里维护 box 嵌套时每层对左 / 右
+        // 留白的累计贡献：
+        //   - currentBoxLeftPad  = ΣboxStack 每层 (paddingLeft + ml(NaN 跳过) + borderWidth)
+        //   - currentBoxRightPad = ΣboxStack 每层 (paddingRight + mr(NaN 跳过) + borderWidth)
+        // 用 contribStack 记录每层 push 时的增量值（boxStack pop 时减回去，避免精度丢失）。
+        //
+        // effectiveVisibleWidth = visibleWidth - currentBoxLeftPad - currentBoxRightPad
+        // emit paragraph 路径（CENTER / JUSTIFY / wrap / startX）用 effective；layoutChapter
+        // 章级 visibleWidth 不动。
+        var currentBoxLeftPad: Float = 0f
+        var currentBoxRightPad: Float = 0f
+        // 栈：每层 push 时 (leftAdd, rightAdd) 增量，pop 时减回。
+        val boxPadContribStack: ArrayDeque<Pair<Float, Float>> = ArrayDeque()
+        // 当前 effective 可排版宽度 = visibleWidth - 累计左右 pad；用 lambda 让取值始终是最新栈状态
+        fun effectiveVisibleWidth(): Float =
+            (visibleWidth.toFloat() - currentBoxLeftPad - currentBoxRightPad).coerceAtLeast(1f)
+
+        // **margin collapse 简化版（box scope 内）**：
+        // 上段 marginBottom 与下段 marginTop 取 max，实现：
+        //   下段 emit margin-top 时 effectiveMt = max(0, mt - lastSegMarginBottom)
+        //   段末 emit margin-bottom 后 lastSegMarginBottom = mb
+        //   BOX_START / BOX_END 时重置 lastSegMarginBottom = 0（跨 box 不 collapse）
+        var lastSegMarginBottom: Float = 0f
+
         // P3-5b Step 2c char-level color：当前 paragraph 的字符级颜色数组（per code-point）。
         // 解码自 flattenToString 内嵌的 SPAN_COLOR_START..END marker。null = 本段无字符级
         // 颜色覆盖；非 null 时按 (chapterPositionCounter - paragraphCpStart) 索引拿到该字符
@@ -1243,11 +1270,35 @@ class ScrollLayoutEngine(
                     val id = nextBoxGroupId++
                     boxGroupStyles[id] = style
                     boxStack.addLast(id)
+
+                    // **Step 9.X**：计算本层 box 对左 / 右 pad 的贡献，push contribStack
+                    // 让 BOX_END 准确减回。margin NaN（AUTO）跳过；负 margin 也跳过（让段落
+                    // 真的能从 box 内侧排，避免 ml=-1em 等场景让 line 跨到 box 外）。
+                    val mlContrib = if (style.marginLeftPx.isNaN() || style.marginLeftPx < 0f) 0f
+                                    else style.marginLeftPx
+                    val mrContrib = if (style.marginRightPx.isNaN() || style.marginRightPx < 0f) 0f
+                                    else style.marginRightPx
+                    val leftAdd = style.paddingLeftPx + mlContrib + style.borderWidthPx
+                    val rightAdd = style.paddingRightPx + mrContrib + style.borderWidthPx
+                    currentBoxLeftPad += leftAdd
+                    currentBoxRightPad += rightAdd
+                    boxPadContribStack.addLast(leftAdd to rightAdd)
+
+                    // Step 9.X margin collapse：进 box 时重置 lastSegMarginBottom（box 边界
+                    // 视为新的 BFC，不与上一段 mb collapse）
+                    lastSegMarginBottom = 0f
+
                     AppLog.info(
                         "BoxGroup/Parse",
                         "BOX_START ch=$chapterIndex id=$id stackDepth=${boxStack.size} payload='${payload.take(120)}' " +
                             "bg=${style.backgroundColor} bc=${style.borderColor} bw=${style.borderWidthPx} " +
                             "br=${style.borderRadiusPx} pad=(${style.paddingTopPx},${style.paddingRightPx},${style.paddingBottomPx},${style.paddingLeftPx})",
+                    )
+                    AppLog.info(
+                        "BoxScope",
+                        "BOX_START id=$id +leftAdd=$leftAdd +rightAdd=$rightAdd " +
+                            "→ currentBoxLeftPad=$currentBoxLeftPad currentBoxRightPad=$currentBoxRightPad " +
+                            "effectiveVisibleWidth=${effectiveVisibleWidth()} (visibleWidth=$visibleWidth)",
                     )
                 } else {
                     AppLog.warn(
@@ -1264,6 +1315,23 @@ class ScrollLayoutEngine(
             ) {
                 val poppedId = boxStack.lastOrNull()
                 if (boxStack.isNotEmpty()) boxStack.removeLast()
+                // **Step 9.X**：BOX_END pop contribStack，减回这一层的左/右 pad 贡献
+                if (boxPadContribStack.isNotEmpty()) {
+                    val (leftSub, rightSub) = boxPadContribStack.removeLast()
+                    currentBoxLeftPad -= leftSub
+                    currentBoxRightPad -= rightSub
+                    // 防漏洞负值（理论不会，加 guard）
+                    if (currentBoxLeftPad < 0f) currentBoxLeftPad = 0f
+                    if (currentBoxRightPad < 0f) currentBoxRightPad = 0f
+                    AppLog.info(
+                        "BoxScope",
+                        "BOX_END poppedId=$poppedId -leftSub=$leftSub -rightSub=$rightSub " +
+                            "→ currentBoxLeftPad=$currentBoxLeftPad currentBoxRightPad=$currentBoxRightPad " +
+                            "effectiveVisibleWidth=${effectiveVisibleWidth()}",
+                    )
+                }
+                // Step 9.X margin collapse：出 box 时也重置 lastSegMarginBottom
+                lastSegMarginBottom = 0f
                 AppLog.info(
                     "BoxGroup/Parse",
                     "BOX_END ch=$chapterIndex poppedId=$poppedId stackDepthAfter=${boxStack.size}",
@@ -1358,10 +1426,18 @@ class ScrollLayoutEngine(
                             if (rowRunList.isNotEmpty()) rowsRuns.add(rowRunList)
                         }
                         val mt = currentBlockStyle.marginTopPx
-                        if (!mt.isNaN() && mt != 0f) currentY += mt
+                        if (!mt.isNaN() && mt != 0f) {
+                            val effectiveMt = if (boxStack.isNotEmpty()) {
+                                (mt - lastSegMarginBottom).coerceAtLeast(0f)
+                            } else mt
+                            currentY += effectiveMt
+                        }
                         emitInlineBlockContainer(rowsRuns, bsW, bsH, currentBlockStyle.textColor)
                         val mb = currentBlockStyle.marginBottomPx
-                        currentY += if (!mb.isNaN() && mb != 0f) mb else paragraphSpacingPx
+                        val mbDefault = if (boxStack.isNotEmpty()) paragraphSpacingPx * 0.3f else paragraphSpacingPx
+                        val spacing = if (!mb.isNaN() && mb != 0f) mb else mbDefault
+                        currentY += spacing
+                        lastSegMarginBottom = spacing
                         chapterPositionCounter++  // 段末虚换行
                         continue
                     }
@@ -1373,10 +1449,18 @@ class ScrollLayoutEngine(
                     // CSS spec：margin-top/bottom 不参与 collapse（table 元素的 margin 跟普通
                     // block 不同，跨 table 不 collapse），所以纯累加（跟 D1.a 段间 margin 一致）。
                     val mt = currentBlockStyle.marginTopPx
-                    if (!mt.isNaN() && mt != 0f) currentY += mt
+                    if (!mt.isNaN() && mt != 0f) {
+                        val effectiveMt = if (boxStack.isNotEmpty()) {
+                            (mt - lastSegMarginBottom).coerceAtLeast(0f)
+                        } else mt
+                        currentY += effectiveMt
+                    }
                     layoutTable(parsed)
                     val mb = currentBlockStyle.marginBottomPx
-                    currentY += if (!mb.isNaN() && mb != 0f) mb else paragraphSpacingPx
+                    val mbDefault = if (boxStack.isNotEmpty()) paragraphSpacingPx * 0.3f else paragraphSpacingPx
+                    val spacing = if (!mb.isNaN() && mb != 0f) mb else mbDefault
+                    currentY += spacing
+                    lastSegMarginBottom = spacing
                     continue
                 }
                 // parse 失败 fallthrough（极少见 — encodeTable 总产合法 marker）
@@ -1397,6 +1481,11 @@ class ScrollLayoutEngine(
             val processedText = cleanedText
 
             // ── D1.a margin-top（段前间距 / 段重叠）──
+            // **Step 9.X margin collapse（box 内）**：上段 mb 与本段 mt 取 max（不累加）。
+            // 实施：effectiveMt = max(0, mt - lastSegMarginBottom)。CSS spec 真正的 collapse
+            // 行为是 max(prev.mb, curr.mt)，prev.mb 已经在上一段 emit 后加进 currentY；下段
+            // 只需补到 max 即可，即 max - prev.mb = max(0, mt - prev.mb)。仅在 box scope 内
+            // 启用避免改变默认章节段间累加行为（用户长期视觉）。
             // CSS `margin-top: 2em` → 段前留白；`margin-top: -1em` → 段往上偏移（某日轻
             // 章首 table 重叠效果）。NaN = AUTO（垂直方向 CSS spec 等同 0，跳过）；0 = 未设置
             // 或显式 0，沿用 paragraphSpacingPx 默认（不改 currentY）。
@@ -1405,10 +1494,18 @@ class ScrollLayoutEngine(
             val marginTopPx = currentBlockStyle.marginTopPx
             if (!marginTopPx.isNaN() && marginTopPx != 0f) {
                 val beforeY = currentY
-                currentY += marginTopPx
+                val effectiveMt = if (boxStack.isNotEmpty()) {
+                    // box 内段 margin collapse：max(0, mt - lastSegMarginBottom)
+                    (marginTopPx - lastSegMarginBottom).coerceAtLeast(0f)
+                } else {
+                    marginTopPx
+                }
+                currentY += effectiveMt
                 com.morealm.app.core.log.AppLog.info(
                     "D1a/Margin",
-                    "para#$paragraphCounter applied margin-top=$marginTopPx currentY=$beforeY → $currentY",
+                    "para#$paragraphCounter applied margin-top=$marginTopPx (effective=$effectiveMt " +
+                        "boxScope=${boxStack.isNotEmpty()} lastMb=$lastSegMarginBottom) " +
+                        "currentY=$beforeY → $currentY",
                 )
             }
             // P3-5b Step 2c diag：仅当原 paragraphText 含 SOH 时才打 log（多色段稀有）
@@ -1434,8 +1531,12 @@ class ScrollLayoutEngine(
                     lastChapterPos = emptyCp,
                 )
                 chapterPositionCounter++
-                // 段末 paragraphSpacing 跨页不补到新页顶（强硬方案 1）
-                currentY += paragraphSpacingPx
+                // **Step 9.X**：box scope 内 paragraphSpacing × 0.3（段已由 CSS margin 主导间距）
+                val effectiveSpacing = if (boxStack.isNotEmpty()) paragraphSpacingPx * 0.3f
+                                       else paragraphSpacingPx
+                currentY += effectiveSpacing
+                // 空段无 CSS margin-bottom，仅 paragraphSpacing 作 mb 记到 lastSegMarginBottom
+                lastSegMarginBottom = effectiveSpacing
                 continue
             }
 
@@ -1649,7 +1750,11 @@ class ScrollLayoutEngine(
                         cssAlign != com.morealm.epub.compat.BlockStyle.TextAlign.CENTER &&
                         !blockMarginAuto
                     ) paragraphIndent.length else 0
-                    val layout = ZhLayout(textChunk, contentPaint, visibleWidth, chars, widths, indentSize)
+                    // **Step 9.X**：box scope 内 ZhLayout 按 effective 宽切行（让 line wrap 提前到
+                    // box 内侧边界）；非 box scope 仍用 visibleWidth。
+                    val effWidth = effectiveVisibleWidth()
+                    val wrapWidth = effWidth.toInt().coerceAtLeast(1)
+                    val layout = ZhLayout(textChunk, contentPaint, wrapWidth, chars, widths, indentSize)
                     for (lineIndex in 0 until layout.lineCount) {
                         // ZhLayout.lineStart/lineEnd 是 UTF-16 char index（基于 text.length），
                         // 而 chars/widths 是 code-point 切分（surrogate pair 合并 1 元素）。
@@ -1685,21 +1790,24 @@ class ScrollLayoutEngine(
                         // 表 `margin: -10em 0 0 auto` 让段从 visibleWidth - desiredWidth - mrPx 开始，
                         // 不再跟 qipao 重叠。修反对称：marginLeftAuto only → 右贴；mrAuto only → 左对齐
                         // 不动；双 auto → 居中保留旧逻辑。
+                        // **Step 9.X**：CENTER / JUSTIFY / RIGHT / margin auto 计算用 effective 宽
+                        // （effWidth）替代 visibleWidth；emitOneLine 再加 currentBoxLeftPad 让字真
+                        // 排在 box 内侧。非 box scope effWidth == visibleWidth，零行为变化。
                         val startX: Float = when {
                             cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.CENTER ->
-                                ((visibleWidth - desiredWidth) / 2f).coerceAtLeast(0f)
+                                ((effWidth - desiredWidth) / 2f).coerceAtLeast(0f)
                             cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.RIGHT ->
-                                (visibleWidth - desiredWidth).coerceAtLeast(0f)
+                                (effWidth - desiredWidth).coerceAtLeast(0f)
                             cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.LEFT ||
                                 cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.JUSTIFY -> {
                                 // 显式 LEFT/JUSTIFY：mlIndent 段缩进 + 段首 indent（heading 段不 indent）
                                 mlIndent + (if (isFirstLine && currentParaHeadingLevel == 0) effectiveFirstLineIndent else 0f)
                             }
                             // 阶段 2-I：margin-left:auto + margin-right 非 auto → 段右贴
-                            // CSS spec：mr 非 auto 是显式右边 margin，从 visibleWidth 减去 desiredWidth + mr
+                            // CSS spec：mr 非 auto 是显式右边 margin，从 effWidth 减去 desiredWidth + mr
                             marginLeftAuto && !marginRightAuto -> {
                                 val mrEffective = if (currentBlockStyle.marginRightPx > 0f) currentBlockStyle.marginRightPx else 0f
-                                (visibleWidth - desiredWidth - mrEffective).coerceAtLeast(0f)
+                                (effWidth - desiredWidth - mrEffective).coerceAtLeast(0f)
                             }
                             // 阶段 2-I：margin-right:auto + margin-left 非 auto → 段左对齐 + mlIndent
                             // (CSS spec 等同 ml 显式 + mr=auto 把多余空间放右，视觉=左对齐)
@@ -1709,20 +1817,24 @@ class ScrollLayoutEngine(
                             // cssAlign null（CSS 没显式 text-align）→ marginCenter 兜底（某仙侠惊蛰
                             // h2.head 实际有 text-align:center 走上面分支；此分支留给纯 margin:auto
                             // 居中场景如 table.vol-title）
-                            marginCenter -> ((visibleWidth - desiredWidth) / 2f).coerceAtLeast(0f)
+                            marginCenter -> ((effWidth - desiredWidth) / 2f).coerceAtLeast(0f)
                             // 全空：沿用旧默认（首行 indent 兜底），叠加 mlIndent
                             else -> mlIndent + (if (isFirstLine) effectiveFirstLineIndent else 0f)
                         }
                         // **D1.a DIAG**：仅当本段有 margin 属性时打 log（避免每行噪声）
-                        if (marginCenter || mlIndent > 0f) {
+                        if (marginCenter || mlIndent > 0f || boxStack.isNotEmpty()) {
                             com.morealm.app.core.log.AppLog.info(
                                 "D1a/Margin",
                                 "line emit marginCenter=$marginCenter mlIndent=$mlIndent " +
-                                    "desiredWidth=$desiredWidth visibleWidth=$visibleWidth startX=$startX " +
+                                    "desiredWidth=$desiredWidth visibleWidth=$visibleWidth effWidth=$effWidth " +
+                                    "startX=$startX boxLeftPad=$currentBoxLeftPad finalStartX=${startX + currentBoxLeftPad} " +
                                     "lineText='${lineText.take(15)}'",
                             )
                         }
-                        val availableWidth = visibleWidth - startX
+                        // **Step 9.X**：availableWidth 按 effective 宽（CENTER/JUSTIFY/RIGHT 等所
+                        // 有路径都基于 effWidth）；emit 时再加 currentBoxLeftPad 让 startX 真挂到
+                        // box 内侧。
+                        val availableWidth = effWidth - startX
                         val residualWidth = availableWidth - desiredWidth
                         // Justify 条件（与旧 addCharsToLineMiddle 同款）：
                         //   - 非末行
@@ -1738,10 +1850,13 @@ class ScrollLayoutEngine(
                             residualWidth > 0f && residualWidth <= availableWidth * 0.25f &&
                             desiredWidth >= availableWidth * 0.65f && lineChars.size > 1
                         val gap = if (shouldJustify) residualWidth / (lineChars.size - 1) else 0f
-                        emitOneLine(lineChars, lineWidths, startX, gap)
+                        // Step 9.X：box scope 内字真排在 box 内侧 → startX += currentBoxLeftPad
+                        emitOneLine(lineChars, lineWidths, startX + currentBoxLeftPad, gap)
                     }
                 } else {
                     // Greedy fallback：与 M1.2 原逻辑等价。
+                    // **Step 9.X**：wrap 阈值 + emit offset 也按 effective 宽（与 ZhLayout 分支一致）
+                    val effWidth = effectiveVisibleWidth()
                     val lineChars = ArrayList<String>()
                     val lineWidths = ArrayList<Float>()
                     var cursorX = if (isFirstChunkOfPara) indentWidth else 0f
@@ -1750,7 +1865,7 @@ class ScrollLayoutEngine(
                     fun flushGreedyLine() {
                         if (lineChars.isEmpty()) return
                         val startX = if (!firstLineEmitted && isFirstChunkOfPara) indentWidth else 0f
-                        emitOneLine(lineChars, lineWidths, startX, 0f)
+                        emitOneLine(lineChars, lineWidths, startX + currentBoxLeftPad, 0f)
                         lineChars.clear()
                         lineWidths.clear()
                         firstLineEmitted = true
@@ -1758,7 +1873,7 @@ class ScrollLayoutEngine(
                     }
                     for (i in chars.indices) {
                         val w = widths[i]
-                        if (cursorX + w > visibleWidth && lineChars.isNotEmpty()) {
+                        if (cursorX + w > effWidth && lineChars.isNotEmpty()) {
                             flushGreedyLine()
                         }
                         lineChars.add(chars[i])
@@ -1813,14 +1928,20 @@ class ScrollLayoutEngine(
             //  2. heading 段（H1-H6）→ paragraphSpacingPx × 3（H3 章首大字与正文区分）
             //  3. 正文 → paragraphSpacingPx（默认）
             // NaN (AUTO) 在垂直方向等同 0（CSS spec），归入"未显式"走 default。
+            //
+            // **Step 9.X**：box scope 内的"默认 paragraphSpacingPx" × 0.3（段间距由 CSS margin 主导）。
+            // 显式 CSS margin-bottom 仍按 CSS 值（用户在 EPUB 里写多少留多少）。
             val marginBottomPx = currentBlockStyle.marginBottomPx
+            val inBox = boxStack.isNotEmpty()
             val spacing = when {
                 !marginBottomPx.isNaN() && marginBottomPx != 0f -> marginBottomPx
                 currentParaHeadingLevel > 0 -> paragraphSpacingPx * 3
-                else -> paragraphSpacingPx
+                else -> if (inBox) paragraphSpacingPx * 0.3f else paragraphSpacingPx
             }
             // 段间空白：纯累加，不补跨页（方案 1 强硬纠正）。允许负值
             currentY += spacing
+            // **Step 9.X**：记录本段 mb 让下段 margin-collapse 取 max
+            lastSegMarginBottom = spacing
         }
 
         if (currentPageLines.isNotEmpty()) {
