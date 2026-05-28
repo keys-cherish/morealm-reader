@@ -102,6 +102,21 @@ data class ScrollLine(
      */
     val blockStyle: BlockStyle = BlockStyle.EMPTY,
     /**
+     * **2026-05-28 Container box group** —— 所在外层装饰容器 group id；null = 不属于任何 group。
+     *
+     * 来源链：epub-compat [ChapterBlockBuilder] 把 `<div class="box">` 等装饰容器 emit 为
+     * [com.morealm.epub.compat.ChapterBlock.Container] → flattenToString 编码 `__MOREALM_BOX_START__`
+     * / `__/MOREALM_BOX_HEADER__` / `__/MOREALM_BOX_END__` marker → [ScrollLayoutEngine] 主循环识别
+     * 后给 BOX_START..BOX_END 之间所有 paragraph emit 的 line 打上同一 groupId。
+     *
+     * **innermost group**：嵌套 BOX 时 line.boxGroupId = 栈顶 id（最内层），group bounds 仅画
+     * 最内层装饰；外层装饰留 Step 10 follow-up 处理。
+     *
+     * Drawer 端：[com.morealm.app.ui.reader.renderer.scroll.drawScrollContainerBoxes]
+     * 按 groupId 分组连续 line 段，一次性绘制外层 round-rect 包围所有 group lines。
+     */
+    val boxGroupId: Int? = null,
+    /**
      * **A5 atoms 骨架**（前进性双轨）：行级 [Atom] 列表，承载新排版路径的渲染数据
      * （含 sizeScale / color / inlineImageSrc 等富 styling）。
      *

@@ -173,7 +173,10 @@ object EpubParser {
     // payload 无 ff= marker（祖先 BlockStyle.fontFamily 被 mergeOnTop 默认 null 吞）。
     // v41 cache 已固化"无 ff="payload，必须 bump v42 重 flatten 让花苞 ❀ 等装饰字体
     // 真正生效。装机用户每章首次打开重新解析一次（cost 通常 < 200ms 可接受）。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v42"
+    // v43：2026-05-28 Phase 2 启用 ContainerScope + BOX marker emit。旧 v42 cache 无
+    // __MOREALM_BOX_START__ marker（Phase 1 minimal encode 丢装饰），bump 让所有 EPUB 章节
+    // cache 失效重 flatten 出新 BOX marker，主仓识别后产 group box 装饰。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v43"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
@@ -794,6 +797,21 @@ object EpubParser {
         // formatKeepImg 老链在 readChapter 路径下线（preCacheChapters 老路径暂留）。
         val structured = readChapterStructured(context, uri, chapter, containingBlockWidthPx)
         val content = if (structured.isEmpty()) "" else structured.flattenToString()
+        // **2026-05-28 BOX marker diag** —— 看 epub-compat 是否 emit Container BOX marker
+        run {
+            val boxStartCount = content.split(
+                com.morealm.epub.compat.StructuredChapterContent.BOX_START_MARKER,
+            ).size - 1
+            val boxEndCount = content.split(
+                com.morealm.epub.compat.StructuredChapterContent.BOX_END_MARKER,
+            ).size - 1
+            com.morealm.app.core.log.AppLog.info(
+                "BoxGroup/Flatten",
+                "chapter='${chapter.title}' url='${chapter.url}' len=${content.length} " +
+                    "boxStartCount=$boxStartCount boxEndCount=$boxEndCount " +
+                    "head300='${content.take(300).replace("\n", "\\n")}'",
+            )
+        }
         // P3-5b Step 2c diag：标题/cover 等多色 RichText 章 flatten 后应该含 SOH(0x01) marker
         val hasSpanMarker = content.contains('')
         if (hasSpanMarker) {

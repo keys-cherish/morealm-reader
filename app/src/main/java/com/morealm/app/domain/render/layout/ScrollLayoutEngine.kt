@@ -423,6 +423,20 @@ class ScrollLayoutEngine(
         // 入参 + 所有调用方的级联改动）。EMPTY = 无装饰（章首块 / 正常段默认）。
         var currentBlockStyle: com.morealm.epub.compat.BlockStyle = com.morealm.epub.compat.BlockStyle.EMPTY
 
+        // **2026-05-28 Container box group** —— 当前 paragraph 所属外层装饰容器 group id 栈。
+        //
+        // 解析 `__MOREALM_BOX_START__...__/MOREALM_BOX_HEADER__` paragraph 时：分配新 id +
+        // decodeBlockStyle 取 outer style → push 到 boxStack + 记到 boxGroupStyles，**continue**
+        // 不产 line。后续普通 paragraph emit line 时 emitLine 读 boxStack.lastOrNull() 作
+        // ScrollLine.boxGroupId（innermost group）。解析 `__/MOREALM_BOX_END__` paragraph 时
+        // pop 栈，**continue** 不产 line。
+        //
+        // 章末 layoutChapter 返回时把 boxGroupStyles.toMap() 塞到 ScrollChapterLayout.boxGroupStyles
+        // 供 ScrollBlockStyleDrawer 查 group 装饰。
+        val boxStack: ArrayDeque<Int> = ArrayDeque()
+        var nextBoxGroupId: Int = 0
+        val boxGroupStyles: MutableMap<Int, com.morealm.epub.compat.BlockStyle> = mutableMapOf()
+
         // P3-5b Step 2c char-level color：当前 paragraph 的字符级颜色数组（per code-point）。
         // 解码自 flattenToString 内嵌的 SPAN_COLOR_START..END marker。null = 本段无字符级
         // 颜色覆盖；非 null 时按 (chapterPositionCounter - paragraphCpStart) 索引拿到该字符
@@ -491,6 +505,7 @@ class ScrollLayoutEngine(
                     imageSrc = imageSrc,
                     isFullPageImage = isFullPageImage,
                     blockStyle = currentBlockStyle,
+                    boxGroupId = boxStack.lastOrNull(),
                     atoms = atoms,
                     headingLevel = headingLevel,
                     cells = cells,
@@ -1207,6 +1222,55 @@ class ScrollLayoutEngine(
         }
 
         for (paragraphRaw in paragraphs) {
+            // **2026-05-28 BOX marker handling** —— 识别 Container box 嵌套 marker。
+            // BOX marker paragraph 自身不 emit line（早于 paragraphCounter++ continue），
+            // 不占 paragraphNum / chapterPosition。
+            val trimmedStart = paragraphRaw.trimStart()
+            if (trimmedStart.startsWith(
+                    com.morealm.epub.compat.StructuredChapterContent.BOX_START_MARKER,
+                )
+            ) {
+                val headerEnd = trimmedStart.indexOf(
+                    com.morealm.epub.compat.StructuredChapterContent.BOX_HEADER_END,
+                )
+                if (headerEnd > 0) {
+                    val payload = trimmedStart.substring(
+                        com.morealm.epub.compat.StructuredChapterContent.BOX_START_MARKER.length,
+                        headerEnd,
+                    )
+                    val style = com.morealm.epub.compat.StructuredChapterContent
+                        .decodeBlockStyle(payload)
+                    val id = nextBoxGroupId++
+                    boxGroupStyles[id] = style
+                    boxStack.addLast(id)
+                    AppLog.info(
+                        "BoxGroup/Parse",
+                        "BOX_START ch=$chapterIndex id=$id stackDepth=${boxStack.size} payload='${payload.take(120)}' " +
+                            "bg=${style.backgroundColor} bc=${style.borderColor} bw=${style.borderWidthPx} " +
+                            "br=${style.borderRadiusPx} pad=(${style.paddingTopPx},${style.paddingRightPx},${style.paddingBottomPx},${style.paddingLeftPx})",
+                    )
+                } else {
+                    AppLog.warn(
+                        "BoxGroup/Parse",
+                        "BOX_START malformed (no BOX_HEADER_END) ch=$chapterIndex paraHead='${trimmedStart.take(80)}'",
+                    )
+                }
+                // BOX_START 的 paragraph 仅作 marker，不 emit line
+                continue
+            }
+            if (trimmedStart.startsWith(
+                    com.morealm.epub.compat.StructuredChapterContent.BOX_END_MARKER,
+                )
+            ) {
+                val poppedId = boxStack.lastOrNull()
+                if (boxStack.isNotEmpty()) boxStack.removeLast()
+                AppLog.info(
+                    "BoxGroup/Parse",
+                    "BOX_END ch=$chapterIndex poppedId=$poppedId stackDepthAfter=${boxStack.size}",
+                )
+                continue
+            }
+
             paragraphCounter++
 
             // ── P3-5b Phase 3：BlockStyle inline marker 解码 ──
@@ -1813,10 +1877,34 @@ class ScrollLayoutEngine(
                 "chapterBgImage=${chapterBgSrc != null}",
         )
 
+        // **2026-05-28 Container box group** —— 把最终 boxGroupStyles map 注入到每个 ScrollPage，
+        // 让 PagePaneCanvas 单页渲染时无需访问整 ScrollChapterLayout 即可拿 group 装饰字典。
+        val finalGroupStyles: Map<Int, com.morealm.epub.compat.BlockStyle> = boxGroupStyles.toMap()
+        val pagesWithGroupStyles = if (finalGroupStyles.isEmpty()) pages
+            else pages.map { it.copy(boxGroupStyles = finalGroupStyles) }
+        // **BoxGroup/Summary diag** —— layout 结束时打印 group 数量 + 每页含 group line 数
+        if (finalGroupStyles.isNotEmpty()) {
+            val pageLineSummary = pagesWithGroupStyles.joinToString(",") { p ->
+                "p${p.pageIndex}=${p.lines.count { it.boxGroupId != null }}/${p.lines.size}"
+            }
+            AppLog.info(
+                "BoxGroup/Summary",
+                "ch=$chapterIndex title='$title' groups=${finalGroupStyles.size} " +
+                    "groupIds=${finalGroupStyles.keys} groupedLinesPerPage=[$pageLineSummary] " +
+                    "leftoverBoxStackDepth=${boxStack.size}",
+            )
+        } else {
+            AppLog.info(
+                "BoxGroup/Summary",
+                "ch=$chapterIndex title='$title' NO groups (boxStack empty=${boxStack.isEmpty()} - " +
+                    "若有 div.装饰容器应该非空，可能 epub-compat onOpen 未走 ContainerScope)",
+            )
+        }
+
         return ScrollChapterLayout(
             chapterIndex = chapterIndex,
             title = title,
-            pages = pages,
+            pages = pagesWithGroupStyles,
             totalHeight = totalHeight,
             viewWidth = viewWidth,
             paddingLeft = paddingLeft,
@@ -1825,6 +1913,7 @@ class ScrollLayoutEngine(
             styleSignature = computeStyleSignature(),
             totalCharCount = chapterPositionCounter,
             chapterBgImageSrc = chapterBgSrc,
+            boxGroupStyles = finalGroupStyles,
         )
     }
 

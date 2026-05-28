@@ -191,10 +191,16 @@ fun ChapterPaneCanvas(
                 pageOffsetY = pageBottom
                 // 视口剔除：page 完全在 viewport 之上 / 之下 → 整页 skip
                 if (pageBottom < viewportTop || pageTop > viewportBottom) continue
+                // **2026-05-28 Container box group** —— 一页一次，画外层装饰容器 box，在
+                // per-line box 之前（让 per-line box 叠在 group box 上层）。
+                val visibleW = (chapter.viewWidth - chapter.paddingLeft * 2).toFloat()
+                drawScrollContainerBoxes(
+                    nc, page.lines, chapter.boxGroupStyles, pageTop, 0f, visibleW,
+                    fontSizeScale = contentPaint.textSize / 16f,
+                )
                 for (line in page.lines) {
                     // P3-5b Phase 3：CSS box 装饰（圆角背景 / 边框）必须画在文字 / 图片之前
                     // **阶段 2-H bugfix v3**：fontSizeScale = contentPaint.textSize / 16f
-                    val visibleW = (chapter.viewWidth - chapter.paddingLeft * 2).toFloat()
                     drawScrollLineBlockStyle(
                         nc, line, pageTop, 0f, visibleW,
                         fontSizeScale = contentPaint.textSize / 16f,

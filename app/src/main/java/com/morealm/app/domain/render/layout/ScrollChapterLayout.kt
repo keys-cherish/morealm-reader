@@ -1,5 +1,7 @@
 package com.morealm.app.domain.render.layout
 
+import com.morealm.epub.compat.BlockStyle
+
 /**
  * 整章像素级排版结果 —— 滚动 Canvas 引擎（ScrollLayoutEngine）的章节级产物。
  *
@@ -74,6 +76,19 @@ data class ScrollChapterLayout(
      * 典型场景：某 EPUB `body.qmp0000 { background-image: url(../Images/p4.jpg); }`。
      */
     val chapterBgImageSrc: String? = null,
+    /**
+     * **2026-05-28 Container box group** —— groupId → 装饰 BlockStyle 字典。
+     *
+     * 由 [ScrollLayoutEngine] 解析 `__MOREALM_BOX_START__` marker 时分配新 id 并填入；
+     * [ScrollLine.boxGroupId] 引用本字典的 key 拿到本 group 装饰。
+     *
+     * Drawer 端 ([com.morealm.app.ui.reader.renderer.scroll.drawScrollContainerBoxes])
+     * 按 line.boxGroupId 分组连续段，对每段调一次 round-rect 绘制（外层 border + background-color
+     * + border-radius）。
+     *
+     * 默认 emptyMap = 该章无装饰容器。
+     */
+    val boxGroupStyles: Map<Int, BlockStyle> = emptyMap(),
 ) {
     /** 章是否为可见内容为空（所有 page.lines 都为空）。空章节渲染兜底"加载中"/"内容为空"占位。 */
     val isEmpty: Boolean

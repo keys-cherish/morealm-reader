@@ -6,6 +6,143 @@ import com.morealm.app.domain.render.layout.ScrollLine
 import com.morealm.epub.compat.BlockStyle
 
 /**
+ * **2026-05-28 Container box group 绘制** —— 给一页内所有连续同 [ScrollLine.boxGroupId] 的
+ * line 段画**一次性**外层装饰 box（border + background + border-radius + padding）。
+ *
+ * **必须在 [drawScrollLineBlockStyle] 之前调用** —— group box 是最外层，per-line box 是叠在
+ * 内部的小装饰；group box 先画作背景，per-line box 后画在 group box 之上。
+ *
+ * 几何契约：
+ *  - 水平：固定 [fallbackLeft]..[fallbackRight]（通常 0..visibleWidth，让 group box 覆盖
+ *    可见宽 padding 内部一格栅）。padding-left / padding-right 缩到 group box 内侧。
+ *  - 垂直：group 内首行 [ScrollLine.lineTop] 减 paddingTop（向外），末行 [ScrollLine.lineBottom]
+ *    加 paddingBottom。pageTop 同 [drawScrollLineBlockStyle]，加在每行 y 上。
+ *
+ * border-style：复用 [drawScrollLineBlockStyle] DOUBLE / SOLID 同等处理。
+ *
+ * **跨页边界**：若 group lines 横跨两页（page-level 模式下 group 可能末行被切到下一页），
+ * 本函数仅处理传入 lines（即当前页 lines），group 末行在下一页时本页 group 末行就当作 box
+ * 底部裁断。下一页 caller 看到 boxGroupId 仍非 null 时画一次"上裁断"的 box（无圆角顶 +
+ * 圆角底）。Phase 2 最小实现先按"每页独立画 box，跨页时上下边可能 squared"处理；视觉精
+ * 致跨页裁断留 follow-up（用户报告 Step 9 真机后再加）。
+ *
+ * @param lines 一页内的所有 line（page.lines）
+ * @param groupStyles 章级 [com.morealm.app.domain.render.layout.ScrollChapterLayout.boxGroupStyles]
+ *   字典，groupId -> 装饰 [BlockStyle]
+ * @param fallbackLeft / [fallbackRight] group box 水平范围（通常 0..visibleWidth）
+ */
+internal fun drawScrollContainerBoxes(
+    canvas: Canvas,
+    lines: List<ScrollLine>,
+    groupStyles: Map<Int, BlockStyle>,
+    pageTop: Float,
+    fallbackLeft: Float,
+    fallbackRight: Float,
+    fontSizeScale: Float = 1f,
+) {
+    if (groupStyles.isEmpty() || lines.isEmpty()) return
+    var runStart: Int = -1
+    var runGroupId: Int? = null
+    fun flush(endIdxExclusive: Int) {
+        val gid = runGroupId ?: return
+        val style = groupStyles[gid] ?: return
+        if (runStart < 0 || endIdxExclusive <= runStart) return
+        drawSingleContainerBox(
+            canvas = canvas,
+            lines = lines,
+            fromIdx = runStart,
+            toIdxInclusive = endIdxExclusive - 1,
+            style = style,
+            pageTop = pageTop,
+            fallbackLeft = fallbackLeft,
+            fallbackRight = fallbackRight,
+            fontSizeScale = fontSizeScale,
+        )
+    }
+    for (i in lines.indices) {
+        val gid = lines[i].boxGroupId
+        if (gid != runGroupId) {
+            flush(i)
+            runStart = if (gid != null) i else -1
+            runGroupId = gid
+        }
+    }
+    flush(lines.size)
+}
+
+private fun drawSingleContainerBox(
+    canvas: Canvas,
+    lines: List<ScrollLine>,
+    fromIdx: Int,
+    toIdxInclusive: Int,
+    style: BlockStyle,
+    pageTop: Float,
+    fallbackLeft: Float,
+    fallbackRight: Float,
+    fontSizeScale: Float,
+) {
+    if (style === BlockStyle.EMPTY) return
+    val firstLine = lines[fromIdx]
+    val lastLine = lines[toIdxInclusive]
+    val borderWidthScaled = style.borderWidthPx * fontSizeScale
+    val halfBorder = borderWidthScaled / 2f
+    val padLeft = style.paddingLeftPx * fontSizeScale
+    val padRight = style.paddingRightPx * fontSizeScale
+    val padTop = style.paddingTopPx * fontSizeScale
+    val padBottom = style.paddingBottomPx * fontSizeScale
+    val rectLeft = fallbackLeft + padLeft - halfBorder
+    val rectRight = fallbackRight - padRight + halfBorder
+    val rectTop = pageTop + firstLine.lineTop - padTop - halfBorder
+    val rectBottom = pageTop + lastLine.lineBottom + padBottom + halfBorder
+    com.morealm.app.core.log.AppLog.info(
+        "BoxGroup/Draw",
+        "drawSingleContainerBox lines=$fromIdx..$toIdxInclusive (count=${toIdxInclusive - fromIdx + 1}) " +
+            "rect=($rectLeft,$rectTop)-($rectRight,$rectBottom) " +
+            "bg=${style.backgroundColor} bc=${style.borderColor} bw=$borderWidthScaled br=${style.borderRadiusPx} " +
+            "pageTop=$pageTop fontSizeScale=$fontSizeScale",
+    )
+    if (rectLeft >= rectRight || rectTop >= rectBottom) return
+    val rectW = rectRight - rectLeft
+    val rectH = rectBottom - rectTop
+    val r = if (style.borderRadiusPx.isInfinite()) minOf(rectW, rectH) / 2f
+            else style.borderRadiusPx * fontSizeScale
+    val paint = Paint().apply { isAntiAlias = true }
+
+    style.backgroundColor?.let { bgArgb ->
+        paint.style = Paint.Style.FILL
+        paint.color = bgArgb
+        canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
+    }
+
+    val bc = style.borderColor
+    if (bc != null && borderWidthScaled > 0f) {
+        paint.style = Paint.Style.STROKE
+        paint.color = bc
+        when (style.borderStyle) {
+            BlockStyle.BorderStyle.DOUBLE -> {
+                val third = borderWidthScaled / 3f
+                paint.strokeWidth = third
+                canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
+                val innerOff = 2f * third
+                val innerR = (r - innerOff).coerceAtLeast(0f)
+                canvas.drawRoundRect(
+                    rectLeft + innerOff, rectTop + innerOff,
+                    rectRight - innerOff, rectBottom - innerOff,
+                    innerR, innerR, paint,
+                )
+            }
+            BlockStyle.BorderStyle.SOLID,
+            BlockStyle.BorderStyle.DASHED,
+            BlockStyle.BorderStyle.DOTTED,
+            -> {
+                paint.strokeWidth = borderWidthScaled
+                canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
+            }
+        }
+    }
+}
+
+/**
  * **P3-5b Phase 3**：把 [ScrollLine.blockStyle] 的 CSS box 装饰画到 line 内容的包围盒上。
  *
  * 共享 helper —— [ChapterPaneCanvas]（scroll 模式）和 [PagePaneCanvas]（page-level 模式
