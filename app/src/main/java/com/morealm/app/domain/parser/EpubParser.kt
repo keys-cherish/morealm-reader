@@ -176,7 +176,14 @@ object EpubParser {
     // v43：2026-05-28 Phase 2 启用 ContainerScope + BOX marker emit。旧 v42 cache 无
     // __MOREALM_BOX_START__ marker（Phase 1 minimal encode 丢装饰），bump 让所有 EPUB 章节
     // cache 失效重 flatten 出新 BOX marker，主仓识别后产 group box 装饰。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v43"
+    // v44：2026-05-28 Step 9.5 + Step 9.2 Phase A 联动 — BlockStyle 新增字段：
+    // element-level backgroundImageSrc（卷首页 juan.png 等装饰图）+ 12 个单边 border 字段
+    // （borderTop/Right/Bottom/Left × Color/Width/Style）+ 4 个 borderRadius 4 角 override 字段
+    // （TL/TR/BR/BL）。encodeBlockStyle 加 bgi / bt{c,w,s} / br_{c,w,s} / bb{c,w,s} / bl{c,w,s} /
+    // brtl / brtr / brbr / brbl 共 17 个新 marker key。旧 v43 cache 全部无这些 key →
+    // 示例 LN A卷首页装饰图 / introduction 横线 / 时间介绍 U 型盒不可见。bump 让所有
+    // EPUB 章节 cache 失效重 flatten 出新装饰 keys。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v44"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
