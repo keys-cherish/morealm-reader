@@ -91,6 +91,10 @@ class WebDavViewModel @Inject constructor(
                 androidx.datastore.preferences.core.stringPreferencesKey("webdav_user"), user)
             prefs.update(
                 androidx.datastore.preferences.core.stringPreferencesKey("webdav_pass"), pass)
+            // Bug fix 2026-05-28：之前 saveWebDav 不动任何 status flow，
+            // 用户点保存按钮看似无反应。复用 _webDavStatus（备份/恢复同渠道），
+            // UI 已有"成功"色 (primary) 区分态。
+            _webDavStatus.value = "配置已保存"
         }
     }
 

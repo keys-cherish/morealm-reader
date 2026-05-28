@@ -157,11 +157,26 @@ class RemoteBookViewModel @Inject constructor(
 
     // ── 公开方法：浏览 ──────────────────────────────────────────
 
-    /** 首次进入：拉 booksDir 一层 + push 到 stack。 */
+    /**
+     * 首次进入：mkdir booksDir 兜底 + 拆多段 push 显示完整面包屑路径。
+     *
+     * Bug fix 2026-05-28（user 真机回归）：
+     *  1. V1 → V2 regression：listOneLevel 丢了 mkdir 兜底 → 首次拉空 list
+     *  2. pathStack 之前只 push 单段 booksDir → breadcrumb 缺中间层
+     *     (e.g. "MoRealm/books" → 面包屑只显示 "books"，缺 "MoRealm")
+     */
     private suspend fun openRoot() {
-        val root = manager.booksDir()
+        manager.ensureBooksDir()
+        val root = manager.booksDir()  // e.g. "MoRealm/books"
         pathStack.clear()
-        pathStack.add(root)
+        val segments = root.split('/').filter { it.isNotBlank() }
+        var acc = ""
+        for (seg in segments) {
+            acc = if (acc.isEmpty()) seg else "$acc/$seg"
+            pathStack.add(acc)
+        }
+        // pathStack 现在含完整层级链，如：["MoRealm", "MoRealm/books"]
+        AppLog.info(TAG, "openRoot booksDir=$root pathStack=$pathStack")
         recomputeCurrentEntries()
         loadCurrentLayer(forceReload = true)
     }
@@ -205,6 +220,10 @@ class RemoteBookViewModel @Inject constructor(
     private suspend fun loadCurrentLayer(forceReload: Boolean) {
         val key = pathStack.lastOrNull() ?: return
         if (!forceReload && listingCache.containsKey(key)) {
+            AppLog.info(
+                TAG,
+                "loadCurrentLayer($key) cache hit (${listingCache[key]?.size ?: 0} entries)",
+            )
             recomputeCurrentEntries()
             return
         }
@@ -213,8 +232,14 @@ class RemoteBookViewModel @Inject constructor(
         try {
             val entries = manager.listOneLevel(key)
             listingCache[key] = entries
+            AppLog.info(
+                TAG,
+                "loadCurrentLayer($key) fetched ${entries.size} entries " +
+                    "(folders=${entries.count { it is RemoteEntry.Folder }}, " +
+                    "files=${entries.count { it is RemoteEntry.File }})",
+            )
             if (entries.isEmpty()) {
-                _status.value = "「${key.substringAfterLast('/')}」目录为空"
+                _status.value = "「${key.substringAfterLast('/')}」目录为空（检查 WebDav 上是否存在该目录、是否放了 epub/txt/mobi/pdf/cbz 等书形文件）"
             }
             recomputeCurrentEntries()
         } catch (e: Exception) {
