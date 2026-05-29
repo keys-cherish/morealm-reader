@@ -8,6 +8,7 @@ import com.morealm.app.domain.render.textHeight
 // **R1 (阶段 R1)** —— 核心 marker 解析 + 数据类迁到独立仓库 epub-layout。主仓只调用 entry point
 // + 引用 public data class。internal marker 字面值 / parser helper 全藏在 epub-layout module。
 import com.morealm.epub.layout.ContentRun
+import com.morealm.epub.layout.InlineBgRun
 import com.morealm.epub.layout.InlineMarkersResult
 import com.morealm.epub.layout.ParsedTable
 import com.morealm.epub.layout.ParsedTableCell
@@ -477,6 +478,11 @@ class ScrollLayoutEngine(
         // （无 em25/em30 之类的字号变化）；非 null 触发 emit 切到 atoms 路径，width 跟
         // sizeScale 联动（measureTextSplit 后再乘 sizeScale）。
         var currentParaSizeScales: FloatArray? = null
+        // **Step 9.2 Phase B / Phase 3**：当前 paragraph 的字符级 inline 背景盒子 run 列表
+        // （来自 epub-layout parseInlineMarkers.bgRuns）。null = 本段无 SPAN_BG。emitOneLine
+        // 按 (chapterPositionCounter - paraStartCp) 落在哪个 run 区间取 argb/padding/boxId，
+        // 同 box 连续字符 coalesce 成单 TextRun（各画各 rect）。
+        var currentParaBgRuns: List<InlineBgRun>? = null
         // H1+H2：当前 paragraph 是否为 heading 段（1..6，0 = 非 heading 正文）。
         // emit line 时透传到 ScrollLine.headingLevel，让 H3 渲染识别 + 用 titlePaint 大字。
         var currentParaHeadingLevel: Int = 0
@@ -1476,6 +1482,7 @@ class ScrollLayoutEngine(
             currentParaCharColors = colorPerCp
             currentParaImageSrcs = parsed.imageSrcPerCp
             currentParaSizeScales = parsed.sizeScalePerCp
+            currentParaBgRuns = parsed.bgRuns
             currentParaHeadingLevel = parsed.headingLevel
             currentParaCpStart = chapterPositionCounter
             val processedText = cleanedText
@@ -1593,13 +1600,51 @@ class ScrollLayoutEngine(
                 // atoms），让 atoms 路径覆盖率从 ~10% (仅 sizeScale/image) 涨到 ~50% (含 color)。
                 // drawByAtoms 已支持 TextRun.colorArgb，无需改渲染端。
                 // 普通正文（无任何 marker）继续走 columns 路径，零行为变化。
-                val emitAtoms = sizeScales != null || imageSrcs != null || colors != null
+                val bgRuns = currentParaBgRuns // Phase 3 local snapshot
+                val emitAtoms = sizeScales != null || imageSrcs != null || colors != null || bgRuns != null
                 val atomList = if (emitAtoms) ArrayList<Atom>(chars.size) else null
+                // **Step 9.2 Phase B / Phase 3** —— bg-only coalesce：仅把同 boxId 连续同 styling
+                // 字符并成 1 个带 bg 字段的 TextRun（drawByAtoms 各画各 rect）；非 bg 字符仍每字符
+                // 1 atom（现有 color/size/image 路径零行为变化，blast radius 最小）。
+                val bgRunText = StringBuilder()
+                var bgRunWidth = 0f
+                var bgRunColor: Int? = null
+                var bgRunSize = 1f
+                var bgRunArgb: Int? = null
+                var bgRunPadL = 0f
+                var bgRunPadT = 0f
+                var bgRunPadR = 0f
+                var bgRunPadB = 0f
+                var bgRunBoxId: Int? = null
+                fun flushBgRun() {
+                    if (atomList != null && bgRunBoxId != null && bgRunText.isNotEmpty()) {
+                        atomList.add(
+                            TextRun(
+                                text = bgRunText.toString(),
+                                colorArgb = bgRunColor,
+                                sizeScale = bgRunSize,
+                                width = bgRunWidth + bgRunPadL + bgRunPadR,
+                                height = contentLineHeight,
+                                baseline = contentLineHeight * 0.8f,
+                                inlineBgArgb = bgRunArgb,
+                                inlineBgPaddingLeftPx = bgRunPadL,
+                                inlineBgPaddingTopPx = bgRunPadT,
+                                inlineBgPaddingRightPx = bgRunPadR,
+                                inlineBgPaddingBottomPx = bgRunPadB,
+                                inlineBgBoxId = bgRunBoxId,
+                            ),
+                        )
+                    }
+                    bgRunText.setLength(0)
+                    bgRunWidth = 0f
+                    bgRunBoxId = null
+                }
                 for (i in chars.indices) {
                     val relIdx = chapterPositionCounter - paraStartCp
                     val charColor = colors?.getOrNull(relIdx)?.takeIf { it != 0 }
                     val inlineSrc = imageSrcs?.getOrNull(relIdx)
                     val sizeScale = sizeScales?.getOrNull(relIdx) ?: 1f
+                    val bgRun = bgRuns?.firstOrNull { relIdx >= it.cpStart && relIdx < it.cpEnd }
                     // A4c：sizeScale 缩放字符宽度（图片例外仍走 inlineImageWidth）
                     val w = when {
                         inlineSrc != null -> inlineImageWidth
@@ -1616,27 +1661,51 @@ class ScrollLayoutEngine(
                             inlineImageSrc = inlineSrc,
                         ),
                     )
-                    // A4c：构造 atom（每 char 1 个，A6 优化时再合并同 styling 区段）
                     if (atomList != null) {
-                        atomList.add(
-                            if (inlineSrc != null) {
-                                InlineImage(src = inlineSrc, width = w, height = contentLineHeight)
-                            } else {
-                                TextRun(
-                                    text = chars[i],
-                                    colorArgb = charColor,
-                                    sizeScale = sizeScale,
-                                    width = w,
-                                    height = contentLineHeight,
-                                    baseline = contentLineHeight * 0.8f,
+                        when {
+                            inlineSrc != null -> {
+                                flushBgRun()
+                                atomList.add(InlineImage(src = inlineSrc, width = w, height = contentLineHeight))
+                            }
+                            bgRun != null -> {
+                                // bg 字符：同 box + 同 color + 同 size 才并入当前 run，否则 flush 起新 run
+                                val sameRun = bgRunBoxId == bgRun.boxId &&
+                                    bgRunColor == charColor && bgRunSize == sizeScale
+                                if (!sameRun) {
+                                    flushBgRun()
+                                    bgRunColor = charColor
+                                    bgRunSize = sizeScale
+                                    bgRunArgb = bgRun.argb
+                                    bgRunPadL = bgRun.paddingLeftPx
+                                    bgRunPadT = bgRun.paddingTopPx
+                                    bgRunPadR = bgRun.paddingRightPx
+                                    bgRunPadB = bgRun.paddingBottomPx
+                                    bgRunBoxId = bgRun.boxId
+                                }
+                                bgRunText.append(chars[i])
+                                bgRunWidth += w
+                            }
+                            else -> {
+                                // 非 bg 字符：每字符 1 atom（零行为变化）
+                                flushBgRun()
+                                atomList.add(
+                                    TextRun(
+                                        text = chars[i],
+                                        colorArgb = charColor,
+                                        sizeScale = sizeScale,
+                                        width = w,
+                                        height = contentLineHeight,
+                                        baseline = contentLineHeight * 0.8f,
+                                    ),
                                 )
-                            },
-                        )
+                            }
+                        }
                     }
                     sb.append(chars[i])
                     chapterPositionCounter++
                     x += w + (if (i < chars.lastIndex) gap else 0f)
                 }
+                flushBgRun()
 
                 // ── exceed 行末压缩（移植 V1 ChapterProvider.exceed L1034-1056 等价）──
                 // ZhLayout 处理 CJK 标点悬挂时会让 lineEnd 包含超出 visibleWidth 的标点。
