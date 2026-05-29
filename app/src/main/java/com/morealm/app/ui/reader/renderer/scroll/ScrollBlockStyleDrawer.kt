@@ -232,7 +232,16 @@ internal fun drawScrollLineBlockStyle(
         rectBottom = cy + heightScaled / 2f + padBottom + halfBorder
     } else {
         rectTop = lineTop - padTop - halfBorder
-        rectBottom = lineBottom + padBottom + halfBorder
+        // **2026-05-29 #2 横线贴文字视觉底**：bottom-only border（introduction `.jj { border-bottom }`）
+        // 且 em 段（[ScrollLine.textBottomRel] 非 NaN，文字 top-aligned 在行内留底部 leading 空隙）时，
+        // 横线贴文字视觉底而非 line.lineBottom（含行高 leading，离标题远 ~24px）。其他段 textBottomRel=
+        // NaN → effBottom == lineBottom 零行为变化；整框 border（uniform / 多边）不进此判定。
+        val effBottom = if (!line.textBottomRel.isNaN() && isBottomOnlyBorder(bs)) {
+            lineTop + line.textBottomRel
+        } else {
+            lineBottom
+        }
+        rectBottom = effBottom + padBottom + halfBorder
     }
     // **EpubW5H/CircleBox/Draw diag (2026-05-27)** — 装饰盒最终几何：rect + radius + scale 来源。
     // 配 EpubW5H/CircleBox/Emit 对比 emit 阶段算出的 boxW/H 与 drawer 阶段的 rectW/H 是否一致，
@@ -507,6 +516,16 @@ private fun drawSidedBorder(
 private fun hasSidedBorder(style: BlockStyle): Boolean =
     style.borderTopColor != null || style.borderRightColor != null ||
         style.borderBottomColor != null || style.borderLeftColor != null
+
+/**
+ * **2026-05-29** —— 仅 bottom 边有 border（其余三边 null）—— introduction `.jj { border-bottom }`
+ * 一条横线场景。#2 横线贴文字视觉底只对此场景生效，整框 / U 型盒不受影响。
+ */
+private fun isBottomOnlyBorder(style: BlockStyle): Boolean =
+    style.borderBottomColor != null &&
+        style.borderTopColor == null &&
+        style.borderLeftColor == null &&
+        style.borderRightColor == null
 
 /**
  * **2026-05-28 Step 9.5** —— CSS `background-size: contain` 风格 —— 等比缩放图到 rect 范围内
