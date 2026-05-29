@@ -251,7 +251,10 @@ object EpubParser {
         val coverHref = book.metadata.coverHref ?: findFallbackCoverHrefViaCore(book) ?: return null
         val cacheDir = File(context.cacheDir, "epub_covers/${uri.hashCode()}")
         val file = File(cacheDir, "cover.jpg")
-        if (file.exists()) return file.absolutePath
+        // 不做 file.exists 短路复用：封面提取逻辑会迭代（如 svg 封面识别 / 路径规范化修复），
+        // 重新导入时应按当前逻辑重新提取覆盖，否则旧错图缓存（如误抓的封底 back.jpg）永不更新
+        // —— 用户重新导入想刷新封面却拿到旧缓存。extractAllForImport 仅导入时调（低频），
+        // 重新解码写入成本可接受。
         return try {
             cacheDir.mkdirs()
             val bytes = book.resource(coverHref) ?: return null
@@ -298,8 +301,16 @@ object EpubParser {
     private fun firstImageHrefInXhtmlBytes(bytes: ByteArray): String? {
         return try {
             val text = bytes.decodeToString()
-            val img = Jsoup.parse(text).select("img").firstOrNull() ?: return null
-            img.attr("src").ifBlank { null }
+            val doc = Jsoup.parse(text)
+            // 1. 标准 <img src>
+            doc.select("img").firstOrNull()?.attr("src")?.ifBlank { null }?.let { return it }
+            // 2. svg <image xlink:href> —— 精排 EPUB 常用 svg 包裹封面图（无 <img>），如
+            // `<svg viewBox=...><image xlink:href="../Images/cover.png"/></svg>`。漏识别会让封面
+            // fallback 退到「manifest 任一 image」兜底，抓到封底 back.jpg 等错图。
+            doc.select("image").firstOrNull()?.let { svg ->
+                return svg.attr("xlink:href").ifBlank { svg.attr("href") }.ifBlank { null }
+            }
+            null
         } catch (_: Exception) {
             null
         }
@@ -315,11 +326,27 @@ object EpubParser {
         // 2. URL decode 再试（中日韩文件名）
         val decoded = runCatching { URLDecoder.decode(imgHref, "UTF-8") }.getOrNull().orEmpty()
         if (decoded.isNotBlank() && book.opfPackage.manifest.any { it.href == decoded }) return decoded
-        // 3. 相对路径解析（章节 xhtml 父目录 + img 相对路径）
+        // 3. 相对路径解析（章节 xhtml 父目录 + img 相对路径），并规范化 ../ ./ 段 ——
+        // svg 封面 href 常是 `../Images/cover.png`，拼成 `Text/../Images/cover.png` 若不规范化
+        // 就匹配不到 manifest 的 `Images/cover.png`。
         val baseDir = chapterHref.substringBeforeLast('/', "")
-        val resolved = if (baseDir.isEmpty()) imgHref else "$baseDir/$imgHref"
-        if (book.opfPackage.manifest.any { it.href == resolved }) return resolved
+        val joined = if (baseDir.isEmpty()) imgHref else "$baseDir/$imgHref"
+        val normalized = normalizeRelativePath(joined)
+        if (book.opfPackage.manifest.any { it.href == normalized }) return normalized
         return null
+    }
+
+    /** 规范化相对路径：消解 `..` / `.` 段。`Text/../Images/x.png` → `Images/x.png`。 */
+    private fun normalizeRelativePath(path: String): String {
+        val out = ArrayDeque<String>()
+        for (seg in path.split('/')) {
+            when (seg) {
+                "", "." -> Unit
+                ".." -> if (out.isNotEmpty()) out.removeLast()
+                else -> out.addLast(seg)
+            }
+        }
+        return out.joinToString("/")
     }
 
     /**
