@@ -186,7 +186,10 @@ object EpubParser {
     // v46：2026-05-29 ChapterBlockBuilder body 装饰剥离块补 backgroundImageSrc=null —— body
     // 页面背景图不再经 blockStyleStack 漏进子段落 effective style（竖条 tile 根治，I5 单测覆盖）。
     // 直接跳 v46：v45 曾被一个误诊 build 装到测试机、生成了带 bug 的 v45 cache，同号会命中旧 cache。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v46"
+    // v47：2026-05-29 R2 cascade 意图分离 —— effectiveBlockStyle 改用 cascadeMerge，element-only
+    // 装饰（bg/border/radius/padding）一律不继承祖先（根治整类「祖先装饰漏子段」）。emit 变（子段
+    // marker 不再带继承来的装饰），bump 强制全章节重 flatten。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v47"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
