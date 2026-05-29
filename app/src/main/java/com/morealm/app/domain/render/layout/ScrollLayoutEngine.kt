@@ -378,7 +378,12 @@ class ScrollLayoutEngine(
         // ChapterBlock.Image，flatten 后 paragraph = "<img src=\"img:Images/cover.jpg\">"
         // (单 line 含 img tag)。caller 传 title="Cover" (或其他) 都该 skip。
         val imgOnlyPattern = Regex("^\\s*<img(?:fp)?\\s+[^>]*>\\s*$")
-        val firstParaIsImageOnly = firstFewParas.firstOrNull()?.let { imgOnlyPattern.matches(it) } ?: false
+        // 剥掉首段可能的 leading BLOCK_STYLE marker 再判 image-only：某 EPUB 封面/卷首/简介页
+        // 的首图带装饰（如 img { width:100% }）→ flatten 在 <img> 前挂 __MOREALM_BLOCK_STYLE__
+        // marker，裸 imgOnlyPattern 不匹配 → firstParaIsImageOnly 误判 false → 与页面自带 h1
+        // 标题重复自画章节标题（简介页「内容简介」h1 + logo 图场景，2026-05-29 真机 log 实证）。
+        val firstParaForImgCheck = firstFewParas.firstOrNull()?.let(::stripLeadingBlockStyleMarker) ?: ""
+        val firstParaIsImageOnly = imgOnlyPattern.matches(firstParaForImgCheck)
         val contentProvidesChapterTitle = isSpecialChapterTitle || hasEarlyTableMarker || firstParaIsImageOnly
 
         val pages = mutableListOf<ScrollPage>()
@@ -2105,6 +2110,18 @@ class ScrollLayoutEngine(
             chapterBgImageSrc = chapterBgSrc,
             boxGroupStyles = finalGroupStyles,
         )
+    }
+
+    /**
+     * 剥掉 paragraph 开头可能的 BLOCK_STYLE marker 段，返回 body。image-only 判断等需要看
+     * 「纯内容」的场景用——装饰 marker（如首图 width）不应干扰 `<img>` 匹配。
+     */
+    private fun stripLeadingBlockStyleMarker(raw: String): String {
+        val start = com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_MARKER
+        val end = com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END
+        if (!raw.startsWith(start)) return raw
+        val endIdx = raw.indexOf(end)
+        return if (endIdx < 0) raw else raw.substring(endIdx + end.length)
     }
 
     /**
