@@ -189,7 +189,11 @@ object EpubParser {
     // v47：2026-05-29 R2 cascade 意图分离 —— effectiveBlockStyle 改用 cascadeMerge，element-only
     // 装饰（bg/border/radius/padding）一律不继承祖先（根治整类「祖先装饰漏子段」）。emit 变（子段
     // marker 不再带继承来的装饰），bump 强制全章节重 flatten。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v47"
+    // v48：2026-05-29 ChapterBlockBuilder scope 双 push 修复 —— table 元素（td/th/table）带 box
+    // 装饰（padding/border/bg）时不再误叠 ContainerScope。修前封面气泡 td 的 padding-left 触发
+    // scope 错乱，吞掉气泡 table + 紧随的作者名表整表（封面作者名 / 橙色气泡缺失）。修后这些 table
+    // 重新 emit，flatten 输出变（多出之前丢失的 table marker），bump 强制全章节重 flatten。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v48"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
