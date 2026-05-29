@@ -1588,6 +1588,7 @@ class ScrollLayoutEngine(
                 widths: List<Float>,
                 startX: Float,
                 gap: Float,
+                centerEffWidth: Float? = null,
             ) {
                 if (chars.isEmpty()) return
                 val cols = ArrayList<ScrollColumn>(chars.size)
@@ -1762,6 +1763,21 @@ class ScrollLayoutEngine(
                     )
                 }
 
+                // **2026-05-29 居中修正**：CENTER 段 startX 用纯文字宽预估，漏算 inline bg 字符背景
+                // padding（cols 实际含每字 padL+padR）→ 文字偏右半个 padding（简介页「内容简介」粉块
+                // 标题实证 startX=295 应 259）。emit 后按 cols 实际宽重新居中；无字符背景时 actualW ==
+                // 预估宽，delta≈0 不动，零行为变化。
+                if (centerEffWidth != null && cols.isNotEmpty()) {
+                    val actualW = cols.last().end - cols.first().start
+                    val targetStart = currentBoxLeftPad + ((centerEffWidth - actualW) / 2f).coerceAtLeast(0f)
+                    val delta = targetStart - cols.first().start
+                    if (kotlin.math.abs(delta) > 0.5f) {
+                        for (i in cols.indices) {
+                            val c = cols[i]
+                            cols[i] = c.copy(start = c.start + delta, end = c.end + delta)
+                        }
+                    }
+                }
                 emitLine(
                     lineColumns = cols,
                     lineText = sb.toString(),
@@ -1925,7 +1941,10 @@ class ScrollLayoutEngine(
                             desiredWidth >= availableWidth * 0.65f && lineChars.size > 1
                         val gap = if (shouldJustify) residualWidth / (lineChars.size - 1) else 0f
                         // Step 9.X：box scope 内字真排在 box 内侧 → startX += currentBoxLeftPad
-                        emitOneLine(lineChars, lineWidths, startX + currentBoxLeftPad, gap)
+                        emitOneLine(
+                            lineChars, lineWidths, startX + currentBoxLeftPad, gap,
+                            centerEffWidth = if (cssAlign == com.morealm.epub.compat.BlockStyle.TextAlign.CENTER) effWidth else null,
+                        )
                     }
                 } else {
                     // Greedy fallback：与 M1.2 原逻辑等价。
