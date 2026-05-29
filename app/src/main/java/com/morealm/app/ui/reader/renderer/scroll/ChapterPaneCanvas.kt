@@ -419,11 +419,14 @@ private fun drawAtomsRow(
                 val effectiveBaselineY = if (scale != 1f) {
                     pageOffsetY + line.lineTop + basePaint.textSize * 0.8f
                 } else baselineY
+                // Phase 4：字符级 inline 背景盒子（底层方块），无 bg 时零开销返回
+                drawInlineBg(canvas, atom, x, effectiveBaselineY, basePaint)
+                val textX = x + atom.inlineBgPaddingLeftPx
                 val hasOverride = if (textColorByCp.isNotEmpty()) {
                     (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
                 } else false
                 if (hasOverride) {
-                    var cx = x
+                    var cx = textX
                     val baseColor = atom.colorArgb ?: defaultColor
                     for (ci in atom.text.indices) {
                         val cp = atomStartCp + ci
@@ -437,7 +440,7 @@ private fun drawAtomsRow(
                 } else {
                     val origColor = basePaint.color
                     if (atom.colorArgb != null) basePaint.color = atom.colorArgb
-                    canvas.drawText(atom.text, x, effectiveBaselineY, basePaint)
+                    canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
                     if (atom.colorArgb != null) basePaint.color = origColor
                 }
                 if (scale != 1f) basePaint.textSize = baseSize
@@ -497,11 +500,14 @@ private fun drawCellsRow(
                     val effectiveX = cell.contentLeft + cell.padding + atom.cellLocalX
                     val effectiveBaselineY = pageOffsetY + line.lineTop + cell.contentTop +
                         cell.padding + atom.cellLocalY + atom.baseline
+                    // Phase 4：字符级 inline 背景盒子（底层方块），无 bg 时零开销返回
+                    drawInlineBg(canvas, atom, effectiveX, effectiveBaselineY, basePaint)
+                    val textX = effectiveX + atom.inlineBgPaddingLeftPx
                     val hasOverride = if (textColorByCp.isNotEmpty()) {
                         (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
                     } else false
                     if (hasOverride) {
-                        var cx = effectiveX
+                        var cx = textX
                         val baseColor = atom.colorArgb ?: defaultColor
                         for (ci in atom.text.indices) {
                             val cp = atomStartCp + ci
@@ -514,7 +520,7 @@ private fun drawCellsRow(
                     } else {
                         val origColor = basePaint.color
                         if (atom.colorArgb != null) basePaint.color = atom.colorArgb
-                        canvas.drawText(atom.text, effectiveX, effectiveBaselineY, basePaint)
+                        canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
                         if (atom.colorArgb != null) basePaint.color = origColor
                     }
                     if (scale != 1f) basePaint.textSize = baseSize
