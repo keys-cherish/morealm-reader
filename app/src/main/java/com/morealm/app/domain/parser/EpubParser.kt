@@ -181,9 +181,12 @@ object EpubParser {
     // （borderTop/Right/Bottom/Left × Color/Width/Style）+ 4 个 borderRadius 4 角 override 字段
     // （TL/TR/BR/BL）。encodeBlockStyle 加 bgi / bt{c,w,s} / br_{c,w,s} / bb{c,w,s} / bl{c,w,s} /
     // brtl / brtr / brbr / brbl 共 17 个新 marker key。旧 v43 cache 全部无这些 key →
-    // 示例 LN A卷首页装饰图 / introduction 横线 / 时间介绍 U 型盒不可见。bump 让所有
+    // 样本 EPUB 卷首页装饰图 / introduction 横线 / 时间介绍 U 型盒不可见。bump 让所有
     // EPUB 章节 cache 失效重 flatten 出新装饰 keys。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v44"
+    // v46：2026-05-29 ChapterBlockBuilder body 装饰剥离块补 backgroundImageSrc=null —— body
+    // 页面背景图不再经 blockStyleStack 漏进子段落 effective style（竖条 tile 根治，I5 单测覆盖）。
+    // 直接跳 v46：v45 曾被一个误诊 build 装到测试机、生成了带 bug 的 v45 cache，同号会命中旧 cache。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v46"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
