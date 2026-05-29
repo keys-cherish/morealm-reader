@@ -172,6 +172,20 @@ data class ScrollLine(
      *  - vertical-align middle/baseline：cell.contentTop = (row.h - cell.contentH) × {0.5 / baselineDelta}
      */
     val cells: List<ScrollLineCell>? = null,
+    /**
+     * **2026-05-29 横线对齐** —— 行内文字「视觉底」相对 [lineTop] 的像素偏移（baseline + descent）。
+     * `NaN` = 未计算（非 em 段 / columns 路径），消费方一律回退到 [lineBottom]，零行为变化。
+     *
+     * 仅在 em 段（[atoms] 含 `sizeScale > 1` 的 [TextRun]）由 [ScrollLayoutEngine.emitLine] 算出。
+     * 因为 em 段文字在行内 top-aligned（drawer `effectiveBaselineY = lineTop + scaledTextSize×0.8`），
+     * 行高仍是 contentLineHeight 时文字底（≈947）会高于 [lineBottom]（≈961），中间一段行高 leading
+     * 空隙。两处消费它对齐到真实文字底而非行底：
+     *  - **#2 横线**：[com.morealm.app.ui.reader.renderer.scroll.drawScrollLineBlockStyle] 画
+     *    bottom-only border（如 introduction `.jj { border-bottom }`）时贴 `lineTop + textBottomRel`。
+     *  - **#3 负 margin clamp**：[ScrollLayoutEngine] 处理下一段负 margin-top 时，禁止其上提钻进
+     *    本行 border 上方（仅当本行是 bottom-only border 时 clamp，不误伤封面 poster 负 margin 叠层）。
+     */
+    val textBottomRel: Float = Float.NaN,
 ) {
     val height: Float get() = lineBottom - lineTop
 

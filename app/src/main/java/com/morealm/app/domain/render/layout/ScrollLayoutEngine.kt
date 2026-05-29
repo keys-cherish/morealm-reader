@@ -96,6 +96,13 @@ class ScrollLayoutEngine(
     private val contentLineHeight: Float = contentTextHeight * lineSpacingExtra
 
     /**
+     * **2026-05-29 横线对齐** —— 缓存 base 字号 descent，避免 emitLine 每行调 `fontMetrics` 分配。
+     * em 段文字视觉底 = `lineTop + scaledTextSize×0.8 + contentDescent×scale`（对齐
+     * drawer scaled-text baseline，详 [ScrollLine.textBottomRel]）。
+     */
+    private val contentDescent: Float = contentPaint.fontMetrics.descent
+
+    /**
      * 自带字体（@font-face）段 ASCII 空格视觉宽度兜底 —— 默认字体度量 ASCII space 约 0.25em，
      * 但自带字体（如某 EPUB w2 字体把 `[` 字符 glyph 设计成花苞 ❀ 装饰图标）的 space glyph
      * 经常被设计师压缩到极窄甚至 0 宽（期待手动控制间距）。emit 阶段不知道渲染层会 swap 到
@@ -513,6 +520,18 @@ class ScrollLayoutEngine(
             cells: List<ScrollLineCell>? = null,
         ) {
             val effectiveLineHeight = lineHeightOverride ?: contentLineHeight
+            // **2026-05-29 横线对齐**：em 段（atoms 含 sizeScale>1）算文字视觉底相对 lineTop 的偏移，
+            // 对齐 drawer `effectiveBaselineY = lineTop + scaledTextSize×0.8`（见 [ScrollLine.textBottomRel]）。
+            // 非 em 段保持 NaN，消费方（#2 横线 / #3 clamp）回退 lineBottom，零行为变化。
+            val lineTextBottomRel: Float = run {
+                val atomList = atoms ?: return@run Float.NaN
+                var maxScale = 1f
+                for (atom in atomList) {
+                    if (atom is TextRun && atom.sizeScale > maxScale) maxScale = atom.sizeScale
+                }
+                if (maxScale <= 1f) Float.NaN
+                else contentPaint.textSize * maxScale * 0.8f + contentDescent * maxScale
+            }
             val proposedTop = currentY
             val proposedBottom = proposedTop + effectiveLineHeight
             val needNewPage = proposedBottom + paddingBottom > viewHeight && currentPageLines.isNotEmpty()
@@ -547,6 +566,7 @@ class ScrollLayoutEngine(
                     atoms = atoms,
                     headingLevel = headingLevel,
                     cells = cells,
+                    textBottomRel = lineTextBottomRel,
                 )
             )
             currentY = finalBottom
@@ -1513,6 +1533,41 @@ class ScrollLayoutEngine(
                     marginTopPx
                 }
                 currentY += effectiveMt
+                // **2026-05-29 #3 负 margin 窄 clamp**：上一行是 bottom-only border（如 introduction
+                // `.jj { border-bottom }`）且本段负 margin 上提时，禁止其钻进横线上方（参考实现里副标题
+                // 在横线下方）。**仅 bottom-only border 触发** —— 不误伤封面 poster 故意做的负 margin
+                // 叠层（上一行无 bottom-only border → 不 clamp，保留叠层语义，避免「修 1 制造 2」）。
+                if (effectiveMt < 0f) {
+                    val prevLine = currentPageLines.lastOrNull()
+                    if (prevLine != null && !prevLine.textBottomRel.isNaN()) {
+                        val pbs = prevLine.blockStyle
+                        val bottomOnlyBorder = pbs.borderBottomColor != null &&
+                            pbs.borderTopColor == null &&
+                            pbs.borderLeftColor == null &&
+                            pbs.borderRightColor == null
+                        if (bottomOnlyBorder) {
+                            // clamp 底线必须与 drawer 横线**实际绘制位置同口径**（对齐 PRD #4 两套坐标系）：
+                            // 横线画在 rectBottom = lineTop + textBottomRel + paddingBottomPx×scale
+                            // （bottom-only 时 uniform halfBorder=0），描边宽 borderBottomWidthPx×scale。
+                            // scale = contentPaint.textSize/16f（与 ChapterPaneCanvas / PagePaneCanvas 的
+                            // fontSizeScale 同源）。底线取「横线中心 + 半描边」让副标题落横线下方留小缝。
+                            // **第一版漏算 paddingBottomPx×scale → 横线仍切在副标题顶（古风）上**。
+                            val borderScale = contentPaint.textSize / 16f
+                            val borderFloorY = prevLine.lineTop + prevLine.textBottomRel +
+                                (pbs.paddingBottomPx + pbs.borderBottomWidthPx) * borderScale
+                            if (currentY < borderFloorY) {
+                                com.morealm.app.core.log.AppLog.info(
+                                    "D1a/Margin",
+                                    "para#$paragraphCounter neg-margin clamp ↓border: " +
+                                        "currentY=$currentY → $borderFloorY " +
+                                        "(textBottomRel=${prevLine.textBottomRel} " +
+                                        "padB=${pbs.paddingBottomPx} bw=${pbs.borderBottomWidthPx} scale=$borderScale)",
+                                )
+                                currentY = borderFloorY
+                            }
+                        }
+                    }
+                }
                 com.morealm.app.core.log.AppLog.info(
                     "D1a/Margin",
                     "para#$paragraphCounter applied margin-top=$marginTopPx (effective=$effectiveMt " +
