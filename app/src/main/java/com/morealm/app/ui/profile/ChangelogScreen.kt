@@ -193,10 +193,28 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.6",
+        date = "2026-05-29",
+        title = "EPUB 富排版增强 + 远程书架层级浏览",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            ChangelogItem(ChangeType.NEW, "远程书架（WebDAV）层级浏览 —— 远程书架可以按文件夹一层层点进去看，勾选要的书再导入，不用一次性拉全部"),
+            ChangelogItem(ChangeType.NEW, "EPUB 字符级背景色 —— 「内容简介」这种每个字带独立彩色块的艺术标题现在能正确显示（彩色方块 + 白字）"),
+            ChangelogItem(ChangeType.FIX, "EPUB 封面对话气泡 + 作者名显示 —— 之前部分精排 EPUB 封面上的对话气泡、竖排作者名整块不显示，现在正常显示"),
+            ChangelogItem(ChangeType.FIX, "EPUB 简介页标题不再重复 —— 之前简介页顶部多出一个大标题（和页面自带的艺术标题撞了），现在去掉"),
+            ChangelogItem(ChangeType.FIX, "EPUB 封面显示真封面 —— 之前部分书（svg 包裹封面）书架封面显示成封底或纯色块，现在正确显示真封面"),
+            ChangelogItem(ChangeType.FIX, "EPUB 页面背景图竖条修复 —— 之前个别书的页面背景图被切成一条条竖条，现在正常铺满"),
+            ChangelogItem(ChangeType.FIX, "EPUB 自带字体排版修正 —— 自带字体的字符间距 / 测量偏差修正"),
+            ChangelogItem(ChangeType.FIX, "音量键翻页失效修复 —— 部分场景下按音量键无法翻页的问题修复"),
+            ChangelogItem(ChangeType.FIX, "个别书本跨页显示错位修复 —— 个别书本在翻页时跨页错位的问题修复"),
+            ChangelogItem(ChangeType.FIX, "超多书本导入卡死修复 —— 一次性导入大量书籍时阅读器卡死的问题修复"),
+            ChangelogItem(ChangeType.IMPROVE, "EPUB 精排样式进一步完善 —— 更多精排样式（彩色盒子、单边边框、不等圆角、元素背景图等）正确显示"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.5",
         date = "2026-05-25",
         title = "EPUB 精品排版引擎 + 翻页体验全面重做",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             ChangelogItem(ChangeType.IMPROVE, "仿真翻页（贝塞尔卷边）暂不支持 EPUB —— 阅读 EPUB 时请把翻页模式改为 平移 / 覆盖 / 滚动 / 无动画 任一项；TXT 仍可正常使用仿真翻页"),
             ChangelogItem(ChangeType.NEW, "【重大更新】EPUB 精品排版引擎 —— 精品 EPUB 的样式现在能正确渲染：圆角彩色文字框、段落背景色、边框、对话气泡描边光晕、行内小图、表格排版、标题大字号 + 间距、段落缩进对齐"),

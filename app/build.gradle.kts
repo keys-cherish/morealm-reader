@@ -62,8 +62,8 @@ android {
         applicationId = "com.morealm.app"
         minSdk = 21
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.5"
+        versionCode = 10
+        versionName = "1.6"
 
         // Room schema export
         ksp {
