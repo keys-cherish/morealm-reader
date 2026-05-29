@@ -129,6 +129,21 @@ data class TextRun(
     override val baseline: Float,
     override val cellLocalX: Float = 0f,
     override val cellLocalY: Float = 0f,
+    /**
+     * **Step 9.2 Phase B / Phase 3** —— 字符级 inline 背景盒子 ARGB（来自 epub-layout
+     * [com.morealm.epub.layout.InlineBgRun]；emit 阶段按 boxId 把同 box 连续字符 coalesce
+     * 进一个 TextRun）。null = 无 bg（零开销 fast path，drawByAtoms 跳过 drawRect）。
+     */
+    val inlineBgArgb: Int? = null,
+    val inlineBgPaddingLeftPx: Float = 0f,
+    val inlineBgPaddingTopPx: Float = 0f,
+    val inlineBgPaddingRightPx: Float = 0f,
+    val inlineBgPaddingBottomPx: Float = 0f,
+    /**
+     * 章级 1-based box 标识。coalesce 判「同 box」依据；同 boxId 跨行 break 的多 TextRun
+     * 各画各 rect（Phase 4）。null = 无 bg。
+     */
+    val inlineBgBoxId: Int? = null,
 ) : Atom {
     override val cpCount: Int get() = text.length
 }
