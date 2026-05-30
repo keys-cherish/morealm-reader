@@ -7,7 +7,9 @@ import com.morealm.app.domain.render.ZhLayout
 import com.morealm.app.domain.render.textHeight
 // **R1 (阶段 R1)** —— 核心 marker 解析 + 数据类迁到独立仓库 epub-layout。主仓只调用 entry point
 // + 引用 public data class。internal marker 字面值 / parser helper 全藏在 epub-layout module。
+import com.morealm.epub.layout.BoxGeometry
 import com.morealm.epub.layout.ContentRun
+import com.morealm.epub.layout.EmGeometry
 import com.morealm.epub.layout.InlineBgRun
 import com.morealm.epub.layout.InlineMarkersResult
 import com.morealm.epub.layout.ParsedTable
@@ -512,6 +514,9 @@ class ScrollLayoutEngine(
             isImage: Boolean = false,
             imageSrc: String? = null,
             isFullPageImage: Boolean = false,
+            isHorizontalRule: Boolean = false,
+            hrLeftPx: Float = 0f,
+            hrRightPx: Float = 0f,
             lineHeightOverride: Float? = null,
             atoms: List<Atom>? = null,
             headingLevel: Int = 0,
@@ -519,7 +524,19 @@ class ScrollLayoutEngine(
             // 详 ScrollLine.cells / ScrollLineCell 注释。
             cells: List<ScrollLineCell>? = null,
         ) {
-            val effectiveLineHeight = lineHeightOverride ?: contentLineHeight
+            // **2026-05-30 em 小字段行高收紧**：currentParaSizeScales 只缩字宽不缩行高，
+            // em09（90% 字，如人物简介）用全字号行高 → 行距过松（溢出）。对齐 CSS 无单位
+            // line-height 随 font-size 缩放：整行都是小 em（atoms 最大 sizeScale ≤1）按它收紧；
+            // 表格行（lineHeightOverride 非空）/ 含大字（标题）/ 混排不动（expand 方向 PRD #1 后做）。
+            val emLineScale: Float = run {
+                if (lineHeightOverride != null) return@run 1f
+                val atomList = atoms ?: return@run 1f
+                var maxS = 0f
+                var hasText = false
+                for (a in atomList) if (a is TextRun) { hasText = true; if (a.sizeScale > maxS) maxS = a.sizeScale }
+                EmGeometry.lineHeightScale(if (hasText) maxS else null)
+            }
+            val effectiveLineHeight = (lineHeightOverride ?: contentLineHeight) * emLineScale
             // **2026-05-29 横线对齐**：em 段（atoms 含 sizeScale>1）算文字视觉底相对 lineTop 的偏移，
             // 对齐 drawer `effectiveBaselineY = lineTop + scaledTextSize×0.8`（见 [ScrollLine.textBottomRel]）。
             // 非 em 段保持 NaN，消费方（#2 横线 / #3 clamp）回退 lineBottom，零行为变化。
@@ -529,8 +546,7 @@ class ScrollLayoutEngine(
                 for (atom in atomList) {
                     if (atom is TextRun && atom.sizeScale > maxScale) maxScale = atom.sizeScale
                 }
-                if (maxScale <= 1f) Float.NaN
-                else contentPaint.textSize * maxScale * 0.8f + contentDescent * maxScale
+                EmGeometry.textBottomRel(contentPaint.textSize, contentDescent, maxScale)
             }
             val proposedTop = currentY
             val proposedBottom = proposedTop + effectiveLineHeight
@@ -561,6 +577,9 @@ class ScrollLayoutEngine(
                     isImage = isImage,
                     imageSrc = imageSrc,
                     isFullPageImage = isFullPageImage,
+                    isHorizontalRule = isHorizontalRule,
+                    hrLeftPx = hrLeftPx,
+                    hrRightPx = hrRightPx,
                     blockStyle = currentBlockStyle,
                     boxGroupId = boxStack.lastOrNull(),
                     atoms = atoms,
@@ -672,37 +691,11 @@ class ScrollLayoutEngine(
             val innerLH = contentTextHeight * 0.95f
             val contentH = ibLines.size * innerLH
 
-            // **P2 fix (2026-05-27)** — 圆形容器 (border-radius:100%) padding 不足时文字超内
-            // 切正方形边界 → 视觉被圆边截。CSS spec：圆形容器要求 padding ≥ (1-1/√2)×D/2 ≈
-            // 0.146 D 才不溢出，但 EPUB 作者通常只给 0.05 D。修法：检测 (innerW × contentH)
-            // 是否塞得进内切正方形 (D/√2)，不行则按需扩 padding 把圆放大让 (innerW × contentH)
-            // 装入。5% 安全余量避边界字符 anti-alias 像素被截。同步覆盖 currentBlockStyle.padding
-            // 让 ScrollBlockStyleDrawer 画放大后的圆。仅 isCircle 段 fire，pill / 矩形装饰盒不受影响。
-            val isCircleForP2 = currentBlockStyle.borderRadiusPx.isInfinite()
-            if (isCircleForP2) {
-                val initialInscribed = minOf(boxW, boxH) / 1.41421356f
-                val needed = maxOf(innerW, contentH)
-                if (needed > initialInscribed) {
-                    val requiredD = needed * 1.05f * 1.41421356f
-                    val targetD = maxOf(requiredD, boxW)
-                    val newPad = padScaled + (targetD - boxW) / 2f
-                    currentBlockStyle = currentBlockStyle.copy(
-                        paddingLeftPx = newPad / fontScale,
-                        paddingRightPx = newPad / fontScale,
-                        paddingTopPx = newPad / fontScale,
-                        paddingBottomPx = newPad / fontScale,
-                    )
-                    com.morealm.app.core.log.AppLog.info(
-                        "EpubW5H/CircleBox/Emit",
-                        "P2 enlarge: oldBoxW=$boxW oldInscribed=$initialInscribed " +
-                            "needed=$needed → newBoxW=$targetD newPad=$newPad",
-                    )
-                    padScaled = newPad
-                    boxW = targetD
-                    boxH = targetD
-                }
-            }
-
+            // **2026-05-30 删 P2 √2 内切正方形膨胀**：参照引擎实证（主流阅读器引擎）——
+            // border-radius 是纯绘制层装饰、不参与测量，盒子尺寸只由 width/height(+padding) 定，
+            // 放不下就溢出/裁，绝不为圆角撑大。之前 P2 为「文字不碰圆边」把圆放大 √2≈1.41×
+            // （4em→5.7em），偏离参照让 qipao 圆全部过大。现让 border-radius 退出测量：圆径锁
+            // 声明 width/height；文字放得下即 declared 尺寸，真比圆宽才 wrap + 长高（不裁字兜底）。
             val lineH = maxOf(boxH, contentH + 2f * padScaled)
 
             // **EpubW5H/CircleBox/Emit diag** — 排版后最终几何（含 P2 enlarge 后），用于验证。
@@ -723,9 +716,16 @@ class ScrollLayoutEngine(
                 )
             }
 
-            val mlRaw = currentBlockStyle.marginLeftPx
-            val mlScaled = if (mlRaw.isNaN()) 0f else mlRaw * fontScale
-            val cellLeft = mlScaled
+            // margin:auto 水平定位（同 layoutTable 1116-1123）：双 auto 居中（chara-qipao1
+            // `margin:0.1em auto` 圆标居中）、仅左 auto 右贴、否则按 marginLeft 左偏。之前只取
+            // marginLeft，auto(NaN) 被算 0 → 圆标贴左不居中。
+            val mlAuto = currentBlockStyle.marginLeftPx.isNaN()
+            val mrAuto = currentBlockStyle.marginRightPx.isNaN()
+            val cellLeft = when {
+                mlAuto && mrAuto -> ((visibleWidth - boxW) / 2f).coerceAtLeast(0f)
+                mlAuto && !mrAuto -> (visibleWidth - boxW).coerceAtLeast(0f)
+                else -> currentBlockStyle.marginLeftPx * fontScale
+            }
 
             val contentTopInCell = (lineH - contentH) / 2f
 
@@ -853,6 +853,26 @@ class ScrollLayoutEngine(
             )
             // 图片占 1 cp（旧引擎 stringBuilder.append(" ")）
             return startCp + 1
+        }
+
+        // emitHorizontalRule：`<hr/>` flatten 的 <morealmhr/> 段 → emit 一条横线 line。
+        // x 范围贴当前 box 内容宽（currentBoxLeftPad..visibleWidth-currentBoxRightPad，与同
+        // box 内文字左缘一致）；box 外 = 整个 visibleWidth。行高用 contentLineHeight 给上下留白，
+        // 渲染层在垂直中线画线。columns 空、占 1 cp（与图片占位对齐）。
+        fun emitHorizontalRule(paragraphNum: Int, startCp: Int) {
+            val left = currentBoxLeftPad
+            val right = (visibleWidth.toFloat() - currentBoxRightPad).coerceAtLeast(left + 1f)
+            emitLine(
+                lineColumns = emptyList(),
+                lineText = "",
+                paragraphNum = paragraphNum,
+                firstChapterPos = startCp,
+                lastChapterPos = startCp,
+                isHorizontalRule = true,
+                hrLeftPx = left,
+                hrRightPx = right,
+                lineHeightOverride = contentLineHeight,
+            )
         }
 
         // emitTitleParagraph：排版一段 title 文本（可跨行换行），段末追加 \n cp。
@@ -1022,8 +1042,12 @@ class ScrollLayoutEngine(
         //
         // CellGlyph 携带 (text 或 image src + width + color + size)，layoutTable emit 时
         // 识别 imageSrc 非 null → emit InlineImage atom 取代 TextRun。
-        fun layoutCellLines(cell: ParsedTableCell): List<List<CellGlyph>> {
-            val widthCap = cell.widthPx ?: visibleWidth.toFloat()
+        fun layoutCellLines(cell: ParsedTableCell, cellWidthScale: Float = 1f): List<List<CellGlyph>> {
+            val fontScale = contentPaint.textSize / 16f
+            // cell.widthPx 是设计 px（epub-compat rootFontSize=16）；glyph 量度是渲染 px，
+            // 需 × fontScale 同单位，让气泡（内层 div `width:18em` 已传到 cell.widthPx）在当前
+            // 字号下按 18em 换行而非整屏宽（修「气泡文字溢出被切」）。
+            val widthCap = cell.widthPx?.let { it * fontScale * cellWidthScale } ?: visibleWidth.toFloat()
             val cellLevelSizeScale = cell.sizeScale
             // **Step 7 bugfix v2 (2026-05-24)**: 不 fallback to cell.textColor (首字 color)。
             // ContentRun.Text.style.color 已携带 per-cp color (parseInlineMarkers 出的 colorPerCp
@@ -1031,7 +1055,6 @@ class ScrollLayoutEngine(
             // 某日轻 sibling table 「某标题」cell 内 "为" "的" color=null (默认黑) vs
             // "美""好" color=粉/橙 — 之前 fallback cellLevelColor 让 "为" 也粉色 (bug)。
             val out = ArrayList<List<CellGlyph>>()
-            val fontScale = contentPaint.textSize / 16f
 
             for (paraRuns in cell.paragraphs) {
                 // 把 paraRuns (List<ContentRun>) 扁平化成 CellGlyph 序列，然后按 widthCap 切行
@@ -1053,7 +1076,7 @@ class ScrollLayoutEngine(
                             // width:100% inherits cell width)。无 cell.widthPx 时 fallback
                             // contentLineHeight × 1.5。 某日轻 sibling 2 chibi sy2.png 在
                             // cell style="width:4em" → cell.widthPx=64 → image width = 64*4.5 ≈ 288。
-                            val imgW = cell.widthPx?.let { it * fontScale } ?: (contentLineHeight * 1.5f)
+                            val imgW = cell.widthPx?.let { it * fontScale * cellWidthScale } ?: (contentLineHeight * 1.5f)
                             glyphs.add(CellGlyph(text = "￼", width = imgW, color = null, imageSrc = run.src, sizeScale = 1f))
                         }
                         is ContentRun.NestedTable -> {
@@ -1098,7 +1121,17 @@ class ScrollLayoutEngine(
         fun layoutTable(parsed: ParsedTable) {
             for (row in parsed.rows) {
                 if (row.cells.isEmpty()) continue
-                val cellLines: List<List<List<CellGlyph>>> = row.cells.map { layoutCellLines(it) }
+                // **2026-05-30 气泡装进屏幕**：本行声明总宽（Σ cell.widthPx×fontScale + gap）超视口时
+                // 按 visibleWidth 等比收缩各 cell（聊天气泡 头像5em + 气泡18em = 23em，大字号下超屏，
+                // 之前整表溢出被 clipRect 裁掉右半边）。不溢出时 scale=1，正常表格零行为变化。
+                val rowWidthScale = run {
+                    val fs = contentPaint.textSize / 16f
+                    val declaredSum = row.cells.sumOf { ((it.widthPx ?: 0f) * fs).toDouble() }.toFloat()
+                    val gaps = 2f * (row.cells.size - 1).coerceAtLeast(0)
+                    val budget = (visibleWidth.toFloat() - gaps).coerceAtLeast(1f)
+                    if (declaredSum > budget && declaredSum > 0f) budget / declaredSum else 1f
+                }
+                val cellLines: List<List<List<CellGlyph>>> = row.cells.map { layoutCellLines(it, rowWidthScale) }
                 // **D2.a Commit 2d fix**：CSS spec — td.width 是最小宽度；实际 cell width =
                 // max(declared widthPx, actual content max line width)。某仙侠 td.width=1.2em
                 // ≈ 19.2px < CJK 字符 ~24-30px → 字符会溢出 + cellCursorX 累加用 19.2 让
@@ -1245,6 +1278,15 @@ class ScrollLayoutEngine(
                             contentHeight = cellLineList.size * cellStride,
                             padding = 0f,
                             atoms = cellAtoms,
+                            // 聊天气泡 div.kuang-hei 等 cell 内 box 装饰：解码 payload → BlockStyle，
+                            // renderer 画 cell 边框 / 圆角。多段气泡走 Container BOX（boxStylePayload）；
+                            // 单段气泡边框 merge 进段落 BLOCK_STYLE → 兜底解码，仅含真边框时当 cell 盒子
+                            // （避免给只有 align/color 的普通段落画空盒）。null → 无装饰零开销。
+                            boxStyle = cell.boxStylePayload?.let {
+                                com.morealm.epub.compat.StructuredChapterContent.decodeBlockStyle(it)
+                            } ?: cell.cellBlockStylePayload?.let {
+                                com.morealm.epub.compat.StructuredChapterContent.decodeBlockStyle(it)
+                            }?.takeIf { it.borderColor != null && it.borderWidthPx > 0f },
                         ),
                     )
                     cellCursorX += cellW
@@ -1309,8 +1351,20 @@ class ScrollLayoutEngine(
                                     else style.marginLeftPx
                     val mrContrib = if (style.marginRightPx.isNaN() || style.marginRightPx < 0f) 0f
                                     else style.marginRightPx
-                    val leftAdd = style.paddingLeftPx + mlContrib + style.borderWidthPx
-                    val rightAdd = style.paddingRightPx + mrContrib + style.borderWidthPx
+                    // **2026-05-30 widthPx 定宽 box 居中几何**（A 级保护：公式提取到 epub-layout
+                    // [BoxGeometry]，主仓只调纯函数）—— declWidthPx>0 渲染成 widthPx×fontScale 宽、
+                    // 屏内居中（margin:auto）窄框，子段缩到 bg 内侧；与 drawer bgRectX 共用同核心 →
+                    // 两边严格一致（根治文字溢出灰框）。无 widthPx 走旧满宽路径。
+                    val (leftAdd, rightAdd) = BoxGeometry.contentInset(
+                        declWidthPx = style.widthPx,
+                        fontScale = contentPaint.textSize / 16f,
+                        paddingLeftRaw = style.paddingLeftPx,
+                        paddingRightRaw = style.paddingRightPx,
+                        borderWidthRaw = style.borderWidthPx,
+                        marginLeftContrib = mlContrib,
+                        marginRightContrib = mrContrib,
+                        availWidth = visibleWidth - currentBoxLeftPad - currentBoxRightPad,
+                    )
                     currentBoxLeftPad += leftAdd
                     currentBoxRightPad += rightAdd
                     boxPadContribStack.addLast(leftAdd to rightAdd)
@@ -1367,6 +1421,20 @@ class ScrollLayoutEngine(
                     "BoxGroup/Parse",
                     "BOX_END ch=$chapterIndex poppedId=$poppedId stackDepthAfter=${boxStack.size}",
                 )
+                continue
+            }
+
+            // **2026-05-30 <hr/> 横线** —— flatten 的 <morealmhr/> 独占段落 → emit 一条横线 line
+            // （贴当前 box 内容宽）。hr 是 ChapterBlock.Paragraph（epub-compat），与正文段一样占
+            // paragraphNum + 2 cp（hr 占位 1 cp + 段末隐式 \n 1 cp），保持跨引擎 cp 兼容。
+            if (trimmedStart.startsWith(
+                    com.morealm.epub.compat.StructuredChapterContent.HR_MARKER,
+                )
+            ) {
+                paragraphCounter++
+                val hrCp = chapterPositionCounter++
+                emitHorizontalRule(paragraphNum = paragraphCounter, startCp = hrCp)
+                chapterPositionCounter++  // 段末隐式 \n 占 1 cp（对齐正文段 emit 末尾）
                 continue
             }
 

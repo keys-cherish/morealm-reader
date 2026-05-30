@@ -118,6 +118,7 @@ class ScrollPagePageBitmapProvider(
                 searchHighlightArgb = searchHighlightArgb,
                 selectionCpRange = selectionRangeForPage,
                 selectionArgb = selectionArgb,
+                readerBgArgb = bgColor,
             )
             bitmap
         } catch (e: OutOfMemoryError) {

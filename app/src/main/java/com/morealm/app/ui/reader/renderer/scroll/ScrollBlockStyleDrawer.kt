@@ -2,13 +2,16 @@ package com.morealm.app.ui.reader.renderer.scroll
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.layout.ScrollLine
+import com.morealm.app.ui.reader.renderer.adaptDecorationBgForReaderBg
 import com.morealm.epub.compat.BlockStyle
+import com.morealm.epub.layout.BoxGeometry
 
 /**
  * **2026-05-28 Container box group 绘制** —— 给一页内所有连续同 [ScrollLine.boxGroupId] 的
@@ -42,6 +45,7 @@ internal fun drawScrollContainerBoxes(
     fallbackLeft: Float,
     fallbackRight: Float,
     fontSizeScale: Float = 1f,
+    readerBgArgb: Int = Color.WHITE,
 ) {
     if (groupStyles.isEmpty() || lines.isEmpty()) return
     var runStart: Int = -1
@@ -60,6 +64,7 @@ internal fun drawScrollContainerBoxes(
             fallbackLeft = fallbackLeft,
             fallbackRight = fallbackRight,
             fontSizeScale = fontSizeScale,
+            readerBgArgb = readerBgArgb,
         )
     }
     for (i in lines.indices) {
@@ -83,6 +88,7 @@ private fun drawSingleContainerBox(
     fallbackLeft: Float,
     fallbackRight: Float,
     fontSizeScale: Float,
+    readerBgArgb: Int,
 ) {
     if (style === BlockStyle.EMPTY) return
     val firstLine = lines[fromIdx]
@@ -93,8 +99,18 @@ private fun drawSingleContainerBox(
     val padRight = style.paddingRightPx * fontSizeScale
     val padTop = style.paddingTopPx * fontSizeScale
     val padBottom = style.paddingBottomPx * fontSizeScale
-    val rectLeft = fallbackLeft + padLeft - halfBorder
-    val rectRight = fallbackRight - padRight + halfBorder
+    // **2026-05-30 widthPx 定宽 box bg 矩形**（几何公式提取到 epub-layout [BoxGeometry]，与
+    // ScrollLayoutEngine contentInset 共用同核心 → bg 框两边与文字内缩严格一致）。padding 已 ×
+    // fontSizeScale 传入。declWidthPx>0 在 fallback 区间居中窄框；否则满宽减 padding。
+    val (rectLeft, rectRight) = BoxGeometry.bgRectX(
+        declWidthPx = style.widthPx,
+        fontScale = fontSizeScale,
+        paddingLeftScaled = padLeft,
+        paddingRightScaled = padRight,
+        fallbackLeft = fallbackLeft,
+        fallbackRight = fallbackRight,
+        halfBorder = halfBorder,
+    )
     val rectTop = pageTop + firstLine.lineTop - padTop - halfBorder
     val rectBottom = pageTop + lastLine.lineBottom + padBottom + halfBorder
     com.morealm.app.core.log.AppLog.info(
@@ -114,6 +130,7 @@ private fun drawSingleContainerBox(
         rectRight = rectRight,
         rectBottom = rectBottom,
         fontSizeScale = fontSizeScale,
+        readerBgArgb = readerBgArgb,
     )
 }
 
@@ -163,6 +180,7 @@ internal fun drawScrollLineBlockStyle(
      * 默认 1f = 16f 设计字号；用户 24sp×3 = 72px → 4.5x → qipao 252px 圆 (≈ 参考 220)。
      */
     fontSizeScale: Float = 1f,
+    readerBgArgb: Int = Color.WHITE,
 ) {
     val bs = line.blockStyle
     if (bs === BlockStyle.EMPTY) return
@@ -266,6 +284,7 @@ internal fun drawScrollLineBlockStyle(
         rectRight = rectRight,
         rectBottom = rectBottom,
         fontSizeScale = fontSizeScale,
+        readerBgArgb = readerBgArgb,
     )
 }
 
@@ -283,7 +302,7 @@ internal fun drawScrollLineBlockStyle(
  * @param fontSizeScale 装饰盒尺寸缩放（border width / radius / padding 已由 caller scale；
  *   单边 border width / 4 角 radius 在此函数内 scale）
  */
-private fun drawBoxDecorations(
+internal fun drawBoxDecorations(
     canvas: Canvas,
     style: BlockStyle,
     rectLeft: Float,
@@ -291,6 +310,7 @@ private fun drawBoxDecorations(
     rectRight: Float,
     rectBottom: Float,
     fontSizeScale: Float,
+    readerBgArgb: Int = Color.WHITE,
 ) {
     val rectW = rectRight - rectLeft
     val rectH = rectBottom - rectTop
@@ -303,8 +323,9 @@ private fun drawBoxDecorations(
 
     // 1. background-color — fill 在最底层（CSS spec：bg color 在 bg image 之下）
     style.backgroundColor?.let { bgArgb ->
-        paint.color = bgArgb
-        paint.alpha = (bgArgb ushr 24) and 0xFF
+        val fill = adaptDecorationBgForReaderBg(bgArgb, readerBgArgb)
+        paint.color = fill
+        paint.alpha = (fill ushr 24) and 0xFF
         drawBoxFill(canvas, rectLeft, rectTop, rectRight, rectBottom, uniformR, cornerRadii, paint)
     }
 

@@ -704,6 +704,7 @@ fun ScrollCanvasReaderHost(
                 curPageBookmarkCps = curPageBookmarkCps,
                 nextPageBookmarkCps = nextPageBookmarkCps,
                 nextPlusPageBookmarkCps = nextPlusPageBookmarkCps,
+                readerBgArgb = bgColorArgb,
                 onChapterShift = { _ ->
                     // Phase 5：通知 VM 的路径已迁移到上方 snapshotFlow + debounce 自动节流。
                     // 此回调保留空实现（factory swap 时仍触发），未来 Phase 6 可能用作即时

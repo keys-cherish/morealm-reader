@@ -230,6 +230,16 @@ fun ChapterPaneCanvas(
                         )
                         continue
                     }
+                    if (line.isHorizontalRule) {
+                        // ── <hr/> 横线 ── line 垂直中线画一条贴 box 内容宽的水平线（columns 空）。
+                        // 颜色 = 正文色降 alpha（适应日 / 夜），粗细随字号缩放。canvas 已 translate
+                        // paddingLeft，故 hrLeftPx/hrRightPx 直接用。复用 bgFillPaint（FILL）画细矩形。
+                        val cy = pageTop + line.lineTop + (line.lineBottom - line.lineTop) / 2f
+                        val th = (contentPaint.textSize / 16f).coerceAtLeast(1.5f)
+                        bgFillPaint.color = (contentPaint.color and 0x00FFFFFF) or (0x66 shl 24)
+                        nc.drawRect(line.hrLeftPx, cy - th / 2f, line.hrRightPx, cy + th / 2f, bgFillPaint)
+                        continue
+                    }
                     val paint: TextPaint
                     val ascent: Float
                     val defaultColor: Int

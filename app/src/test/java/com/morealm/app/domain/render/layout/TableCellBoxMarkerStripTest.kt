@@ -72,4 +72,50 @@ class TableCellBoxMarkerStripTest {
             cellParas.any { "气泡正文XYZ" in it },
         )
     }
+
+    @Test
+    fun `cell 内气泡 BOX 样式保留为 boxStylePayload 且能解出边框`() {
+        val out = flatten(
+            """<table><tr>
+                 <td><img alt="avatar" src="p03.png" /></td>
+                 <td><div class="kuang-hei"><p>气泡正文XYZ</p><p>第二句</p></div></td>
+               </tr></table>""",
+        )
+        val parsed = parseTableMarker(out)
+        assertNotNull("table marker 应解析成功；flatten='$out'", parsed)
+        val allCells = parsed!!.rows.flatMap { it.cells }
+        val boxCell = allCells.firstOrNull { it.boxStylePayload != null }
+        assertNotNull("气泡 cell 应保留 boxStylePayload（而非丢弃）；cells=$allCells", boxCell)
+        val style = StructuredChapterContent.decodeBlockStyle(boxCell!!.boxStylePayload!!)
+        // kuang-hei: border 2px solid #000 → 解出非零边框宽 + 边框色。
+        assertTrue(
+            "应从 payload 解出气泡边框；borderWidthPx=${style.borderWidthPx} borderColor=${style.borderColor} style=$style",
+            style.borderWidthPx > 0f && style.borderColor != null,
+        )
+    }
+
+    @Test
+    fun `单段气泡 cell 边框从段落 BLOCK_STYLE 兜底解出`() {
+        // 单 <p> kuang-hei div：epub-compat 不走 Container，把边框 merge 进 sole <p> 的 block style。
+        val out = flatten(
+            """<table><tr>
+                 <td><img alt="avatar" src="p03.png" /></td>
+                 <td><div class="kuang-hei"><p>单段气泡XYZ</p></div></td>
+               </tr></table>""",
+        )
+        val parsed = parseTableMarker(out)
+        assertNotNull("table 应解析；flatten='$out'", parsed)
+        val allCells = parsed!!.rows.flatMap { it.cells }
+        // 单段 → 无 BOX marker（边框 merge 进段落 BLOCK_STYLE）。
+        assertFalse("单段气泡不应走 Container BOX；flatten='$out'", StructuredChapterContent.BOX_START_MARKER in out)
+        // host 同款逻辑：找 cellBlockStylePayload 解出真边框的 cell（头像 cell 的空 payload → null，忽略）。
+        val borderCell = allCells.firstNotNullOfOrNull { c ->
+            c.cellBlockStylePayload?.let { StructuredChapterContent.decodeBlockStyle(it) }
+                ?.takeIf { it.borderWidthPx > 0f && it.borderColor != null }
+        }
+        assertNotNull(
+            "单段气泡 cell 应从段落 BLOCK_STYLE 兜底解出 kuang-hei 边框；cells=$allCells",
+            borderCell,
+        )
+    }
 }
