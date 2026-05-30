@@ -68,6 +68,25 @@ data class ScrollLine(
      */
     val isFullPageImage: Boolean = false,
     /**
+     * true=`<hr/>` 横线占位行 —— 渲染层据此在 [lineTop]..[lineBottom] 垂直中线画一条水平线
+     * （贴 [hrLeftPx]..[hrRightPx]），columns 为空、不画文字。
+     *
+     * 来源链：epub-compat [com.morealm.epub.compat.ChapterBlockBuilder] 把 `<hr/>` emit 成
+     * `Paragraph(HR_MARKER)`（[com.morealm.epub.compat.StructuredChapterContent.HR_MARKER] =
+     * `<morealmhr/>` 标签形，TTS / 搜索由 htmlTagRegex 自动剥）→ flatten 独占一段 →
+     * [ScrollLayoutEngine] 主循环识别 → [ScrollLayoutEngine] emitHorizontalRule。占 1 cp
+     * （与图片 / 空段对齐）。
+     */
+    val isHorizontalRule: Boolean = false,
+    /**
+     * [isHorizontalRule] = true 时横线左 / 右 x（column 坐标系，[0, visibleWidth]，渲染层已
+     * translate paddingLeft，故直接用）。box 内 hr 取 box 内容宽（`currentBoxLeftPad` ..
+     * `visibleWidth - currentBoxRightPad`），与同 box 内文字左缘一致；box 外取整个 visibleWidth。
+     */
+    val hrLeftPx: Float = 0f,
+    /** 见 [hrLeftPx]。 */
+    val hrRightPx: Float = 0f,
+    /**
      * 行内整文本（含全角空格 / 标点，由 [ScrollLayoutEngine] 决定是否含末尾对齐填充）。
      * 跟 `columns.map { it.charData }.joinToString("")` 在大多数行下等价，但章首块 /
      * 图片段例外 —— 文本以 `text` 为权威，columns 为坐标权威。
@@ -228,4 +247,10 @@ data class ScrollLineCell(
     val atoms: List<Atom>,
     val backgroundColor: Int? = null,
     val borderRadiusPx: Float = 0f,
+    /**
+     * cell 级 box 装饰（聊天气泡 div.kuang-hei 的边框 / 圆角 / bg）。来自 [ParsedTableCell]
+     * 的 boxStylePayload 经 decodeBlockStyle 解码；null = 无 box 装饰。renderer 在画 cell
+     * 内容前用 [com.morealm.app.ui.reader.renderer.scroll] drawBoxDecorations 画到 cell 包围盒。
+     */
+    val boxStyle: BlockStyle? = null,
 )

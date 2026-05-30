@@ -208,6 +208,8 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             ChangelogItem(ChangeType.FIX, "音量键翻页失效修复 —— 部分场景下按音量键无法翻页的问题修复"),
             ChangelogItem(ChangeType.FIX, "个别书本跨页显示错位修复 —— 个别书本在翻页时跨页错位的问题修复"),
             ChangelogItem(ChangeType.FIX, "超多书本导入卡死修复 —— 一次性导入大量书籍时阅读器卡死的问题修复"),
+            ChangelogItem(ChangeType.FIX, "EPUB 简介页标题横线 + 副标题位置修正 —— 部分精排 EPUB 简介页，标题下的横线之前离标题偏远、紧跟的副标题还会跟标题艺术字重叠；现在横线贴着标题、副标题规整落在横线下方"),
+            ChangelogItem(ChangeType.FIX, "EPUB 人物简介/对话气泡页乱码修正 —— 部分精排 EPUB 的人物简介页（头像 + 对话气泡那种）之前会冒出一串内部标记字符当正文显示；现在正常显示对话文字"),
             ChangelogItem(ChangeType.IMPROVE, "EPUB 精排样式进一步完善 —— 更多精排样式（彩色盒子、单边边框、不等圆角、元素背景图等）正确显示"),
         ),
     ),

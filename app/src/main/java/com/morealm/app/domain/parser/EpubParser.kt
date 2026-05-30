@@ -193,7 +193,9 @@ object EpubParser {
     // 装饰（padding/border/bg）时不再误叠 ContainerScope。修前封面气泡 td 的 padding-left 触发
     // scope 错乱，吞掉气泡 table + 紧随的作者名表整表（封面作者名 / 橙色气泡缺失）。修后这些 table
     // 重新 emit，flatten 输出变（多出之前丢失的 table marker），bump 强制全章节重 flatten。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v48"
+    // v52：2026-05-30 `<hr/>` 横线 —— epub-compat 把 <hr/> emit 成 Paragraph(<morealmhr/>) 而非
+    // 之前丢成 \n，flatten 输出新增 <morealmhr/> 段，bump 强制全章节重 flatten（旧 cache 无此 marker）。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v52"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)

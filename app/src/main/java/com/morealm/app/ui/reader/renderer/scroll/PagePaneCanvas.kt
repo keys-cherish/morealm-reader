@@ -47,6 +47,7 @@ import com.morealm.app.domain.render.layout.ScrollPage
  * @param selectionCpRange 选区 cp 范围；EMPTY = 不画
  * @param selectionArgb 选区背景 argb
  * @param bookmarkArgb 书签三角颜色
+ * @param readerBgArgb 阅读器纯色背景 argb；用于夜间 EPUB 装饰底色自适应（暗底不闪眼）
  */
 @Composable
 fun PagePaneCanvas(
@@ -64,6 +65,7 @@ fun PagePaneCanvas(
     selectionCpRange: IntRange = IntRange.EMPTY,
     selectionArgb: Int = 0x4D5B6CFE.toInt(),
     bookmarkArgb: Int = 0xFFD32F2F.toInt(),
+    readerBgArgb: Int = 0xFFFFFFFF.toInt(),
     modifier: Modifier = Modifier,
 ) {
     // 字体颜色诊断（EPUB CharColor / 段落 textColor / atom.colorArgb / col.colorArgb）
@@ -105,6 +107,7 @@ fun PagePaneCanvas(
                 selectionCpRange = selectionCpRange,
                 selectionArgb = selectionArgb,
                 bookmarkArgb = bookmarkArgb,
+                readerBgArgb = readerBgArgb,
             )
         }
     }
@@ -138,6 +141,7 @@ internal fun drawScrollPageOnCanvas(
     selectionCpRange: IntRange = IntRange.EMPTY,
     selectionArgb: Int = 0x4D5B6CFE.toInt(),
     bookmarkArgb: Int = 0xFFD32F2F.toInt(),
+    readerBgArgb: Int = 0xFFFFFFFF.toInt(),
 ) {
     val contentAscent = -contentPaint.fontMetrics.ascent
     val titleAscent = -titlePaint.fontMetrics.ascent
@@ -183,12 +187,14 @@ internal fun drawScrollPageOnCanvas(
         nc, page.lines, page.boxGroupStyles, pageTop = 0f,
         fallbackLeft = 0f, fallbackRight = visibleWidthF,
         fontSizeScale = bsScale,
+        readerBgArgb = readerBgArgb,
     )
     for (line in page.lines) {
         drawScrollLineBlockStyle(
             nc, line, pageTop = 0f,
             fallbackLeft = 0f, fallbackRight = visibleWidthF,
             fontSizeScale = bsScale,
+            readerBgArgb = readerBgArgb,
         )
     }
 
@@ -263,6 +269,15 @@ internal fun drawScrollPageOnCanvas(
                 android.graphics.RectF(offsetX, offsetY, offsetX + drawW, offsetY + drawH),
                 null,
             )
+            continue
+        }
+        if (line.isHorizontalRule) {
+            // ── <hr/> 横线 ── 同 ChapterPaneCanvas：line 垂直中线画贴 box 内容宽的水平线。
+            // canvas 已 translate paddingLeft，hrLeftPx/hrRightPx 直接用；复用 bgFillPaint（FILL）。
+            val cy = line.lineTop + (line.lineBottom - line.lineTop) / 2f
+            val th = (contentPaint.textSize / 16f).coerceAtLeast(1.5f)
+            bgFillPaint.color = (contentPaint.color and 0x00FFFFFF) or (0x66 shl 24)
+            nc.drawRect(line.hrLeftPx, cy - th / 2f, line.hrRightPx, cy + th / 2f, bgFillPaint)
             continue
         }
         val paint: TextPaint
@@ -533,9 +548,23 @@ private fun drawByCells(
     textColorByCp: Map<Int, Int> = emptyMap(),
 ) {
     val baseSize = basePaint.textSize
+    val fontScale = baseSize / 16f
     var atomStartCp = line.firstChapterPos
     for (cell in cells) {
-        // 未来 Task 2-D：cell.backgroundColor != null 时画 RoundRect bg + cell.borderRadiusPx 圆角
+        // **Task 2-D（聊天气泡 div.kuang-hei 边框）**：cell 有 box 装饰 → 画字前画圆角边框盒。
+        // rect = cell 内容包围盒向外扩 padding（CSS content-box：padding/border 在 content 之外）。
+        // 复用 drawBoxDecorations（边框 / 圆角 / 若有 bg 走夜间自适应）。
+        cell.boxStyle?.let { bs ->
+            val pad = bs.paddingLeftPx * fontScale
+            drawBoxDecorations(
+                canvas, bs,
+                cell.contentLeft - pad,
+                line.lineTop + cell.contentTop - pad,
+                cell.contentLeft + cell.contentWidth + pad,
+                line.lineTop + cell.contentTop + cell.contentHeight + pad,
+                fontScale,
+            )
+        }
         for (atom in cell.atoms) {
             when (atom) {
                 is com.morealm.app.domain.render.layout.TextRun -> {

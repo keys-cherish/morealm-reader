@@ -89,6 +89,8 @@ fun ScrollCanvasRenderer(
     curPageBookmarkCps: List<Int> = emptyList(),
     nextPageBookmarkCps: List<Int> = emptyList(),
     nextPlusPageBookmarkCps: List<Int> = emptyList(),
+    /** 阅读器纯色背景 argb；透传给 PagePaneCanvas 做夜间装饰底色自适应。 */
+    readerBgArgb: Int = 0xFFFFFFFF.toInt(),
     modifier: Modifier = Modifier,
     onChapterShift: (delta: Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
@@ -230,6 +232,7 @@ fun ScrollCanvasRenderer(
                 searchHighlightArgb = searchHighlightArgb,
                 selectionCpRange = selectionRangeForCur,
                 selectionArgb = selectionArgb,
+                readerBgArgb = readerBgArgb,
             )
             PagePaneCanvas(
                 page = nextPage,
@@ -240,6 +243,7 @@ fun ScrollCanvasRenderer(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = nextPageHighlightSpecs,
                 bookmarkCps = nextPageBookmarkCps,
+                readerBgArgb = readerBgArgb,
             )
             PagePaneCanvas(
                 page = nextPlusPage,
@@ -250,6 +254,7 @@ fun ScrollCanvasRenderer(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = nextPlusPageHighlightSpecs,
                 bookmarkCps = nextPlusPageBookmarkCps,
+                readerBgArgb = readerBgArgb,
             )
         },
     ) { measurables, constraints ->

@@ -276,6 +276,7 @@ fun PageCanvas(
                 highlights = effectiveHighlights,
                 textColorSpans = textColorSpans,
                 underlines = underlines,
+                readerBgArgb = theme.bgArgb,
             )
         } else {
             // No overlay — use CanvasRecorder: record once, replay on subsequent frames
@@ -293,6 +294,7 @@ fun PageCanvas(
                     hasBookmark = hasBookmark,
                     bmColorArgb = bmColorArgb,
                     canvasWidth = size.width,
+                    readerBgArgb = theme.bgArgb,
                 )
             }
         }
@@ -316,6 +318,7 @@ private fun drawBlockStyleDecoration(
     line: TextLine,
     lineTop: Float,
     lineBottom: Float,
+    readerBgArgb: Int = 0xFFFFFFFF.toInt(),
 ) {
     val bs = line.blockStyle
     if (bs === BlockStyle.EMPTY) return
@@ -342,7 +345,7 @@ private fun drawBlockStyleDecoration(
     // 1. 背景填充
     bs.backgroundColor?.let { bgArgb ->
         paint.style = Paint.Style.FILL
-        paint.color = bgArgb
+        paint.color = adaptDecorationBgForReaderBg(bgArgb, readerBgArgb)
         paint.strokeWidth = 0f
         paint.pathEffect = null
         canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, r, r, paint)
@@ -475,6 +478,8 @@ fun drawPageContent(
      * 完全独立 —— 同一段文字可以同时是「背景 + 字色 + 下划线」三层叠加。
      */
     underlines: List<HighlightSpan> = emptyList(),
+    /** 阅读器纯色背景 argb；用于夜间 EPUB 装饰底色自适应（暗底不闪眼）。 */
+    readerBgArgb: Int = 0xFFFFFFFF.toInt(),
 ) {
     val highlightPaint = sharedHighlightPaint
     val spacingPaint = sharedSpacingPaint
@@ -498,7 +503,7 @@ fun drawPageContent(
         // 多行 paragraph 的情况下每条 line 独立画自己的盒子 —— Phase 3 视觉简化，
         // Phase 3.5+ 可改按整段统一画一个大盒。
         // 必须最先画（在文字、高亮、下划线之前），否则会覆盖到上面。
-        drawBlockStyleDecoration(canvas, line, lineTop, lineBottom)
+        drawBlockStyleDecoration(canvas, line, lineTop, lineBottom, readerBgArgb)
 
         // 1. Search result highlights
         for (col in line.columns) {
@@ -892,6 +897,7 @@ fun renderPageToBitmap(
         textColorSpans = textColorSpans,
         underlines = underlines,
         canvasWidth = width.toFloat(),
+        readerBgArgb = bgColor,
     )
     pageInfoOverlay?.let { overlay ->
         drawPageInfoOverlay(canvas, width, height, page, overlay)
