@@ -1373,6 +1373,14 @@ class ScrollLayoutEngine(
                     currentBoxRightPad += rightAdd
                     boxPadContribStack.addLast(leftAdd to rightAdd)
 
+                    // **2026-05-30 #3 box 垂直上间距预留**：drawer 把 bg 顶画在 firstContent.lineTop -
+                    // paddingTop（bg 向上探 padTop），但布局之前没为 marginTop + paddingTop 留垂直空间
+                    // → bg 顶探进上方元素（如名字圆标）重叠。在此推进 currentY（marginTop + paddingTop，
+                    // × fontScale），让 bg 顶落到上方元素下方留隙。NaN(AUTO) 垂直向等同 0。
+                    val boxVScale = contentPaint.textSize / 16f
+                    val boxMarginTopV = (if (style.marginTopPx.isNaN()) 0f else style.marginTopPx) * boxVScale
+                    currentY += boxMarginTopV + style.paddingTopPx * boxVScale
+
                     // Step 9.X margin collapse：进 box 时重置 lastSegMarginBottom（box 边界
                     // 视为新的 BFC，不与上一段 mb collapse）
                     lastSegMarginBottom = 0f
