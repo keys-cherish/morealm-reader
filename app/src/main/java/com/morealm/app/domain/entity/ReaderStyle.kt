@@ -40,7 +40,9 @@ data class ReaderStyle(
     val letterSpacing: Float = 0f,
 
     // ── Layout ──
-    val lineHeight: Float = 2.0f,
+    // **2026-05-30 行距默认收紧**：2.0→1.4（effective≈字号×1.6，舒适区上沿）。旧 2.0 偏松
+    // （≈字号×2.3）。对齐中文阅读舒适默认；老用户已存自定义 lineHeight 不受影响。
+    val lineHeight: Float = 1.4f,
     val paragraphSpacing: Int = 8,
     val paragraphIndent: String = "　　",
     val textAlign: String = "justify", // left, center, justify
@@ -87,7 +89,7 @@ data class ReaderStyle(
         fun defaults(): List<ReaderStyle> = listOf(
             ReaderStyle(
                 id = "preset_paper", name = "默认",
-                textSize = 17, lineHeight = 2.0f, paragraphSpacing = 8,
+                textSize = 17, lineHeight = 1.4f, paragraphSpacing = 8,
                 paddingLeft = 16, paddingRight = 16, paddingTop = 16, paddingBottom = 16,
                 isBuiltin = true, sortOrder = 0,
             ),
