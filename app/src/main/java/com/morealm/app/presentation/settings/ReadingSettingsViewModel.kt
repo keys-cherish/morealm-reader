@@ -40,6 +40,10 @@ class ReadingSettingsViewModel @Inject constructor(
     val resumeLastRead: StateFlow<Boolean> = prefs.resumeLastRead
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    /** 「文字上色」总开关 —— 只读，供阅读设置入口行显示「已开/已关」；写操作在 RuleColorScreen / RuleColorViewModel。 */
+    val ruleColorEnabled: StateFlow<Boolean> = prefs.ruleColorEnabled
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     val longPressUnderline: StateFlow<Boolean> = prefs.longPressUnderline
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
