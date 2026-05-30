@@ -691,7 +691,7 @@ class ScrollLayoutEngine(
             val innerLH = contentTextHeight * 0.95f
             val contentH = ibLines.size * innerLH
 
-            // **2026-05-30 删 P2 √2 内切正方形膨胀**：参照引擎实证（主流阅读器引擎）——
+            // **2026-05-30 删 P2 √2 内切正方形膨胀**：参照主流阅读器引擎实证——
             // border-radius 是纯绘制层装饰、不参与测量，盒子尺寸只由 width/height(+padding) 定，
             // 放不下就溢出/裁，绝不为圆角撑大。之前 P2 为「文字不碰圆边」把圆放大 √2≈1.41×
             // （4em→5.7em），偏离参照让 qipao 圆全部过大。现让 border-radius 退出测量：圆径锁
