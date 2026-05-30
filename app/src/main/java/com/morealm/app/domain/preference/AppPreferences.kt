@@ -155,6 +155,7 @@ class AppPreferences @Inject constructor(
         val HEADSET_BUTTON_PAGE = booleanPreferencesKey("headset_button_page")
         val VOLUME_KEY_LONG_PRESS = stringPreferencesKey("volume_key_long_press") // off|page|chapter
         val RESUME_LAST_READ = booleanPreferencesKey("resume_last_read")
+        val RULE_COLOR_ENABLED = booleanPreferencesKey("rule_color_enabled")
         val SHELF_SORT_MODE = stringPreferencesKey("shelf_sort_mode") // title|recent|addTime|format
         val LONG_PRESS_UNDERLINE = booleanPreferencesKey("long_press_underline")
         /** 节日彩蛋去重：今天的彩蛋已弹过则跳过。值 = LocalDate.toString()（"2026-04-19"）。 */
@@ -518,6 +519,10 @@ class AppPreferences @Inject constructor(
     val resumeLastRead: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.RESUME_LAST_READ] ?: false }
 
+    /** 「文字上色」总开关。默认关——引擎未接入前避免「开了没反应」；引擎完成后再评估默认值。 */
+    val ruleColorEnabled: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.RULE_COLOR_ENABLED] ?: false }
+
     /** 书架排序模式持久化。默认 "title"（自然排序），与 ShelfViewModel.sortBooks 的 else 分支对齐。 */
     val shelfSortMode: Flow<String> = context.dataStore.data
         .map { it[Keys.SHELF_SORT_MODE] ?: "title" }
@@ -862,6 +867,7 @@ class AppPreferences @Inject constructor(
         }
     }
     suspend fun setResumeLastRead(enabled: Boolean) = update(Keys.RESUME_LAST_READ, enabled)
+    suspend fun setRuleColorEnabled(enabled: Boolean) = update(Keys.RULE_COLOR_ENABLED, enabled)
     suspend fun setShelfSortMode(mode: String) = update(Keys.SHELF_SORT_MODE, mode)
     suspend fun setLongPressUnderline(enabled: Boolean) = update(Keys.LONG_PRESS_UNDERLINE, enabled)
     suspend fun setScreenTimeout(seconds: Int) = update(Keys.SCREEN_TIMEOUT, seconds)

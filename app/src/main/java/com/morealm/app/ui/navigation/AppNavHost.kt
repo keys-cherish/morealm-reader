@@ -52,6 +52,7 @@ import com.morealm.app.ui.search.SearchScreen
 import com.morealm.app.ui.settings.AppLogScreen
 import com.morealm.app.ui.cache.CacheBookScreen
 import com.morealm.app.ui.settings.ReadingSettingsScreen
+import com.morealm.app.ui.settings.RuleColorScreen
 import com.morealm.app.ui.shelf.ShelfScreen
 import com.morealm.app.ui.source.BookSourceManageScreen
 import com.morealm.app.ui.theme.LocalMoRealmColors
@@ -88,7 +89,7 @@ fun MoRealmNavHost(
     }
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "contributors" || route == "source_manage" || route == "reading_settings" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route == "legado_import" || route == "appearance" || route.startsWith("theme_editor")
+        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "contributors" || route == "source_manage" || route == "reading_settings" || route == "rule_color" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route == "legado_import" || route == "appearance" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -373,7 +374,14 @@ fun MoRealmNavHost(
             }
 
             composable("reading_settings") {
-                ReadingSettingsScreen(onBack = { navController.safePopBackStack() })
+                ReadingSettingsScreen(
+                    onBack = { navController.safePopBackStack() },
+                    onNavigateRuleColor = { navController.safeNavigate("rule_color") },
+                )
+            }
+
+            composable("rule_color") {
+                RuleColorScreen(onBack = { navController.safePopBackStack() })
             }
 
             composable("search_settings") {

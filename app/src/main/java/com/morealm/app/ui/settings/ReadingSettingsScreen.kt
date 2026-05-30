@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Search
@@ -62,6 +63,7 @@ import com.morealm.app.ui.theme.LocalMoRealmColors
 @Composable
 fun ReadingSettingsScreen(
     onBack: () -> Unit = {},
+    onNavigateRuleColor: () -> Unit = {},
     viewModel: ReadingSettingsViewModel = hiltViewModel(),
 ) {
     val moColors = LocalMoRealmColors.current
@@ -81,6 +83,7 @@ fun ReadingSettingsScreen(
     val titleAlign by viewModel.titleAlign.collectAsStateWithLifecycle()
     val innerSearchMode by viewModel.innerSearchMode.collectAsStateWithLifecycle()
     val customTxtChapterRegex by viewModel.customTxtChapterRegex.collectAsStateWithLifecycle()
+    val ruleColorEnabled by viewModel.ruleColorEnabled.collectAsStateWithLifecycle()
 
     // Dialog states
     var showAnimDialog by remember { mutableStateOf(false) }
@@ -249,6 +252,18 @@ fun ReadingSettingsScreen(
                     title = "章节标题对齐",
                     value = titleAlignLabel(titleAlign),
                     onClick = { showTitleAlignDialog = true },
+                )
+            }
+
+            // ── 文字上色 ──
+            SectionHeader("文字上色")
+            SettingsCard {
+                SettingsClickRow(
+                    icon = Icons.Outlined.Palette,
+                    title = "文字上色",
+                    subtitle = "标点 / 数字 / 字母 / 引号内…按规则着色",
+                    value = if (ruleColorEnabled) "已开" else "已关",
+                    onClick = onNavigateRuleColor,
                 )
             }
 
