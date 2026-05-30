@@ -716,15 +716,19 @@ class ScrollLayoutEngine(
                 )
             }
 
-            // margin:auto 水平定位（同 layoutTable 1116-1123）：双 auto 居中（chara-qipao1
-            // `margin:0.1em auto` 圆标居中）、仅左 auto 右贴、否则按 marginLeft 左偏。之前只取
-            // marginLeft，auto(NaN) 被算 0 → 圆标贴左不居中。
+            // margin:auto 水平定位（同 layoutTable）：双 auto 居中、仅左 auto 右贴、否则按 marginLeft。
+            // **2026-05-30 box 内定位**：相对 box 内容区（cbLeft=currentBoxLeftPad，cbW=内容宽），
+            // 不是整个 visibleWidth —— 否则 box 内左对齐圆标（chara-qipao2 margin=0）会跑到屏幕左缘/
+            // 框外（左对齐时 marginLeft=0=屏左；之前居中靠「全宽中≈框中」巧合才对）。box 外
+            // （currentBoxLeftPad=0、cbW=visibleWidth）退化为整宽，行为不变（如框外名字圆标居中）。
+            val cbLeft = currentBoxLeftPad
+            val cbW = effectiveVisibleWidth()
             val mlAuto = currentBlockStyle.marginLeftPx.isNaN()
             val mrAuto = currentBlockStyle.marginRightPx.isNaN()
             val cellLeft = when {
-                mlAuto && mrAuto -> ((visibleWidth - boxW) / 2f).coerceAtLeast(0f)
-                mlAuto && !mrAuto -> (visibleWidth - boxW).coerceAtLeast(0f)
-                else -> currentBlockStyle.marginLeftPx * fontScale
+                mlAuto && mrAuto -> cbLeft + ((cbW - boxW) / 2f).coerceAtLeast(0f)
+                mlAuto && !mrAuto -> cbLeft + (cbW - boxW).coerceAtLeast(0f)
+                else -> cbLeft + currentBlockStyle.marginLeftPx * fontScale
             }
 
             val contentTopInCell = (lineH - contentH) / 2f
@@ -1524,15 +1528,20 @@ class ScrollLayoutEngine(
                             }
                             if (rowRunList.isNotEmpty()) rowsRuns.add(rowRunList)
                         }
-                        val mt = currentBlockStyle.marginTopPx
+                        // **2026-05-30 #2 值表上提同行**：① em margin 是 raw px(16/em)，必须 ×
+                        // fontScale 进缩放布局空间 —— 否则 -1.7em=-27.2px 相对 pill 缩放高(108px)太小、
+                        // 上提不到同行；② box 内仅正 mt collapse，负 mt 直接上提（CSS 语义，旧
+                        // coerceAtLeast(0f) 把负值钳 0）。mb 同步缩放保持单位一致。
+                        val mScale = contentPaint.textSize / 16f
+                        val mt = currentBlockStyle.marginTopPx * mScale
                         if (!mt.isNaN() && mt != 0f) {
-                            val effectiveMt = if (boxStack.isNotEmpty()) {
+                            val effectiveMt = if (boxStack.isNotEmpty() && mt > 0f) {
                                 (mt - lastSegMarginBottom).coerceAtLeast(0f)
                             } else mt
                             currentY += effectiveMt
                         }
                         emitInlineBlockContainer(rowsRuns, bsW, bsH, currentBlockStyle.textColor)
-                        val mb = currentBlockStyle.marginBottomPx
+                        val mb = currentBlockStyle.marginBottomPx * mScale
                         val mbDefault = if (boxStack.isNotEmpty()) paragraphSpacingPx * 0.3f else paragraphSpacingPx
                         val spacing = if (!mb.isNaN() && mb != 0f) mb else mbDefault
                         currentY += spacing
@@ -1547,15 +1556,19 @@ class ScrollLayoutEngine(
                     //
                     // CSS spec：margin-top/bottom 不参与 collapse（table 元素的 margin 跟普通
                     // block 不同，跨 table 不 collapse），所以纯累加（跟 D1.a 段间 margin 一致）。
-                    val mt = currentBlockStyle.marginTopPx
+                    // **2026-05-30 #2 值表上提同行**：em margin 是 raw px(16/em) → × fontScale 进缩放
+                    // 布局空间（-1.7em=-27.2px 不缩放相对 pill 108px 太小、上提不到同行）；table 不
+                    // collapse，box 内仅正 mt collapse-clamp，负 mt 直接上提（旧 coerceAtLeast(0f) 钳 0）。
+                    val mScale = contentPaint.textSize / 16f
+                    val mt = currentBlockStyle.marginTopPx * mScale
                     if (!mt.isNaN() && mt != 0f) {
-                        val effectiveMt = if (boxStack.isNotEmpty()) {
+                        val effectiveMt = if (boxStack.isNotEmpty() && mt > 0f) {
                             (mt - lastSegMarginBottom).coerceAtLeast(0f)
                         } else mt
                         currentY += effectiveMt
                     }
                     layoutTable(parsed)
-                    val mb = currentBlockStyle.marginBottomPx
+                    val mb = currentBlockStyle.marginBottomPx * mScale
                     val mbDefault = if (boxStack.isNotEmpty()) paragraphSpacingPx * 0.3f else paragraphSpacingPx
                     val spacing = if (!mb.isNaN() && mb != 0f) mb else mbDefault
                     currentY += spacing
