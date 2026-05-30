@@ -119,8 +119,8 @@ class ReaderSettingsController(
         .stateIn(scope, SharingStarted.Eagerly, 18f)
 
     val lineHeight: StateFlow<Float> = activeStyle
-        .map { it?.lineHeight ?: 2.0f }
-        .stateIn(scope, SharingStarted.Eagerly, 2.0f)
+        .map { it?.lineHeight ?: 1.4f }
+        .stateIn(scope, SharingStarted.Eagerly, 1.4f)
 
     val fontFamily: StateFlow<String> = activeStyle
         .map { it?.fontFamily ?: "noto_serif_sc" }
