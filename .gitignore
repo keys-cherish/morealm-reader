@@ -32,3 +32,4 @@ local.properties
 .continue/
 .junie/
 skills-lock.json
+.pre-commit-config.yaml
