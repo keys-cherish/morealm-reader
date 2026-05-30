@@ -195,7 +195,9 @@ object EpubParser {
     // 重新 emit，flatten 输出变（多出之前丢失的 table marker），bump 强制全章节重 flatten。
     // v52：2026-05-30 `<hr/>` 横线 —— epub-compat 把 <hr/> emit 成 Paragraph(<morealmhr/>) 而非
     // 之前丢成 \n，flatten 输出新增 <morealmhr/> 段，bump 强制全章节重 flatten（旧 cache 无此 marker）。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v52"
+    // v53：2026-05-30 single-child 容器 margin 修 —— qipao 圆标(chara-qipao2 无 margin)不再误继承
+    // 内层 table 的 margin:auto，decode payload 的 ml/mr 从 AUTO 变 0（圆标靠左），flatten 输出变。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v53"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
