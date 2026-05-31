@@ -213,6 +213,7 @@ fun ReaderScreen(
     val ttsScrollProgress by viewModel.tts.ttsScrollProgress.collectAsStateWithLifecycle()
     val pageAnim by viewModel.settings.pageAnim.collectAsStateWithLifecycle()
     val ruleColorEnabled by viewModel.settings.ruleColorEnabled.collectAsStateWithLifecycle()
+    val ruleColorPalette by viewModel.settings.ruleColorPalette.collectAsStateWithLifecycle()
     // 章节标题对齐：透传给 CanvasRenderer，change 触发重新排版（layoutInputs.remember）。
     val titleAlign by viewModel.settings.titleAlign.collectAsStateWithLifecycle()
     val tapTL by viewModel.settings.tapActionTopLeft.collectAsStateWithLifecycle()
@@ -683,6 +684,7 @@ fun ReaderScreen(
                 typeface = readerTypeface,
                 isNight = isNight,
                 ruleColorEnabled = ruleColorEnabled,
+                ruleColorPalette = ruleColorPalette,
                 letterSpacing = effectiveReaderStyle?.letterSpacing ?: 0f,
                 textBold = effectiveReaderStyle?.textBold ?: 0,
                 lineSpacingExtra = readerLineHeight,
@@ -857,6 +859,7 @@ fun ReaderScreen(
                 typeface = readerTypeface,
                 isNight = isNight,
                 ruleColorEnabled = ruleColorEnabled,
+                ruleColorPalette = ruleColorPalette,
                 letterSpacing = effectiveReaderStyle?.letterSpacing ?: 0f,
                 textBold = effectiveReaderStyle?.textBold ?: 0,
                 lineSpacingExtra = readerLineHeight,

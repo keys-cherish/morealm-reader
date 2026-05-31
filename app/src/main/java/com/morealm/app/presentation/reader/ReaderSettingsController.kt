@@ -178,6 +178,10 @@ class ReaderSettingsController(
     val ruleColorEnabled: StateFlow<Boolean> = prefs.ruleColorEnabled
         .stateIn(scope, SharingStarted.Eagerly, false)
 
+    /** 「文字上色」调色板用户覆盖编码串 —— 透传给排版引擎 resolve 调色板（空 = 全默认）。 */
+    val ruleColorPalette: StateFlow<String> = prefs.ruleColorPalette
+        .stateIn(scope, SharingStarted.Eagerly, "")
+
     /**
      * 章节标题对齐：0=左 / 1=中 / 2=右。
      * 来自 [com.morealm.app.domain.preference.AppPreferences.titleAlign] 全局偏好；

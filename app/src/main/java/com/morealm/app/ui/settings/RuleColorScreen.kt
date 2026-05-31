@@ -1,41 +1,53 @@
 package com.morealm.app.ui.settings
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.morealm.app.domain.render.color.RuleColorCategory
+import com.morealm.app.domain.render.color.RuleColorPalette
 import com.morealm.app.presentation.settings.RuleColorViewModel
+import com.morealm.app.ui.theme.LocalMoRealmColors
 
 /**
- * 「文字上色」设置子页（骨架）。
+ * 「文字上色」设置子页。Phase 1：总开关骨架；Phase 3：调色板（6 类别色，明 / 暗各一套，
+ * 单色 hex / 预设网格覆盖 + 恢复默认）。Phase 2 用户高亮词管理后续填入下方占位块。
  *
- * 参考 ColorTxt（纯本地规则、非 AI）正文着色：标点 / 数字 / 字母 / 特殊符号 /
- * 引号内 / 括号内 + 用户高亮词。本版只落「总开关 + 页面骨架」，分词引擎、
- * 调色板自定义、高亮词管理在后续版本填入下方占位块。
- *
- * 视觉沿用阅读设置页（SectionHeader + 卡片 + 开关行）。阅读设置页的同名 helper 是
- * private 不跨文件复用，这里自带一份精简等价实现，避免为骨架这步提前抽公共组件。
+ * 视觉沿用阅读设置页（SectionHeader + 卡片）。颜色选择行参考 ThemeEditorScreen 的色块 +
+ * hex 输入 + 预设网格模式（不跨文件复用其 private helper，本文件自带精简版）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +56,13 @@ fun RuleColorScreen(
     viewModel: RuleColorViewModel = hiltViewModel(),
 ) {
     val enabled by viewModel.enabled.collectAsStateWithLifecycle()
+    val lightOverrides by viewModel.lightOverrides.collectAsStateWithLifecycle()
+    val darkOverrides by viewModel.darkOverrides.collectAsStateWithLifecycle()
+
+    // 用户调的是「当前生效主题」下的色：明主题改明色、夜主题改夜色（与阅读时所见一致）。
+    val isNight = LocalMoRealmColors.current.isNight
+    val overrides = if (isNight) darkOverrides else lightOverrides
+    var expandedCat by remember { mutableStateOf<RuleColorCategory?>(null) }
 
     Scaffold(
         topBar = {
@@ -84,11 +103,25 @@ fun RuleColorScreen(
                 )
             }
 
-            SectionHeader("调色板")
-            PlaceholderCard(
-                "自定义各类别（标点 / 数字 / 字母 / 引号内 / 括号内…）的颜色，" +
-                    "日间、夜间各一套。后续版本开放。",
-            )
+            SectionHeader("调色板（${if (isNight) "夜间" else "日间"}主题）")
+            SettingsCard {
+                RuleColorPalette.EDITABLE_CATEGORIES.forEach { cat ->
+                    val argb = overrides[cat] ?: RuleColorPalette.defaultColor(cat, isNight)
+                    ColorPickRow(
+                        label = categoryLabel(cat),
+                        argb = argb,
+                        overridden = overrides[cat] != null,
+                        expanded = expandedCat == cat,
+                        onToggle = { expandedCat = if (expandedCat == cat) null else cat },
+                        onPick = { viewModel.setColor(cat, isNight, it) },
+                        onReset = { viewModel.resetColor(cat, isNight) },
+                    )
+                }
+            }
+            TextButton(
+                onClick = { viewModel.resetAll(isNight) },
+                modifier = Modifier.padding(start = 16.dp, top = 4.dp),
+            ) { Text("全部恢复默认（${if (isNight) "夜间" else "日间"}）") }
 
             SectionHeader("高亮词")
             PlaceholderCard(
@@ -96,6 +129,122 @@ fun RuleColorScreen(
             )
 
             Spacer(Modifier.height(32.dp))
+        }
+    }
+}
+
+/** 类别中文名（NONE 不展示，不在 EDITABLE_CATEGORIES）。 */
+private fun categoryLabel(c: RuleColorCategory): String = when (c) {
+    RuleColorCategory.PUNCTUATION -> "标点"
+    RuleColorCategory.NUMBER -> "数字"
+    RuleColorCategory.LATIN -> "字母"
+    RuleColorCategory.SPECIAL -> "特殊符号"
+    RuleColorCategory.QUOTE_INNER -> "引号内"
+    RuleColorCategory.BRACKET_INNER -> "括号内"
+    RuleColorCategory.NONE -> ""
+}
+
+/** 调色板预设色（ARGB）；6/行，覆盖 6 类别明暗默认 + 常用阅读色。 */
+private val PRESET_COLORS: List<Int> = listOf(
+    0xFF267F99, 0xFF4EC9B0, 0xFFA31515, 0xFFCE9178, 0xFF001080, 0xFF9CDCFE,
+    0xFF795E26, 0xFFDCDCAA, 0xFFAF00DB, 0xFFC586C0, 0xFFF56C6C, 0xFF569CD6,
+    0xFFCC0000, 0xFF009933, 0xFF0033CC, 0xFFCC6600, 0xFF333333, 0xFFBBBBBB,
+).map { it.toInt() }
+
+private fun hex6(argb: Int): String = "%06X".format(argb and 0xFFFFFF)
+
+@Composable
+private fun ColorPickRow(
+    label: String,
+    argb: Int,
+    overridden: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onPick: (Int) -> Unit,
+    onReset: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(26.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(argb)),
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            if (overridden) {
+                Text(
+                    "已自定义",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(
+                "#${hex6(argb)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
+        }
+        if (expanded) {
+            // Hex 输入
+            var hexInput by remember(argb) { mutableStateOf(hex6(argb)) }
+            OutlinedTextField(
+                value = hexInput,
+                onValueChange = { v ->
+                    val clean = v.replace("#", "").take(6)
+                    hexInput = clean
+                    if (clean.length == 6 && clean.all { it in "0123456789abcdefABCDEF" }) {
+                        ("FF$clean".toLongOrNull(16))?.let { onPick(it.toInt()) }
+                    }
+                },
+                label = { Text("Hex 色值") },
+                prefix = { Text("#") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            )
+            // 预设网格 6/行
+            PRESET_COLORS.chunked(6).forEach { rowColors ->
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    rowColors.forEach { c ->
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(c))
+                                .clickable { onPick(c); hexInput = hex6(c) },
+                        )
+                    }
+                }
+            }
+            if (overridden) {
+                TextButton(onClick = onReset, modifier = Modifier.padding(bottom = 4.dp)) {
+                    Text("恢复默认", style = MaterialTheme.typography.labelMedium)
+                }
+            }
         }
     }
 }

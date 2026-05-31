@@ -119,6 +119,8 @@ fun PageLevelReaderHost(
     isNight: Boolean = false,
     /** 「文字上色」总开关 —— true 时按规则给正文上色（明/暗调色板随 [isNight] 切）。 */
     ruleColorEnabled: Boolean = false,
+    /** 「文字上色」调色板用户覆盖编码串（空 = 全默认；见 RuleColorPalette.decodeOverrides）。 */
+    ruleColorPalette: String = "",
     letterSpacing: Float = 0f,
     textBold: Int = 0,
     lineSpacingExtra: Float = 1.2f,
@@ -259,9 +261,10 @@ fun PageLevelReaderHost(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
         contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing,
         paragraphIndent, titleMode, titleAlign, textFullJustify,
-        // ruleColorEnabled / isNight 进 key：开关或日夜切换 → engine 重建 → 重排版（颜色被
-        // computeStyleSignature 排除，靠 engine 重建做缓存失效，对齐 MVP 策略 A）。
-        ruleColorEnabled, isNight,
+        // ruleColorEnabled / isNight / ruleColorPalette 进 key：开关、日夜切换、改调色板 →
+        // engine 重建 → 重排版（颜色被 computeStyleSignature 排除，靠 engine 重建做缓存失效，
+        // 对齐 MVP 策略 A）。
+        ruleColorEnabled, isNight, ruleColorPalette,
     ) {
         ScrollLayoutEngine(
             viewWidth = viewWidth,
@@ -285,7 +288,8 @@ fun PageLevelReaderHost(
             imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
             pageLevelMode = true,
             ruleColorScanner = if (ruleColorEnabled) {
-                RuleColorScanner(RuleColorPalette.default(isNight))
+                val (lightOv, darkOv) = RuleColorPalette.decodeOverrides(ruleColorPalette)
+                RuleColorScanner(RuleColorPalette.resolve(isNight, if (isNight) darkOv else lightOv))
             } else {
                 null
             },
