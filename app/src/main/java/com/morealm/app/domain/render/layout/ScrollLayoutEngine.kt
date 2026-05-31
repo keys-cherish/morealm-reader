@@ -4,6 +4,7 @@ import android.text.TextPaint
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.TextMeasure
 import com.morealm.app.domain.render.ZhLayout
+import com.morealm.app.domain.render.cjkFullCharWidth
 import com.morealm.app.domain.render.color.RuleColorScanner
 import com.morealm.app.domain.render.textHeight
 // **R1 (阶段 R1)** —— 核心 marker 解析 + 数据类迁到独立仓库 epub-layout。主仓只调用 entry point
@@ -101,6 +102,8 @@ class ScrollLayoutEngine(
     val visibleHeight: Int = viewHeight - paddingTop - paddingBottom
 
     private val contentTextMeasure: TextMeasure = TextMeasure(contentPaint)
+    // ZhLayout compressible 阈值（全角 CJK 字宽）—— 测量在此完成，喂进纯化后的 ZhLayout 决策内核。
+    private val cnCharWidth: Float = cjkFullCharWidth(contentPaint)
     private val contentTextHeight: Float = contentPaint.textHeight
     private val contentLineHeight: Float = contentTextHeight * lineSpacingExtra
 
@@ -2017,7 +2020,7 @@ class ScrollLayoutEngine(
                     // box 内侧边界）；非 box scope 仍用 visibleWidth。
                     val effWidth = effectiveVisibleWidth()
                     val wrapWidth = effWidth.toInt().coerceAtLeast(1)
-                    val layout = ZhLayout(textChunk, contentPaint, wrapWidth, chars, widths, indentSize)
+                    val layout = ZhLayout(wrapWidth, chars, widths, indentSize, cnCharWidth)
                     for (lineIndex in 0 until layout.lineCount) {
                         // ZhLayout.lineStart/lineEnd 是 UTF-16 char index（基于 text.length），
                         // 而 chars/widths 是 code-point 切分（surrogate pair 合并 1 元素）。
