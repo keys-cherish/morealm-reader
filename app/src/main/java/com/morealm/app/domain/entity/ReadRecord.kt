@@ -20,7 +20,7 @@ import kotlinx.serialization.Serializable
  * **冗余字段说明**：[bookName] / [coverPath] 都冗余自 books 表，是为了在书被删除后阅读记录仍
  * 能展示（"已删除的书 X"）+ Legado 导入不强依赖书架匹配。代价：~50 字节/行，可接受。
  *
- * 关联：MEMORY.md「阅读器导航语义」+ Legado [外部开源阅读器实现]。
+ * 关联：MEMORY.md「阅读器导航语义」+ 参考实现的阅读记录实体。
  */
 @Serializable
 @Entity(

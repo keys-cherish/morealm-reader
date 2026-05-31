@@ -25,8 +25,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Background batch refresher for shelf web-book TOCs (Legado parity — see
- * 外部开源阅读器实现 / addToWaitUp / startUpTocJob).
+ * Background batch refresher for shelf web-book TOCs (参考成熟开源阅读器实现的
+ * 书架后台批量更新目录逻辑：入队 / 去重 / 后台任务调度）。
  *
  * Behavior contract
  * -----------------

@@ -3,7 +3,7 @@ package com.morealm.app.domain.render.layout
 /**
  * page-level 滚动模式的 page 序列管理器 —— V2 滚动 Canvas 重构 (page+全) 的核心。
  *
- * 仿 Legado [外部开源阅读器实现] 设计：
+ * 参考成熟开源阅读器实现的 page 序列管理器设计：
  * - 4 个 page 槽 [curPage] / [prevPage] / [nextPage] / [nextPlusPage]
  * - [moveToPrev] / [moveToNext] 内部自动处理跨章（章末→下章首 / 章首→上章末）
  * - [hasPrev] / [hasNext] / [hasNextPlus] 边界判定（首/末章 + 章内首/末 page）

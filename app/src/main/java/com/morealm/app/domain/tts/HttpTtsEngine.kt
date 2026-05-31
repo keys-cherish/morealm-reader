@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit
  * HTTP TTS 引擎 — 把段落文本交给用户配置的 HTTP 朗读源（Legado httpTTS 兼容），
  * 拉回音频字节、缓存到本地文件、用 ExoPlayer 播放。
  *
- * 与 Legado [外部开源阅读器实现] 的对应关系：
+ * 与参考实现的对应关系：
  * - URL 模板 / header / loginCheckJs：通过 [AnalyzeUrl] 渲染（替换 `{{speakText}}`/
  *   `{{speakSpeed}}`/`{{encode}}`、合并 header、执行 `<js>...</js>`）。
  * - 音频缓存：`context.cacheDir/httpTTS/<md5>.mp3`，命名与 Legado
@@ -39,7 +39,7 @@ import java.util.concurrent.TimeUnit
  * - 播放：ExoPlayer 单实例 + playlist。speak() 单段同步等播完；speakChapter()
  *   批量入队并通过 [Player.Listener.onMediaItemTransition] 把段进度回调给 host。
  * - 错误：单段失败计入 [consecutiveErrors]，连续 5 次抛 [IOException]，host 自己
- *   决定是否回退到 system；与 Legado HttpReadAloudService.kt:393-409 的"5 次"阈值一致。
+ *   决定是否回退到 system；与成熟开源阅读器 HTTP 朗读的"5 次"失败阈值一致。
  *
  * **本实现刻意省略**：
  * - SimpleCache 流式（用户答允许；文件级缓存够用，重听都命中）

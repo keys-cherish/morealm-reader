@@ -429,7 +429,7 @@ private val MIGRATION_24_25 = object : Migration(24, 25) {
  *
  *  - loginUrl       — 鉴权登录入口（与 Legado HttpTTS.loginUrl 对齐）
  *  - loginUi        — LoginUi JSON（保存即可，登录面板渲染留作后续）
- *  - loginCheckJs   — 响应预检脚本，对齐 Legado HttpReadAloudService.kt:338-364：
+ *  - loginCheckJs   — 响应预检脚本，参考成熟开源阅读器的 HTTP 朗读鉴权预检实现：
  *                     evalJS 包一层 response 做鉴权校验；失败时可走 errResponse 重试
  *  - concurrentRate — "1/1000" 风格限速字符串，由 ConcurrentRateLimiter 解析
  *
@@ -786,7 +786,7 @@ object AppModule {
         // WAL/SHM）+ snapshot.json 副本。但 provideDatabase 是 Hilt @Singleton 在
         // Application.onCreate 字段注入阶段构造的——**主线程**。DB 一大就阻塞 8s+。
         //
-        // 现策略（参考 legado AppDatabase.kt:60-67）：
+        // 现策略（参考成熟开源阅读器的数据库构建启动路径）：
         //   - 升级 → Room migration 链（addMigrations 链全连）自动迁移；
         //   - 降级 → MainActivity.onCreate 头部已经先跑 [RecoveryGuard.shouldEnterRecovery]
         //     拦截，跳到 RecoveryActivity 让用户选 snapshot 恢复（**不**走 Room）；

@@ -509,8 +509,8 @@ class SimulationReadView(context: Context) : android.view.View(context) {
 
     /**
      * Map a raw finger Y to the touch Y the simulation engine should use,
-     * based on where the drag *started* and which way it's going. Ported
-     * from Legado [外部开源阅读器实现]
+     * based on where the drag *started* and which way it's going. Adapted
+     * from a mature open-source reader's simulation page-turn touch handler
      * ACTION_MOVE branch — the rule that lets users start a page turn from
      * anywhere on screen without the curl jumping between top and bottom.
      *

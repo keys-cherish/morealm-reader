@@ -47,8 +47,8 @@ import com.morealm.epub.layout.parseTableMarker
  * Legado `TextColumn` / `TextLine` / `TextPage` / `TextChapter` 的字段语义，但命名加
  * `Scroll` 前缀避免与本项目既有 `TextLine` / `TextPage`（在 PageLayout 路径下）冲突。
  *
- * 排版算法 M1.2-M1.5 参考 Legado [外部开源阅读器实现]
- * 主流程独立实现；Compose / Canvas 渲染层（M2）走 MoRealm 自有。
+ * 排版算法 M1.2-M1.5 参考成熟开源阅读器实现的章节排版主流程独立实现；
+ * Compose / Canvas 渲染层（M2）走 MoRealm 自有。
  */
 class ScrollLayoutEngine(
     val viewWidth: Int,

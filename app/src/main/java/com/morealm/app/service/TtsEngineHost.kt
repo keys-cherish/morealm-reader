@@ -1380,8 +1380,8 @@ class TtsEngineHost(
     }
 
     /**
-     * Plan C-equivalent for HttpTts —— 整章批量朗读路径，对齐 Legado
-     * [外部开源阅读器实现]。
+     * Plan C-equivalent for HttpTts —— 整章批量朗读路径，对齐参考实现的
+     * 整章批量下载并播放音频逻辑。
      *
      * 流程：
      * 1. 收集 [paragraphIndex, paragraphs.size) 中所有非空、非 skipRegex 的段。
@@ -1389,8 +1389,8 @@ class TtsEngineHost(
      *    边下边入队；onParagraphStart(localIdx) 把段进度回调上来 → 转换为
      *    paragraphIndex 真实坐标 → publishState 让阅读器高亮跟随。
      * 3. 全章一旦进入"正在播最后一段"阶段，启动 [preloadNextChapterJob] 后台
-     *    把下一章前 [HTTP_PRELOAD_NEXT_PARAGRAPHS] 段拉到磁盘缓存（与 Legado
-     *    HttpReadAloudService.kt:193-216 的 preDownloadAudios 思路一致）。
+     *    把下一章前 [HTTP_PRELOAD_NEXT_PARAGRAPHS] 段拉到磁盘缓存（与成熟开源
+     *    阅读器 HTTP 朗读的下一章音频预下载思路一致）。
      * 4. 完成后等 [WAIT_NEXT_CHAPTER_MS] 让 ReaderViewModel 推进章节。
      *
      * 失败处理：HttpTtsEngine 已经做了"连续 5 次失败抛 IOException"——这里只兜底

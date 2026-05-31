@@ -140,7 +140,7 @@ class ReaderChapterController(
 
     // ── Three-chapter cache (Legado MD3 ReadBook 模型对齐) ──
     //
-    // 对齐参考: legado-with-MD3 外部开源阅读器实现
+    // 对齐参考: 成熟开源阅读器的三章缓存模型
     //   var prevTextChapter: TextChapter? = null
     //   var curTextChapter: TextChapter? = null
     //   var nextTextChapter: TextChapter? = null
@@ -213,7 +213,7 @@ class ReaderChapterController(
     /**
      * 同步指针腾挪 NEXT 路径：prev = cur; cur = next; next = null。
      *
-     * 对齐 Legado [外部开源阅读器实现] 的精神——在调用栈
+     * 对齐参考实现的跨章 NEXT 指针腾挪精神——在调用栈
      * 内完成所有相关 StateFlow 的赋值，下一帧 Compose 重组立即看到新章节，
      * **不存在异步窗口**。
      *
@@ -335,7 +335,7 @@ class ReaderChapterController(
 
     /**
      * 同步指针腾挪 PREV 路径：next = cur; cur = prev; prev = null。
-     * 对齐 Legado [外部开源阅读器实现]。
+     * 对齐参考实现的跨章 PREV 指针腾挪。
      *
      * 同步腾挪集合与 [commitChapterShiftNext] 对称：
      *   - `_nextTextChapter` ← 旧 `_curTextChapter`
@@ -349,7 +349,7 @@ class ReaderChapterController(
      *   - `_prevPreloadedChapter` ← null
      */
     /**
-     * 同步提交跨章 PREV（仿 Legado [外部开源阅读器实现]）。
+     * 同步提交跨章 PREV（参考成熟开源阅读器实现的跨章 PREV 指针腾挪）。
      *
      * @param toLast `true`（**默认**）= 跳上一章**末页**（手势 PREV 连续阅读语义，常见路径）；
      *               `false` = 跳上一章**章头**（按钮 PREV，显式覆盖默认）。

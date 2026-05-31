@@ -7,7 +7,7 @@ package com.morealm.app.domain.render.layout
  * 由 [com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderHost] 实现，
  * 内部持有 ViewModel 的章节加载 state（Compose mutableState）。
  *
- * 设计参考 Legado [外部开源阅读器实现]，差异：
+ * 设计参考成熟开源阅读器实现的章节数据源接口，差异：
  * - 去掉 `pageIndex` getter：本工程改由 [ScrollPageFactory.pageIndex] 维护，
  *   不依赖全局 ReadBook 单例
  * - 去掉 `isScroll`：本数据源专服务 scroll 模式，恒 true

@@ -212,7 +212,7 @@ class ReplaceRuleViewModel @Inject constructor(
 // region — DTO + conversion. File-private to ReplaceRuleViewModel; promote to
 //          a separate file only if more than one call site needs them.
 
-/** Legado modern format (matches `外部开源阅读器实现`
+/** Legado modern format (matches the imported replace-rule entity
  *  field-for-field as serialized by GSON). Defaults match Legado's @ColumnInfo
  *  defaultValue annotations so partial JSONs from the wild still parse. */
 @Serializable
