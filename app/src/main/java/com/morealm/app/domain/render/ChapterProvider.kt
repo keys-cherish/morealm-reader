@@ -788,21 +788,32 @@ class ChapterProvider(
         var absStartX = x
         val widthsArray = allocateFloatArray(text.length, floatArray)
         textPaint.getTextWidths(text, widthsArray)
-        val layout = if (useZhLayout) {
+        // ZhLayout 纯化后不再是 android.text.Layout 子类，不能与 StaticLayout 共用多态 layout
+        // 变量（两分支 LUB 退化成 Any）。改为从各分支抽出 lineCount + 取行 lambda，下方按它们迭代。
+        val lineCount: Int
+        val lineStartOf: (Int) -> Int
+        val lineEndOf: (Int) -> Int
+        if (useZhLayout) {
             val (words, widths) = measureTextSplit(text, widthsArray)
             val indentSize = if (isFirstLine) paragraphIndent.length else 0
-            ZhLayout(text, textPaint, visibleWidth, words, widths, indentSize)
+            val zh = ZhLayout(visibleWidth, words, widths, indentSize, cjkFullCharWidth(textPaint))
+            lineCount = zh.lineCount
+            lineStartOf = zh::getLineStart
+            lineEndOf = zh::getLineEnd
         } else {
-            StaticLayout(text, textPaint, visibleWidth, Layout.Alignment.ALIGN_NORMAL, 0f, 0f, true)
+            val sl = StaticLayout(text, textPaint, visibleWidth, Layout.Alignment.ALIGN_NORMAL, 0f, 0f, true)
+            lineCount = sl.lineCount
+            lineStartOf = sl::getLineStart
+            lineEndOf = sl::getLineEnd
         }
         var durY = when {
             emptyContent && textPages.size == 1 -> {
                 val textPage = textPages.last()
                 if (textPage.lineSize == 0) {
-                    val ty = (visibleHeight - layout.lineCount * textHeight) / 2
+                    val ty = (visibleHeight - lineCount * textHeight) / 2
                     if (ty > titleTopSpacing) ty else titleTopSpacing.toFloat()
                 } else {
-                    var textLayoutHeight = layout.lineCount * textHeight
+                    var textLayoutHeight = lineCount * textHeight
                     val firstLine = textPage.getLine(0)
                     if (firstLine.lineTop < textLayoutHeight + titleTopSpacing) {
                         textLayoutHeight = firstLine.lineTop - titleTopSpacing
@@ -820,7 +831,7 @@ class ChapterProvider(
             else -> y
         }
 
-        for (lineIndex in 0 until layout.lineCount) {
+        for (lineIndex in 0 until lineCount) {
             val textLine = TextLine(isTitle = isTitle, isChapterNum = isChapterNum, blockStyle = blockStyle)
             if (durY + textHeight > visibleHeight) {
                 val textPage = textPages.last()
@@ -837,19 +848,19 @@ class ChapterProvider(
                 if (textPage.height < durY) textPage.height = durY
                 durY = 0f
             }
-            val lineStart = layout.getLineStart(lineIndex)
-            val lineEnd = layout.getLineEnd(lineIndex)
+            val lineStart = lineStartOf(lineIndex)
+            val lineEnd = lineEndOf(lineIndex)
             val lineText = text.substring(lineStart, lineEnd)
             val (words, widths) = measureTextSplit(lineText, widthsArray, lineStart)
             val desiredWidth = widths.sum()
             when {
-                lineIndex == 0 && layout.lineCount > 1 && !isTitle && isFirstLine -> {
+                lineIndex == 0 && lineCount > 1 && !isTitle && isFirstLine -> {
                     textLine.text = lineText
                     addCharsToLineFirst(
                         absStartX, textLine, words, desiredWidth, widths,
                     )
                 }
-                lineIndex == layout.lineCount - 1 -> {
+                lineIndex == lineCount - 1 -> {
                     textLine.text = lineText
                     val startXOffset = computeTitleStartXOffset(
                         isTitle, forceLeftTitle, isVolumeTitle, emptyContent, isChapterNum,

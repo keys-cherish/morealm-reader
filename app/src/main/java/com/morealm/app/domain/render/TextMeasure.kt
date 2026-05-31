@@ -1,9 +1,11 @@
 package com.morealm.app.domain.render
 
 import android.graphics.Typeface
+import android.os.Build
 import android.text.TextPaint
 import android.util.SparseArray
 import androidx.core.util.getOrDefault
+import java.util.WeakHashMap
 import kotlin.math.ceil
 
 /**
@@ -99,5 +101,22 @@ class TextMeasure(private var paint: TextPaint) {
             result.add(cp)
         }
         return result
+    }
+}
+
+private val cjkCharWidthCache = WeakHashMap<TextPaint, Float>()
+
+/**
+ * 全角 CJK 字宽（含 API35+ letterSpacing 修正），按 paint 缓存。
+ *
+ * 供 [ZhLayout] 的 compressible 阈值用 —— 测量留平台侧，宽度算好后喂进纯化的 ZhLayout
+ * 决策内核。取代原 ZhLayout 内联的 `getDesiredWidth("我")` + 私有 WeakHashMap 缓存（同语义、同缓存策略）。
+ */
+fun cjkFullCharWidth(paint: TextPaint): Float = cjkCharWidthCache.getOrPut(paint) {
+    val w = paint.measureText("我")
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+        w + paint.letterSpacing * paint.textSize
+    } else {
+        w
     }
 }
