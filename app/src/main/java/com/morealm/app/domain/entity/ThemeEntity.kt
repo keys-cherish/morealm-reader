@@ -49,8 +49,8 @@ data class ThemeEntity(
 /**
  * Legado ThemeConfig.Config compatible format for import/export.
  *
- * Mirrors `外部开源阅读器实现` 1:1; field names
- * must match Legado's GSON output. Optional fields (`transparentNavBar`,
+ * 对齐通用主题配置结构; field names
+ * must match the imported GSON output. Optional fields (`transparentNavBar`,
  * `backgroundImgPath`, `backgroundImgBlur`) are accepted but only the first
  * two map onto MoRealm — `backgroundImgBlur` has no equivalent and is
  * dropped on import. `customCss` is a MoRealm-only extension.
@@ -159,7 +159,7 @@ private fun argbToHex(argb: Int): String =
  *   - 夜间主题：textColorNight + textAccentColorNight + bgStrNight → 同上
  *
  * 已知限制 — 用 toast 提醒用户：
- *   - `bgStr` 是 Legado 沙盒绝对路径（/storage/emulated/0/Android/data/外部开源阅读器实现）
+ *   - `bgStr` 是第三方阅读器沙盒路径（指向其私有 Android/data 目录的绝对路径）
  *     在 Android 11+ 上 MoRealm 不能跨包访问，此时降级到背景色 = `bgStr` 颜色解析失败兜底白底
  *   - 字号/行距/缩进/padding 这些归 ReaderStyle 而非 ThemeEntity，本路径不消费
  *     （要做也可以做，但当前仅修「主题解析报错」P0 痛点）

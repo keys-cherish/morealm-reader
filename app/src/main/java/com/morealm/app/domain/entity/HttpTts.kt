@@ -16,7 +16,7 @@ import kotlinx.serialization.json.Json
  *
  * Response should be audio data (MP3/WAV/PCM).
  *
- * v26 新增字段（与 Legado [外部开源阅读器实现] 对齐）：
+ * v26 新增字段（与参考实现对齐）：
  * - [loginUrl] / [loginUi]：可选登录 URL 与 LoginUi JSON，用于鉴权类源
  * - [loginCheckJs]：响应预检 JS（鉴权失败时可触发重试登录）
  * - [concurrentRate]：并发限速字符串，形如 "1/1000"，由 ConcurrentRateLimiter 解析

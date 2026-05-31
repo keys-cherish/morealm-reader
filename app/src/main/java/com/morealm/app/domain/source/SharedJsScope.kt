@@ -10,7 +10,7 @@ import java.lang.ref.WeakReference
 import java.security.MessageDigest
 
 /**
- * jsLib 共享作用域 —— 与 Legado `外部开源阅读器实现` 行为对齐。
+ * jsLib 共享作用域 —— 与参考实现的共享 JS 作用域行为对齐。
  *
  * 书源 `jsLib` 字段里的 JS 代码会被预执行一次到独立 Scriptable scope 中，
  * 声明的 `var / function` 挂在这个 scope 上；随后 [BookSource.evalJS] 把

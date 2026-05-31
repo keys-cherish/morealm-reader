@@ -434,7 +434,7 @@ object JsExtensions {
 
     // ── Legado 兼容 AES 便捷接口 ──
     //
-    // 参考 外部开源阅读器实现（已 @Deprecated 但仍被大量书源 JS 调用）。
+    // 参考成熟开源阅读器实现的 JS 加解密便捷接口（已 @Deprecated 但仍被大量书源 JS 调用）。
     // 形如「{{书源 JS}}」里写 `java.aesBase64DecodeToString(data, key, "AES/CBC/PKCS5Padding", iv)`
     // 的旧规则会通过 Rhino 解析到这些方法，找不到就刷屏 `TypeError: 找不到函数 aesBase64DecodeToString`。
     // 全部转调本类已有的 [createSymmetricCrypto] / [SymmetricCryptoHelper]，零运行时新依赖。

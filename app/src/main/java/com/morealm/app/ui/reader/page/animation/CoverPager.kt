@@ -29,7 +29,7 @@ private const val COVER_MAX_SHADOW_ALPHA = 0.4f
 
 /**
  * 「覆盖式」翻页 —— 来页从右侧滑入并盖住下面的页面，下面的页面留在原地不动。
- * 参考 Legado [外部开源阅读器实现]。
+ * 参考成熟开源阅读器实现的覆盖式翻页代理。
  *
  * # 与 [SlidePager] 的区别
  *

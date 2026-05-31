@@ -23,7 +23,7 @@ import java.util.zip.ZipInputStream
 /**
  * Legado 备份 zip 一键导入器。
  *
- * Legado 备份格式（参考 `legado/help/storage/Backup.kt`）：
+ * Legado 备份格式（参考其备份导出实现）：
  *  - zip 平铺结构（无嵌套目录），21 个固定文件名
  *  - 每个 .json 是 GSON 序列化的 `List<Entity>`
  *  - 配置走两个 .xml（`config.xml` / `videoConfig.xml`，本导入器只处理 config.xml 的白名单键）
@@ -817,7 +817,7 @@ object LegadoImporter {
      * Legado type 字段是位掩码（text=0, audio=1, image=2, web=4, local=8, epub=16, ...）。
      * MoRealm.BookFormat 是枚举。映射到最贴近的 entry，未知 → UNKNOWN。
      *
-     * 参考 `legado/constant/BookType.kt`：
+     * 参考其书籍类型常量定义：
      *   text=0, audio=1, image=2, webBook=8 (含 1<<3), localTxt=16 (含 1<<4), epub=32, ...
      * 但实际备份里 Book.type 只是个 Int，没有 stable 文档；这里只覆盖最常见的。
      */
@@ -945,7 +945,7 @@ object LegadoImporter {
     /**
      * Legado.SearchKeyword → MoRealm.SearchKeyword。
      *
-     * Legado entity (`外部开源阅读器实现`) 与 MoRealm
+     * 导入源实体与 MoRealm
      * 实体字段名 / 类型完全相同（word / usage / lastUseTime），1:1 直搬。
      *
      * 唯一处理：word 在调用方就 trim 过；这里只把 usage 兜底为 ≥1（Legado 老数据

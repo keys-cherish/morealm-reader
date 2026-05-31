@@ -136,12 +136,12 @@ class ThemeRepository @Inject constructor(
      * If [ThemeEntity.backgroundImageUri] points at an http(s) URL, download it
      * once into [bgCacheDir] and rewrite the URI to `file://...` so the image
      * stays available offline and renders without re-fetching every theme switch.
-     * Mirrors Legado's `ThemeConfig.applyConfig` http-bg branch (line 256-273 of
-     * `legado/help/config/ThemeConfig.kt`) but stores in internal storage to
+     * Mirrors the http-bg branch of a mature open-source reader's theme-config
+     * apply path, but stores in internal storage to
      * avoid the runtime storage-permission dance.
      *
      * 新增 file:// 绝对路径分支（Legado ReadConfig 导入用）：
-     *   - 路径在 Legado 沙盒（/storage/emulated/0/Android/data/外部开源阅读器实现）→ Android 11+
+     *   - 路径在第三方阅读器沙盒（指向其私有 Android/data 目录）→ Android 11+
      *     scoped storage 限制，跨包根本读不到 → 把路径加进 [inaccessibleBgPaths] 让 UI toast，
      *     uri 抹掉为 null（主题颜色照常生效，只是背景没图）
      *   - 路径在公共目录或我们能读到 → 试 copy 到 internal bgCacheDir 复用 http 分支同样的 file://

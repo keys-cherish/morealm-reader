@@ -12,7 +12,7 @@ import java.util.regex.Pattern
  * - HTML 注释、其他标签全部剥离（[formatKeepImg] 例外保留 `<img>` 并把 src 写成绝对 URL）
  * - 段首加全角空格 `　　`（中文小说排版习惯）
  *
- * 端口自 `D:/temp_build/sigma/legado/app/src/main/java/io/legado/app/utils/HtmlFormatter.kt`。
+ * 实现参考成熟开源阅读器的 HTML 格式化工具。
  * 唯一的 MoRealm 适配点：URL 重写不再依赖 `NetworkUtils.getAbsoluteURL`（MoRealm 没有
  * 此方法），改用同一包下的 [AnalyzeRule.getAbsoluteURL] 静态方法 —— 语义一致。
  */

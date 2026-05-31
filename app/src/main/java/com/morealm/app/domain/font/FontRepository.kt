@@ -19,8 +19,8 @@ import javax.inject.Singleton
  *   2) EXTERNAL   ：用户用 OpenDocumentTree 选的文件夹，URI 存在 AppPreferences.fontFolderUri
  *      只读扫描（.ttf / .otf），不复制
  *
- * Typeface 加载逻辑 [loadTypeface] 参考 Legado
- * `ChapterProvider.getTypeface()` (legado/.../ui/book/read/page/provider/ChapterProvider.kt:207)：
+ * Typeface 加载逻辑 [loadTypeface] 参考成熟开源阅读器的
+ * 章节排版器字体加载实现：
  *   - content URI + Android O+：openFileDescriptor + Typeface.Builder(fd)
  *   - file URI / 绝对路径   ：Typeface.createFromFile
  *   - 加载失败兜底返回 [Typeface.SANS_SERIF]，由调用方决定是否清空 path

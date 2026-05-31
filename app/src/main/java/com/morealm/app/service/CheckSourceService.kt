@@ -29,7 +29,7 @@ import javax.inject.Inject
 
 /**
  * 书源校验前台服务 — 把 [CheckSource] 单例的批量执行从 ViewModel 搬到
- * ForegroundService，对齐 Legado `service/CheckSourceService.kt`（293 行）的
+ * ForegroundService，参考成熟开源阅读器书源校验前台服务的
  * 健壮性：通知栏进度 + 取消按钮 + 后台不被杀。
  *
  * **为什么前台化**：

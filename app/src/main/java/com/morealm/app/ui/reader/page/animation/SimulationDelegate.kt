@@ -53,7 +53,7 @@ import com.morealm.app.ui.reader.renderer.hitTestPageRough
  *   把上面的 `SimulationParams` 转给 SimulationReadView
  * - **本文件** — Compose 侧组装 `SimulationParams` 的 remember 块
  *
- * 等价于 Legado MD3 的 `delegate/SimulationPageDelegate.kt`（612 行）的 Compose 版本。
+ * 等价于成熟开源阅读器仿真翻页代理的 Compose 版本。
  *
  * # 调用方式
  *

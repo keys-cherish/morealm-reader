@@ -14,7 +14,7 @@ import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
 /**
  * 无动画翻页 Transition —— 最简的 page-level 横向 Transition。
  *
- * Legado 对应 [外部开源阅读器实现]：
+ * 参考成熟开源阅读器实现的无动画翻页代理：
  * onDraw 直接画 currentPage，nextPageByAnim / prevPageByAnim 内部 `readView.fillPage`
  * 瞬切。**没有 fling / drag 偏移动画**。
  *

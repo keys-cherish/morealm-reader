@@ -220,7 +220,7 @@ fun Reader(
     /**
      * Layout-publish callbacks — Phase 2 MD3-aligned 同步腾挪基础。
      *
-     * 对齐 Legado [外部开源阅读器实现] 的精神：当排版完成
+     * 对齐参考实现的排版完成回调精神：当排版完成
      * 后把 [com.morealm.app.domain.render.TextChapter] 推回 ViewModel 层（具体是
      * [com.morealm.app.presentation.reader.ReaderChapterController] 的三个 publish*
      * setter），让 ScrollRenderer 能从 _curTextChapter / _prev / _next 三个 StateFlow

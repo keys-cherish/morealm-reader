@@ -63,7 +63,7 @@ class ReaderNavigationController(
     }
 
     /**
-     * 跨章 PREV（仿 Legado [外部开源阅读器实现]）。
+     * 跨章 PREV（参考成熟开源阅读器实现的跨章 PREV 指针腾挪）。
      *
      * @param toLast `true`（**默认**）= 跳上一章**末页**（手势 PREV 连续阅读，常见场景）；
      *               `false` = 跳上一章**章头**（按钮 PREV，显式覆盖默认）。

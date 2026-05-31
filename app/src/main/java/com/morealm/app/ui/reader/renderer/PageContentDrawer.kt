@@ -523,8 +523,8 @@ fun drawPageContent(
         if (highlights.isNotEmpty()) {
             val lineStart = line.chapterPosition
             val lineCharCount = line.charSize
-            // line.chapterPosition advances by `+1` past paragraph end (see
-            // ChapterProvider.kt:538 — accounts for the implicit '\n' of a
+            // line.chapterPosition advances by `+1` past paragraph end (the
+            // chapter-layout provider accounts for the implicit '\n' of a
             // paragraph break). For overlap detection we use the visible
             // character span only.
             val lineEnd = lineStart + lineCharCount
