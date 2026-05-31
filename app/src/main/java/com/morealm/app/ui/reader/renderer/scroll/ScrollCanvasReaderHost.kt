@@ -932,9 +932,9 @@ fun ScrollCanvasReaderHost(
             val bottomInsetDp = if (navBarBottom.value >= cutoutBottom.value) navBarBottom else cutoutBottom
 
             ReaderInfoBar(
-                slotLeft = if (infoBar.showTimeBattery) mapSlot(infoBar.headerLeft) else "none",
-                slotCenter = if (infoBar.showChapterName) mapSlot(infoBar.headerCenter) else "none",
-                slotRight = if (infoBar.showTimeBattery) mapSlot(infoBar.headerRight) else "none",
+                slotLeft = gateInfoSlot(mapSlot(infoBar.headerLeft), infoBar.showChapterName, infoBar.showTimeBattery),
+                slotCenter = gateInfoSlot(mapSlot(infoBar.headerCenter), infoBar.showChapterName, infoBar.showTimeBattery),
+                slotRight = gateInfoSlot(mapSlot(infoBar.headerRight), infoBar.showChapterName, infoBar.showTimeBattery),
                 chapterTitle = chapterTitle,
                 pageIndex = 0,
                 pageCount = 0,
@@ -968,9 +968,9 @@ fun ScrollCanvasReaderHost(
                         end = infoBar.paddingHorizontal.dp, bottom = 8.dp),
             )
             ReaderInfoBar(
-                slotLeft = if (infoBar.showChapterName) mapSlot(infoBar.footerLeft) else "none",
-                slotCenter = if (infoBar.showTimeBattery) mapSlot(infoBar.footerCenter) else "none",
-                slotRight = if (infoBar.showTimeBattery) mapSlot(infoBar.footerRight) else "none",
+                slotLeft = gateInfoSlot(mapSlot(infoBar.footerLeft), infoBar.showChapterName, infoBar.showTimeBattery),
+                slotCenter = gateInfoSlot(mapSlot(infoBar.footerCenter), infoBar.showChapterName, infoBar.showTimeBattery),
+                slotRight = gateInfoSlot(mapSlot(infoBar.footerRight), infoBar.showChapterName, infoBar.showTimeBattery),
                 chapterTitle = chapterTitle,
                 pageIndex = 0,
                 pageCount = 0,

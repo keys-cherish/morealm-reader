@@ -54,6 +54,7 @@ import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
 import com.morealm.app.ui.reader.renderer.scroll.ScrollSelectionOverlay
 import com.morealm.app.ui.reader.renderer.scroll.ScrollSelectionState
+import com.morealm.app.ui.reader.renderer.scroll.gateInfoSlot
 import com.morealm.app.ui.reader.renderer.scroll.handleCancelSelection
 import com.morealm.app.ui.reader.renderer.scroll.handleLongPress
 import androidx.compose.ui.geometry.Offset
@@ -954,9 +955,9 @@ fun PageLevelReaderHost(
                 val chapterTitle = currentLayout.title
 
                 ReaderInfoBar(
-                    slotLeft = if (infoBar.showTimeBattery) mapSlot(infoBar.headerLeft) else "none",
-                    slotCenter = if (infoBar.showChapterName) mapSlot(infoBar.headerCenter) else "none",
-                    slotRight = if (infoBar.showTimeBattery) mapSlot(infoBar.headerRight) else "none",
+                    slotLeft = gateInfoSlot(mapSlot(infoBar.headerLeft), infoBar.showChapterName, infoBar.showTimeBattery),
+                    slotCenter = gateInfoSlot(mapSlot(infoBar.headerCenter), infoBar.showChapterName, infoBar.showTimeBattery),
+                    slotRight = gateInfoSlot(mapSlot(infoBar.headerRight), infoBar.showChapterName, infoBar.showTimeBattery),
                     chapterTitle = chapterTitle,
                     pageIndex = core.pageFactory.pageIndex,
                     pageCount = currentLayout.pages.size,
@@ -986,9 +987,9 @@ fun PageLevelReaderHost(
                             end = infoBar.paddingHorizontal.dp, bottom = 8.dp),
                 )
                 ReaderInfoBar(
-                    slotLeft = if (infoBar.showChapterName) mapSlot(infoBar.footerLeft) else "none",
-                    slotCenter = if (infoBar.showTimeBattery) mapSlot(infoBar.footerCenter) else "none",
-                    slotRight = if (infoBar.showTimeBattery) mapSlot(infoBar.footerRight) else "none",
+                    slotLeft = gateInfoSlot(mapSlot(infoBar.footerLeft), infoBar.showChapterName, infoBar.showTimeBattery),
+                    slotCenter = gateInfoSlot(mapSlot(infoBar.footerCenter), infoBar.showChapterName, infoBar.showTimeBattery),
+                    slotRight = gateInfoSlot(mapSlot(infoBar.footerRight), infoBar.showChapterName, infoBar.showTimeBattery),
                     chapterTitle = chapterTitle,
                     pageIndex = core.pageFactory.pageIndex,
                     pageCount = currentLayout.pages.size,

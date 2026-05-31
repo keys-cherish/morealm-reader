@@ -34,3 +34,22 @@ data class ScrollCanvasInfoBarConfig(
     val footerCenter: String,
     val footerRight: String,
 )
+
+/**
+ * 信息栏 slot 按「内容类型」决定显隐，而非按位置：
+ *  - 章节名内容（`chapter`）归 [ScrollCanvasInfoBarConfig.showChapterName]；
+ *  - 时间 / 电量内容归 [ScrollCanvasInfoBarConfig.showTimeBattery]；
+ *  - 进度 / 页码等其余内容不受这两个开关控制（显隐由 slot 自身配置成 `"none"` 决定）。
+ *
+ * 替代旧的「按固定位置」门控（如 headerLeft 一律归 showTimeBattery）——位置门控假设
+ * slot 内容落在固定位置，与用户可自定义的实际 slot 错位，导致关「时间电量」误藏页脚
+ * 进度、关「章节名」误藏页脚时间电量（见本文件 showChapterName/showTimeBattery 注释的
+ * 原始意图）。token 集合对齐 PageContentDrawer.infoSlotText / Reader.InfoSlotContent。
+ */
+internal fun gateInfoSlot(slot: String, showChapterName: Boolean, showTimeBattery: Boolean): String =
+    when (slot) {
+        "chapter" -> if (showChapterName) slot else "none"
+        "time", "battery", "battery_pct", "time_battery", "battery_time", "time_battery_pct" ->
+            if (showTimeBattery) slot else "none"
+        else -> slot
+    }
