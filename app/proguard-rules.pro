@@ -61,3 +61,12 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+
+# ── R8 进一步收紧（编译期，零运行时成本）──
+# repackageclasses '' 把所有未被 keep 的类压进单一空包名，抹掉包结构信息；
+# allowaccessmodification 放宽访问修饰符让 R8 更激进地内联 / 合并。
+# 二者纯编译期、不增运行时开销；与移除 epub consumer keep 配合，让排版核心（主仓
+# domain/render/layout/** + epub layout/compat，均无 keep）在 release 里更难反推。
+# 已 keep 的反射 / 序列化类（entity / analyzeRule / rule / serializer）不受 repackage 影响。
+-repackageclasses ''
+-allowaccessmodification
