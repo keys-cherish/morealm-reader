@@ -75,6 +75,7 @@ import com.morealm.app.domain.entity.*
         SearchBookCache::class,
         SearchKeyword::class,
         ReadRecord::class,
+        HighlightWord::class,
     ],
     version = AppDatabase.SCHEMA_VERSION,
     exportSchema = true,
@@ -86,6 +87,8 @@ import com.morealm.app.domain.entity.*
         //
         // v32→v33: 加表 read_records (P1 阅读记录功能)。Room 自动 CREATE TABLE。
         AutoMigration(from = 32, to = 33),
+        // v33→v34: 加表 highlight_words (文字上色高亮词)。纯新增表，Room 自动 CREATE TABLE。
+        AutoMigration(from = 33, to = 34),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -109,6 +112,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun searchBookCacheDao(): SearchBookCacheDao
     abstract fun searchKeywordDao(): SearchKeywordDao
     abstract fun readRecordDao(): ReadRecordDao
+    abstract fun highlightWordDao(): HighlightWordDao
 
     companion object {
         /**
@@ -116,6 +120,6 @@ abstract class AppDatabase : RoomDatabase() {
          * 注解直接引用，外部模块（[com.morealm.app.di.APP_DB_SCHEMA_VERSION]）也
          * 通过 const val 编译期同步。
          */
-        const val SCHEMA_VERSION = 33
+        const val SCHEMA_VERSION = 34
     }
 }

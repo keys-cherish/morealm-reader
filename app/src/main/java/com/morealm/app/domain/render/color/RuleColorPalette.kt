@@ -50,6 +50,19 @@ class RuleColorPalette(
         fun default(isNight: Boolean): RuleColorPalette =
             RuleColorPalette(if (isNight) DARK else LIGHT)
 
+        // 高亮词色组（PRD §2.6）：明 / 暗各 10 色。colorIndex % size 取色。
+        private val HL_LIGHT: List<Int> = listOf(
+            0xFFCC0000, 0xFFCC6600, 0xFF996600, 0xFF669900, 0xFF009933,
+            0xFF009999, 0xFF0033CC, 0xFF6633CC, 0xFF990099, 0xFFCC3399,
+        ).map { it.toInt() }
+        private val HL_DARK: List<Int> = listOf(
+            0xFFFF6666, 0xFFFFCC66, 0xFFFFFF66, 0xFF66FF66, 0xFF66FFFF,
+            0xFF66CCFF, 0xFF9999FF, 0xFFCC66FF, 0xFFFF99CC, 0xFFFFCCCC,
+        ).map { it.toInt() }
+
+        /** 高亮词色组（按主题）；调色板高亮色号 colorIndex 取此组（越界 % size 兜底）。 */
+        fun highlightColors(isNight: Boolean): List<Int> = if (isNight) HL_DARK else HL_LIGHT
+
         /** 内置默认 + 用户对当前主题的覆盖（[overrides] 仅含被改过的类别）。空覆盖回退 [default]。 */
         fun resolve(isNight: Boolean, overrides: Map<RuleColorCategory, Int>): RuleColorPalette {
             if (overrides.isEmpty()) return default(isNight)

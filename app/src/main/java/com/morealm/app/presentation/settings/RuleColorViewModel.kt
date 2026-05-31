@@ -2,6 +2,8 @@ package com.morealm.app.presentation.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.morealm.app.domain.db.HighlightWordDao
+import com.morealm.app.domain.entity.HighlightWord
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.render.color.RuleColorCategory
 import com.morealm.app.domain.render.color.RuleColorPalette
@@ -11,17 +13,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.UUID
 import javax.inject.Inject
 
 /**
- * 「文字上色」设置子页的 ViewModel：总开关 + 调色板覆盖（Phase 3）。
- *
- * 后续 Phase 2 的用户高亮词管理（含 Aho-Corasick 自动机重建）也挂这里。
- * 与 [ReadingSettingsViewModel] 同构：注入 [AppPreferences]，stateIn 暴露读、viewModelScope 写回。
+ * 「文字上色」设置子页的 ViewModel：总开关 + 调色板覆盖（Phase 3）+ 用户高亮词（Phase 2）。
+ * 与 [ReadingSettingsViewModel] 同构：注入 [AppPreferences] / [HighlightWordDao]，
+ * stateIn 暴露读、viewModelScope 写回。
  */
 @HiltViewModel
 class RuleColorViewModel @Inject constructor(
     private val prefs: AppPreferences,
+    private val highlightWordDao: HighlightWordDao,
 ) : ViewModel() {
 
     val enabled: StateFlow<Boolean> = prefs.ruleColorEnabled
@@ -41,17 +44,14 @@ class RuleColorViewModel @Inject constructor(
         .map { RuleColorPalette.decodeOverrides(it).second }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
-    /** 改某类别在指定主题（[isNight]）下的颜色。 */
     fun setColor(category: RuleColorCategory, isNight: Boolean, color: Int) = persist { l, d ->
         if (isNight) d[category] = color else l[category] = color
     }
 
-    /** 单个类别恢复内置默认（移除覆盖）。 */
     fun resetColor(category: RuleColorCategory, isNight: Boolean) = persist { l, d ->
         if (isNight) d.remove(category) else l.remove(category)
     }
 
-    /** 当前主题全部类别恢复默认。 */
     fun resetAll(isNight: Boolean) = persist { l, d ->
         if (isNight) d.clear() else l.clear()
     }
@@ -68,4 +68,21 @@ class RuleColorViewModel @Inject constructor(
         mutate(l, d)
         prefs.setRuleColorPalette(RuleColorPalette.encodeOverrides(l, d))
     }
+
+    // ── 用户高亮词（Phase 2）──
+    val highlightWords: StateFlow<List<HighlightWord>> = highlightWordDao.observeAll()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 添加高亮词（去首尾空白；空词忽略；同词由 DAO REPLACE 去重 / 改色）。 */
+    fun addHighlightWord(word: String, colorIndex: Int) {
+        val w = word.trim()
+        if (w.isEmpty()) return
+        viewModelScope.launch {
+            highlightWordDao.upsert(
+                HighlightWord(id = UUID.randomUUID().toString(), word = w, colorIndex = colorIndex),
+            )
+        }
+    }
+
+    fun deleteHighlightWord(id: String) = viewModelScope.launch { highlightWordDao.deleteById(id) }
 }

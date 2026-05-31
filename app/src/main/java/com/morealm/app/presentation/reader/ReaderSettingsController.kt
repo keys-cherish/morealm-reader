@@ -3,6 +3,8 @@ package com.morealm.app.presentation.reader
 import android.content.Context
 import android.graphics.Typeface
 import android.net.Uri
+import com.morealm.app.domain.db.HighlightWordDao
+import com.morealm.app.domain.entity.HighlightWord
 import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.font.FontRepository
 import com.morealm.app.domain.preference.AppPreferences
@@ -23,6 +25,7 @@ class ReaderSettingsController(
     private val context: Context,
     private val styleRepo: ReaderStyleRepository,
     private val fontRepo: FontRepository,
+    private val highlightWordDao: HighlightWordDao,
 ) {
     // ══════════════════════════════════════════════════════════════
     // Behavioral settings (DataStore) — NOT part of visual style
@@ -181,6 +184,10 @@ class ReaderSettingsController(
     /** 「文字上色」调色板用户覆盖编码串 —— 透传给排版引擎 resolve 调色板（空 = 全默认）。 */
     val ruleColorPalette: StateFlow<String> = prefs.ruleColorPalette
         .stateIn(scope, SharingStarted.Eagerly, "")
+
+    /** 用户高亮词表 —— 透传给排版引擎构造 HighlightWordMatcher（空 = 不做高亮词上色）。 */
+    val highlightWords: StateFlow<List<HighlightWord>> = highlightWordDao.observeAll()
+        .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     /**
      * 章节标题对齐：0=左 / 1=中 / 2=右。

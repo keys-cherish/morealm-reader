@@ -534,6 +534,20 @@ interface HighlightDao {
     suspend fun deleteByBookId(bookId: String)
 }
 
+/** 用户高亮词（「文字上色」Phase 2）。全局生效，词唯一（去重）。 */
+@Dao
+interface HighlightWordDao {
+    @Query("SELECT * FROM highlight_words ORDER BY createdAt DESC")
+    fun observeAll(): Flow<List<HighlightWord>>
+
+    /** 词唯一：同词 REPLACE（改色号 / 去重）。 */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(word: HighlightWord)
+
+    @Query("DELETE FROM highlight_words WHERE id = :id")
+    suspend fun deleteById(id: String)
+}
+
 @Dao
 interface ReplaceRuleDao {
     @Query("SELECT * FROM replace_rules WHERE enabled = 1 ORDER BY sortOrder")
