@@ -814,7 +814,7 @@ class ScrollLayoutEngine(
         // dims 解码走 [imageDimensionsResolver]；null 时 fallback 4:3（visibleWidth × 0.75）。
         // 占 1 cp 与旧引擎 stringBuilder.append(" ") 严格对齐。
         // 返回累加后的 chapterPositionCounter（含图片占的 1 cp）。
-        fun emitImage(src: String, paragraphNum: Int, startCp: Int, isFullPage: Boolean = false): Int {
+        fun emitImage(src: String, paragraphNum: Int, startCp: Int, isFullPage: Boolean = false, widthFraction: Float? = null): Int {
             val dims = imageDimensionsResolver.resolve(src, visibleWidth)
             val imgWidth: Int
             val imgHeight: Int
@@ -826,10 +826,17 @@ class ScrollLayoutEngine(
             // visibleWidth，让封面图占满整个屏幕宽度（封面整屏渲染）。
             // 普通 `<img>` (某轻小说 01 等) isFullPage=false 走原 visibleWidth 段落图行为。
             val baseW = if (isFullPage) viewWidth else visibleWidth
+            // 声明显示宽度（widthFraction = 占视口比例，epub-lib 从 img `width='60%'` / CSS width 算）
+            // → 起始宽；无声明（null）走满宽 baseW（封面 / 插画行为不变）。fullpage 封面忽略 fraction。
+            val declaredW = if (!isFullPage && widthFraction != null && widthFraction > 0f) {
+                (baseW * widthFraction).toInt().coerceIn(1, baseW)
+            } else {
+                baseW
+            }
             if (dims != null && dims.first > 0 && dims.second > 0) {
                 val (intW, intH) = dims
-                var w = baseW
-                var h = (intH.toFloat() * baseW / intW).toInt()
+                var w = declaredW
+                var h = (intH.toFloat() * declaredW / intW).toInt()
                 // 高度上限仍按 visibleHeight clamp（不超过 page 可用高），避免被 InfoBar 裁掉
                 if (h > visibleHeight) {
                     w = (w.toFloat() * visibleHeight / h).toInt()
@@ -838,15 +845,15 @@ class ScrollLayoutEngine(
                 imgWidth = w; imgHeight = h
             } else {
                 // Fallback 4:3，与旧 ChapterProvider.setTypeImage line 684 兜底一致
-                imgWidth = baseW
-                imgHeight = (baseW * 0.75f).toInt().coerceAtMost(visibleHeight)
+                imgWidth = declaredW
+                imgHeight = (declaredW * 0.75f).toInt().coerceAtMost(visibleHeight)
             }
-            // 诊断日志：原图 W/H、resolver 返回值、visible/view 区、emit 后的 imgWidth/imgHeight。
+            // 诊断日志：原图 W/H、resolver 返回值、visible/view 区、声明宽度比例、emit 后的尺寸。
             com.morealm.app.core.log.AppLog.info(
                 "Engine/Image",
                 "emitImage src='${src.takeLast(40)}' orig=${origW}x${origH} " +
                     "view=${viewWidth}x${viewHeight} visible=${visibleWidth}x${visibleHeight} " +
-                    "isFullPage=$isFullPage → emit=${imgWidth}x${imgHeight} " +
+                    "wFrac=$widthFraction isFullPage=$isFullPage → emit=${imgWidth}x${imgHeight} " +
                     "paraNum=$paragraphNum startCp=$startCp pageLevelMode=$pageLevelMode",
             )
 
@@ -2163,11 +2170,14 @@ class ScrollLayoutEngine(
                     val tagName = m.groupValues[1]
                     val srcVal = m.groupValues[2]
                     val isFullPage = tagName.equals("imgfp", ignoreCase = true)
+                    // `w="0.60"` attr（epub-lib flatten 写入）= 声明宽度占视口比例；无则 null 走满宽。
+                    val widthFraction = imgWidthRegex.find(m.value)?.groupValues?.getOrNull(1)?.toFloatOrNull()
                     chapterPositionCounter = emitImage(
                         src = srcVal,
                         paragraphNum = paragraphCounter,
                         startCp = chapterPositionCounter,
                         isFullPage = isFullPage,
+                        widthFraction = widthFraction,
                     )
                     isFirstChunk = false  // img 后续 chunk 不是段首
                     cursor = m.range.last + 1
@@ -2617,6 +2627,13 @@ class ScrollLayoutEngine(
             "<(imgfp|img)\\b[^>]*src=['\"]([^'\"]*)['\"][^>]*>",
             RegexOption.IGNORE_CASE,
         )
+
+        /**
+         * 从 img marker 提取声明宽度比例 `w="0.60"`（epub-lib StructuredContent flatten 对带
+         * [com.morealm.epub.compat.ChapterBlock.Image.widthFraction] 的 image 写入）。命中 →
+         * emitImage 按比例渲染装饰小图（云朵 / logo），不命中走满宽默认。
+         */
+        private val imgWidthRegex = Regex("""\bw=['"]([0-9.]+)['"]""")
 
         // **R1 (阶段 R1.2)**：TABLE_MARKER_* 常量已迁到 com.morealm.epub.layout.TableMarkers
         // (internal object)。主仓 contains 检测改用 hasTableMarker(text) entry point，不再

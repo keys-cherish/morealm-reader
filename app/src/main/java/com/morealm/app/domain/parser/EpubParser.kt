@@ -197,7 +197,9 @@ object EpubParser {
     // 之前丢成 \n，flatten 输出新增 <morealmhr/> 段，bump 强制全章节重 flatten（旧 cache 无此 marker）。
     // v53：2026-05-30 single-child 容器 margin 修 —— qipao 圆标(chara-qipao2 无 margin)不再误继承
     // 内层 table 的 margin:auto，decode payload 的 ml/mr 从 AUTO 变 0（圆标靠左），flatten 输出变。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v53"
+    // v54：2026-05-31 img 声明宽度 —— flatten 对带 widthFraction 的 image 写 `<img src w="0.6">`
+    // （之前丢 width，装饰小图如云朵被 host 拉满宽），新增 w attr → bump 强制全章节重 flatten。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v54"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
