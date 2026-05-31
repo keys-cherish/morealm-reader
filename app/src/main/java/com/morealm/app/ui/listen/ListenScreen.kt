@@ -224,12 +224,14 @@ fun ListenScreen(
         com.morealm.app.ui.widget.TtsErrorSnackbarHost(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
                 .padding(bottom = 96.dp),
         )
         com.morealm.app.ui.widget.ThemedSnackbarHost(
             hostState = snackbarHost,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
                 .padding(bottom = 96.dp),
         )
     }

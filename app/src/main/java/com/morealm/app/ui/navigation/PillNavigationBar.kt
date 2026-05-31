@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -107,6 +108,9 @@ fun PillNavigationBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            // 避让系统导航栏（三键 / 手势条）——否则真机(如真我 GT6)导航栏较高时药丸与系统
+            // 导航键重叠。各主 tab 的内容底 padding 同步加 navigationBars 高度让位（见各 Screen）。
+            .navigationBarsPadding()
             .padding(start = 24.dp, end = 24.dp, bottom = 16.dp),
         contentAlignment = Alignment.BottomCenter,
     ) {

@@ -424,6 +424,7 @@ fun SearchScreen(
             snackbarHost,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
                 .padding(bottom = 96.dp),
         )
     }
