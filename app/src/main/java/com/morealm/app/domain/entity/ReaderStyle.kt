@@ -77,10 +77,18 @@ data class ReaderStyle(
 ) {
     companion object {
         /**
+         * 内置 preset 默认值版本号。**任何修改 [defaults] 字段默认值（行距 / 字号 / 边距等）
+         * 都必须 +1** —— [com.morealm.app.presentation.reader.ReaderSettingsController.initialize]
+         * 用它做「升级后刷新内置 preset」守卫，让默认值变更对老用户立即生效（无需手动恢复出厂），
+         * 同时只刷一次、不会每次启动重置用户对 preset 的临时调整。
+         */
+        const val PRESET_VERSION = 1
+
+        /**
          * 5 个内置排版预设。**仅排版差异**，颜色由主题决定。id 保留与历史版本一致避免
          * active_reader_style migration（preset_paper / preset_green / preset_blue /
          * preset_warm / preset_ink）；name 与字段值随之改成排版语义：
-         *  - **默认** (preset_paper)：通用基线，textSize=17 / lineHeight=2.0 / spacing=8
+         *  - **默认** (preset_paper)：通用基线，textSize=17 / lineHeight=1.4 / spacing=8
          *  - **紧凑** (preset_green)：屏幕小或一次想看多内容，文字密集
          *  - **宽松** (preset_blue)：阅读舒适度优先，行距段距更大
          *  - **大字** (preset_warm)：长辈 / 小屏 / 视觉疲劳时用，字号 20
