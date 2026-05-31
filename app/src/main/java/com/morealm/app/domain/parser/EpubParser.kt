@@ -199,7 +199,10 @@ object EpubParser {
     // 内层 table 的 margin:auto，decode payload 的 ml/mr 从 AUTO 变 0（圆标靠左），flatten 输出变。
     // v54：2026-05-31 img 声明宽度 —— flatten 对带 widthFraction 的 image 写 `<img src w="0.6">`
     // （之前丢 width，装饰小图如云朵被 host 拉满宽），新增 w attr → bump 强制全章节重 flatten。
-    private const val CHAPTER_CACHE_DIR = "epub_chapters_v54"
+    // v55：2026-05-31 img 声明宽度 cache 失效补 —— v54 cache 由旧 epub-lib 构建写入（marker 缺 w），
+    // 切到含 width 修复的 epub-lib 后 cache key(path) 不变不会自动失效，须再 bump 让旧 cache 失效、
+    // 用新 flatten（写 w）重建，否则装饰小图仍读旧 cache 被拉满宽。
+    private const val CHAPTER_CACHE_DIR = "epub_chapters_v55"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)
