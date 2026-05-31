@@ -217,26 +217,29 @@ object ImageCache {
      * RUNNING_LOW 时它不收缩，导致 256MB heap 在漫画/插图 EPUB 场景下被 64MB
      * Bitmap 缓存 + Compose / ChapterProvider 的临时分配挤爆，触发 OOM。
      *
-     * 阈值与 Android 框架约定一致：
-     * - **MODERATE / BACKGROUND / UI_HIDDEN (10/40/20)**：温和回收一半
-     * - **LOW / CRITICAL (15/80)**：全清
+     * **level 值非单调，必须精确匹配不能用 `>=`**：`UI_HIDDEN(20) > RUNNING_CRITICAL(15)`，
+     * 旧代码 `level >= RUNNING_CRITICAL` 把「切后台(UI_HIDDEN)」误判成内存危急 → 每次切后台
+     * 全清图片缓存，书架封面消失（用户反馈）。按语义分组：
+     * - **RUNNING_CRITICAL(15) / COMPLETE(80)**：真危急（前台内存紧张 / 进程将被杀）→ 全清防 OOM
+     * - **RUNNING_MODERATE(5)/RUNNING_LOW(10)/UI_HIDDEN(20)/BACKGROUND(40)/MODERATE(60)**：
+     *   温和回收一半（切后台 / 一般压力，保留 LRU 近用项，回前台少 miss）
      */
     fun onTrimMemory(level: Int) {
-        when {
-            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
+        when (level) {
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
+            ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> {
                 val before = cache.size()
                 cache.evictAll()
-                AppLog.info("ImageCache", "onTrimMemory($level) CRITICAL → evictAll (was ${before}KB)")
+                AppLog.info("ImageCache", "onTrimMemory($level) critical → evictAll (was ${before}KB)")
             }
-            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> {
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE,
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW,
+            ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN,
+            ComponentCallbacks2.TRIM_MEMORY_BACKGROUND,
+            ComponentCallbacks2.TRIM_MEMORY_MODERATE -> {
                 val before = cache.size()
                 cache.trimToSize(cache.maxSize() / 2)
-                AppLog.info("ImageCache", "onTrimMemory($level) LOW → trim ${before}KB→${cache.size()}KB")
-            }
-            level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> {
-                val before = cache.size()
-                cache.trimToSize(cache.maxSize() / 2)
-                AppLog.info("ImageCache", "onTrimMemory($level) MODERATE → trim ${before}KB→${cache.size()}KB")
+                AppLog.info("ImageCache", "onTrimMemory($level) moderate → trim ${before}KB→${cache.size()}KB")
             }
         }
     }
