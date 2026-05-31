@@ -174,6 +174,10 @@ class ReaderSettingsController(
     val pageAnim: StateFlow<String> = prefs.pageAnim
         .stateIn(scope, SharingStarted.Eagerly, "slide")
 
+    /** 「文字上色」总开关 —— 全局行为偏好，透传给排版引擎（两个 page-level Host）。 */
+    val ruleColorEnabled: StateFlow<Boolean> = prefs.ruleColorEnabled
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
     /**
      * 章节标题对齐：0=左 / 1=中 / 2=右。
      * 来自 [com.morealm.app.domain.preference.AppPreferences.titleAlign] 全局偏好；

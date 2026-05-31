@@ -212,6 +212,7 @@ fun ReaderScreen(
     val viewingImageSrc by viewModel.viewingImageSrc.collectAsStateWithLifecycle()
     val ttsScrollProgress by viewModel.tts.ttsScrollProgress.collectAsStateWithLifecycle()
     val pageAnim by viewModel.settings.pageAnim.collectAsStateWithLifecycle()
+    val ruleColorEnabled by viewModel.settings.ruleColorEnabled.collectAsStateWithLifecycle()
     // 章节标题对齐：透传给 CanvasRenderer，change 触发重新排版（layoutInputs.remember）。
     val titleAlign by viewModel.settings.titleAlign.collectAsStateWithLifecycle()
     val tapTL by viewModel.settings.tapActionTopLeft.collectAsStateWithLifecycle()
@@ -681,13 +682,14 @@ fun ReaderScreen(
                 textColorArgb = readerFg.toArgb(),
                 typeface = readerTypeface,
                 isNight = isNight,
+                ruleColorEnabled = ruleColorEnabled,
                 letterSpacing = effectiveReaderStyle?.letterSpacing ?: 0f,
                 textBold = effectiveReaderStyle?.textBold ?: 0,
                 lineSpacingExtra = readerLineHeight,
                 paragraphSpacing = effectiveReaderStyle?.paragraphSpacing ?: 8,
                 // 段首缩进默认 ""（ContentProcessor 已加 "　　"）；非默认 indent 由 caller 自己处理
                 titleMode = effectiveReaderStyle?.titleMode ?: 0,
-                titleAlign = effectiveReaderStyle?.titleMode?.takeIf { it != 0 } ?: 0,  // titleMode 1=center → titleAlign 1
+                titleAlign = titleAlign,
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
                 // 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer jumpToken/jumpChapterPosition 等价）：
                 // renderedChapter.restoreToken 由 ReaderChapterController.loadChapter / seekProgressInPlace
@@ -854,12 +856,13 @@ fun ReaderScreen(
                 textColorArgb = readerFg.toArgb(),
                 typeface = readerTypeface,
                 isNight = isNight,
+                ruleColorEnabled = ruleColorEnabled,
                 letterSpacing = effectiveReaderStyle?.letterSpacing ?: 0f,
                 textBold = effectiveReaderStyle?.textBold ?: 0,
                 lineSpacingExtra = readerLineHeight,
                 paragraphSpacing = effectiveReaderStyle?.paragraphSpacing ?: 8,
                 titleMode = effectiveReaderStyle?.titleMode ?: 0,
-                titleAlign = effectiveReaderStyle?.titleMode?.takeIf { it != 0 } ?: 0,
+                titleAlign = titleAlign,
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
                 bgColorArgb = readerBg.toArgb(),
                 bgImageUri = readerBgImage,

@@ -41,6 +41,8 @@ import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
 import com.morealm.app.domain.render.layout.ScrollImageDimensionsResolver
 import com.morealm.app.domain.render.layout.ScrollLayoutEngine
+import com.morealm.app.domain.render.color.RuleColorPalette
+import com.morealm.app.domain.render.color.RuleColorScanner
 import com.morealm.app.domain.render.layout.extractText
 import com.morealm.app.domain.render.layout.findColumnAt
 import com.morealm.app.domain.render.layout.findColumnByPixel
@@ -115,6 +117,8 @@ fun PageLevelReaderHost(
     textColorArgb: Int? = null,
     typeface: Typeface? = null,
     isNight: Boolean = false,
+    /** 「文字上色」总开关 —— true 时按规则给正文上色（明/暗调色板随 [isNight] 切）。 */
+    ruleColorEnabled: Boolean = false,
     letterSpacing: Float = 0f,
     textBold: Int = 0,
     lineSpacingExtra: Float = 1.2f,
@@ -255,6 +259,9 @@ fun PageLevelReaderHost(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
         contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing,
         paragraphIndent, titleMode, titleAlign, textFullJustify,
+        // ruleColorEnabled / isNight 进 key：开关或日夜切换 → engine 重建 → 重排版（颜色被
+        // computeStyleSignature 排除，靠 engine 重建做缓存失效，对齐 MVP 策略 A）。
+        ruleColorEnabled, isNight,
     ) {
         ScrollLayoutEngine(
             viewWidth = viewWidth,
@@ -277,6 +284,11 @@ fun PageLevelReaderHost(
             // (resolver 默认 NoOp → dims=null → fallback `visibleWidth*0.75=598`)。
             imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
             pageLevelMode = true,
+            ruleColorScanner = if (ruleColorEnabled) {
+                RuleColorScanner(RuleColorPalette.default(isNight))
+            } else {
+                null
+            },
         )
     }
 
