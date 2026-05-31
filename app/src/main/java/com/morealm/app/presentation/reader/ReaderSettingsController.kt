@@ -193,6 +193,16 @@ class ReaderSettingsController(
     fun initialize() {
         scope.launch(Dispatchers.IO) {
             styleRepo.ensureDefaults()
+            // 内置 preset 版本同步：升级后首次启动把内置 preset 刷为最新默认值（让 lineHeight 等
+            // 默认变更对老用户立即生效，无需手动「恢复出厂」）。版本守卫确保只在 PRESET_VERSION
+            // 提升后刷一次，不会每次启动重置用户对内置 preset 的临时调整；用户自建样式（非
+            // preset_ id）不在 [ReaderStyle.defaults] 内，upsertAll 不会动它们。
+            val synced = prefs.presetSyncedVersion.first()
+            if (synced < ReaderStyle.PRESET_VERSION) {
+                styleRepo.upsertAll(ReaderStyle.defaults())
+                prefs.setPresetSyncedVersion(ReaderStyle.PRESET_VERSION)
+                AppLog.info("Settings", "builtin presets synced → v${ReaderStyle.PRESET_VERSION}")
+            }
         }
         scope.launch {
             _activeStyleId.value = prefs.activeReaderStyle.first()
