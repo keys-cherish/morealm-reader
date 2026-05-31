@@ -1,7 +1,9 @@
 package com.morealm.app.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,11 +22,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -63,6 +67,10 @@ fun RuleColorScreen(
     val isNight = LocalMoRealmColors.current.isNight
     val overrides = if (isNight) darkOverrides else lightOverrides
     var expandedCat by remember { mutableStateOf<RuleColorCategory?>(null) }
+    val highlightWords by viewModel.highlightWords.collectAsStateWithLifecycle()
+    val hlColors = RuleColorPalette.highlightColors(isNight)
+    var newWord by remember { mutableStateOf("") }
+    var newColorIdx by remember { mutableIntStateOf(0) }
 
     Scaffold(
         topBar = {
@@ -124,9 +132,99 @@ fun RuleColorScreen(
             ) { Text("全部恢复默认（${if (isNight) "夜间" else "日间"}）") }
 
             SectionHeader("高亮词")
-            PlaceholderCard(
-                "登记词语后，全文每次出现都会自动着色（长词优先）。后续版本开放。",
-            )
+            SettingsCard {
+                if (highlightWords.isEmpty()) {
+                    Text(
+                        "还没有高亮词。添加后，正文每次出现该词都会自动着色（长词优先）。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    )
+                } else {
+                    highlightWords.forEach { hw ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(20.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(hlColors[hw.colorIndex % hlColors.size])),
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                hw.word,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(onClick = { viewModel.deleteHighlightWord(hw.id) }) {
+                                Icon(
+                                    Icons.Filled.Delete,
+                                    "删除",
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                )
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                )
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    OutlinedTextField(
+                        value = newWord,
+                        onValueChange = { newWord = it },
+                        label = { Text("新高亮词") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "颜色",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        hlColors.forEachIndexed { idx, c ->
+                            Box(
+                                Modifier
+                                    .size(28.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(c))
+                                    .then(
+                                        if (idx == newColorIdx) {
+                                            Modifier.border(
+                                                2.dp,
+                                                MaterialTheme.colorScheme.onSurface,
+                                                RoundedCornerShape(8.dp),
+                                            )
+                                        } else {
+                                            Modifier
+                                        },
+                                    )
+                                    .clickable { newColorIdx = idx },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    FilledTonalButton(
+                        onClick = { viewModel.addHighlightWord(newWord, newColorIdx); newWord = "" },
+                        enabled = newWord.isNotBlank(),
+                    ) { Text("添加高亮词") }
+                }
+            }
 
             Spacer(Modifier.height(32.dp))
         }

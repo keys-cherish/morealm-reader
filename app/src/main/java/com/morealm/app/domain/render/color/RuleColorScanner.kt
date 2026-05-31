@@ -17,15 +17,31 @@ package com.morealm.app.domain.render.color
  *
  * 贪婪陷阱（PRD §2.5）：兜底 / inner-rest 每次只消费 1 个码点；拉丁词可连续吃（真词边界）。
  */
-class RuleColorScanner(private val palette: RuleColorPalette) {
+class RuleColorScanner(
+    private val palette: RuleColorPalette,
+    private val matcher: HighlightWordMatcher? = null,
+    private val highlightColors: List<Int> = emptyList(),
+) {
 
     private data class Frame(val closeCp: Int, val inner: RuleColorCategory)
 
     /** 开符信息：闭符码点 + 是否括号（引号子状态才允许嵌套括号）+ 子状态兜底类别。 */
     private data class Opener(val closeCp: Int, val isBracket: Boolean, val inner: RuleColorCategory)
 
-    /** 扫描 [text]，返回每码点 ARGB（0 = 不上色）。size == text 的码点数。 */
+    /** 扫描 [text]，返回每码点 ARGB（0 = 不上色）。高亮词命中的码点用高亮色覆盖类别色（高亮词 > 类别）。 */
     fun scan(text: String): IntArray {
+        val category = scanCategories(text)
+        val m = matcher
+        if (m == null || m.isEmpty || highlightColors.isEmpty()) return category
+        val wordIdx = m.match(text)
+        return IntArray(category.size) { i ->
+            val wi = if (i < wordIdx.size) wordIdx[i] else -1
+            if (wi >= 0) highlightColors[wi % highlightColors.size] else category[i]
+        }
+    }
+
+    /** 仅类别色状态机（标点/数字/字母/特殊/引号内/括号内），不含高亮词。size == text 码点数。 */
+    private fun scanCategories(text: String): IntArray {
         if (text.isEmpty()) return IntArray(0)
         // 拆码点（minSdk 21 无 String.codePoints()，手动遍历）
         val cps = ArrayList<Int>(text.length)

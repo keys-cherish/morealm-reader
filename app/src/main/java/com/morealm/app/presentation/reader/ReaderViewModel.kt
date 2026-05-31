@@ -107,6 +107,8 @@ class ReaderViewModel @Inject constructor(
      * 见 [ReaderTtsController]：reader 不再依赖 host 那条 voices 路径，独立维护。
      */
     private val httpTtsDao: com.morealm.app.domain.db.HttpTtsDao,
+    /** 用户高亮词 DAO —— 透传给 [ReaderSettingsController]，喂给排版引擎做高亮词上色。 */
+    private val highlightWordDao: com.morealm.app.domain.db.HighlightWordDao,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -114,7 +116,7 @@ class ReaderViewModel @Inject constructor(
 
     // ── Delegates (existing) ──
     val tts = ReaderTtsController(context, prefs, viewModelScope, httpTtsDao)
-    val settings = ReaderSettingsController(prefs, viewModelScope, context, styleRepo, fontRepo)
+    val settings = ReaderSettingsController(prefs, viewModelScope, context, styleRepo, fontRepo, highlightWordDao)
 
     // ── Extracted Controllers ──
     val chapter = ReaderChapterController(

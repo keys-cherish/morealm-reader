@@ -41,6 +41,7 @@ import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
 import com.morealm.app.domain.render.layout.ScrollImageDimensionsResolver
 import com.morealm.app.domain.render.layout.ScrollLayoutEngine
+import com.morealm.app.domain.render.color.HighlightWordMatcher
 import com.morealm.app.domain.render.color.RuleColorPalette
 import com.morealm.app.domain.render.color.RuleColorScanner
 import com.morealm.app.domain.render.layout.extractText
@@ -121,6 +122,8 @@ fun PageLevelReaderHost(
     ruleColorEnabled: Boolean = false,
     /** 「文字上色」调色板用户覆盖编码串（空 = 全默认；见 RuleColorPalette.decodeOverrides）。 */
     ruleColorPalette: String = "",
+    /** 用户高亮词表（空 = 不做高亮词上色）；命中码点用高亮色覆盖类别色（长词优先）。 */
+    highlightWords: List<com.morealm.app.domain.entity.HighlightWord> = emptyList(),
     letterSpacing: Float = 0f,
     textBold: Int = 0,
     lineSpacingExtra: Float = 1.2f,
@@ -264,7 +267,7 @@ fun PageLevelReaderHost(
         // ruleColorEnabled / isNight / ruleColorPalette 进 key：开关、日夜切换、改调色板 →
         // engine 重建 → 重排版（颜色被 computeStyleSignature 排除，靠 engine 重建做缓存失效，
         // 对齐 MVP 策略 A）。
-        ruleColorEnabled, isNight, ruleColorPalette,
+        ruleColorEnabled, isNight, ruleColorPalette, highlightWords,
     ) {
         ScrollLayoutEngine(
             viewWidth = viewWidth,
@@ -289,7 +292,16 @@ fun PageLevelReaderHost(
             pageLevelMode = true,
             ruleColorScanner = if (ruleColorEnabled) {
                 val (lightOv, darkOv) = RuleColorPalette.decodeOverrides(ruleColorPalette)
-                RuleColorScanner(RuleColorPalette.resolve(isNight, if (isNight) darkOv else lightOv))
+                val matcher = if (highlightWords.isNotEmpty()) {
+                    HighlightWordMatcher(highlightWords.map { it.word to it.colorIndex })
+                } else {
+                    null
+                }
+                RuleColorScanner(
+                    palette = RuleColorPalette.resolve(isNight, if (isNight) darkOv else lightOv),
+                    matcher = matcher,
+                    highlightColors = RuleColorPalette.highlightColors(isNight),
+                )
             } else {
                 null
             },
