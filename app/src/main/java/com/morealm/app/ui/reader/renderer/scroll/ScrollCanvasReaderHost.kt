@@ -102,6 +102,8 @@ fun ScrollCanvasReaderHost(
     isNight: Boolean = false,
     /** 「文字上色」总开关 —— true 时按规则给正文上色（明/暗调色板随 [isNight] 切）。 */
     ruleColorEnabled: Boolean = false,
+    /** 「文字上色」调色板用户覆盖编码串（空 = 全默认；见 RuleColorPalette.decodeOverrides）。 */
+    ruleColorPalette: String = "",
     /** letterSpacing（ReaderStyle.letterSpacing）—— 字符间距乘 fontSize。 */
     letterSpacing: Float = 0f,
     /** 字重：0=normal / 1=bold / 2=light（ReaderStyle.textBold）。 */
@@ -301,9 +303,9 @@ fun ScrollCanvasReaderHost(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
         contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing,
         paragraphIndent, titleMode, titleAlign, textFullJustify,
-        // ruleColorEnabled / isNight 进 key：开关或日夜切换 → engine 重建 → 重排版（颜色被
-        // computeStyleSignature 排除，靠 engine 重建做缓存失效，对齐 MVP 策略 A）。
-        ruleColorEnabled, isNight,
+        // ruleColorEnabled / isNight / ruleColorPalette 进 key：开关、日夜切换、改调色板 →
+        // engine 重建 → 重排版（颜色被 computeStyleSignature 排除，靠 engine 重建做缓存失效）。
+        ruleColorEnabled, isNight, ruleColorPalette,
     ) {
         ScrollLayoutEngine(
             viewWidth = viewWidth,
@@ -325,7 +327,8 @@ fun ScrollCanvasReaderHost(
             // 修「cover/inline image 被压扁」根因 (resolver 默认 NoOp → dims=null → fallback)。
             imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
             ruleColorScanner = if (ruleColorEnabled) {
-                RuleColorScanner(RuleColorPalette.default(isNight))
+                val (lightOv, darkOv) = RuleColorPalette.decodeOverrides(ruleColorPalette)
+                RuleColorScanner(RuleColorPalette.resolve(isNight, if (isNight) darkOv else lightOv))
             } else {
                 null
             },

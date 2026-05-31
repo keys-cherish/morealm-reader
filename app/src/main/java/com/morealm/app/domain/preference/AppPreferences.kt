@@ -156,6 +156,7 @@ class AppPreferences @Inject constructor(
         val VOLUME_KEY_LONG_PRESS = stringPreferencesKey("volume_key_long_press") // off|page|chapter
         val RESUME_LAST_READ = booleanPreferencesKey("resume_last_read")
         val RULE_COLOR_ENABLED = booleanPreferencesKey("rule_color_enabled")
+        val RULE_COLOR_PALETTE = stringPreferencesKey("rule_color_palette")
         val PRESET_SYNCED_VERSION = intPreferencesKey("preset_synced_version")
         val SHELF_SORT_MODE = stringPreferencesKey("shelf_sort_mode") // title|recent|addTime|format
         val LONG_PRESS_UNDERLINE = booleanPreferencesKey("long_press_underline")
@@ -524,6 +525,10 @@ class AppPreferences @Inject constructor(
     val ruleColorEnabled: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.RULE_COLOR_ENABLED] ?: false }
 
+    /** 「文字上色」调色板用户覆盖（编码串，见 RuleColorPalette.encode/decodeOverrides）；空 = 全用默认色。 */
+    val ruleColorPalette: Flow<String> = context.dataStore.data
+        .map { it[Keys.RULE_COLOR_PALETTE] ?: "" }
+
     /** 内置 preset 已同步到的 [com.morealm.app.domain.entity.ReaderStyle.PRESET_VERSION]；默认 0（老用户/全新安装首启均触发刷新）。 */
     val presetSyncedVersion: Flow<Int> = context.dataStore.data
         .map { it[Keys.PRESET_SYNCED_VERSION] ?: 0 }
@@ -873,6 +878,7 @@ class AppPreferences @Inject constructor(
     }
     suspend fun setResumeLastRead(enabled: Boolean) = update(Keys.RESUME_LAST_READ, enabled)
     suspend fun setRuleColorEnabled(enabled: Boolean) = update(Keys.RULE_COLOR_ENABLED, enabled)
+    suspend fun setRuleColorPalette(encoded: String) = update(Keys.RULE_COLOR_PALETTE, encoded)
     suspend fun setPresetSyncedVersion(v: Int) = update(Keys.PRESET_SYNCED_VERSION, v)
     suspend fun setShelfSortMode(mode: String) = update(Keys.SHELF_SORT_MODE, mode)
     suspend fun setLongPressUnderline(enabled: Boolean) = update(Keys.LONG_PRESS_UNDERLINE, enabled)
