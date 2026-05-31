@@ -11,13 +11,16 @@ import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.parser.ComicResourceLoader
 import com.morealm.app.domain.parser.EpubComicResourceLoader
 import com.morealm.app.domain.parser.MobiComicResourceLoader
+import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.BookRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -34,6 +37,7 @@ import javax.inject.Inject
 class ComicReaderViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val bookRepo: BookRepository,
+    private val prefs: AppPreferences,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -41,6 +45,12 @@ class ComicReaderViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(ComicReaderState())
     val state: StateFlow<ComicReaderState> = _state.asStateFlow()
+
+    /** 音量键翻页偏好 —— 与小说阅读器共用同一份 [AppPreferences] 设置（阅读设置里改即两端生效）。 */
+    val volumeKeyPage: StateFlow<Boolean> = prefs.volumeKeyPage
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val volumeKeyReverse: StateFlow<Boolean> = prefs.volumeKeyReverse
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     init {
         loadBookAndImages()

@@ -2,6 +2,7 @@ package com.morealm.app.ui.reader.comic
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.view.KeyEvent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -9,6 +10,8 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,7 +67,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -90,6 +97,13 @@ fun ComicReaderScreen(
     val scope = rememberCoroutineScope()
     var controlsVisible by remember { mutableStateOf(false) }
     var pageMode by remember { mutableIntStateOf(0) } // 0=条漫滚动, 1=左右翻页
+
+    // 音量键翻页：与小说阅读器共用 volumeKeyPage 偏好。Box 需持键盘焦点才能收到 onKeyEvent，
+    // viewportHeightPx 用于条漫模式按「约一屏」滚动（翻页模式直接 pager ±1）。
+    val keyFocus = remember { FocusRequester() }
+    val volumeKeyPage by viewModel.volumeKeyPage.collectAsStateWithLifecycle()
+    val volumeKeyReverse by viewModel.volumeKeyReverse.collectAsStateWithLifecycle()
+    var viewportHeightPx by remember { mutableIntStateOf(0) }
 
     // ── 条漫滚动 state ──
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = state.startIndex)
@@ -147,7 +161,46 @@ fun ComicReaderScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    // 图片就绪后请求键盘焦点，让音量键 onKeyEvent 生效（仿小说 ReaderScreen 的 keyFocus）。
+    LaunchedEffect(state.totalImages) {
+        if (state.totalImages > 0) {
+            runCatching { keyFocus.requestFocus() }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .onSizeChanged { viewportHeightPx = it.height }
+            .focusRequester(keyFocus)
+            .focusable()
+            .onKeyEvent { event ->
+                // 音量键翻页（受 volumeKeyPage 管）。控制栏显示时把音量键还给系统调音量。
+                if (!volumeKeyPage) return@onKeyEvent false
+                val ne = event.nativeKeyEvent
+                val kc = ne.keyCode
+                if (kc != KeyEvent.KEYCODE_VOLUME_UP && kc != KeyEvent.KEYCODE_VOLUME_DOWN) {
+                    return@onKeyEvent false
+                }
+                if (controlsVisible) return@onKeyEvent false
+                if (ne.action == KeyEvent.ACTION_DOWN && state.totalImages > 0) {
+                    // VOLUME_DOWN = 下一页/下一屏；volumeKeyReverse 反转（XOR）
+                    val forward = (kc == KeyEvent.KEYCODE_VOLUME_DOWN) != volumeKeyReverse
+                    scope.launch {
+                        if (pageMode == 1) {
+                            val target = (pagerState.currentPage + if (forward) 1 else -1)
+                                .coerceIn(0, state.totalImages - 1)
+                            pagerState.animateScrollToPage(target)
+                        } else {
+                            val oneScreen = (if (viewportHeightPx > 0) viewportHeightPx.toFloat() else 2400f) * 0.9f
+                            listState.animateScrollBy(if (forward) oneScreen else -oneScreen)
+                        }
+                    }
+                }
+                true // 消费音量键 DOWN+UP，阻止系统弹音量条
+            },
+    ) {
         when {
             state.loading -> CircularProgressIndicator(
                 modifier = Modifier.align(Alignment.Center),
