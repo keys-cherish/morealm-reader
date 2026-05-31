@@ -4,6 +4,7 @@ import android.text.TextPaint
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.TextMeasure
 import com.morealm.app.domain.render.ZhLayout
+import com.morealm.app.domain.render.color.RuleColorScanner
 import com.morealm.app.domain.render.textHeight
 // **R1 (阶段 R1)** —— 核心 marker 解析 + 数据类迁到独立仓库 epub-layout。主仓只调用 entry point
 // + 引用 public data class。internal marker 字面值 / parser helper 全藏在 epub-layout module。
@@ -88,6 +89,12 @@ class ScrollLayoutEngine(
      * P4.6 失败的原因是只动了 flushPage 没动 needNewPage 路径，本次两处都按 mode fork）。
      */
     val pageLevelMode: Boolean = false,
+    /**
+     * 正文规则上色扫描器（PRD「文字上色」）。null = 关闭（默认，零开销 fast path）。
+     * 非 null 时排版期对每段 cleanText 现算规则色，按 CSS 优先 merge 进 per-cp 前景色，
+     * 走 columns 路径绘制（[ScrollColumn.colorArgb]，col.start 含 justify gap → 两端对齐保留）。
+     */
+    val ruleColorScanner: RuleColorScanner? = null,
 ) {
 
     val visibleWidth: Int = viewWidth - paddingLeft - paddingRight
@@ -1593,11 +1600,22 @@ class ScrollLayoutEngine(
             val parsed = parseInlineMarkers(paragraphText)
             val cleanedText = parsed.cleanText
             val colorPerCp = parsed.colorPerCp
-            currentParaCharColors = colorPerCp
+            val headingLevel = parsed.headingLevel
+            // 「文字上色」：规则色排版期对 cleanText 现算，按 CSS 优先 merge（EPUB 显式 CSS 色盖过
+            // 规则色；TXT 无 CSS → 全用规则色）。scanner==null（关）走原 colorPerCp，零开销 fast path。
+            //
+            // EPUB h1/h2/h3 等标题段走正文循环，但视觉上属于章节标题；若继续扫规则色会把标题
+            // 里的数字、标点、引号内容染成正文规则色，破坏标题统一样式。因此 heading 段只保留
+            // 原有 CSS/inline 显式色，不叠加正文规则色。
+            currentParaCharColors = if (ruleColorScanner != null && headingLevel <= 0) {
+                RuleColorScanner.mergeCssPriority(colorPerCp, ruleColorScanner.scan(cleanedText))
+            } else {
+                colorPerCp
+            }
             currentParaImageSrcs = parsed.imageSrcPerCp
             currentParaSizeScales = parsed.sizeScalePerCp
             currentParaBgRuns = parsed.bgRuns
-            currentParaHeadingLevel = parsed.headingLevel
+            currentParaHeadingLevel = headingLevel
             currentParaCpStart = chapterPositionCounter
             val processedText = cleanedText
 
@@ -1751,7 +1769,11 @@ class ScrollLayoutEngine(
                 // drawByAtoms 已支持 TextRun.colorArgb，无需改渲染端。
                 // 普通正文（无任何 marker）继续走 columns 路径，零行为变化。
                 val bgRuns = currentParaBgRuns // Phase 3 local snapshot
-                val emitAtoms = sizeScales != null || imageSrcs != null || colors != null || bgRuns != null
+                // 注：colors（per-cp 前景色：EPUB CSS 色 / 规则上色）**不**触发 atoms —— 前景色由
+                // columns 路径的 col.colorArgb 绘制（PagePaneCanvas drawText 用 col.start，含 justify
+                // gap，两端对齐保留）；atoms 路径用 atom.width 累加会丢 gap，不适合全文上色。size/
+                // image/bg 仍走 atoms（各自需要 atom 字段表达）。
+                val emitAtoms = sizeScales != null || imageSrcs != null || bgRuns != null
                 val atomList = if (emitAtoms) ArrayList<Atom>(chars.size) else null
                 // **Step 9.2 Phase B / Phase 3** —— bg-only coalesce：仅把同 boxId 连续同 styling
                 // 字符并成 1 个带 bg 字段的 TextRun（drawByAtoms 各画各 rect）；非 bg 字符仍每字符

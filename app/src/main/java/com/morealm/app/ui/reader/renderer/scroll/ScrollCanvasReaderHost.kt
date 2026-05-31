@@ -39,6 +39,8 @@ import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.layout.ScrollImageDimensionsResolver
 import com.morealm.app.domain.render.layout.ScrollLayoutEngine
 import com.morealm.app.domain.render.layout.extractText
+import com.morealm.app.domain.render.color.RuleColorPalette
+import com.morealm.app.domain.render.color.RuleColorScanner
 import com.morealm.app.domain.render.layout.findColumnAt
 import com.morealm.app.domain.render.layout.findColumnByPixel
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
@@ -98,6 +100,8 @@ fun ScrollCanvasReaderHost(
     typeface: android.graphics.Typeface? = null,
     /** 是否夜间模式 —— 决定 title / chapterNum 的颜色派生。 */
     isNight: Boolean = false,
+    /** 「文字上色」总开关 —— true 时按规则给正文上色（明/暗调色板随 [isNight] 切）。 */
+    ruleColorEnabled: Boolean = false,
     /** letterSpacing（ReaderStyle.letterSpacing）—— 字符间距乘 fontSize。 */
     letterSpacing: Float = 0f,
     /** 字重：0=normal / 1=bold / 2=light（ReaderStyle.textBold）。 */
@@ -297,6 +301,9 @@ fun ScrollCanvasReaderHost(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
         contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing,
         paragraphIndent, titleMode, titleAlign, textFullJustify,
+        // ruleColorEnabled / isNight 进 key：开关或日夜切换 → engine 重建 → 重排版（颜色被
+        // computeStyleSignature 排除，靠 engine 重建做缓存失效，对齐 MVP 策略 A）。
+        ruleColorEnabled, isNight,
     ) {
         ScrollLayoutEngine(
             viewWidth = viewWidth,
@@ -317,6 +324,11 @@ fun ScrollCanvasReaderHost(
             // 注入真实 dims 解析器 — 让 emitImage 拿到原图 aspect ratio 不走 4:3 fallback。
             // 修「cover/inline image 被压扁」根因 (resolver 默认 NoOp → dims=null → fallback)。
             imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
+            ruleColorScanner = if (ruleColorEnabled) {
+                RuleColorScanner(RuleColorPalette.default(isNight))
+            } else {
+                null
+            },
         )
     }
 
