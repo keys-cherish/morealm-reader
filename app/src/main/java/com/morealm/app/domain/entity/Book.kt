@@ -1,5 +1,6 @@
 package com.morealm.app.domain.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -90,6 +91,15 @@ data class Book(
      * 文本管线完全解耦，便于独立维护演进。
      */
     val isComic: Boolean = false,
+
+    // ── Shelf membership (since v35) ──
+    /**
+     * 是否在书架显示。true = 正式书架书（默认；v34→v35 迁移时所有老书置 true，保留在架）。
+     * false = 「查看 / 试读但未点加入书架」的临时记录——可正常阅读，但不出现在书架 / 文件夹 /
+     * 本地搜索 / 批量刷新里。详情页点「加入书架」翻 true；离开仍未加入则按退出提示清除。
+     */
+    @ColumnInfo(defaultValue = "1")
+    val inBookshelf: Boolean = true,
 )
 
 @Serializable

@@ -14,58 +14,61 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface BookDao {
-    @Query("SELECT * FROM books WHERE folderId IS :folderId ORDER BY lastReadAt DESC")
+    @Query("SELECT * FROM books WHERE folderId IS :folderId AND inBookshelf = 1 ORDER BY lastReadAt DESC")
     fun getBooksInFolder(folderId: String?): Flow<List<Book>>
 
+    // 续读入口：不过滤 inBookshelf —— 只有真正读过（lastReadAt>0）的书才浮现，
+    // 让"试读但未加入"的书也能从续读卡 / 桌面 widget 恢复阅读。
     @Query("SELECT * FROM books ORDER BY lastReadAt DESC LIMIT 1")
     fun getLastReadBook(): Flow<Book?>
 
+    // 按 key 查：不过滤 —— 加载 / 去重必须无视在架状态。
     @Query("SELECT * FROM books WHERE id = :id")
     suspend fun getById(id: String): Book?
 
-    @Query("SELECT * FROM books ORDER BY lastReadAt DESC")
+    @Query("SELECT * FROM books WHERE inBookshelf = 1 ORDER BY lastReadAt DESC")
     fun getAllBooks(): Flow<List<Book>>
 
-    @Query("SELECT * FROM books ORDER BY title COLLATE NOCASE")
+    @Query("SELECT * FROM books WHERE inBookshelf = 1 ORDER BY title COLLATE NOCASE")
     fun getAllBooksPaging(): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books WHERE folderId IS NULL ORDER BY title COLLATE NOCASE")
+    @Query("SELECT * FROM books WHERE folderId IS NULL AND inBookshelf = 1 ORDER BY title COLLATE NOCASE")
     fun getUngroupedBooksPaging(): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books WHERE folderId IS NULL ORDER BY lastReadAt DESC")
+    @Query("SELECT * FROM books WHERE folderId IS NULL AND inBookshelf = 1 ORDER BY lastReadAt DESC")
     fun getUngroupedBooksByRecent(): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books WHERE folderId IS NULL ORDER BY addedAt DESC")
+    @Query("SELECT * FROM books WHERE folderId IS NULL AND inBookshelf = 1 ORDER BY addedAt DESC")
     fun getUngroupedBooksByAddTime(): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books WHERE folderId IS NULL ORDER BY format, title COLLATE NOCASE")
+    @Query("SELECT * FROM books WHERE folderId IS NULL AND inBookshelf = 1 ORDER BY format, title COLLATE NOCASE")
     fun getUngroupedBooksByFormat(): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books ORDER BY lastReadAt DESC")
+    @Query("SELECT * FROM books WHERE inBookshelf = 1 ORDER BY lastReadAt DESC")
     fun getAllBooksByRecent(): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books ORDER BY addedAt DESC")
+    @Query("SELECT * FROM books WHERE inBookshelf = 1 ORDER BY addedAt DESC")
     fun getAllBooksByAddTime(): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books ORDER BY format, title COLLATE NOCASE")
+    @Query("SELECT * FROM books WHERE inBookshelf = 1 ORDER BY format, title COLLATE NOCASE")
     fun getAllBooksByFormat(): PagingSource<Int, Book>
 
-    @Query("SELECT COUNT(*) FROM books WHERE folderId = :folderId")
+    @Query("SELECT COUNT(*) FROM books WHERE folderId = :folderId AND inBookshelf = 1")
     fun countByFolderId(folderId: String): Flow<Int>
 
-    @Query("SELECT * FROM books WHERE folderId = :folderId ORDER BY title COLLATE NOCASE")
+    @Query("SELECT * FROM books WHERE folderId = :folderId AND inBookshelf = 1 ORDER BY title COLLATE NOCASE")
     fun getBooksByFolderPaging(folderId: String): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books WHERE folderId = :folderId ORDER BY lastReadAt DESC")
+    @Query("SELECT * FROM books WHERE folderId = :folderId AND inBookshelf = 1 ORDER BY lastReadAt DESC")
     fun getBooksByFolderByRecent(folderId: String): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books WHERE folderId = :folderId ORDER BY addedAt DESC")
+    @Query("SELECT * FROM books WHERE folderId = :folderId AND inBookshelf = 1 ORDER BY addedAt DESC")
     fun getBooksByFolderByAddTime(folderId: String): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books WHERE folderId = :folderId ORDER BY format, title COLLATE NOCASE")
+    @Query("SELECT * FROM books WHERE folderId = :folderId AND inBookshelf = 1 ORDER BY format, title COLLATE NOCASE")
     fun getBooksByFolderByFormat(folderId: String): PagingSource<Int, Book>
 
-    @Query("SELECT * FROM books WHERE title LIKE :keyword OR author LIKE :keyword ORDER BY lastReadAt DESC")
+    @Query("SELECT * FROM books WHERE (title LIKE :keyword OR author LIKE :keyword) AND inBookshelf = 1 ORDER BY lastReadAt DESC")
     suspend fun searchBooks(keyword: String): List<Book>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -99,8 +102,12 @@ interface BookDao {
     @Query("UPDATE books SET lastCheckCount = 0 WHERE id = :id")
     suspend fun clearLastCheckCount(id: String)
 
-    /** Books eligible for batch toc refresh (web-format only, opt-in). */
-    @Query("SELECT * FROM books WHERE format = 'WEB' AND canUpdate = 1 ORDER BY lastReadAt DESC")
+    /** 显式加入 / 移出书架。inBookshelf=false = 「查看 / 试读但未加入」的临时记录，不进书架列表。 */
+    @Query("UPDATE books SET inBookshelf = :inShelf WHERE id = :id")
+    suspend fun setInBookshelf(id: String, inShelf: Boolean)
+
+    /** Books eligible for batch toc refresh (web-format only, opt-in)。仅书架内的书参与自动刷新。 */
+    @Query("SELECT * FROM books WHERE format = 'WEB' AND canUpdate = 1 AND inBookshelf = 1 ORDER BY lastReadAt DESC")
     suspend fun getRefreshableBooks(): List<Book>
 
     @Delete
@@ -115,14 +122,14 @@ interface BookDao {
     @Query("SELECT COUNT(*) FROM books")
     suspend fun count(): Int
 
-    /** Count "logical books": each folder = 1 book, each loose file = 1 book */
-    @Query("SELECT (SELECT COUNT(DISTINCT folderId) FROM books WHERE folderId IS NOT NULL) + (SELECT COUNT(*) FROM books WHERE folderId IS NULL)")
+    /** Count "logical books": each folder = 1 book, each loose file = 1 book（仅统计书架内）。 */
+    @Query("SELECT (SELECT COUNT(DISTINCT folderId) FROM books WHERE folderId IS NOT NULL AND inBookshelf = 1) + (SELECT COUNT(*) FROM books WHERE folderId IS NULL AND inBookshelf = 1)")
     suspend fun countLogicalBooks(): Int
 
-    @Query("SELECT * FROM books WHERE folderId = :folderId ORDER BY title")
+    @Query("SELECT * FROM books WHERE folderId = :folderId AND inBookshelf = 1 ORDER BY title")
     suspend fun getBooksByFolderId(folderId: String): List<Book>
 
-    @Query("SELECT * FROM books WHERE title LIKE '%' || :keyword || '%' OR author LIKE '%' || :keyword || '%' ORDER BY lastReadAt DESC")
+    @Query("SELECT * FROM books WHERE (title LIKE '%' || :keyword || '%' OR author LIKE '%' || :keyword || '%') AND inBookshelf = 1 ORDER BY lastReadAt DESC")
     suspend fun searchBooksSync(keyword: String): List<Book>
 
     @Query("SELECT * FROM books WHERE localPath = :localPath LIMIT 1")

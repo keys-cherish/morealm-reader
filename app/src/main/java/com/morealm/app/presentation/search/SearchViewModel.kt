@@ -397,6 +397,50 @@ class SearchViewModel @Inject constructor(
         addToShelfInternal(result, withDownload = false, onBookReady = onBookReady)
     }
 
+    /**
+     * 「查看」搜索结果 —— 落库为**临时记录**（inBookshelf=false），不进书架 / 不分组 /
+     * 不发加书事件 / 不触发后台刷新。caller 拿 bookId 导航到详情页预览。
+     * 已存在（含已在架）的书直接复用其 id，不重复插入、不降级在架状态。
+     */
+    fun viewBook(result: SearchResult, onBookReady: (String) -> Unit) {
+        if (result.sourceType != TEXT_BOOK_SOURCE_TYPE) {
+            AppLog.warn("Search", "Blocked non-text source result: ${result.title} from ${result.sourceName}")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val existing = bookRepo.findByBookUrl(result.bookUrl, result.sourceUrl)
+                if (existing != null) {
+                    withContext(Dispatchers.Main) { onBookReady(existing.id) }
+                    return@launch
+                }
+                val bookId = java.util.UUID.randomUUID().toString()
+                val book = Book(
+                    id = bookId,
+                    title = result.title,
+                    author = result.author,
+                    coverUrl = result.coverUrl,
+                    sourceUrl = result.sourceUrl,
+                    sourceId = result.sourceUrl,
+                    bookUrl = result.bookUrl,
+                    tocUrl = result.searchBook?.tocUrl?.takeIf { it.isNotBlank() },
+                    origin = result.sourceUrl,
+                    originName = result.sourceName,
+                    description = result.intro.ifBlank { null },
+                    kind = result.kind?.takeIf { it.isNotBlank() },
+                    wordCount = result.wordCount?.takeIf { it.isNotBlank() },
+                    format = BookFormat.WEB,
+                    addedAt = System.currentTimeMillis(),
+                    inBookshelf = false,
+                )
+                bookRepo.insert(book)
+                withContext(Dispatchers.Main) { onBookReady(bookId) }
+            } catch (e: Exception) {
+                AppLog.error("Search", "viewBook failed: ${e.message}", e)
+            }
+        }
+    }
+
     fun addToShelf(result: SearchResult) {
         addToShelfAndRead(result) { /* no-op navigation */ }
     }

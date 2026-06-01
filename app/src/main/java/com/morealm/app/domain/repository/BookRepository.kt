@@ -79,6 +79,9 @@ class BookRepository @Inject constructor(
 
     suspend fun update(book: Book) = bookDao.update(book)
 
+    /** 显式加入 / 移出书架（只翻 inBookshelf 标志，不动其它字段）。 */
+    suspend fun setInBookshelf(id: String, inShelf: Boolean) = bookDao.setInBookshelf(id, inShelf)
+
     suspend fun delete(book: Book) = bookDao.delete(book)
 
     suspend fun deleteById(id: String) = bookDao.deleteById(id)

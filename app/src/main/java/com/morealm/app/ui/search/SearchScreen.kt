@@ -56,6 +56,7 @@ import kotlinx.coroutines.launch
 fun SearchScreen(
     onBack: () -> Unit = {},
     onNavigateReader: (String) -> Unit = {},
+    onNavigateDetail: (String) -> Unit = {},
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     // rememberSaveable：把搜索关键词存入 SavedState，跨 reader 跳转返回时保留输入；
@@ -368,8 +369,9 @@ fun SearchScreen(
                             result = result,
                             onClick = {
                                 if (result.sourceType == 0) {
-                                    viewModel.addToShelfAndRead(result) { bookId ->
-                                        onNavigateReader(bookId)
+                                    // 短按 = 查看：进详情页预览（不入书架）；加入书架 / 阅读由详情页决定。
+                                    viewModel.viewBook(result) { bookId ->
+                                        onNavigateDetail(bookId)
                                     }
                                 } else {
                                     scope.launch { snackbarHost.showSnackbar("非文本书源暂不能阅读") }

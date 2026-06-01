@@ -287,6 +287,9 @@ fun MoRealmNavHost(
                             onNavigateReader = { bookId ->
                                 navController.navigateToReader(bookId)
                             },
+                            onNavigateDetail = { bookId ->
+                                navController.navigateToDetail(bookId)
+                            },
                         )
                         BottomTab.Listen -> ListenScreen(
                             onNavigateHttpTtsManage = onNavHttpTtsManage,
