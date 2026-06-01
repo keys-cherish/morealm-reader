@@ -1,5 +1,6 @@
 package com.morealm.app.domain.render.color
 
+import com.morealm.epub.layout.mergeCssPriority
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -100,11 +101,11 @@ class RuleColorScannerTest {
     fun `mergeCssPriority — CSS 非 0 优先，TXT null 全用规则`() {
         assertArrayEquals(
             intArrayOf(1, 9, 3),
-            RuleColorScanner.mergeCssPriority(intArrayOf(0, 9, 0), intArrayOf(1, 2, 3)),
+            mergeCssPriority(intArrayOf(0, 9, 0), intArrayOf(1, 2, 3)),
         )
         assertArrayEquals(
             intArrayOf(1, 2, 3),
-            RuleColorScanner.mergeCssPriority(null, intArrayOf(1, 2, 3)),
+            mergeCssPriority(null, intArrayOf(1, 2, 3)),
         )
     }
 }

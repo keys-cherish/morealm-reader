@@ -4,7 +4,8 @@ import com.morealm.epub.layout.LayoutLog
 import com.morealm.epub.layout.LayoutMeasurer
 import com.morealm.epub.layout.ZhLayout
 import com.morealm.epub.layout.stripLeadingBlockStyleMarker
-import com.morealm.app.domain.render.color.RuleColorScanner
+import com.morealm.epub.layout.RuleColorSource
+import com.morealm.epub.layout.mergeCssPriority
 // **R1 (阶段 R1)** —— 核心 marker 解析 + 数据类迁到独立仓库 epub-layout。主仓只调用 entry point
 // + 引用 public data class。internal marker 字面值 / parser helper 全藏在 epub-layout module。
 import com.morealm.epub.layout.BoxGeometry
@@ -93,7 +94,7 @@ class ScrollLayoutEngine(
      * 非 null 时排版期对每段 cleanText 现算规则色，按 CSS 优先 merge 进 per-cp 前景色，
      * 走 columns 路径绘制（[ScrollColumn.colorArgb]，col.start 含 justify gap → 两端对齐保留）。
      */
-    val ruleColorScanner: RuleColorScanner? = null,
+    val ruleColorScanner: RuleColorSource? = null,
     val layoutLog: LayoutLog = LayoutLog.NONE,
 ) {
 
@@ -1470,7 +1471,7 @@ class ScrollLayoutEngine(
             // 里的数字、标点、引号内容染成正文规则色，破坏标题统一样式。因此 heading 段只保留
             // 原有 CSS/inline 显式色，不叠加正文规则色。
             currentParaCharColors = if (ruleColorScanner != null && headingLevel <= 0) {
-                RuleColorScanner.mergeCssPriority(colorPerCp, ruleColorScanner.scan(cleanedText))
+                mergeCssPriority(colorPerCp, ruleColorScanner.scan(cleanedText))
             } else {
                 colorPerCp
             }
