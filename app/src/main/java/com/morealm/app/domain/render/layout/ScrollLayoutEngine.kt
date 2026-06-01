@@ -1,6 +1,6 @@
 package com.morealm.app.domain.render.layout
 
-import com.morealm.app.core.log.AppLog
+import com.morealm.epub.layout.LayoutLog
 import com.morealm.epub.layout.LayoutMeasurer
 import com.morealm.epub.layout.ZhLayout
 import com.morealm.epub.layout.stripLeadingBlockStyleMarker
@@ -94,6 +94,7 @@ class ScrollLayoutEngine(
      * 走 columns 路径绘制（[ScrollColumn.colorArgb]，col.start 含 justify gap → 两端对齐保留）。
      */
     val ruleColorScanner: RuleColorScanner? = null,
+    val layoutLog: LayoutLog = LayoutLog.NONE,
 ) {
 
     val visibleWidth: Int = viewWidth - paddingLeft - paddingRight
@@ -565,7 +566,7 @@ class ScrollLayoutEngine(
                 val inscribedSide = minOf(boxW, boxH) / 1.41421356f
                 val widthOverflow = innerW > inscribedSide
                 val heightOverflow = contentH > inscribedSide
-                com.morealm.app.core.log.AppLog.info(
+                layoutLog.info(
                     "EpubW5H/CircleBox/Emit",
                     "para#$paragraphCounter isCircle=$isCircle designW=$designW designH=$designH " +
                         "fontScale=$fontScale padScaled=$padScaled " +
@@ -703,7 +704,7 @@ class ScrollLayoutEngine(
                 imgHeight = (declaredW * 0.75f).toInt().coerceAtMost(visibleHeight)
             }
             // 诊断日志：原图 W/H、resolver 返回值、visible/view 区、声明宽度比例、emit 后的尺寸。
-            com.morealm.app.core.log.AppLog.info(
+            layoutLog.info(
                 "Engine/Image",
                 "emitImage src='${src.takeLast(40)}' orig=${origW}x${origH} " +
                     "view=${viewWidth}x${viewHeight} visible=${visibleWidth}x${visibleHeight} " +
@@ -1253,20 +1254,20 @@ class ScrollLayoutEngine(
                     // 视为新的 BFC，不与上一段 mb collapse）
                     lastSegMarginBottom = 0f
 
-                    AppLog.info(
+                    layoutLog.info(
                         "BoxGroup/Parse",
                         "BOX_START ch=$chapterIndex id=$id stackDepth=${boxStack.size} payload='${payload.take(120)}' " +
                             "bg=${style.backgroundColor} bc=${style.borderColor} bw=${style.borderWidthPx} " +
                             "br=${style.borderRadiusPx} pad=(${style.paddingTopPx},${style.paddingRightPx},${style.paddingBottomPx},${style.paddingLeftPx})",
                     )
-                    AppLog.info(
+                    layoutLog.info(
                         "BoxScope",
                         "BOX_START id=$id +leftAdd=$leftAdd +rightAdd=$rightAdd " +
                             "→ currentBoxLeftPad=$currentBoxLeftPad currentBoxRightPad=$currentBoxRightPad " +
                             "effectiveVisibleWidth=${effectiveVisibleWidth()} (visibleWidth=$visibleWidth)",
                     )
                 } else {
-                    AppLog.warn(
+                    layoutLog.warn(
                         "BoxGroup/Parse",
                         "BOX_START malformed (no BOX_HEADER_END) ch=$chapterIndex paraHead='${trimmedStart.take(80)}'",
                     )
@@ -1288,7 +1289,7 @@ class ScrollLayoutEngine(
                     // 防漏洞负值（理论不会，加 guard）
                     if (currentBoxLeftPad < 0f) currentBoxLeftPad = 0f
                     if (currentBoxRightPad < 0f) currentBoxRightPad = 0f
-                    AppLog.info(
+                    layoutLog.info(
                         "BoxScope",
                         "BOX_END poppedId=$poppedId -leftSub=$leftSub -rightSub=$rightSub " +
                             "→ currentBoxLeftPad=$currentBoxLeftPad currentBoxRightPad=$currentBoxRightPad " +
@@ -1297,7 +1298,7 @@ class ScrollLayoutEngine(
                 }
                 // Step 9.X margin collapse：出 box 时也重置 lastSegMarginBottom
                 lastSegMarginBottom = 0f
-                AppLog.info(
+                layoutLog.info(
                     "BoxGroup/Parse",
                     "BOX_END ch=$chapterIndex poppedId=$poppedId stackDepthAfter=${boxStack.size}",
                 )
@@ -1354,7 +1355,7 @@ class ScrollLayoutEngine(
                         currentBlockStyle.marginLeftPx != 0f ||
                         currentBlockStyle.marginRightPx != 0f
                     if (anyMargin) {
-                        com.morealm.app.core.log.AppLog.info(
+                        layoutLog.info(
                             "D1a/Margin",
                             "para#$paragraphCounter payload='${payload.take(200)}' " +
                                 "mt=${currentBlockStyle.marginTopPx} mr=${currentBlockStyle.marginRightPx} " +
@@ -1524,7 +1525,7 @@ class ScrollLayoutEngine(
                             val borderFloorY = prevLine.lineTop + prevLine.textBottomRel +
                                 (pbs.paddingBottomPx + pbs.borderBottomWidthPx) * borderScale
                             if (currentY < borderFloorY) {
-                                com.morealm.app.core.log.AppLog.info(
+                                layoutLog.info(
                                     "D1a/Margin",
                                     "para#$paragraphCounter neg-margin clamp ↓border: " +
                                         "currentY=$currentY → $borderFloorY " +
@@ -1536,7 +1537,7 @@ class ScrollLayoutEngine(
                         }
                     }
                 }
-                com.morealm.app.core.log.AppLog.info(
+                layoutLog.info(
                     "D1a/Margin",
                     "para#$paragraphCounter applied margin-top=$marginTopPx (effective=$effectiveMt " +
                         "boxScope=${boxStack.isNotEmpty()} lastMb=$lastSegMarginBottom) " +
@@ -1545,7 +1546,7 @@ class ScrollLayoutEngine(
             }
             // P3-5b Step 2c diag：仅当原 paragraphText 含 SOH 时才打 log（多色段稀有）
             if (paragraphText.contains('')) {
-                com.morealm.app.core.log.AppLog.info(
+                layoutLog.info(
                     "P3-5b/CharColor",
                     "paragraph has SOH markers rawLen=${paragraphText.length} " +
                         "cleanLen=${cleanedText.length} colorsSize=${colorPerCp?.size} " +
@@ -1771,7 +1772,7 @@ class ScrollLayoutEngine(
                     val visualRightOffset: Float = boundsRight.toFloat() - advance  // > 0 = 描边伸出 advance
                     val visualRightAbs: Float = lastCol.end + maxOf(0f, visualRightOffset)
                     val clipPotential = visualRightAbs > visibleWidth.toFloat()
-                    com.morealm.app.core.log.AppLog.info(
+                    layoutLog.info(
                         "EpubW5H/LineEnd",
                         "family='${currentBlockStyle.fontFamily}' " +
                             "lastCh='${lastCol.charData.take(2)}' " +
@@ -1933,7 +1934,7 @@ class ScrollLayoutEngine(
                         }
                         // **D1.a DIAG**：仅当本段有 margin 属性时打 log（避免每行噪声）
                         if (marginCenter || mlIndent > 0f || boxStack.isNotEmpty()) {
-                            com.morealm.app.core.log.AppLog.info(
+                            layoutLog.info(
                                 "D1a/Margin",
                                 "line emit marginCenter=$marginCenter mlIndent=$mlIndent " +
                                     "desiredWidth=$desiredWidth visibleWidth=$visibleWidth effWidth=$effWidth " +
@@ -2086,7 +2087,7 @@ class ScrollLayoutEngine(
         // ── 诊断日志（章中 page 首行被 InfoBar 盖根因排查 2026-05-20）──
         // 列出每 page 的第一行 lineTop。期望章首 page = paddingTop，章中 page = 0（bug）。
         // page-level 模式下 page 1+ 第一行 lineTop=0 → 紧贴 viewport 顶 → 被 InfoBar 渐变盖半透。
-        AppLog.info(
+        layoutLog.info(
             "PageTopDiag",
             "ch=$chapterIndex paddingTop=$paddingTop pages=${pages.size} " +
                 "firstLineTops=${pages.map { p -> p.lines.firstOrNull()?.lineTop?.toInt() ?: -1 }}",
@@ -2105,7 +2106,7 @@ class ScrollLayoutEngine(
                 }
             }
         }
-        AppLog.info(
+        layoutLog.info(
             "ScrollLayoutEngine",
             "layoutChapter idx=$chapterIndex viewWidth=$viewWidth padding=L${paddingLeft}/R${paddingRight} " +
                 "visibleWidth=$visibleWidth maxColumnEnd=$maxColumnEnd " +
@@ -2124,14 +2125,14 @@ class ScrollLayoutEngine(
             val pageLineSummary = pagesWithGroupStyles.joinToString(",") { p ->
                 "p${p.pageIndex}=${p.lines.count { it.boxGroupId != null }}/${p.lines.size}"
             }
-            AppLog.info(
+            layoutLog.info(
                 "BoxGroup/Summary",
                 "ch=$chapterIndex title='$title' groups=${finalGroupStyles.size} " +
                     "groupIds=${finalGroupStyles.keys} groupedLinesPerPage=[$pageLineSummary] " +
                     "leftoverBoxStackDepth=${boxStack.size}",
             )
         } else {
-            AppLog.info(
+            layoutLog.info(
                 "BoxGroup/Summary",
                 "ch=$chapterIndex title='$title' NO groups (boxStack empty=${boxStack.isEmpty()} - " +
                     "若有 div.装饰容器应该非空，可能 epub-compat onOpen 未走 ContainerScope)",
@@ -2168,12 +2169,12 @@ class ScrollLayoutEngine(
         if (!content.startsWith(marker)) return content to null
         val endIdx = content.indexOf(end, marker.length)
         if (endIdx < 0) {
-            AppLog.warn("ScrollLayoutEngine", "stripChapterBgMarker: marker open but no close, content head='${content.take(60)}'")
+            layoutLog.warn("ScrollLayoutEngine", "stripChapterBgMarker: marker open but no close, content head='${content.take(60)}'")
             return content to null
         }
         val src = content.substring(marker.length, endIdx)
         val cleaned = content.substring(endIdx + end.length).removePrefix("\n")
-        AppLog.info("ScrollLayoutEngine/BG", "stripped chapter bg src='${src.take(80)}' cleanedLen=${cleaned.length} originalLen=${content.length}")
+        layoutLog.info("ScrollLayoutEngine/BG", "stripped chapter bg src='${src.take(80)}' cleanedLen=${cleaned.length} originalLen=${content.length}")
         return cleaned to src.takeIf { it.isNotEmpty() }
     }
 

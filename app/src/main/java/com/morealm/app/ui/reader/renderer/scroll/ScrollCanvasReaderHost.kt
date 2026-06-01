@@ -3,6 +3,7 @@ package com.morealm.app.ui.reader.renderer.scroll
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.TextPaint
+import com.morealm.app.domain.render.AppLogLayoutLog
 import com.morealm.app.domain.render.PaintLayoutMeasurer
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -330,6 +331,7 @@ fun ScrollCanvasReaderHost(
             // 注入真实 dims 解析器 — 让 emitImage 拿到原图 aspect ratio 不走 4:3 fallback。
             // 修「cover/inline image 被压扁」根因 (resolver 默认 NoOp → dims=null → fallback)。
             imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
+            layoutLog = AppLogLayoutLog,
             ruleColorScanner = if (ruleColorEnabled) {
                 val (lightOv, darkOv) = RuleColorPalette.decodeOverrides(ruleColorPalette)
                 val matcher = if (highlightWords.isNotEmpty()) {
