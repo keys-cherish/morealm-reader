@@ -1,8 +1,8 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
 import com.morealm.app.domain.render.layout.ScrollChapterDataSource
-import com.morealm.app.domain.render.layout.ScrollChapterLayout
-import com.morealm.app.domain.render.layout.ScrollPage
+import com.morealm.epub.render.ScrollChapterLayout
+import com.morealm.epub.render.ScrollPage
 import com.morealm.app.domain.render.layout.ScrollPageFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue

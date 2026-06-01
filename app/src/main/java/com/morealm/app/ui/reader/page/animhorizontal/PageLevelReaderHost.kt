@@ -42,7 +42,7 @@ import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
 import com.morealm.epub.render.ScrollImageDimensionsResolver
-import com.morealm.app.domain.render.layout.ScrollLayoutEngine
+import com.morealm.epub.render.ScrollLayoutEngine
 import com.morealm.app.domain.render.color.HighlightWordMatcher
 import com.morealm.app.domain.render.color.RuleColorPalette
 import com.morealm.app.domain.render.color.RuleColorScanner

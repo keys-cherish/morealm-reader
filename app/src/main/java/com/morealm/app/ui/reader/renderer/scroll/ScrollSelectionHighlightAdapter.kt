@@ -1,7 +1,7 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
 import com.morealm.app.domain.entity.Highlight
-import com.morealm.app.domain.render.layout.ScrollChapterLayout
+import com.morealm.epub.render.ScrollChapterLayout
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
 import com.morealm.app.domain.render.layout.ScrollHighlightProjector
 

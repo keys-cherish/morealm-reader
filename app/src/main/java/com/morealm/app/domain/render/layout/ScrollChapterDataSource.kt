@@ -1,5 +1,7 @@
 package com.morealm.app.domain.render.layout
 
+import com.morealm.epub.render.ScrollChapterLayout
+
 /**
  * page-level 滚动模式的章节数据源 —— [ScrollPageFactory] 通过本接口取 prev/cur/next
  * 三章 [ScrollChapterLayout]，跨章 swap 时依据返回的引用做 page 序列拼接。

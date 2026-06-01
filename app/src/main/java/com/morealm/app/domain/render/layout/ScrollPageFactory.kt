@@ -1,5 +1,8 @@
 package com.morealm.app.domain.render.layout
 
+import com.morealm.epub.render.ScrollChapterLayout
+import com.morealm.epub.render.ScrollPage
+
 /**
  * page-level 滚动模式的 page 序列管理器 —— V2 滚动 Canvas 重构 (page+全) 的核心。
  *

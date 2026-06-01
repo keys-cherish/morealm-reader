@@ -1,5 +1,7 @@
 package com.morealm.app.domain.render.layout
 
+import com.morealm.epub.render.*
+
 import com.morealm.epub.compat.BlockStyle
 import org.junit.Test
 import org.junit.Assert.assertEquals
