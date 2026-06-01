@@ -355,7 +355,7 @@ internal fun drawScrollPageOnCanvas(
         for (col in line.columns) {
             if (col.inlineImageSrc != null) {
                 val bmp = com.morealm.app.domain.render.ImageCache.get(
-                    col.inlineImageSrc, (col.end - col.start).toInt(),
+                    col.inlineImageSrc!!, (col.end - col.start).toInt(),
                 )
                 if (bmp != null) {
                     val bmpW = bmp.width.toFloat()
@@ -492,7 +492,7 @@ private fun drawByAtoms(
                     basePaint.color = defaultColor
                 } else {
                     val origColor = basePaint.color
-                    if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                    if (atom.colorArgb != null) basePaint.color = atom.colorArgb!!
                     canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
                     if (atom.colorArgb != null) basePaint.color = origColor
                 }
@@ -592,7 +592,7 @@ private fun drawByCells(
                         basePaint.color = defaultColor
                     } else {
                         val origColor = basePaint.color
-                        if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                        if (atom.colorArgb != null) basePaint.color = atom.colorArgb!!
                         canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
                         if (atom.colorArgb != null) basePaint.color = origColor
                     }

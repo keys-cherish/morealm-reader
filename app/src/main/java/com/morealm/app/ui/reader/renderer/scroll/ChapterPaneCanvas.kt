@@ -15,7 +15,7 @@ import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.render.layout.ScrollChapterLayout
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
 import com.morealm.app.domain.render.layout.ScrollLine
-import com.morealm.app.domain.render.layout.findColumnAt
+import com.morealm.epub.render.findColumnAt
 import com.morealm.epub.compat.BlockStyle
 
 /**
@@ -315,7 +315,7 @@ fun ChapterPaneCanvas(
                         // A4b：inline image 占位列（charData = U+FFFC）→ ImageCache + drawBitmap
                         if (col.inlineImageSrc != null) {
                             val bmp = com.morealm.app.domain.render.ImageCache.get(
-                                col.inlineImageSrc, (col.end - col.start).toInt(),
+                                col.inlineImageSrc!!, (col.end - col.start).toInt(),
                             )
                             if (bmp != null) {
                                 val bmpW = bmp.width.toFloat()
@@ -449,7 +449,7 @@ private fun drawAtomsRow(
                     basePaint.color = defaultColor
                 } else {
                     val origColor = basePaint.color
-                    if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                    if (atom.colorArgb != null) basePaint.color = atom.colorArgb!!
                     canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
                     if (atom.colorArgb != null) basePaint.color = origColor
                 }
@@ -529,7 +529,7 @@ private fun drawCellsRow(
                         basePaint.color = defaultColor
                     } else {
                         val origColor = basePaint.color
-                        if (atom.colorArgb != null) basePaint.color = atom.colorArgb
+                        if (atom.colorArgb != null) basePaint.color = atom.colorArgb!!
                         canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
                         if (atom.colorArgb != null) basePaint.color = origColor
                     }

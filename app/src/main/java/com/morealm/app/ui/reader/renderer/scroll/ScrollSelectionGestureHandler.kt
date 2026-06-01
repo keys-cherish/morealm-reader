@@ -1,7 +1,7 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
 import com.morealm.app.domain.render.layout.ScrollChapterLayout
-import com.morealm.app.domain.render.layout.findColumnByPixel
+import com.morealm.epub.render.findColumnByPixel
 
 /**
  * 选区手势纯函数 —— 长按 → 选词起；drag handle → 移动端点。
