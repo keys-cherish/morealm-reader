@@ -76,7 +76,7 @@ class EpubFontRegistry private constructor(
                     // sources 是 CSS src fallback list。本版本只用 url(...) 路径走 book.resource
                     // 取首个能加载成功的；local(...) 在 EPUB 上下文意义有限（书自带字体优先），
                     // 当前 CssFontFace 已只暴露 url tokens（详 CssFontFace.kt:21 注释）
-                    val typeface = tryLoadFromSources(book, cssItem.href, face.sources, bookKey, face.family, fontRepo)
+                    val typeface = tryLoadFromSources(book, cssItem.href, face.sources, face.localNames, bookKey, face.family, fontRepo)
                     if (typeface != null) {
                         map[face.family] = typeface
                     }
@@ -97,6 +97,7 @@ class EpubFontRegistry private constructor(
             book: EpubBook,
             cssHref: String,
             sources: List<String>,
+            localNames: List<String>,
             bookKey: String,
             family: String,
             fontRepo: FontRepository,
@@ -128,7 +129,15 @@ class EpubFontRegistry private constructor(
                     return typeface
                 }
             }
-            AppLog.warn(TAG, "all sources failed for family=$family sources=$sources")
+            // url() 全失败（多见于 `src: local(系统字体), url(未打包)` 链）→ 按 local() 名回退系统/asset 字体。
+            for (local in localNames) {
+                val tf = fontRepo.resolveSystemFontByName(local)
+                if (tf != null) {
+                    AppLog.debug(TAG, "family=$family resolved via local('$local')")
+                    return tf
+                }
+            }
+            AppLog.warn(TAG, "all sources failed for family=$family sources=$sources locals=$localNames")
             return null
         }
 

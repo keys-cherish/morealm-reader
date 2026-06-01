@@ -242,6 +242,33 @@ class FontRepository @Inject constructor(
     }
 
     /**
+     * 把 EPUB `@font-face` 的 `local("…")` 名映射到打包 asset / 系统 Typeface。
+     *
+     * 覆盖 EPUB 常引用的中文系统字体名（宋体/楷体/黑体/仿宋/准圆 及别名 / 短码 / 罗马名）。命中
+     * 返回对应 Typeface（asset 缺失时回落 Android 内建 SERIF/SANS）；无系统等价的特殊装饰字体
+     * 返回 null，由 caller 继续 fallback。修「EPUB `src: local(系统字体), url(未打包)` 链全废」。
+     */
+    fun resolveSystemFontByName(localName: String): Typeface? {
+        val raw = localName.trim()
+        if (raw.isEmpty()) return null
+        val n = raw.lowercase()
+        fun has(vararg keys: String): Boolean = keys.any { raw.contains(it) || n.contains(it) }
+        return when {
+            has("楷") || n.contains("kai") || n == "kt" ->
+                loadAssetTypeface("kaiti") ?: Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+            has("仿宋") || n.contains("fangsong") || n == "fs" ->
+                loadAssetTypeface("fangsong") ?: Typeface.SERIF
+            has("黑", "雅黑") || n.contains("hei") || n.contains("gothic") || n == "ht" ->
+                loadAssetTypeface("noto_sans_sc") ?: Typeface.SANS_SERIF
+            has("圆") || n.contains("yuan") || n == "yt" ->
+                Typeface.SANS_SERIF
+            has("宋", "明") || n.contains("song") || n.contains("mincho") || n.contains("ming") || n == "st" ->
+                loadAssetTypeface("noto_serif_sc") ?: Typeface.SERIF
+            else -> null
+        }
+    }
+
+    /**
      * 加载一个字体路径为 [Typeface]，加载失败返回 null（**不** 兜底，让调用方决策）。
      * 参考 Legado ChapterProvider.getTypeface()。
      */
