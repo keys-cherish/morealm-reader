@@ -263,9 +263,6 @@ fun ChapterPaneCanvas(
                     // EPUB 自带字体：block 级 fontFamily → Typeface swap
                     val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
                     val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
-                    com.morealm.app.domain.font.EpubFontRegistry.diagContentLineFont(
-                        line.blockStyle.fontFamily, !line.isTitle && !line.isChapterNum, line.text,
-                    )
 
                     val baselineY = pageTop + line.lineTop + ascent
                     // P3-5b Step 2a：段落统一字体色（同 PagePaneCanvas 同位逻辑）
