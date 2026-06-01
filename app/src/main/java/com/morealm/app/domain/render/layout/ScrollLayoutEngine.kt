@@ -3,6 +3,7 @@ package com.morealm.app.domain.render.layout
 import com.morealm.epub.layout.LayoutLog
 import com.morealm.epub.layout.LayoutMeasurer
 import com.morealm.epub.layout.ZhLayout
+import com.morealm.epub.render.ScrollImageDimensionsResolver
 import com.morealm.epub.layout.stripLeadingBlockStyleMarker
 import com.morealm.epub.layout.RuleColorSource
 import com.morealm.epub.layout.mergeCssPriority

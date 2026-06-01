@@ -2,6 +2,7 @@ package com.morealm.app.domain.render.layout
 
 import android.text.TextPaint
 import com.morealm.app.domain.render.PaintLayoutMeasurer
+import com.morealm.epub.render.ScrollImageDimensionsResolver
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
