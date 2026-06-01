@@ -227,6 +227,7 @@ dependencies {
     // R1 (阶段 R1)：核心 layout 算法迁移到独立仓库 epub-layout。Android 端只调用 entry point +
     // 引用 public data class；内部 marker parser / cell stride 算法 / row offset 全 internal。
     implementation("com.morealm.epub:epub-layout")
+    implementation("com.morealm.epub:epub-render")
 
     // Image
     implementation(libs.coil.compose)

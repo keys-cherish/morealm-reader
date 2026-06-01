@@ -41,7 +41,7 @@ import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
-import com.morealm.app.domain.render.layout.ScrollImageDimensionsResolver
+import com.morealm.epub.render.ScrollImageDimensionsResolver
 import com.morealm.app.domain.render.layout.ScrollLayoutEngine
 import com.morealm.app.domain.render.color.HighlightWordMatcher
 import com.morealm.app.domain.render.color.RuleColorPalette

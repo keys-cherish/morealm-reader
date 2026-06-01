@@ -38,7 +38,7 @@ import androidx.compose.ui.geometry.Offset
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.ImageCache
-import com.morealm.app.domain.render.layout.ScrollImageDimensionsResolver
+import com.morealm.epub.render.ScrollImageDimensionsResolver
 import com.morealm.app.domain.render.layout.ScrollLayoutEngine
 import com.morealm.app.domain.render.layout.extractText
 import com.morealm.app.domain.render.color.HighlightWordMatcher
