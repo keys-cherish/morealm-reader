@@ -1,6 +1,7 @@
 package com.morealm.app.domain.render.layout
 
 import android.text.TextPaint
+import com.morealm.app.domain.render.PaintLayoutMeasurer
 import com.morealm.epub.compat.BlockStyle
 import com.morealm.epub.compat.StructuredChapterContent
 import org.junit.Assert.assertFalse
@@ -41,8 +42,8 @@ class ScrollLayoutEngineBorderBottomTest {
         paddingRight = 40,
         paddingTop = 60,
         paddingBottom = 60,
-        titlePaint = titlePaint,
-        contentPaint = contentPaint,
+        titleMeasurer = PaintLayoutMeasurer(titlePaint),
+        contentMeasurer = PaintLayoutMeasurer(contentPaint),
         lineSpacingExtra = 1.2f,
         paragraphSpacing = 8,
     )

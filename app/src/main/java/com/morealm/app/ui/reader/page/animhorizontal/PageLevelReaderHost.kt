@@ -3,6 +3,7 @@ package com.morealm.app.ui.reader.page.animhorizontal
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.TextPaint
+import com.morealm.app.domain.render.PaintLayoutMeasurer
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -277,9 +278,9 @@ fun PageLevelReaderHost(
             paddingRight = paddingRight,
             paddingTop = effectivePadTop,
             paddingBottom = effectivePadBottom,
-            titlePaint = titlePaint,
-            contentPaint = contentPaint,
-            chapterNumPaint = chapterNumPaint,
+            titleMeasurer = PaintLayoutMeasurer(titlePaint),
+            contentMeasurer = PaintLayoutMeasurer(contentPaint),
+            chapterNumMeasurer = chapterNumPaint?.let { PaintLayoutMeasurer(it) },
             lineSpacingExtra = lineSpacingExtra,
             paragraphSpacing = paragraphSpacing,
             paragraphIndent = paragraphIndent,

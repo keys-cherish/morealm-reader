@@ -1,8 +1,6 @@
 package com.morealm.app.domain.render.layout
 
-import android.text.TextPaint
 import com.morealm.app.core.log.AppLog
-import com.morealm.app.domain.render.PaintLayoutMeasurer
 import com.morealm.epub.layout.LayoutMeasurer
 import com.morealm.epub.layout.ZhLayout
 import com.morealm.epub.layout.stripLeadingBlockStyleMarker
@@ -58,8 +56,8 @@ class ScrollLayoutEngine(
     val paddingRight: Int,
     val paddingTop: Int,
     val paddingBottom: Int,
-    val titlePaint: TextPaint,
-    val contentPaint: TextPaint,
+    val titleMeasurer: LayoutMeasurer,
+    val contentMeasurer: LayoutMeasurer,
     /**
      * 段首缩进字符（默认空）—— 注意：实际场景中 [com.morealm.app.domain.webbook.ContentProcessor]
      * 已经在每段文本前加了 "　　"，因此 engine 默认不再 额外加 indentWidth offset，否则
@@ -75,8 +73,8 @@ class ScrollLayoutEngine(
     val paragraphSpacing: Int = 8,
     val titleTopSpacing: Int = 0,
     val titleBottomSpacing: Int = 0,
-    /** 章首块（橙色章序号 + 大字主标题 + 装饰线）专用 paint。null = 用 [titlePaint]。 */
-    val chapterNumPaint: TextPaint? = null,
+    /** 章首块（橙色章序号 + 大字主标题 + 装饰线）专用测量器。null = 用 [titleMeasurer]。 */
+    val chapterNumMeasurer: LayoutMeasurer? = null,
     /**
      * 图片像素 dims 解析器 —— 注入式避免 domain 层耦合 ImageCache / BitmapFactory。
      * 默认 [ScrollImageDimensionsResolver.NoOp]（走 4:3 fallback）；生产代码在 DI 模块注入
@@ -101,7 +99,6 @@ class ScrollLayoutEngine(
     val visibleWidth: Int = viewWidth - paddingLeft - paddingRight
     val visibleHeight: Int = viewHeight - paddingTop - paddingBottom
 
-    private val contentMeasurer = PaintLayoutMeasurer(contentPaint)
     // ZhLayout compressible 阈值（全角 CJK 字宽）—— 测量在此完成，喂进纯化后的 ZhLayout 决策内核。
     private val cnCharWidth: Float = contentMeasurer.cjkFullCharWidth
     private val contentTextHeight: Float = contentMeasurer.textHeight
@@ -115,18 +112,15 @@ class ScrollLayoutEngine(
     private val contentDescent: Float = contentMeasurer.descent
 
     /**
-     * 章首块 title 主行用 paint / 测量器 / 行高。复用 [titlePaint]。
-     * 章首块行高直接用 textHeight（**不**乘 lineSpacingExtra），与旧
-     * [com.morealm.app.domain.render.ChapterProvider] 对齐——标题行紧凑。
+     * 章首块 title 主行行高 —— 复用 [titleMeasurer]。直接用 textHeight（**不**乘 lineSpacingExtra），
+     * 与旧 [com.morealm.app.domain.render.ChapterProvider] 对齐——标题行紧凑。
      */
-    private val titleMeasurer = PaintLayoutMeasurer(titlePaint)
     private val titleTextHeight: Float = titleMeasurer.textHeight
 
     /**
-     * 章首块章序号小字行用 paint / 测量器 / 行高。复用 [chapterNumPaint]，null 时 fallback
-     * [titlePaint]。
+     * 章首块章序号小字行测量器 —— 复用 [chapterNumMeasurer]，null 时 fallback [titleMeasurer]。
      */
-    private val chapterNumMeasurerSafe = chapterNumPaint?.let { PaintLayoutMeasurer(it) } ?: titleMeasurer
+    private val chapterNumMeasurerSafe = chapterNumMeasurer ?: titleMeasurer
     private val chapterNumTextHeightSafe: Float = chapterNumMeasurerSafe.textHeight
 
     /**
