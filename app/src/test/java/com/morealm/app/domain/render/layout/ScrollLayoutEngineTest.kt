@@ -1,6 +1,7 @@
 package com.morealm.app.domain.render.layout
 
 import android.text.TextPaint
+import com.morealm.app.domain.render.PaintLayoutMeasurer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -47,8 +48,8 @@ class ScrollLayoutEngineTest {
         paddingRight = paddingRight,
         paddingTop = paddingTop,
         paddingBottom = paddingBottom,
-        titlePaint = titlePaint,
-        contentPaint = contentPaint,
+        titleMeasurer = PaintLayoutMeasurer(titlePaint),
+        contentMeasurer = PaintLayoutMeasurer(contentPaint),
         lineSpacingExtra = lineSpacingExtra,
         paragraphSpacing = paragraphSpacing,
     )
@@ -490,7 +491,7 @@ class ScrollLayoutEngineTest {
         val eng = ScrollLayoutEngine(
             viewWidth = 1080, viewHeight = 2200,
             paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-            titlePaint = titlePaint, contentPaint = contentPaint,
+            titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
             useZhLayout = false,
         )
         val layout = eng.layoutChapter(0, "T", "ABCDE", omitChapterTitleBlock = true)
@@ -527,7 +528,7 @@ class ScrollLayoutEngineTest {
         val engGreedy = ScrollLayoutEngine(
             viewWidth = 1080, viewHeight = 2200,
             paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-            titlePaint = titlePaint, contentPaint = contentPaint,
+            titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
             useZhLayout = false,
         )
         val lZh = engZh.layoutChapter(0, "T", content, omitChapterTitleBlock = true)
@@ -610,7 +611,7 @@ class ScrollLayoutEngineTest {
         val eng = ScrollLayoutEngine(
             viewWidth = 1080, viewHeight = 2200,
             paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-            titlePaint = titlePaint, contentPaint = contentPaint,
+            titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
             titleMode = 2,  // 无标题模式
         )
         val layout = eng.layoutChapter(0, "第一章 山边小村", "正文")
@@ -665,7 +666,7 @@ class ScrollLayoutEngineTest {
         val eng = ScrollLayoutEngine(
             viewWidth = 1080, viewHeight = 2200,
             paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-            titlePaint = titlePaint, contentPaint = contentPaint,
+            titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
             imageDimensionsResolver = resolver,
         )
         val content = """<img src="x"/>"""
@@ -682,7 +683,7 @@ class ScrollLayoutEngineTest {
         val eng = ScrollLayoutEngine(
             viewWidth = 1080, viewHeight = 2200,
             paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-            titlePaint = titlePaint, contentPaint = contentPaint,
+            titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
             imageDimensionsResolver = resolver,
         )
         val content = """<img src="huge"/>"""
@@ -809,7 +810,7 @@ class ScrollLayoutEngineTest {
         val eng = ScrollLayoutEngine(
             viewWidth = 81, viewHeight = 2200,  // visibleWidth = 81 - 40 - 40 = 1
             paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-            titlePaint = titlePaint, contentPaint = contentPaint,
+            titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
             useZhLayout = false,  // 走简单贪心 fallback 更可控
         )
         val layout = eng.layoutChapter(0, "T", "ABC", omitChapterTitleBlock = true)
@@ -987,53 +988,53 @@ class ScrollLayoutEngineTest {
             "paddingLeft" to ScrollLayoutEngine(
                 viewWidth = 1080, viewHeight = 2200,
                 paddingLeft = 80, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
             ),
             "paddingTop" to ScrollLayoutEngine(
                 viewWidth = 1080, viewHeight = 2200,
                 paddingLeft = 40, paddingRight = 40, paddingTop = 120, paddingBottom = 60,
-                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
             ),
             "lineSpacingExtra" to ScrollLayoutEngine(
                 viewWidth = 1080, viewHeight = 2200,
                 paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
                 lineSpacingExtra = 2.0f,
             ),
             "paragraphSpacing" to ScrollLayoutEngine(
                 viewWidth = 1080, viewHeight = 2200,
                 paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
                 paragraphSpacing = 20,
             ),
             "useZhLayout" to ScrollLayoutEngine(
                 viewWidth = 1080, viewHeight = 2200,
                 paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
                 useZhLayout = false,
             ),
             "textFullJustify" to ScrollLayoutEngine(
                 viewWidth = 1080, viewHeight = 2200,
                 paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
                 textFullJustify = false,
             ),
             "titleMode" to ScrollLayoutEngine(
                 viewWidth = 1080, viewHeight = 2200,
                 paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
                 titleMode = 1,
             ),
             "titleAlign" to ScrollLayoutEngine(
                 viewWidth = 1080, viewHeight = 2200,
                 paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
                 titleAlign = 2,
             ),
             "paragraphIndent" to ScrollLayoutEngine(
                 viewWidth = 1080, viewHeight = 2200,
                 paddingLeft = 40, paddingRight = 40, paddingTop = 60, paddingBottom = 60,
-                titlePaint = titlePaint, contentPaint = contentPaint,
+                titleMeasurer = PaintLayoutMeasurer(titlePaint), contentMeasurer = PaintLayoutMeasurer(contentPaint),
                 paragraphIndent = "\t",
             ),
         )

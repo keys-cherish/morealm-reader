@@ -1,6 +1,7 @@
 package com.morealm.app.domain.render.layout
 
 import android.text.TextPaint
+import com.morealm.app.domain.render.PaintLayoutMeasurer
 import com.morealm.epub.compat.StructuredChapterContent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -36,8 +37,8 @@ class ScrollLayoutEngineCoalesceTest {
         paddingRight = 40,
         paddingTop = 60,
         paddingBottom = 60,
-        titlePaint = titlePaint,
-        contentPaint = contentPaint,
+        titleMeasurer = PaintLayoutMeasurer(titlePaint),
+        contentMeasurer = PaintLayoutMeasurer(contentPaint),
     )
 
     /** 构造 emit 格式 SPAN_BG marker；[pad] = scaled int（px×100），与 emitSpanBgHeader 一致。 */
