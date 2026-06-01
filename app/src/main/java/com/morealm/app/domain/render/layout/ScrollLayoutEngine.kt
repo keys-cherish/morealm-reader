@@ -2312,10 +2312,6 @@ class ScrollLayoutEngine(
     }
 
     /**
-     * 剥掉 paragraph 开头可能的 BLOCK_STYLE marker 段，返回 body。image-only 判断等需要看
-     * 「纯内容」的场景用——装饰 marker（如首图 width）不应干扰 `<img>` 匹配。
-     */
-    /**
      * **C1/C2**：检查 content 是否以 `__MOREALM_CH_BG__<src>__/MOREALM_CH_BG__` 开头
      * 的 chapter bg marker。是 → 返回 (剥掉 marker 的 cleanedContent, src)；否 → 返回
      * (content, null)。
