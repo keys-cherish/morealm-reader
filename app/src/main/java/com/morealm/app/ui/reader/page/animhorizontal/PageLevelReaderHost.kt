@@ -3,6 +3,7 @@ package com.morealm.app.ui.reader.page.animhorizontal
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.TextPaint
+import com.morealm.app.domain.render.AppLogLayoutLog
 import com.morealm.app.domain.render.PaintLayoutMeasurer
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -291,6 +292,7 @@ fun PageLevelReaderHost(
             // 修「某轻小说 01 cover 1000x1333 被算成 798x598 (4:3 压扁) 视觉只占视口 1/3」根因
             // (resolver 默认 NoOp → dims=null → fallback `visibleWidth*0.75=598`)。
             imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
+            layoutLog = AppLogLayoutLog,
             pageLevelMode = true,
             ruleColorScanner = if (ruleColorEnabled) {
                 val (lightOv, darkOv) = RuleColorPalette.decodeOverrides(ruleColorPalette)
