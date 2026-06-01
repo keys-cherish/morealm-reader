@@ -54,15 +54,16 @@ class MoRealmApp : Application(), ImageLoaderFactory {
         super.onCreate()
         instance = this
         AppLog.init(this)
-        // APK 签名自校验（debug 跳过）：启动首算并缓存，供后续功能按官方/非官方签名门控。
-        runCatching {
-            val official = SignatureGuard.isOfficialSignature(this)
-            if (BuildConfig.DEBUG) {
-                AppLog.info("App", "signature SHA-256=${SignatureGuard.currentCertSha256(this)}")
-            } else if (!official) {
-                AppLog.warn("App", "signature self-check: non-official signature")
-            }
-        }.onFailure { AppLog.warn("App", "signature self-check failed: ${it.message}") }
+        // APK 签名自校验：非官方签名的 release 直接终止（完整性保护，威慑级）。
+        // debug 永不触发（BuildConfig.DEBUG 编译期常量）；读取失败宽松判官方避免误伤。
+        // throw 必须在 runCatching 外，否则被 getOrDefault 吞掉不生效。
+        val officialSignature = runCatching { SignatureGuard.isOfficialSignature(this) }.getOrDefault(true)
+        if (BuildConfig.DEBUG) {
+            runCatching { AppLog.info("App", "signature SHA-256=${SignatureGuard.currentCertSha256(this)}") }
+        } else if (!officialSignature) {
+            AppLog.warn("App", "signature self-check failed — aborting")
+            throw IllegalStateException("integrity check failed")
+        }
         // 预 load native algo lib —— 触发 NativeOps.<clinit> 内的 System.loadLibrary，
         // 让首次 Edge TTS / 其他用到 NativeOps 的调用不必在热路径阻塞 IO。
         // 老旧 ABI / 系统极端情况下 UnsatisfiedLinkError 不致命，调用点自行兜底。
