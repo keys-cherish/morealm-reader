@@ -178,6 +178,21 @@ class BookDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 详情页「加入书架」—— 把临时记录（inBookshelf=false）正式加入书架：翻 inBookshelf=true，
+     * 并在未分组时按自动分组规则补一个 folderId（与搜索加书路径一致）。已在架则 no-op。
+     */
+    fun addToShelf() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val current = _book.value ?: return@launch
+            if (current.inBookshelf) return@launch
+            val folderId = current.folderId ?: autoGroupClassifier.classify(current)
+            val updated = current.copy(inBookshelf = true, folderId = folderId)
+            bookRepo.update(updated)
+            _book.value = updated
+        }
+    }
+
     private val _saving = MutableStateFlow(false)
     val saving: StateFlow<Boolean> = _saving.asStateFlow()
 

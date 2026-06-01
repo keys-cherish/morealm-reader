@@ -1,6 +1,7 @@
 package com.morealm.app.ui.detail
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.presentation.profile.BookDetailViewModel
@@ -63,6 +64,17 @@ fun BookDetailScreen(
     val downloadProgress by viewModel.cacheDownloadProgress.collectAsStateWithLifecycle()
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
+    // 预览态（inBookshelf=false）退出处理：读过才提示「加入书架?」，纯浏览静默清除（不留残记录）。
+    var hasOpenedReader by remember { mutableStateOf(false) }
+    var showAddPrompt by remember { mutableStateOf(false) }
+    val leaveScreen = {
+        val current = book
+        if (current != null && !current.inBookshelf) {
+            if (hasOpenedReader) showAddPrompt = true
+            else { viewModel.deleteBook(); onBack() }
+        } else onBack()
+    }
+    BackHandler { leaveScreen() }
 
     // 订阅换源失败事件 -> Toast 反馈。
     // 历史 bug：applyCandidate Step 1/2 失败时只 silent return，UI 看上去"点了没反应"。
@@ -78,7 +90,7 @@ fun BookDetailScreen(
             TopAppBar(
                 title = {},
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { leaveScreen() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
                     }
                 },
@@ -104,13 +116,17 @@ fun BookDetailScreen(
                             )
                         }
                     }
-                    IconButton(onClick = { showEditDialog = true }) {
-                        Icon(Icons.Default.Edit, "编辑元数据",
-                            tint = MaterialTheme.colorScheme.onBackground)
-                    }
-                    IconButton(onClick = { showDeleteConfirm = true }) {
-                        Icon(Icons.Default.Delete, "删除",
-                            tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f))
+                    // 编辑元数据 / 删除（移出书架）只对已在架的书有意义；
+                    // 预览态（搜索查看但未加入）隐藏，避免误删 + 减少干扰。
+                    if (book?.inBookshelf == true) {
+                        IconButton(onClick = { showEditDialog = true }) {
+                            Icon(Icons.Default.Edit, "编辑元数据",
+                                tint = MaterialTheme.colorScheme.onBackground)
+                        }
+                        IconButton(onClick = { showDeleteConfirm = true }) {
+                            Icon(Icons.Default.Delete, "删除",
+                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f))
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -190,7 +206,7 @@ fun BookDetailScreen(
                 Spacer(Modifier.height(24.dp))
 
                 Button(
-                    onClick = onRead,
+                    onClick = { hasOpenedReader = true; onRead() },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
@@ -201,6 +217,18 @@ fun BookDetailScreen(
                         if (b.lastReadChapter > 0) "继续阅读" else "开始阅读",
                         modifier = Modifier.padding(vertical = 4.dp),
                     )
+                }
+
+                // 预览态：未加入书架的书显示「加入书架」（点击翻 inBookshelf=true）。
+                if (!b.inBookshelf) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.addToShelf() },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        Text("加入书架", modifier = Modifier.padding(vertical = 4.dp))
+                    }
                 }
 
                 // Source switch button (for online books)
@@ -268,6 +296,21 @@ fun BookDetailScreen(
                 Spacer(Modifier.height(32.dp))
             }
         }
+    }
+
+    // 预览态退出提示：读过但未加入书架 → 问是否加入；选否则清除该临时记录。
+    if (showAddPrompt) {
+        AlertDialog(
+            onDismissRequest = { showAddPrompt = false },
+            title = { Text("加入书架") },
+            text = { Text("是否将《${book?.title ?: ""}》加入书架？不加入将不保留阅读记录。") },
+            confirmButton = {
+                TextButton(onClick = { showAddPrompt = false; viewModel.addToShelf(); onBack() }) { Text("加入") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddPrompt = false; viewModel.deleteBook(); onBack() }) { Text("不加入") }
+            },
+        )
     }
 
     // Delete confirmation dialog
