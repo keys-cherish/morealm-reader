@@ -1,5 +1,7 @@
 package com.morealm.app.domain.render.color
 
+import com.morealm.epub.layout.RuleColorSource
+
 /**
  * 正文规则上色扫描器 —— 纯本地、非 AI 的字符分类状态机（移植 ColorTxt Monarch 思路，PRD §2）。
  *
@@ -21,7 +23,7 @@ class RuleColorScanner(
     private val palette: RuleColorPalette,
     private val matcher: HighlightWordMatcher? = null,
     private val highlightColors: List<Int> = emptyList(),
-) {
+) : RuleColorSource {
 
     private data class Frame(val closeCp: Int, val inner: RuleColorCategory)
 
@@ -29,7 +31,7 @@ class RuleColorScanner(
     private data class Opener(val closeCp: Int, val isBracket: Boolean, val inner: RuleColorCategory)
 
     /** 扫描 [text]，返回每码点 ARGB（0 = 不上色）。高亮词命中的码点用高亮色覆盖类别色（高亮词 > 类别）。 */
-    fun scan(text: String): IntArray {
+    override fun scan(text: String): IntArray {
         val category = scanCategories(text)
         val m = matcher
         if (m == null || m.isEmpty || highlightColors.isEmpty()) return category
@@ -160,16 +162,5 @@ class RuleColorScanner(
             0xFF1E, 0x3E, 0x3C, 0x2026, 0x2014, 0x2D,
         )
 
-        /**
-         * CSS 优先合并（PRD §4.4 选项 A）：EPUB CSS 显式色（[css]，0=无）盖过规则色（[rule]）。
-         * TXT 无 CSS（css=null）→ 全用规则色。两数组须同码点口径、同长。
-         */
-        fun mergeCssPriority(css: IntArray?, rule: IntArray): IntArray {
-            if (css == null) return rule
-            return IntArray(rule.size) { i ->
-                val c = css.getOrElse(i) { 0 }
-                if (c != 0) c else rule[i]
-            }
-        }
     }
 }
