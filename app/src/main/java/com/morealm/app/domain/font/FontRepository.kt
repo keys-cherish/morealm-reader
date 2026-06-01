@@ -282,17 +282,25 @@ class FontRepository @Inject constructor(
         val dir = File(context.cacheDir, "epub_fonts").apply { if (!exists()) mkdirs() }
         val sanitizedKey = sanitizeFileName(cacheKey)
         val file = File(dir, "$sanitizedKey.ttf")
-        return try {
-            // 同 key 已落盘则复用，避免重复 I/O（同一本书同字体多章共享）
-            if (!file.exists() || file.length() != bytes.size.toLong()) {
-                file.outputStream().use { it.write(bytes) }
+        // Typeface.createFromFile 在单本 EPUB 多个嵌入字体连续加载 / 低端设备压力下会偶发失败
+        // （抛异常，或返回 Typeface.DEFAULT 这种"看似成功实为 fallback"的结果），表现为
+        // "部分字体没生效、整页字体割裂、重启时好时坏"。重试 + 显式判 DEFAULT（对齐 importFromUri
+        // 校验）让瞬时失败 / 残缺缓存文件可在同次构建内恢复。
+        repeat(3) { attempt ->
+            try {
+                // 同 key 已落盘且大小一致则复用，避免重复 I/O（同一本书同字体多章共享）
+                if (!file.exists() || file.length() != bytes.size.toLong()) {
+                    file.outputStream().use { it.write(bytes) }
+                }
+                val tf = Typeface.createFromFile(file)
+                if (tf != null && tf !== Typeface.DEFAULT) return tf
+            } catch (t: Throwable) {
+                AppLog.warn("FontRepository", "tryLoadFontBytes key=$cacheKey attempt=$attempt 失败: ${t.localizedMessage}", t)
             }
-            Typeface.createFromFile(file)
-        } catch (t: Throwable) {
-            AppLog.warn("FontRepository", "tryLoadFontBytes key=$cacheKey 失败: ${t.localizedMessage}", t)
-            file.delete()
-            null
+            // 本轮失败（异常 / null / DEFAULT）→ 删可能残缺的缓存文件，下一轮重写重试
+            runCatching { file.delete() }
         }
+        return null
     }
 
     // ─── 工具 ──────────────────────────────────────────────────────────────
