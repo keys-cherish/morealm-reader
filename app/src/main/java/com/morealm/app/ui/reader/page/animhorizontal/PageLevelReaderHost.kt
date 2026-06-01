@@ -279,9 +279,11 @@ fun PageLevelReaderHost(
             paddingRight = paddingRight,
             paddingTop = effectivePadTop,
             paddingBottom = effectivePadBottom,
-            titleMeasurer = PaintLayoutMeasurer(titlePaint),
-            contentMeasurer = PaintLayoutMeasurer(contentPaint),
-            chapterNumMeasurer = chapterNumPaint?.let { PaintLayoutMeasurer(it) },
+            // 测量器包 paint 副本：布局在后台线程 swap 副本 typeface（自带字体测量），与主线程
+            // 绘制用的同一支 paint 解耦，根治「布局 swap 泄漏到绘制 paint → 正文画成子集字体」。
+            titleMeasurer = PaintLayoutMeasurer(TextPaint().apply { set(titlePaint) }),
+            contentMeasurer = PaintLayoutMeasurer(TextPaint().apply { set(contentPaint) }),
+            chapterNumMeasurer = chapterNumPaint?.let { PaintLayoutMeasurer(TextPaint().apply { set(it) }) },
             lineSpacingExtra = lineSpacingExtra,
             paragraphSpacing = paragraphSpacing,
             paragraphIndent = paragraphIndent,

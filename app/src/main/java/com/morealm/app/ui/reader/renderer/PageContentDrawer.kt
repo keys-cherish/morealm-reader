@@ -494,9 +494,6 @@ fun drawPageContent(
         // EPUB 自带字体：block 级 fontFamily → Typeface swap（save/restore 包裹整行绘制）
         val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
         val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
-        com.morealm.app.domain.font.EpubFontRegistry.diagContentLineFont(
-            line.blockStyle.fontFamily, !line.isTitle && !line.isChapterNum, line.text,
-        )
 
         val lineTop = line.lineTop + paddingTop
         val lineBottom = line.lineBottom + paddingTop

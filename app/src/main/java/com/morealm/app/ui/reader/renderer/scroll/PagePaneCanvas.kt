@@ -302,9 +302,6 @@ internal fun drawScrollPageOnCanvas(
         }
         val epubTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(line.blockStyle.fontFamily)
         val savedTypeface = if (epubTypeface != null) paint.typeface.also { paint.typeface = epubTypeface } else null
-        com.morealm.app.domain.font.EpubFontRegistry.diagContentLineFont(
-            line.blockStyle.fontFamily, !line.isTitle && !line.isChapterNum, line.text,
-        )
 
         // **P1 fix (2026-05-27)** — swap 后用 swap 字体的 ascent 重算 baselineY，避免 columns
         // path 用 fontMetrics 函数顶部预算的「默认 paint」ascent 常量让自带字体 descent 超出

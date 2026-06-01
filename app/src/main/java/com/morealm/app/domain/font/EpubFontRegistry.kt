@@ -30,8 +30,6 @@ import java.net.URI
  */
 class EpubFontRegistry private constructor(
     private val families: Map<String, Typeface>,
-    /** 从 url(...) 成功加载的 family（= 书自带子集 ttf）。诊断用：正文行解析到这些 = 字体割裂 bug。 */
-    private val embeddedFamilies: Set<String>,
 ) {
 
     /** family 名查 Typeface（精确匹配）；null = 没声明 / 加载失败 / woff2 不支持。 */
@@ -46,7 +44,7 @@ class EpubFontRegistry private constructor(
     companion object {
         private const val TAG = "EpubFontRegistry"
         /** 空实例 —— 给没 CSS 字体或 build 失败的书复用，避免 null 检查噪声。 */
-        val EMPTY: EpubFontRegistry = EpubFontRegistry(emptyMap(), emptySet())
+        val EMPTY: EpubFontRegistry = EpubFontRegistry(emptyMap())
 
         /**
          * 扫 [book] 的所有 text/css manifest item → 解析 @font-face → 落盘 + 建 family→Typeface
@@ -61,7 +59,6 @@ class EpubFontRegistry private constructor(
             if (cssItems.isEmpty()) return EMPTY
 
             val map = HashMap<String, Typeface>(8)
-            val embedded = HashSet<String>(4)
             for (cssItem in cssItems) {
                 val cssBytes = book.resource(cssItem.href) ?: continue
                 val css = try {
@@ -79,21 +76,16 @@ class EpubFontRegistry private constructor(
                     // sources 是 CSS src fallback list。本版本只用 url(...) 路径走 book.resource
                     // 取首个能加载成功的；local(...) 在 EPUB 上下文意义有限（书自带字体优先），
                     // 当前 CssFontFace 已只暴露 url tokens（详 CssFontFace.kt:21 注释）
-                    val loaded = tryLoadFromSources(book, cssItem.href, face.sources, face.localNames, bookKey, face.family, fontRepo)
-                    if (loaded != null) {
-                        map[face.family] = loaded.typeface
-                        if (loaded.embedded) embedded.add(face.family)
+                    val typeface = tryLoadFromSources(book, cssItem.href, face.sources, face.localNames, bookKey, face.family, fontRepo)
+                    if (typeface != null) {
+                        map[face.family] = typeface
                     }
                 }
             }
 
             if (map.isEmpty()) return EMPTY
-            AppLog.info(
-                TAG,
-                "EpubFontRegistry built for $bookKey: ${map.size} families; " +
-                    "嵌入子集(url)=$embedded 系统/local=${map.keys - embedded}",
-            )
-            return EpubFontRegistry(map, embedded)
+            AppLog.info(TAG, "EpubFontRegistry built for $bookKey: ${map.size} families = ${map.keys}")
+            return EpubFontRegistry(map)
         }
 
         /**
@@ -109,7 +101,7 @@ class EpubFontRegistry private constructor(
             bookKey: String,
             family: String,
             fontRepo: FontRepository,
-        ): Loaded? {
+        ): Typeface? {
             for (src in sources) {
                 val trimmed = src.trim()
                 // 跳过 woff/woff2（Android Typeface 不支持），data:/ http:/ 协议无意义
@@ -134,7 +126,7 @@ class EpubFontRegistry private constructor(
                 val typeface = fontRepo.tryLoadFontBytes(key, bytes)
                 if (typeface != null) {
                     AppLog.debug(TAG, "loaded family=$family from $fontHref bytes=${bytes.size}")
-                    return Loaded(typeface, embedded = true)
+                    return typeface
                 }
             }
             // url() 全失败（多见于 `src: local(系统字体), url(未打包)` 链）→ 按 local() 名回退系统/asset 字体。
@@ -142,7 +134,7 @@ class EpubFontRegistry private constructor(
                 val tf = fontRepo.resolveSystemFontByName(local)
                 if (tf != null) {
                     AppLog.debug(TAG, "family=$family resolved via local('$local')")
-                    return Loaded(tf, embedded = false)
+                    return tf
                 }
             }
             AppLog.warn(TAG, "all sources failed for family=$family sources=$sources locals=$localNames")
@@ -192,24 +184,5 @@ class EpubFontRegistry private constructor(
 
         /** renderer 端入口：拿 active book 的 family → Typeface 映射。 */
         fun resolveActive(family: String?): Typeface? = activeRegistry.get().resolve(family)
-
-        /**
-         * **字体割裂诊断 (2026-06-01)**：正文行（非标题 / 章号）若解析到「书自带子集字体」
-         * （url(...) 加载的子集 ttf）就 log——这是字体割裂 bug 的特征（正文被画成标题用的子集
-         * 字体，子集有的字小号异形、没有的字回退系统）。标题用嵌入字体是正常的，故门控
-         * isContentLine；门控保证正常书零噪声。
-         */
-        fun diagContentLineFont(family: String?, isContentLine: Boolean, textPreview: String) {
-            if (!isContentLine || family.isNullOrEmpty()) return
-            if (family in activeRegistry.get().embeddedFamilies) {
-                AppLog.info(
-                    "FontSplitDiag",
-                    "正文行被画成书自带子集字体 family='$family' text='${textPreview.take(24).replace("\n", " ")}'",
-                )
-            }
-        }
-
-        /** [tryLoadFromSources] 结果：typeface + 是否来自 url(...)（书自带子集 = embedded）。 */
-        private class Loaded(val typeface: Typeface, val embedded: Boolean)
     }
 }
