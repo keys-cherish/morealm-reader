@@ -55,7 +55,11 @@ internal object GreetingEngine {
     /** seed 位移后取模 — 高位与低位分布独立，让四轴各取不同位段。 */
     private fun bucketIndex(seed: Long, shift: Int, size: Int): Int {
         if (size <= 0) return 0
-        return ((seed ushr shift) % size).toInt()
+        // seed 是有符号 Long；shift=0 时 ushr 不清符号位，负 seed % size 会得负数 →
+        // 当下标即 IndexOutOfBounds（2026-06-01 节日 seed 为负触发）。规整到 [0,size)。
+        // minSdk=21 不能用 Math.floorMod（API 24），用纯算术回正。
+        val mod = ((seed ushr shift) % size).toInt()
+        return if (mod < 0) mod + size else mod
     }
 
     // ────────── A 轴：节日开场 ──────────
