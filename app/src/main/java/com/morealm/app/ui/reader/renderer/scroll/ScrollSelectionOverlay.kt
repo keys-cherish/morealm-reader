@@ -25,7 +25,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.render.layout.ScrollChapterLayout
-import com.morealm.app.domain.render.layout.findColumnAt
+import com.morealm.epub.render.findColumnAt
 import kotlinx.coroutines.delay
 
 /**

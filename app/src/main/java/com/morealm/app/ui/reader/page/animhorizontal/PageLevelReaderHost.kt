@@ -46,9 +46,9 @@ import com.morealm.app.domain.render.layout.ScrollLayoutEngine
 import com.morealm.app.domain.render.color.HighlightWordMatcher
 import com.morealm.app.domain.render.color.RuleColorPalette
 import com.morealm.app.domain.render.color.RuleColorScanner
-import com.morealm.app.domain.render.layout.extractText
-import com.morealm.app.domain.render.layout.findColumnAt
-import com.morealm.app.domain.render.layout.findColumnByPixel
+import com.morealm.epub.render.extractText
+import com.morealm.epub.render.findColumnAt
+import com.morealm.epub.render.findColumnByPixel
 import com.morealm.app.ui.reader.page.animation.PageAnimType
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.SelectionToolbar

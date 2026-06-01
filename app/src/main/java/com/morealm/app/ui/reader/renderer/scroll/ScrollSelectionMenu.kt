@@ -20,7 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.render.layout.ScrollChapterLayout
-import com.morealm.app.domain.render.layout.findColumnAt
+import com.morealm.epub.render.findColumnAt
 
 /**
  * 选区菜单 8 项动作 —— 长按文字后选区菜单显示在选区下方。
