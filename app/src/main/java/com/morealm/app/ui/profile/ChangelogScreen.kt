@@ -194,12 +194,19 @@ private data class ChangelogEntry(
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
         version = "v1.6",
-        date = "2026-05-29",
+        date = "2026-06-01",
         title = "EPUB 富排版增强 + 远程书架层级浏览",
         tag = ReleaseTag.LATEST,
         items = listOf(
+            ChangelogItem(ChangeType.NEW, "搜索改为「先看后加」—— 点搜索结果先进入书籍详情页（可直接开始阅读试看），不再一点就自动进书架；想收藏点「加入书架」才进，看过不要的不留痕迹"),
             ChangelogItem(ChangeType.NEW, "远程书架（WebDAV）层级浏览 —— 远程书架可以按文件夹一层层点进去看，勾选要的书再导入，不用一次性拉全部"),
             ChangelogItem(ChangeType.NEW, "EPUB 字符级背景色 —— 「内容简介」这种每个字带独立彩色块的艺术标题现在能正确显示（彩色方块 + 白字）"),
+            ChangelogItem(ChangeType.FIX, "正文偶发显示成书内特殊字体修复 —— 部分 EPUB 正文偶尔被画成书里自带的艺术 / 子集字体（字忽大忽小、跨章变化），现在正文稳定使用阅读字体"),
+            ChangelogItem(ChangeType.FIX, "部分电子书系统字体声明不生效修复 —— 一些书用「宋体 / 楷体 / 黑体 / 仿宋」等系统字体声明的文字之前没生效退成默认，现在正确回退到对应系统字体"),
+            ChangelogItem(ChangeType.FIX, "嵌入字体偶发加载失败修复 —— 书内嵌字体偶尔只加载一半 / 失败，现在自动重试 + 兜底"),
+            ChangelogItem(ChangeType.FIX, "夜间模式部分电子书正文不变白修复 —— 之前正文颜色被写死成黑色、夜间贴深色背景几乎看不清，现在跟随夜间主题自动变浅"),
+            ChangelogItem(ChangeType.FIX, "特定节日打开偶发闪退修复 —— 个别节日打开 App 时节日问候卡片可能闪退，已修复"),
+            ChangelogItem(ChangeType.FIX, "信息栏关闭「时间 / 电量」时误藏阅读进度修复 —— 关掉信息栏的时间 / 电量显示后阅读进度被一起藏了，现在两者独立"),
             ChangelogItem(ChangeType.FIX, "EPUB 封面对话气泡 + 作者名显示 —— 之前部分精排 EPUB 封面上的对话气泡、竖排作者名整块不显示，现在正常显示"),
             ChangelogItem(ChangeType.FIX, "EPUB 简介页标题不再重复 —— 之前简介页顶部多出一个大标题（和页面自带的艺术标题撞了），现在去掉"),
             ChangelogItem(ChangeType.FIX, "EPUB 封面显示真封面 —— 之前部分书（svg 包裹封面）书架封面显示成封底或纯色块，现在正确显示真封面"),
