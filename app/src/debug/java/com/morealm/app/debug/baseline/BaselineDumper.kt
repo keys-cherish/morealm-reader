@@ -1,10 +1,10 @@
 package com.morealm.app.debug.baseline
 
-import com.morealm.app.domain.render.layout.Atom
-import com.morealm.app.domain.render.layout.InlineImage
-import com.morealm.app.domain.render.layout.ScrollLine
-import com.morealm.app.domain.render.layout.ScrollLineCell
-import com.morealm.app.domain.render.layout.TextRun
+import com.morealm.epub.render.Atom
+import com.morealm.epub.render.InlineImage
+import com.morealm.epub.render.ScrollLine
+import com.morealm.epub.render.ScrollLineCell
+import com.morealm.epub.render.TextRun
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json

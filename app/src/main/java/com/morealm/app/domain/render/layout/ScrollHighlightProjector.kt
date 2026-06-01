@@ -1,6 +1,10 @@
 package com.morealm.app.domain.render.layout
 
 import com.morealm.app.domain.entity.Highlight
+import com.morealm.epub.render.ScrollChapterLayout
+import com.morealm.epub.render.ScrollColumn
+import com.morealm.epub.render.ScrollLine
+import com.morealm.epub.render.ScrollPage
 
 /**
  * Highlight DB → [ScrollHighlightDrawSpec] 投影 —— 把章内 highlight 投影到 layout 坐标。

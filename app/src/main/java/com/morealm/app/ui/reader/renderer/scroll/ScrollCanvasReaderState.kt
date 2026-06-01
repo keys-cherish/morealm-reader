@@ -6,7 +6,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.morealm.app.domain.render.layout.ScrollChapterDataSource
-import com.morealm.app.domain.render.layout.ScrollChapterLayout
+import com.morealm.epub.render.ScrollChapterLayout
 
 /**
  * 滚动 Canvas 阅读器持久状态 —— Host 持有，UI Composable 观察。

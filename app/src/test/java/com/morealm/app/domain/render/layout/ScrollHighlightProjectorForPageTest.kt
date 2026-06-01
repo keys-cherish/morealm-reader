@@ -1,5 +1,7 @@
 package com.morealm.app.domain.render.layout
 
+import com.morealm.epub.render.*
+
 import com.morealm.app.domain.entity.Highlight
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue

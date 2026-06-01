@@ -12,9 +12,9 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
-import com.morealm.app.domain.render.layout.ScrollChapterLayout
+import com.morealm.epub.render.ScrollChapterLayout
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
-import com.morealm.app.domain.render.layout.ScrollLine
+import com.morealm.epub.render.ScrollLine
 import com.morealm.epub.render.findColumnAt
 import com.morealm.epub.compat.BlockStyle
 
@@ -407,8 +407,8 @@ fun ChapterPaneCanvas(
  */
 private fun drawAtomsRow(
     canvas: android.graphics.Canvas,
-    atoms: List<com.morealm.app.domain.render.layout.Atom>,
-    line: com.morealm.app.domain.render.layout.ScrollLine,
+    atoms: List<com.morealm.epub.render.Atom>,
+    line: com.morealm.epub.render.ScrollLine,
     basePaint: android.text.TextPaint,
     baselineY: Float,
     pageOffsetY: Float,
@@ -421,7 +421,7 @@ private fun drawAtomsRow(
     var atomStartCp = line.firstChapterPos  // A5 Step 2：atom 起始 cp 用于 textColorByCp 查询
     for (atom in atoms) {
         when (atom) {
-            is com.morealm.app.domain.render.layout.TextRun -> {
+            is com.morealm.epub.render.TextRun -> {
                 val baseSize = basePaint.textSize
                 val scale = atom.sizeScale
                 if (scale != 1f) basePaint.textSize = baseSize * scale
@@ -456,7 +456,7 @@ private fun drawAtomsRow(
                 if (scale != 1f) basePaint.textSize = baseSize
                 x += atom.width
             }
-            is com.morealm.app.domain.render.layout.InlineImage -> {
+            is com.morealm.epub.render.InlineImage -> {
                 val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
                 if (bmp != null) {
                     val slotH = line.lineBottom - line.lineTop
@@ -491,8 +491,8 @@ private fun drawAtomsRow(
  */
 private fun drawCellsRow(
     canvas: android.graphics.Canvas,
-    cells: List<com.morealm.app.domain.render.layout.ScrollLineCell>,
-    line: com.morealm.app.domain.render.layout.ScrollLine,
+    cells: List<com.morealm.epub.render.ScrollLineCell>,
+    line: com.morealm.epub.render.ScrollLine,
     basePaint: android.text.TextPaint,
     pageOffsetY: Float,
     textColorByCp: Map<Int, Int> = emptyMap(),
@@ -504,7 +504,7 @@ private fun drawCellsRow(
         // 未来 Task 2-D：cell.backgroundColor / borderRadiusPx 装饰盒
         for (atom in cell.atoms) {
             when (atom) {
-                is com.morealm.app.domain.render.layout.TextRun -> {
+                is com.morealm.epub.render.TextRun -> {
                     val scale = atom.sizeScale
                     if (scale != 1f) basePaint.textSize = baseSize * scale
                     val effectiveX = cell.contentLeft + cell.padding + atom.cellLocalX
@@ -535,7 +535,7 @@ private fun drawCellsRow(
                     }
                     if (scale != 1f) basePaint.textSize = baseSize
                 }
-                is com.morealm.app.domain.render.layout.InlineImage -> {
+                is com.morealm.epub.render.InlineImage -> {
                     val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
                     if (bmp != null) {
                         val drawX = cell.contentLeft + cell.padding + atom.cellLocalX

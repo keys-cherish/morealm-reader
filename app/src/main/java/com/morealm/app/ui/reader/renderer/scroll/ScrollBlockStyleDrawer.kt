@@ -8,7 +8,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import com.morealm.app.domain.render.ImageCache
-import com.morealm.app.domain.render.layout.ScrollLine
+import com.morealm.epub.render.ScrollLine
 import com.morealm.app.ui.reader.renderer.adaptDecorationBgForReaderBg
 import com.morealm.epub.compat.BlockStyle
 import com.morealm.epub.layout.BoxGeometry

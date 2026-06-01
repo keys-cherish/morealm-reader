@@ -7,9 +7,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
-import com.morealm.app.domain.render.layout.ScrollChapterLayout
+import com.morealm.epub.render.ScrollChapterLayout
 import com.morealm.app.domain.render.layout.ScrollHighlightProjector
-import com.morealm.app.domain.render.layout.ScrollPage
+import com.morealm.epub.render.ScrollPage
 import com.morealm.app.ui.reader.renderer.RevealHighlight
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
 import com.morealm.app.ui.reader.renderer.scroll.drawScrollPageOnCanvas

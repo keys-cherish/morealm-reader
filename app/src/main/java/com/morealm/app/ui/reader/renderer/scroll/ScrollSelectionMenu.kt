@@ -19,7 +19,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import com.morealm.app.domain.render.layout.ScrollChapterLayout
+import com.morealm.epub.render.ScrollChapterLayout
 import com.morealm.epub.render.findColumnAt
 
 /**

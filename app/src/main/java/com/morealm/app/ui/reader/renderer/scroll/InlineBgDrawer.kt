@@ -3,7 +3,7 @@ package com.morealm.app.ui.reader.renderer.scroll
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.text.TextPaint
-import com.morealm.app.domain.render.layout.TextRun
+import com.morealm.epub.render.TextRun
 
 /**
  * **Step 9.2 Phase B / Phase 4** —— 字符级 inline 背景盒子绘制（封面/简介页「内容简介」单字

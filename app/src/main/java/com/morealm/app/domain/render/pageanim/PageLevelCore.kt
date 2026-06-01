@@ -8,8 +8,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
-import com.morealm.app.domain.render.layout.ScrollChapterLayout
-import com.morealm.app.domain.render.layout.ScrollLayoutEngine
+import com.morealm.epub.render.ScrollChapterLayout
+import com.morealm.epub.render.ScrollLayoutEngine
 import com.morealm.app.domain.render.layout.ScrollPageFactory
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
 import androidx.compose.runtime.rememberCoroutineScope
