@@ -12,6 +12,7 @@ import com.morealm.app.domain.db.TxtTocRuleDao
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.CookieStore
 import com.morealm.app.domain.parser.LocalBookParser
+import com.morealm.app.domain.security.SignatureGuard
 import com.morealm.app.domain.sync.WebDavBackupRunner
 import com.morealm.app.domain.sync.WebDavBookProgressSync
 import com.morealm.app.domain.webbook.CacheBook
@@ -53,6 +54,15 @@ class MoRealmApp : Application(), ImageLoaderFactory {
         super.onCreate()
         instance = this
         AppLog.init(this)
+        // APK 签名自校验（debug 跳过）：启动首算并缓存，供后续功能按官方/非官方签名门控。
+        runCatching {
+            val official = SignatureGuard.isOfficialSignature(this)
+            if (BuildConfig.DEBUG) {
+                AppLog.info("App", "signature SHA-256=${SignatureGuard.currentCertSha256(this)}")
+            } else if (!official) {
+                AppLog.warn("App", "signature self-check: non-official signature")
+            }
+        }.onFailure { AppLog.warn("App", "signature self-check failed: ${it.message}") }
         // 预 load native algo lib —— 触发 NativeOps.<clinit> 内的 System.loadLibrary，
         // 让首次 Edge TTS / 其他用到 NativeOps 的调用不必在热路径阻塞 IO。
         // 老旧 ABI / 系统极端情况下 UnsatisfiedLinkError 不致命，调用点自行兜底。
