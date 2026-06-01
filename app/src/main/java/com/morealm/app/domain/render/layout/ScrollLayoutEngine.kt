@@ -4,6 +4,7 @@ import android.text.TextPaint
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.TextMeasure
 import com.morealm.epub.layout.ZhLayout
+import com.morealm.epub.layout.stripLeadingBlockStyleMarker
 import com.morealm.app.domain.render.cjkFullCharWidth
 import com.morealm.app.domain.render.color.RuleColorScanner
 import com.morealm.app.domain.render.textHeight
@@ -2314,14 +2315,6 @@ class ScrollLayoutEngine(
      * 剥掉 paragraph 开头可能的 BLOCK_STYLE marker 段，返回 body。image-only 判断等需要看
      * 「纯内容」的场景用——装饰 marker（如首图 width）不应干扰 `<img>` 匹配。
      */
-    private fun stripLeadingBlockStyleMarker(raw: String): String {
-        val start = com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_MARKER
-        val end = com.morealm.epub.compat.StructuredChapterContent.BLOCK_STYLE_END
-        if (!raw.startsWith(start)) return raw
-        val endIdx = raw.indexOf(end)
-        return if (endIdx < 0) raw else raw.substring(endIdx + end.length)
-    }
-
     /**
      * **C1/C2**：检查 content 是否以 `__MOREALM_CH_BG__<src>__/MOREALM_CH_BG__` 开头
      * 的 chapter bg marker。是 → 返回 (剥掉 marker 的 cleanedContent, src)；否 → 返回
