@@ -2,12 +2,11 @@ package com.morealm.app.domain.render.layout
 
 import android.text.TextPaint
 import com.morealm.app.core.log.AppLog
-import com.morealm.app.domain.render.TextMeasure
+import com.morealm.app.domain.render.PaintLayoutMeasurer
+import com.morealm.epub.layout.LayoutMeasurer
 import com.morealm.epub.layout.ZhLayout
 import com.morealm.epub.layout.stripLeadingBlockStyleMarker
-import com.morealm.app.domain.render.cjkFullCharWidth
 import com.morealm.app.domain.render.color.RuleColorScanner
-import com.morealm.app.domain.render.textHeight
 // **R1 (阶段 R1)** —— 核心 marker 解析 + 数据类迁到独立仓库 epub-layout。主仓只调用 entry point
 // + 引用 public data class。internal marker 字面值 / parser helper 全藏在 epub-layout module。
 import com.morealm.epub.layout.BoxGeometry
@@ -102,10 +101,10 @@ class ScrollLayoutEngine(
     val visibleWidth: Int = viewWidth - paddingLeft - paddingRight
     val visibleHeight: Int = viewHeight - paddingTop - paddingBottom
 
-    private val contentTextMeasure: TextMeasure = TextMeasure(contentPaint)
+    private val contentMeasurer = PaintLayoutMeasurer(contentPaint)
     // ZhLayout compressible 阈值（全角 CJK 字宽）—— 测量在此完成，喂进纯化后的 ZhLayout 决策内核。
-    private val cnCharWidth: Float = cjkFullCharWidth(contentPaint)
-    private val contentTextHeight: Float = contentPaint.textHeight
+    private val cnCharWidth: Float = contentMeasurer.cjkFullCharWidth
+    private val contentTextHeight: Float = contentMeasurer.textHeight
     private val contentLineHeight: Float = contentTextHeight * lineSpacingExtra
 
     /**
@@ -113,165 +112,22 @@ class ScrollLayoutEngine(
      * em 段文字视觉底 = `lineTop + scaledTextSize×0.8 + contentDescent×scale`（对齐
      * drawer scaled-text baseline，详 [ScrollLine.textBottomRel]）。
      */
-    private val contentDescent: Float = contentPaint.fontMetrics.descent
-
-    /**
-     * 自带字体（@font-face）段 ASCII 空格视觉宽度兜底 —— 默认字体度量 ASCII space 约 0.25em，
-     * 但自带字体（如某 EPUB w2 字体把 `[` 字符 glyph 设计成花苞 ❀ 装饰图标）的 space glyph
-     * 经常被设计师压缩到极窄甚至 0 宽（期待手动控制间距）。emit 阶段不知道渲染层会 swap 到
-     * w2 字体，按默认字体度量出窄空格 → column.start 序列紧凑 → 渲染时「❀角色 A❀」紧贴。
-     *
-     * 修法：当 [currentBlockStyle.fontFamily] 非空时把 ASCII space 字符 width boost 到至少
-     * 半个 CJK 字宽（~0.5em），还原参考实现的「❀ 角色 A ❀」对称间距。仅 fontFamily 非空段
-     * fire，TXT / 系统字体段无回归。
-     */
-    private val asciiSpaceMinWidthWithCustomFont: Float = contentPaint.measureText("一") * 0.5f
-
-    /**
-     * **P3 fix (2026-05-27)** — 自带字体段窄 ASCII 字符宽度对齐（fallback 路径）。
-     *
-     * 仅用作 [swapTypefaceMeasure] swap typeface 解析失败时的 fallback。优先用
-     * [swapTypefaceMeasure] 真实测量；本函数只是兜底防止失败时位置全乱。
-     *
-     * 修法：window 内将 ASCII 标点宽度拉到至少 [asciiSpaceMinWidthWithCustomFont]（0.5 × CJK）。
-     * 字母数字不动避免破坏英文段排版。
-     */
-    private fun boostNarrowAsciiForCustomFont(
-        fontFamily: String?,
-        chars: ArrayList<String>,
-        widths: ArrayList<Float>,
-    ) {
-        if (fontFamily == null) return
-        val minW = asciiSpaceMinWidthWithCustomFont
-        var diag: StringBuilder? = null
-        for (i in chars.indices) {
-            val ch = chars[i]
-            if (ch.isEmpty()) continue
-            val firstCh = ch[0]
-            val cp = firstCh.code
-            if (cp !in 0x20..0x7E) continue
-            if (firstCh.isLetterOrDigit()) continue
-            if (widths[i] >= minW) continue
-            if (diag == null) diag = StringBuilder()
-            val rawW = widths[i]
-            widths[i] = minW
-            diag.append("[i=$i ch='$ch' raw=$rawW->boost=$minW]")
-        }
-        if (diag != null) {
-            AppLog.info(
-                "EpubW5H/CustomFontWidth",
-                "family='$fontFamily' minW=$minW boostScan=$diag",
-            )
-        }
-    }
-
-    /**
-     * **P3 v2 (2026-05-27)** — 自带字体段用 swap typeface 真实测量 ASCII 标点宽度。
-     *
-     * 取代 [boostNarrowAsciiForCustomFont] 拍脑袋 boost 到 0.5×CJK 的写法。装机实测 P3 v1
-     * 的 boost 让 `❀ 角色 A ❀` 速记 pill 视觉间距过大（27px boost 但 ❀ glyph 渲染可能只
-     * 20px）。改用 [com.morealm.app.domain.font.EpubFontRegistry] 查 swap typeface，
-     * 直接 measureText 拿真实 glyph advance —— 不管 ❀ 是 20 还是 50 都能对上渲染。
-     *
-     * **v3 (2026-05-27 升级)**：范围从仅 ASCII 标点扩到**所有字符**，包括 CJK。
-     * v2 限定 ASCII 时漏掉了一个症状：纯 CJK 段配自带描边字体时，
-     * CJK glyph 比默认字宽 5-10%，ZhLayout 按窄宽算「N 字一行」实际占 N+0.5 字宽 →
-     * 末字超 visibleWidth 被 clipRect 吃掉（用户实测 P / 效 被截）。
-     * v3 让 CJK 也走 swap typeface measureText：若 swap 字体覆盖 CJK，拿真实 glyph
-     * advance；若不覆盖，Android 自动 fallback 到 Noto Sans CJK 等，renderer 端 swap
-     * 也走同 fallback → measure-render 一致不跳变。
-     *
-     * swap typeface 解析失败时 fallback 到 [boostNarrowAsciiForCustomFont]（兜底 ASCII 标点）。
-     *
-     * Caller：[emitInlineBlockContainer.runsToGlyphs]（pill / qipao）+ [emitTextChunk]（正文段）。
-     */
-    private fun swapTypefaceMeasure(
-        text: String,
-        fontFamily: String?,
-    ): Pair<ArrayList<String>, ArrayList<Float>> {
-        val (chars, defWidths) = contentTextMeasure.measureTextSplit(text)
-        if (fontFamily == null) return chars to defWidths
-        val swapTypeface = com.morealm.app.domain.font.EpubFontRegistry.resolveActive(fontFamily)
-        if (swapTypeface == null) {
-            // fallback：swap 字体没注册或加载失败 → 用 boost 兜底防位置全乱
-            boostNarrowAsciiForCustomFont(fontFamily, chars, defWidths)
-            return chars to defWidths
-        }
-        val widths = ArrayList<Float>(chars.size)
-        val origTypeface = contentPaint.typeface
-        contentPaint.typeface = swapTypeface
-        var diag: StringBuilder? = null
-        var diagTrunc = false
-        // **EpubW5H/GlyphBounds diag (2026-05-27)** — 比对 advance (measureText) vs visual bounds
-        // (getTextBounds.right)，识别描边伸出 advance 范围的字符（maker 等 outlined 字体常见）。
-        // overhang > 2px 才记。clipRect 切 visual 不切 advance → 若 line 末字 overhang 大且
-        // col.end + overhang > visibleWidth，描边右沿被切（"P 被吃" 嫌疑根因）。
-        var boundsDiag: StringBuilder? = null
-        var boundsDiagTrunc = false
-        val tmpBounds = android.graphics.Rect()
-        try {
-            for (i in chars.indices) {
-                val ch = chars[i]
-                if (ch.isEmpty()) {
-                    widths.add(defWidths[i])
-                    continue
-                }
-                val swapW = contentPaint.measureText(ch)
-                widths.add(swapW)
-                if (kotlin.math.abs(swapW - defWidths[i]) > 1f && !diagTrunc) {
-                    if (diag == null) diag = StringBuilder()
-                    if (diag.length < 400) {
-                        diag.append("[i=$i ch='${ch.take(2)}' def=${defWidths[i]}->swap=$swapW]")
-                    } else {
-                        diag.append("[...]")
-                        diagTrunc = true
-                    }
-                }
-                // glyph bounds vs advance overhang 检测
-                contentPaint.getTextBounds(ch, 0, ch.length, tmpBounds)
-                val overhang = tmpBounds.right - swapW
-                if (overhang > 2f && !boundsDiagTrunc) {
-                    if (boundsDiag == null) boundsDiag = StringBuilder()
-                    if (boundsDiag.length < 400) {
-                        boundsDiag.append("[i=$i ch='${ch.take(2)}' adv=$swapW boundsR=${tmpBounds.right} +$overhang]")
-                    } else {
-                        boundsDiag.append("[...]")
-                        boundsDiagTrunc = true
-                    }
-                }
-            }
-        } finally {
-            contentPaint.typeface = origTypeface
-        }
-        if (diag != null) {
-            AppLog.info(
-                "EpubW5H/CustomFontWidth",
-                "family='$fontFamily' swap-measure=$diag",
-            )
-        }
-        if (boundsDiag != null) {
-            AppLog.info(
-                "EpubW5H/GlyphBounds",
-                "family='$fontFamily' overhang=$boundsDiag",
-            )
-        }
-        return chars to widths
-    }
+    private val contentDescent: Float = contentMeasurer.descent
 
     /**
      * 章首块 title 主行用 paint / 测量器 / 行高。复用 [titlePaint]。
      * 章首块行高直接用 textHeight（**不**乘 lineSpacingExtra），与旧
      * [com.morealm.app.domain.render.ChapterProvider] 对齐——标题行紧凑。
      */
-    private val titleTextMeasure: TextMeasure = TextMeasure(titlePaint)
-    private val titleTextHeight: Float = titlePaint.textHeight
+    private val titleMeasurer = PaintLayoutMeasurer(titlePaint)
+    private val titleTextHeight: Float = titleMeasurer.textHeight
 
     /**
      * 章首块章序号小字行用 paint / 测量器 / 行高。复用 [chapterNumPaint]，null 时 fallback
      * [titlePaint]。
      */
-    private val chapterNumTextMeasureSafe: TextMeasure = TextMeasure(chapterNumPaint ?: titlePaint)
-    private val chapterNumTextHeightSafe: Float = (chapterNumPaint ?: titlePaint).textHeight
+    private val chapterNumMeasurerSafe = chapterNumPaint?.let { PaintLayoutMeasurer(it) } ?: titleMeasurer
+    private val chapterNumTextHeightSafe: Float = chapterNumMeasurerSafe.textHeight
 
     /**
      * 段首缩进的像素宽度 —— 作为**排版属性**应用（首行 lineCursor 起点 = indentWidth），
@@ -282,7 +138,7 @@ class ScrollLayoutEngine(
      * - findColumnByPixel 命中段首 x < indentWidth 时吸附到段首第一个真实字符（M1.7 实现）
      * - 持久化 chapterPosition 与原文字符 offset 严格 1:1，跨引擎一致
      */
-    private val indentWidth: Float = contentPaint.measureText(paragraphIndent)
+    private val indentWidth: Float = contentMeasurer.measureWidth(paragraphIndent)
 
     /**
      * 段间空白像素值 —— 与旧 [com.morealm.app.domain.render.ChapterProvider] 量级对齐：
@@ -557,7 +413,7 @@ class ScrollLayoutEngine(
                 for (atom in atomList) {
                     if (atom is TextRun && atom.sizeScale > maxScale) maxScale = atom.sizeScale
                 }
-                EmGeometry.textBottomRel(contentPaint.textSize, contentDescent, maxScale)
+                EmGeometry.textBottomRel(contentMeasurer.textSize, contentDescent, maxScale)
             }
             val proposedTop = currentY
             val proposedBottom = proposedTop + effectiveLineHeight
@@ -634,7 +490,7 @@ class ScrollLayoutEngine(
             designH: Float,
             cellLevelColor: Int? = null,
         ) {
-            val fontScale = contentPaint.textSize / 16f
+            val fontScale = contentMeasurer.textSize / 16f
             // **Step 7 v6 (2026-05-24)**: CSS box-sizing: content-box (default) — padding 加在
             // width 外。box rect 视觉宽高 = inner content 宽高 + 2 × padding。
             // 之前 (v5) `innerW = boxW - 2 × pad` 把 padding 算 box 内 (border-box)，让
@@ -659,7 +515,7 @@ class ScrollLayoutEngine(
                             // **P3 v2 (2026-05-27)** — 自带字体段用 swap typeface 真实测量 ASCII
                             // 标点宽度。取代 P3 v1 的「boost 到 0.5×CJK」(实测过松散)。详
                             // [swapTypefaceMeasure] kdoc。
-                            val (chars, rawWidths) = swapTypefaceMeasure(run.text, currentBlockStyle.fontFamily)
+                            val (chars, rawWidths) = contentMeasurer.measureSplitWithFont(run.text, currentBlockStyle.fontFamily)
                             val effScale = run.style.fontSizeEm ?: 1f
                             val effColor = run.style.color ?: cellLevelColor
                             for (i in chars.indices) {
@@ -902,14 +758,14 @@ class ScrollLayoutEngine(
         // 返回累加后的 chapterPositionCounter（含段末 \n）。
         fun emitTitleParagraph(
             text: String,
-            textMeasure: TextMeasure,
+            measurer: LayoutMeasurer,
             lineHeight: Float,
             isChapterNum: Boolean,
             isTitleEnd: Boolean,
             paragraphNum: Int,
             startCp: Int,
         ): Int {
-            val (chars, widths) = textMeasure.measureTextSplit(text)
+            val (chars, widths) = measurer.measureSplit(text)
             var lineColumns = mutableListOf<ScrollColumn>()
             var lineCursorX = 0f  // 章首块不缩进
             val lineTextBuilder = StringBuilder()
@@ -993,7 +849,7 @@ class ScrollLayoutEngine(
                 paragraphCounter++
                 chapterPositionCounter = emitTitleParagraph(
                     text = chapterNumText!!,
-                    textMeasure = chapterNumTextMeasureSafe,
+                    measurer = chapterNumMeasurerSafe,
                     lineHeight = chapterNumTextHeightSafe,
                     isChapterNum = true,
                     isTitleEnd = !hasTitle,  // 没 title 时 chapter-num 是章首块末行
@@ -1011,7 +867,7 @@ class ScrollLayoutEngine(
                     paragraphCounter++
                     chapterPositionCounter = emitTitleParagraph(
                         text = line,
-                        textMeasure = titleTextMeasure,
+                        measurer = titleMeasurer,
                         lineHeight = titleTextHeight,
                         isChapterNum = false,
                         isTitleEnd = idx == titleLines.lastIndex,  // 最后一行 title 标 isTitleEnd
@@ -1065,7 +921,7 @@ class ScrollLayoutEngine(
         // CellGlyph 携带 (text 或 image src + width + color + size)，layoutTable emit 时
         // 识别 imageSrc 非 null → emit InlineImage atom 取代 TextRun。
         fun layoutCellLines(cell: ParsedTableCell, cellWidthScale: Float = 1f): List<List<CellGlyph>> {
-            val fontScale = contentPaint.textSize / 16f
+            val fontScale = contentMeasurer.textSize / 16f
             // cell.widthPx 是设计 px（epub-compat rootFontSize=16）；glyph 量度是渲染 px，
             // 需 × fontScale 同单位，让气泡（内层 div `width:18em` 已传到 cell.widthPx）在当前
             // 字号下按 18em 换行而非整屏宽（修「气泡文字溢出被切」）。
@@ -1084,7 +940,7 @@ class ScrollLayoutEngine(
                 for (run in paraRuns) {
                     when (run) {
                         is ContentRun.Text -> {
-                            val (chars, rawWidths) = contentTextMeasure.measureTextSplit(run.text)
+                            val (chars, rawWidths) = contentMeasurer.measureSplit(run.text)
                             val effScale = run.style.fontSizeEm ?: cellLevelSizeScale
                             // null = 默认色 (黑)；非 null = per-cp color
                             val effColor = run.style.color
@@ -1147,7 +1003,7 @@ class ScrollLayoutEngine(
                 // 按 visibleWidth 等比收缩各 cell（聊天气泡 头像5em + 气泡18em = 23em，大字号下超屏，
                 // 之前整表溢出被 clipRect 裁掉右半边）。不溢出时 scale=1，正常表格零行为变化。
                 val rowWidthScale = run {
-                    val fs = contentPaint.textSize / 16f
+                    val fs = contentMeasurer.textSize / 16f
                     val declaredSum = row.cells.sumOf { ((it.widthPx ?: 0f) * fs).toDouble() }.toFloat()
                     val gaps = 2f * (row.cells.size - 1).coerceAtLeast(0)
                     val budget = (visibleWidth.toFloat() - gaps).coerceAtLeast(1f)
@@ -1379,7 +1235,7 @@ class ScrollLayoutEngine(
                     // 两边严格一致（根治文字溢出灰框）。无 widthPx 走旧满宽路径。
                     val (leftAdd, rightAdd) = BoxGeometry.contentInset(
                         declWidthPx = style.widthPx,
-                        fontScale = contentPaint.textSize / 16f,
+                        fontScale = contentMeasurer.textSize / 16f,
                         paddingLeftRaw = style.paddingLeftPx,
                         paddingRightRaw = style.paddingRightPx,
                         borderWidthRaw = style.borderWidthPx,
@@ -1395,7 +1251,7 @@ class ScrollLayoutEngine(
                     // paddingTop（bg 向上探 padTop），但布局之前没为 marginTop + paddingTop 留垂直空间
                     // → bg 顶探进上方元素（如名字圆标）重叠。在此推进 currentY（marginTop + paddingTop，
                     // × fontScale），让 bg 顶落到上方元素下方留隙。NaN(AUTO) 垂直向等同 0。
-                    val boxVScale = contentPaint.textSize / 16f
+                    val boxVScale = contentMeasurer.textSize / 16f
                     val boxMarginTopV = (if (style.marginTopPx.isNaN()) 0f else style.marginTopPx) * boxVScale
                     currentY += boxMarginTopV + style.paddingTopPx * boxVScale
 
@@ -1558,7 +1414,7 @@ class ScrollLayoutEngine(
                         // fontScale 进缩放布局空间 —— 否则 -1.7em=-27.2px 相对 pill 缩放高(108px)太小、
                         // 上提不到同行；② box 内仅正 mt collapse，负 mt 直接上提（CSS 语义，旧
                         // coerceAtLeast(0f) 把负值钳 0）。mb 同步缩放保持单位一致。
-                        val mScale = contentPaint.textSize / 16f
+                        val mScale = contentMeasurer.textSize / 16f
                         val mt = currentBlockStyle.marginTopPx * mScale
                         if (!mt.isNaN() && mt != 0f) {
                             val effectiveMt = if (boxStack.isNotEmpty() && mt > 0f) {
@@ -1585,7 +1441,7 @@ class ScrollLayoutEngine(
                     // **2026-05-30 #2 值表上提同行**：em margin 是 raw px(16/em) → × fontScale 进缩放
                     // 布局空间（-1.7em=-27.2px 不缩放相对 pill 108px 太小、上提不到同行）；table 不
                     // collapse，box 内仅正 mt collapse-clamp，负 mt 直接上提（旧 coerceAtLeast(0f) 钳 0）。
-                    val mScale = contentPaint.textSize / 16f
+                    val mScale = contentMeasurer.textSize / 16f
                     val mt = currentBlockStyle.marginTopPx * mScale
                     if (!mt.isNaN() && mt != 0f) {
                         val effectiveMt = if (boxStack.isNotEmpty() && mt > 0f) {
@@ -1667,10 +1523,10 @@ class ScrollLayoutEngine(
                             // clamp 底线必须与 drawer 横线**实际绘制位置同口径**（对齐 PRD #4 两套坐标系）：
                             // 横线画在 rectBottom = lineTop + textBottomRel + paddingBottomPx×scale
                             // （bottom-only 时 uniform halfBorder=0），描边宽 borderBottomWidthPx×scale。
-                            // scale = contentPaint.textSize/16f（与 ChapterPaneCanvas / PagePaneCanvas 的
+                            // scale = contentMeasurer.textSize/16f（与 ChapterPaneCanvas / PagePaneCanvas 的
                             // fontSizeScale 同源）。底线取「横线中心 + 半描边」让副标题落横线下方留小缝。
                             // **第一版漏算 paddingBottomPx×scale → 横线仍切在副标题顶（古风）上**。
-                            val borderScale = contentPaint.textSize / 16f
+                            val borderScale = contentMeasurer.textSize / 16f
                             val borderFloorY = prevLine.lineTop + prevLine.textBottomRel +
                                 (pbs.paddingBottomPx + pbs.borderBottomWidthPx) * borderScale
                             if (currentY < borderFloorY) {
@@ -1916,16 +1772,9 @@ class ScrollLayoutEngine(
                     finalLastEnd > visibleWidth.toFloat() * 0.95f
                 ) {
                     val lastCol = cols.last()
-                    val swapTf = currentBlockStyle.fontFamily?.let {
-                        com.morealm.app.domain.font.EpubFontRegistry.resolveActive(it)
-                    }
-                    val savedTf = contentPaint.typeface
-                    if (swapTf != null) contentPaint.typeface = swapTf
-                    val visualBounds = android.graphics.Rect()
-                    contentPaint.getTextBounds(lastCol.charData, 0, lastCol.charData.length, visualBounds)
-                    contentPaint.typeface = savedTf
+                    val boundsRight = contentMeasurer.visualRight(lastCol.charData, currentBlockStyle.fontFamily)
                     val advance: Float = lastCol.end - lastCol.start
-                    val visualRightOffset: Float = visualBounds.right.toFloat() - advance  // > 0 = 描边伸出 advance
+                    val visualRightOffset: Float = boundsRight.toFloat() - advance  // > 0 = 描边伸出 advance
                     val visualRightAbs: Float = lastCol.end + maxOf(0f, visualRightOffset)
                     val clipPotential = visualRightAbs > visibleWidth.toFloat()
                     com.morealm.app.core.log.AppLog.info(
@@ -1933,7 +1782,7 @@ class ScrollLayoutEngine(
                         "family='${currentBlockStyle.fontFamily}' " +
                             "lastCh='${lastCol.charData.take(2)}' " +
                             "lastStart=${lastCol.start} lastEnd=${lastCol.end} adv=$advance " +
-                            "boundsR=${visualBounds.right} visualOverhang=$visualRightOffset " +
+                            "boundsR=$boundsRight visualOverhang=$visualRightOffset " +
                             "visualRightAbs=$visualRightAbs visibleWidth=$visibleWidth " +
                             "excessFired=$excessFired clipPotential=$clipPotential " +
                             "lineText40='${sb.toString().take(40).replace("\n", "\\n")}'",
@@ -1974,7 +1823,7 @@ class ScrollLayoutEngine(
                 // **P3 v3 (2026-05-27)** — 自带字体段所有字符（含 CJK）走 swap typeface 测量，
                 // 修复纯 CJK 段 ZhLayout 按窄宽算行末字超 visibleWidth 被切（末字
                 // P 被吃实测）。详 [swapTypefaceMeasure] kdoc v3 注释。
-                val (chars, rawWidths) = swapTypefaceMeasure(textChunk, currentBlockStyle.fontFamily)
+                val (chars, rawWidths) = contentMeasurer.measureSplitWithFont(textChunk, currentBlockStyle.fontFamily)
                 if (chars.isEmpty()) return
 
                 // **A4c+ 字体跨页修**：把 sizeScale 反映到 widths 让 ZhLayout 按真实缩放后
@@ -2033,7 +1882,7 @@ class ScrollLayoutEngine(
                         val lineText = textChunk.substring(lineStart, lineEnd)
                         // **P3 v3** — 同 emitTextChunk 入口的 swapTypefaceMeasure，保持
                         // ZhLayout 算行后的 emit 测量与 wrap 测量一致（避免拼凑跨字体的位置序列）
-                        val (lineChars, lineWidths) = swapTypefaceMeasure(lineText, currentBlockStyle.fontFamily)
+                        val (lineChars, lineWidths) = contentMeasurer.measureSplitWithFont(lineText, currentBlockStyle.fontFamily)
                         if (lineChars.isEmpty()) continue
                         val isFirstLine = isFirstChunkOfPara && lineIndex == 0
                         val isLastLine = lineIndex == layout.lineCount - 1
@@ -2411,12 +2260,9 @@ class ScrollLayoutEngine(
         append("pr=").append(paddingRight).append(';')
         append("pt=").append(paddingTop).append(';')
         append("pb=").append(paddingBottom).append(';')
-        append("cts=").append(contentPaint.textSize.toBits()).append(';')
-        append("ctf=").append(System.identityHashCode(contentPaint.typeface)).append(';')
-        append("tts=").append(titlePaint.textSize.toBits()).append(';')
-        append("ttf=").append(System.identityHashCode(titlePaint.typeface)).append(';')
-        append("cnts=").append((chapterNumPaint?.textSize ?: titlePaint.textSize).toBits()).append(';')
-        append("cntf=").append(System.identityHashCode(chapterNumPaint?.typeface ?: titlePaint.typeface)).append(';')
+        append("cm=").append(contentMeasurer.cacheToken).append(';')
+        append("tm0=").append(titleMeasurer.cacheToken).append(';')
+        append("cnm=").append(chapterNumMeasurerSafe.cacheToken).append(';')
         append("lse=").append(lineSpacingExtra.toBits()).append(';')
         append("ps=").append(paragraphSpacing).append(';')
         append("indent='").append(paragraphIndent).append("';")
