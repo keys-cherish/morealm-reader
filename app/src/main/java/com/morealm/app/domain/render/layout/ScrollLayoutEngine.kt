@@ -3,7 +3,7 @@ package com.morealm.app.domain.render.layout
 import android.text.TextPaint
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.TextMeasure
-import com.morealm.app.domain.render.ZhLayout
+import com.morealm.epub.layout.ZhLayout
 import com.morealm.app.domain.render.cjkFullCharWidth
 import com.morealm.app.domain.render.color.RuleColorScanner
 import com.morealm.app.domain.render.textHeight
