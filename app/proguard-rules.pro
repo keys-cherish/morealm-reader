@@ -62,6 +62,12 @@
     native <methods>;
 }
 
+# ── 反射加载的实现 keep ──
+# 经 Class.forName 反射引用、无静态引用的类，R8 默认判 unused 删除 / 重命名导致反射失败。
+# keep 类名 + 成员保证反射可达；类不存在时 keep 无目标（R8 忽略）。
+-keep class com.morealm.app.domain.security.SignatureGuardImpl { *; }
+-keep class com.morealm.app.domain.security.SignatureGuardDelegate { *; }
+
 # ── R8 进一步收紧（编译期，零运行时成本）──
 # repackageclasses '' 把所有未被 keep 的类压进单一空包名，抹掉包结构信息；
 # allowaccessmodification 放宽访问修饰符让 R8 更激进地内联 / 合并。
