@@ -50,6 +50,9 @@ skills-lock.json
 *.crt
 *.key
 
+# 本地构建专用实现，不随仓库分发
+/app/src/main/java/com/morealm/app/domain/security/SignatureGuardImpl.kt
+
 # 编辑器 / 系统临时文件（跨平台协作防 add）
 *.bak
 *.swp
