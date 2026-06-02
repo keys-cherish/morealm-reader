@@ -23,8 +23,10 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
 import com.morealm.app.domain.render.layout.ScrollPageFactory
+import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
 import com.morealm.app.ui.reader.renderer.scroll.PagePaneCanvas
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
+import com.morealm.epub.render.ScrollPage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -67,6 +69,8 @@ fun SlidePageTransition(
     prevPageBookmarkCps: List<Int> = emptyList(),
     /** Host 注入：zone tap → 走 animateAndCommit 平移动画；null = Host fallback 瞬切 */
     turnCtrl: PageTurnAnimController? = null,
+    /** Host 注入：按 page 现算页内页眉页脚（随页翻）；默认 { null } = 不画。 */
+    pageInfoBarProvider: (ScrollPage) -> PageInfoBarSpec? = { null },
     modifier: Modifier = Modifier,
     onChapterShift: (delta: Int) -> Unit = {},
 ) {
@@ -224,6 +228,7 @@ fun SlidePageTransition(
                 searchHighlightArgb = searchHighlightArgb,
                 selectionCpRange = selectionRangeForCur,
                 selectionArgb = selectionArgb,
+                pageInfoBar = pageInfoBarProvider(curPage),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
             PagePaneCanvas(
@@ -235,6 +240,7 @@ fun SlidePageTransition(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = nextPageHighlightSpecs,
                 bookmarkCps = nextPageBookmarkCps,
+                pageInfoBar = pageInfoBarProvider(nextPage),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
             PagePaneCanvas(
@@ -246,6 +252,7 @@ fun SlidePageTransition(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = nextPlusPageHighlightSpecs,
                 bookmarkCps = nextPlusPageBookmarkCps,
+                pageInfoBar = pageInfoBarProvider(nextPlusPage),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
             PagePaneCanvas(
@@ -257,6 +264,7 @@ fun SlidePageTransition(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = prevPageHighlightSpecs,
                 bookmarkCps = prevPageBookmarkCps,
+                pageInfoBar = pageInfoBarProvider(prevPage),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
         },

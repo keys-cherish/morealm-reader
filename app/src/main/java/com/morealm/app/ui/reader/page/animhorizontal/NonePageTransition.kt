@@ -8,8 +8,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
 import com.morealm.app.domain.render.layout.ScrollPageFactory
+import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
 import com.morealm.app.ui.reader.renderer.scroll.PagePaneCanvas
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
+import com.morealm.epub.render.ScrollPage
 
 /**
  * 无动画翻页 Transition —— 最简的 page-level 横向 Transition。
@@ -42,6 +44,8 @@ fun NonePageTransition(
     selectionArgb: Int = 0x4D5B6CFE.toInt(),
     curPageHighlightSpecs: List<ScrollHighlightDrawSpec> = emptyList(),
     curPageBookmarkCps: List<Int> = emptyList(),
+    /** Host 注入：按 page 现算页内页眉页脚（随页翻）；默认 { null } = 不画（行为同旧 overlay 模式）。 */
+    pageInfoBarProvider: (ScrollPage) -> PageInfoBarSpec? = { null },
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.fillMaxSize().background(backgroundColor)) {
@@ -70,6 +74,7 @@ fun NonePageTransition(
             searchHighlightArgb = searchHighlightArgb,
             selectionCpRange = selectionRangeForCur,
             selectionArgb = selectionArgb,
+            pageInfoBar = pageInfoBarProvider(curPage),
             modifier = Modifier.fillMaxSize(),
         )
     }

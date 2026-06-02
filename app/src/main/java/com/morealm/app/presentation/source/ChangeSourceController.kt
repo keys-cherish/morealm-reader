@@ -224,9 +224,19 @@ class ChangeSourceController(
             }
 
             // Step 2: 拉/复用新 toc。
+            //
+            // **不包整体 withTimeout**（2026-06-02 修「换源总返回空目录」）：原先用
+            // getSourceSearchTimeoutMs()（30s，语义是单源「搜索」超时）裹住整本目录抓取。但目录
+            // 常分几十页（如某书 1530 章 ≈ 77 页），逐页累加必然 > 30s → withTimeout 到点抛
+            // TimeoutCancellationException → 已抓到的上千章被整体丢弃 + 不写 tocCache → 用户反复
+            // 点反复重抓反复超时，表现为「换源永远空目录」。
+            // 关键：withTimeout 抛异常时局部 chapterList 丢失，拿不到「已抓的部分」；只有**不包它**，
+            // BookChapterList 内部「单页失败 break → return 已抓章节」的容错才能真正生效。
+            // 单请求不会无限挂：全局 okHttpClient 已配 callTimeout(60s)/readTimeout(60s) 兜底，
+            // 翻页有 nextUrlList 去重防死循环。
             val cacheKey = candidate.sourceUrl + "|" + sb.bookUrl
             val newToc: List<ChapterResult> = try {
-                tocCache[cacheKey] ?: withTimeout(prefs.getSourceSearchTimeoutMs()) {
+                tocCache[cacheKey] ?: run {
                     // 根因：搜索结果 sb.tocUrl 永远为空（BookList 不读 tocUrl，搜索规则也没有这字段），
                     // 很多源详情页 URL ≠ 目录页 URL（详情 /book/123，目录 /book/123/chapters）。
                     // 直接拿 bookUrl 当 tocUrl 跑 chapterList 规则会大概率匹配不到元素 → 空目录。

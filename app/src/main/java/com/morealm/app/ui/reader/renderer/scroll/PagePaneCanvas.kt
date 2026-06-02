@@ -5,14 +5,25 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.text.TextPaint
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
+import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.epub.render.ScrollPage
 
 /**
@@ -66,6 +77,11 @@ fun PagePaneCanvas(
     selectionArgb: Int = 0x4D5B6CFE.toInt(),
     bookmarkArgb: Int = 0xFFD32F2F.toInt(),
     readerBgArgb: Int = 0xFFFFFFFF.toInt(),
+    /**
+     * 水平翻页（NONE/SLIDE/COVER）时画进**本页**的页眉页脚，随页一起翻动（对齐 Legado）；
+     * null = 不画（垂直滚动模式走原裸 Canvas 路径，零行为变化）。
+     */
+    pageInfoBar: PageInfoBarSpec? = null,
     modifier: Modifier = Modifier,
 ) {
     // 字体颜色诊断（EPUB CharColor / 段落 textColor / atom.colorArgb / col.colorArgb）
@@ -88,7 +104,7 @@ fun PagePaneCanvas(
         )
     }
 
-    Canvas(modifier) {
+    val drawPage: DrawScope.() -> Unit = {
         drawIntoCanvas { canvas ->
             drawScrollPageOnCanvas(
                 nc = canvas.nativeCanvas,
@@ -111,6 +127,101 @@ fun PagePaneCanvas(
             )
         }
     }
+    if (pageInfoBar == null) {
+        // 垂直滚动 / 无信息栏：裸 Canvas，与原实现完全等价（零行为变化）
+        Canvas(modifier, onDraw = drawPage)
+    } else {
+        // 水平翻页：正文 + 页眉页脚同在一个页容器内 → 随页 placeRelative 一起翻动；无渐变羽化
+        Box(modifier) {
+            Canvas(Modifier.fillMaxSize(), onDraw = drawPage)
+            PageInfoBars(pageInfoBar)
+        }
+    }
+}
+
+/** 水平翻页页眉 / 页脚单行高度（dp）。[PageLevelReaderHost] 正文预留复用此常量，保证正文末行紧贴页脚不重叠。 */
+internal const val PAGED_INFO_BAR_LINE_DP = 20
+
+/**
+ * 水平翻页时画进**每页**的页眉页脚数据（per-page）。由 PageLevelReaderHost 为每个可见 page
+ * （prev/cur/next/nextPlus）按其所属章 layout 现算 [chapterTitle] / [scrollPercent]，配合全局
+ * [batteryLevel] / [currentTime] 组装。垂直滚动模式不用（传 null，PagePaneCanvas 走裸 Canvas）。
+ */
+data class PageInfoBarSpec(
+    val config: ScrollCanvasInfoBarConfig,
+    val chapterTitle: String,
+    val chapterIndex: Int,
+    val pageIndexInChapter: Int,
+    val pageCountInChapter: Int,
+    val scrollPercent: Float,
+    val batteryLevel: Int,
+    val batteryCharging: Boolean,
+    val currentTime: String,
+    val topInsetDp: Dp,
+    val bottomInsetDp: Dp,
+)
+
+/**
+ * page 内页眉（顶）+ 页脚（底）—— **无渐变背景**（水平翻页不需要垂直滚动那种羽化），随页一起翻。
+ * 高度 [PAGED_INFO_BAR_LINE_DP] + 系统栏 inset，与 Host 正文预留对齐，所以正文末行紧贴页脚不重叠。
+ */
+@Composable
+private fun BoxScope.PageInfoBars(spec: PageInfoBarSpec) {
+    val cfg = spec.config
+    // 横向 page-level 有「页」概念，slot 保留原义（不像 SCROLL 把 "page" 降级到章进度）
+    fun mapSlot(s: String): String = s
+    ReaderInfoBar(
+        slotLeft = gateInfoSlot(mapSlot(cfg.headerLeft), cfg.showChapterName, cfg.showTimeBattery),
+        slotCenter = gateInfoSlot(mapSlot(cfg.headerCenter), cfg.showChapterName, cfg.showTimeBattery),
+        slotRight = gateInfoSlot(mapSlot(cfg.headerRight), cfg.showChapterName, cfg.showTimeBattery),
+        chapterTitle = spec.chapterTitle,
+        pageIndex = spec.pageIndexInChapter,
+        pageCount = spec.pageCountInChapter,
+        currentPage = null,
+        chapterIndex = spec.chapterIndex,
+        chaptersSize = cfg.chaptersSize,
+        batteryLevel = spec.batteryLevel,
+        batteryCharging = spec.batteryCharging,
+        currentTime = spec.currentTime,
+        textColor = cfg.textColor,
+        scrollPercentOverride = spec.scrollPercent,
+        modifier = Modifier
+            .align(Alignment.TopStart)
+            .fillMaxWidth()
+            .height(PAGED_INFO_BAR_LINE_DP.dp + spec.topInsetDp)
+            .padding(
+                top = spec.topInsetDp,
+                start = cfg.paddingHorizontal.dp,
+                end = cfg.paddingHorizontal.dp,
+                bottom = 4.dp,
+            ),
+    )
+    ReaderInfoBar(
+        slotLeft = gateInfoSlot(mapSlot(cfg.footerLeft), cfg.showChapterName, cfg.showTimeBattery),
+        slotCenter = gateInfoSlot(mapSlot(cfg.footerCenter), cfg.showChapterName, cfg.showTimeBattery),
+        slotRight = gateInfoSlot(mapSlot(cfg.footerRight), cfg.showChapterName, cfg.showTimeBattery),
+        chapterTitle = spec.chapterTitle,
+        pageIndex = spec.pageIndexInChapter,
+        pageCount = spec.pageCountInChapter,
+        currentPage = null,
+        chapterIndex = spec.chapterIndex,
+        chaptersSize = cfg.chaptersSize,
+        batteryLevel = spec.batteryLevel,
+        batteryCharging = spec.batteryCharging,
+        currentTime = spec.currentTime,
+        textColor = cfg.textColor,
+        scrollPercentOverride = spec.scrollPercent,
+        modifier = Modifier
+            .align(Alignment.BottomStart)
+            .fillMaxWidth()
+            .height(PAGED_INFO_BAR_LINE_DP.dp + spec.bottomInsetDp)
+            .padding(
+                top = 4.dp,
+                start = cfg.paddingHorizontal.dp,
+                end = cfg.paddingHorizontal.dp,
+                bottom = spec.bottomInsetDp,
+            ),
+    )
 }
 
 /**
