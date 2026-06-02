@@ -289,7 +289,13 @@ internal fun drawScrollPageOnCanvas(
     // layout 平移到屏幕 x = N（viewport 左缘出现"上一页字片段"残影，用户
     // 实测样本：某 EPUB 章节左缘半字"京 / 人记载 / 好绘"等）。
     // clipRect 是 page bound 的固有不变量，不依赖排版层 100% 正确。
-    nc.clipRect(0f, 0f, visibleWidthF, viewHeightF)
+    //
+    // **右界放宽 glyphOverhangPad**：精排 EPUB 自带宋体部分字的笔画视觉右缘比 advance 宽 1~3px，
+    // justify 末字精确贴 visibleWidth 后那点笔尖会被裁掉（用户实测末字「家」右缘缺角）。放宽约
+    // 字号 0.15（6~8px）落在右页边距留白内、不超屏；远小于残影所在的 x≈viewWidth 极端越界，
+    // 故 COVER prev 左缘残影防护仍生效（prev 的该区仍在屏幕外）。
+    val glyphOverhangPad = contentPaint.textSize * 0.15f
+    nc.clipRect(0f, 0f, visibleWidthF + glyphOverhangPad, viewHeightF)
 
     // ─── 层 0：P3-5b Phase 3 块装饰（圆角背景 / 边框） ───
     val bsScale = contentPaint.textSize / 16f
