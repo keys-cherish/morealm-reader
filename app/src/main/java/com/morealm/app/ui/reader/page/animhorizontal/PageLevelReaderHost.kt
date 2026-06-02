@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
@@ -43,6 +44,7 @@ import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
 import com.morealm.epub.render.ScrollImageDimensionsResolver
 import com.morealm.epub.render.ScrollLayoutEngine
+import com.morealm.epub.render.ScrollPage
 import com.morealm.app.domain.render.color.HighlightWordMatcher
 import com.morealm.app.domain.render.color.RuleColorPalette
 import com.morealm.app.domain.render.color.RuleColorScanner
@@ -53,6 +55,8 @@ import com.morealm.app.ui.reader.page.animation.PageAnimType
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.SelectionToolbar
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
+import com.morealm.app.ui.reader.renderer.scroll.PAGED_INFO_BAR_LINE_DP
+import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
 import com.morealm.app.ui.reader.renderer.scroll.ScrollSelectionOverlay
 import com.morealm.app.ui.reader.renderer.scroll.ScrollSelectionState
@@ -237,11 +241,23 @@ fun PageLevelReaderHost(
         }
     }
 
+    // **viewport 真实高度修正**（2026-06-02 修「翻页底部凭空留白」）：入参 viewHeight/viewWidth 来自
+    // ReaderScreen 的 configuration.screenHeightDp —— edge-to-edge 下它扣掉了状态栏，比真实渲染容器
+    // （下方 Box fillMaxSize，实测 1920）小一个状态栏高（实测 diffH=72），排版按偏小高度铺满 → 正文末行
+    // 与页脚间凭空留 ~72px 空白。改用渲染容器 onSizeChanged 实测尺寸 shadow 掉入参，后续 effectivePad /
+    // engine 全自动用实测值；首帧用入参兜底，实测到后刷新触发 engine 重建（同章重排由 reflowAnchorCp 保位）。
+    // 与垂直滚动用 BoxWithConstraints 真实容器高的做法对齐。
+    var measuredViewWidth by remember { mutableStateOf(viewWidth) }
+    var measuredViewHeight by remember { mutableStateOf(viewHeight) }
+    @Suppress("NAME_SHADOWING") val viewWidth = measuredViewWidth
+    @Suppress("NAME_SHADOWING") val viewHeight = measuredViewHeight
+
     // safe area + InfoBar 占位（infoBar != null 时正文 padding 给 InfoBar 让位避免遮挡）
     val density = androidx.compose.ui.platform.LocalDensity.current
-    // page-level 模式 InfoBar 让位高度：48dp 足够装一行 fontSize 10sp + battery icon
-    // (Row centered)；之前 64dp 是 CanvasTransition 时代的设计，page-level 浪费 16dp。
-    val infoBarHeightDp = 48.dp
+    // page-level 模式正文上下预留 = 页眉页脚单行高度 + 系统栏 inset。
+    // 页眉页脚现在画进每页（随页翻，见 PagePaneCanvas.PageInfoBars），不再悬浮 overlay；
+    // 复用 PAGED_INFO_BAR_LINE_DP 让正文末行紧贴页脚、不留多余空白（对齐参照铺满）。
+    val infoBarHeightDp = PAGED_INFO_BAR_LINE_DP.dp
     val infoBarHeightPx = with(density) { infoBarHeightDp.toPx() }.toInt()
     val statusBarPx = with(density) {
         WindowInsets.statusBars.asPaddingValues().calculateTopPadding().toPx()
@@ -727,6 +743,20 @@ fun PageLevelReaderHost(
     Box(
         modifier
             .fillMaxSize()
+            .onSizeChanged {
+                // 渲染容器实测尺寸 → shadow 掉入参 viewHeight/viewWidth（修「底部凭空留白」根因：
+                // 入参来自 screenHeightDp 扣了状态栏，比真实容器小 72px）。仅在变化时更新避免重组抖动。
+                if (it.width > 0 && it.height > 0 &&
+                    (it.width != measuredViewWidth || it.height != measuredViewHeight)
+                ) {
+                    com.morealm.app.core.log.AppLog.info(
+                        "PageFillDiag",
+                        "viewport measured ${measuredViewWidth}x${measuredViewHeight} → ${it.width}x${it.height}",
+                    )
+                    measuredViewWidth = it.width
+                    measuredViewHeight = it.height
+                }
+            }
             .background(androidx.compose.ui.graphics.Color(bgColorArgb))
             .then(hostTapModifier)
     ) {
@@ -747,6 +777,43 @@ fun PageLevelReaderHost(
         if (currentLayout != null) {
             val selectionChapterIndex = if (selection.isActive) selection.chapterIndex else -1
             val selectionCpRange = if (selection.isActive) selection.cpRange else IntRange.EMPTY
+
+            // ── 页内页眉页脚 provider（随页翻，替代旧的悬浮 overlay）──
+            // 为每个可见 page（prev/cur/next/nextPlus）按其所属章 layout 现算标题 + 章内进度，
+            // 配全局电量/时间组装 spec，交给 PagePaneCanvas 画在该 page 内（随页 placeRelative 滑动）。
+            // infoBar==null（纯净模式）或 EMPTY_PAGE 占位（chapterIndex<0）→ 返 null 不画。
+            val infoStatusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+            val infoCutoutTop = WindowInsets.displayCutout.asPaddingValues().calculateTopPadding()
+            val infoCutoutBottom = WindowInsets.displayCutout.asPaddingValues().calculateBottomPadding()
+            val infoNavBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+            val infoTopInsetDp = if (infoStatusBarTop.value >= infoCutoutTop.value) infoStatusBarTop else infoCutoutTop
+            val infoBottomInsetDp = if (infoNavBarBottom.value >= infoCutoutBottom.value) infoNavBarBottom else infoCutoutBottom
+            val pageInfoBarProvider: (ScrollPage) -> PageInfoBarSpec? = provider@{ page ->
+                val cfg = infoBar ?: return@provider null
+                if (page.chapterIndex < 0) return@provider null
+                val layout = when (page.chapterIndex) {
+                    core.state.currentChapter?.chapterIndex -> core.state.currentChapter
+                    core.state.nextChapter?.chapterIndex -> core.state.nextChapter
+                    core.state.prevChapter?.chapterIndex -> core.state.prevChapter
+                    else -> null
+                }
+                val total = (layout?.pages?.size ?: 1).coerceAtLeast(1)
+                val pct = ((page.pageIndex + 1).toFloat() / total * 100f).coerceIn(0f, 100f)
+                PageInfoBarSpec(
+                    config = cfg,
+                    chapterTitle = layout?.title ?: "",
+                    chapterIndex = page.chapterIndex,
+                    pageIndexInChapter = page.pageIndex,
+                    pageCountInChapter = total,
+                    scrollPercent = pct,
+                    batteryLevel = batteryStatus.level,
+                    batteryCharging = batteryStatus.charging,
+                    currentTime = currentTime,
+                    topInsetDp = infoTopInsetDp,
+                    bottomInsetDp = infoBottomInsetDp,
+                )
+            }
+
             // dispatch 到具体 Transition（独立 own 自己的动画 + drag；不再接 pointerInput tap）
             when (animType) {
                 PageAnimType.NONE -> {
@@ -765,6 +832,7 @@ fun PageLevelReaderHost(
                         selectionCpRange = selectionCpRange,
                         curPageHighlightSpecs = curPageHighlightSpecs,
                         curPageBookmarkCps = curPageBookmarkCps,
+                        pageInfoBarProvider = pageInfoBarProvider,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -791,6 +859,7 @@ fun PageLevelReaderHost(
                         nextPlusPageBookmarkCps = nextPlusPageBookmarkCps,
                         prevPageBookmarkCps = prevPageBookmarkCps,
                         turnCtrl = turnCtrl,
+                        pageInfoBarProvider = pageInfoBarProvider,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -854,6 +923,7 @@ fun PageLevelReaderHost(
                         nextPageBookmarkCps = nextPageBookmarkCps,
                         prevPageBookmarkCps = prevPageBookmarkCps,
                         turnCtrl = turnCtrl,
+                        pageInfoBarProvider = pageInfoBarProvider,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -873,6 +943,7 @@ fun PageLevelReaderHost(
                         selectionCpRange = selectionCpRange,
                         curPageHighlightSpecs = curPageHighlightSpecs,
                         curPageBookmarkCps = curPageBookmarkCps,
+                        pageInfoBarProvider = pageInfoBarProvider,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -935,8 +1006,9 @@ fun PageLevelReaderHost(
                 )
             }
 
-            // ── InfoBar 顶/底（P4.1 接入，与 SCROLL Host 同款 + 横向 page-level slot 语义）──
-            if (infoBar != null) {
+            // ── InfoBar 顶/底：仅 SIMULATION（仿真翻页 bitmap 路径无法把页眉页脚画进页）保留悬浮
+            // overlay；NONE/SLIDE/COVER 已改为页内页眉页脚（随页翻、无羽化，见 pageInfoBarProvider）。──
+            if (infoBar != null && animType == PageAnimType.SIMULATION) {
                 // 横向 page-level 模式有"页"概念，slot "page"/"progress"/"page_progress" 保留原义
                 // （不像 SCROLL 把 "page" 降级到 "chapter_progress"）。
                 fun mapSlot(s: String): String = s

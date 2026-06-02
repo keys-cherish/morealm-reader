@@ -3,13 +3,16 @@ package com.morealm.app.domain.render.pageanim
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.epub.render.ScrollChapterLayout
 import com.morealm.epub.render.ScrollLayoutEngine
+import com.morealm.epub.render.findColumnAt
 import com.morealm.app.domain.render.layout.ScrollPageFactory
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -96,6 +99,9 @@ fun rememberPageLevelCore(
     engine: ScrollLayoutEngine,
 ): PageLevelCoreHandle {
     val state = remember { ScrollCanvasReaderState(initialChapterIndex = currentChapterIndex) }
+    // 同章重排（改字号/字体/行距 → engine 重建 → styleSignature 变）锚点：重排前记当前视口顶 cp，
+    // 重排完据此恢复阅读位置，避免被跨章 reset 拉回章首。-1 = 无锚点（真跨章 / 首次加载走 reset 0）。
+    var reflowAnchorCp by remember { mutableIntStateOf(-1) }
     val pageFactory = remember(state) {
         ScrollPageFactory(
             dataSource = state,
@@ -135,6 +141,12 @@ fun rememberPageLevelCore(
     // engine 引用变化（字号 / 字体 / padding 变）→ 已有 layout 失效，清掉触发重排
     LaunchedEffect(engine) {
         val sig = engine.computeStyleSignature()
+        // 同章重排恢复：清 currentChapter 前先记下当前视口顶 cp。下方 loadCur effect 重排完
+        // （chapterIndex 不变）按此 cp 定位，避免 cross-ch reset 把视野拉回章首（改字号跳章首根因）。
+        val cur = state.currentChapter
+        if (cur != null && cur.styleSignature != sig) {
+            reflowAnchorCp = currentTopCp(cur, pageFactory.pageIndex, state.pageOffset)
+        }
         if (state.currentChapter?.styleSignature != sig) state.currentChapter = null
         if (state.prevChapter?.styleSignature != sig) state.prevChapter = null
         if (state.nextChapter?.styleSignature != sig) state.nextChapter = null
@@ -224,7 +236,20 @@ fun rememberPageLevelCore(
                 // Slider 拖动 in-place seek 的 restoreToken JUMP 路径会在 Host 层下一帧
                 // 覆盖 pageIndex / pageOffset 到目标 progress（cp>0 或 prog>0 时），无副作用。
                 val oldPageIdx = pageFactory.pageIndex
-                if (oldPageIdx != 0 || state.pageOffset != 0f) {
+                val anchorCp = reflowAnchorCp
+                if (anchorCp >= 0) {
+                    // 同章重排：按重排前记下的 cp 在新 layout 定位，保持阅读位置不跳章首。
+                    val hit = layout.findColumnAt(anchorCp)
+                    if (hit != null) {
+                        pageFactory.moveToPage(hit.page.pageIndex)
+                        state.pageOffset = hit.line.lineTop
+                        AppLog.info("PageLevelCore", "  reflow restore cp=$anchorCp → page=${hit.page.pageIndex} off=${hit.line.lineTop}")
+                    } else {
+                        pageFactory.moveToPage(0)
+                        state.pageOffset = 0f
+                    }
+                    reflowAnchorCp = -1
+                } else if (oldPageIdx != 0 || state.pageOffset != 0f) {
                     pageFactory.moveToPage(0)
                     state.pageOffset = 0f
                     AppLog.info("PageLevelCore", "  cross-ch reset pageIndex $oldPageIdx → 0, pageOffset → 0")
@@ -252,4 +277,14 @@ fun rememberPageLevelCore(
     }
 
     return remember(state, pageFactory) { PageLevelCoreHandle(state, pageFactory) }
+}
+
+/**
+ * 重排前算当前视口顶部那一行的 cp —— 同章 reflow（改字号/字体/行距）后据此在新 layout 恢复
+ * 阅读位置，避免跳章首。视口顶 = 当前 page 内 [pageOffset] 处第一个 lineBottom 越过它的行。
+ */
+private fun currentTopCp(layout: ScrollChapterLayout, pageIndex: Int, pageOffset: Float): Int {
+    val page = layout.pages.getOrNull(pageIndex) ?: return -1
+    val line = page.lines.firstOrNull { it.lineBottom > pageOffset } ?: page.lines.firstOrNull()
+    return line?.firstChapterPos ?: -1
 }

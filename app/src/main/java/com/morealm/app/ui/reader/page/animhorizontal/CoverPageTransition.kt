@@ -25,8 +25,10 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
 import com.morealm.app.domain.render.layout.ScrollPageFactory
+import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
 import com.morealm.app.ui.reader.renderer.scroll.PagePaneCanvas
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
+import com.morealm.epub.render.ScrollPage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -71,6 +73,8 @@ fun CoverPageTransition(
     prevPageBookmarkCps: List<Int> = emptyList(),
     /** Host 注入：zone tap → 走本 Renderer 的 animateAndCommit 覆盖动画；null = Host fallback 瞬切 */
     turnCtrl: PageTurnAnimController? = null,
+    /** Host 注入：按 page 现算页内页眉页脚（随页翻）；默认 { null } = 不画。 */
+    pageInfoBarProvider: (ScrollPage) -> PageInfoBarSpec? = { null },
     modifier: Modifier = Modifier,
     onChapterShift: (delta: Int) -> Unit = {},
 ) {
@@ -229,6 +233,7 @@ fun CoverPageTransition(
                 searchHighlightArgb = searchHighlightArgb,
                 selectionCpRange = selectionRangeForCur,
                 selectionArgb = selectionArgb,
+                pageInfoBar = pageInfoBarProvider(curPage),
                 modifier = Modifier
                     .fillMaxSize()
                     .background(backgroundColor)
@@ -280,6 +285,7 @@ fun CoverPageTransition(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = nextPageHighlightSpecs,
                 bookmarkCps = nextPageBookmarkCps,
+                pageInfoBar = pageInfoBarProvider(nextPage),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
             // 索引 2：prevPage（从左滑入覆盖 cur）—— 阴影已搬到 cur 上，prev 这里只画内容
@@ -292,6 +298,7 @@ fun CoverPageTransition(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = prevPageHighlightSpecs,
                 bookmarkCps = prevPageBookmarkCps,
+                pageInfoBar = pageInfoBarProvider(prevPage),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
         },
