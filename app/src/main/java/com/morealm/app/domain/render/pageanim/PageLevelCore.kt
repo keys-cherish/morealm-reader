@@ -3,6 +3,7 @@ package com.morealm.app.domain.render.pageanim
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.roundToInt
 
 /**
  * page-level 阅读器各 Host 共享 core —— Legado ReadView + TextPageFactory 模型在
@@ -97,11 +99,24 @@ fun rememberPageLevelCore(
     onChapterIndexChange: (Int) -> Unit,
     loadChapterContent: suspend (Int) -> ScrollChapterContent?,
     engine: ScrollLayoutEngine,
+    /**
+     * true = 横向翻页（COVER/SLIDE/NONE，整页瞬切，pageOffset 恒 0）；false = 垂直滚动
+     * （pageOffset 是页内纵向偏移）。仅影响同章 reflow 恢复时 pageOffset 的设法：横向
+     * 恢复到含锚点的整页（offset=0），垂直恢复到锚点行的页内 Y。详见 reflow restore 处。
+     */
+    horizontalPaged: Boolean = false,
 ): PageLevelCoreHandle {
     val state = remember { ScrollCanvasReaderState(initialChapterIndex = currentChapterIndex) }
     // 同章重排（改字号/字体/行距 → engine 重建 → styleSignature 变）锚点：重排前记当前视口顶 cp，
     // 重排完据此恢复阅读位置，避免被跨章 reset 拉回章首。-1 = 无锚点（真跨章 / 首次加载走 reset 0）。
     var reflowAnchorCp by remember { mutableIntStateOf(-1) }
+    // reflow 恢复落点 pageIndex —— 区分「reflow 自身的 moveToPage」与「用户主动翻页」：
+    // 下方 snapshotFlow 监听到 pageIndex 偏离落点即视为用户翻页 → 让锚点失效（否则翻页后
+    // 再切字体会按旧锚点跳回翻页前位置）。-1 = 无落点。
+    var reflowSettlePageIdx by remember { mutableIntStateOf(-1) }
+    // cp 命中失败时的兜底锚：重排前记下的章内页比例（0-1）。cp 主锚 + 比例兜底两层定位，
+    // cp 越界 / 边缘命中失败时按比例就近落页，而非粗暴回章首（边缘漂移到章首根因）。
+    var reflowAnchorFraction by remember { mutableFloatStateOf(0f) }
     val pageFactory = remember(state) {
         ScrollPageFactory(
             dataSource = state,
@@ -138,14 +153,33 @@ fun rememberPageLevelCore(
             .collect { onChapterIndexChangeUpdated(it) }
     }
 
+    // 用户主动翻页（pageIndex 偏离 reflow 落点）→ 锚点失效。否则同章翻页后再切字体会按旧
+    // 锚点跳回翻页前位置。reflow 自身的 moveToPage 落点 == reflowSettlePageIdx，不误清。
+    LaunchedEffect(state, pageFactory) {
+        snapshotFlow { pageFactory.pageIndex }
+            .collect { idx ->
+                if (reflowAnchorCp >= 0 && idx != reflowSettlePageIdx) {
+                    AppLog.info("PageLevelCore", "  user paged (pageIdx=$idx != settle=$reflowSettlePageIdx) -> clear reflow anchor")
+                    reflowAnchorCp = -1
+                }
+            }
+    }
+
     // engine 引用变化（字号 / 字体 / padding 变）→ 已有 layout 失效，清掉触发重排
     LaunchedEffect(engine) {
         val sig = engine.computeStyleSignature()
         // 同章重排恢复：清 currentChapter 前先记下当前视口顶 cp。下方 loadCur effect 重排完
         // （chapterIndex 不变）按此 cp 定位，避免 cross-ch reset 把视野拉回章首（改字号跳章首根因）。
         val cur = state.currentChapter
-        if (cur != null && cur.styleSignature != sig) {
+        // 仅在「无锚点」时记录：连续快速切字体时锚点冻结在用户原始视口 cp，避免每次 reflow
+        // 用「整页对齐后的新页首 cp」重记 → 页首单调递减、视口逐次漂移（用户报「切换字体每页
+        // 都不同」根因：cp 4124→4028→3947→…）。翻页后由下方 snapshotFlow 清锚点再重记。
+        if (cur != null && cur.styleSignature != sig && reflowAnchorCp < 0) {
             reflowAnchorCp = currentTopCp(cur, pageFactory.pageIndex, state.pageOffset)
+            // 同时记章内页比例，作 cp 命中失败时的兜底锚（见 reflowAnchorFraction）。
+            reflowAnchorFraction = if (cur.pages.isNotEmpty()) {
+                pageFactory.pageIndex.toFloat() / cur.pages.size
+            } else 0f
         }
         if (state.currentChapter?.styleSignature != sig) state.currentChapter = null
         if (state.prevChapter?.styleSignature != sig) state.prevChapter = null
@@ -241,14 +275,28 @@ fun rememberPageLevelCore(
                     // 同章重排：按重排前记下的 cp 在新 layout 定位，保持阅读位置不跳章首。
                     val hit = layout.findColumnAt(anchorCp)
                     if (hit != null) {
+                        // 先记落点再 moveToPage：下方 snapshotFlow 据 settle 区分 reflow 自身翻页与
+                        // 用户翻页，settle 必须在触发 pageIndex 变化前就位，否则被误判为用户翻页清锚点。
+                        reflowSettlePageIdx = hit.page.pageIndex
                         pageFactory.moveToPage(hit.page.pageIndex)
-                        state.pageOffset = hit.line.lineTop
-                        AppLog.info("PageLevelCore", "  reflow restore cp=$anchorCp → page=${hit.page.pageIndex} off=${hit.line.lineTop}")
+                        // 横向翻页整页瞬切、pageOffset 恒 0：定位到含锚点的整页即可。若设成行内
+                        // lineTop，页面会纵向偏移半页（用户报「改字体/边距后卡半页、跳页」根因）。
+                        // 垂直滚动才需要把页内滚到锚点行的 Y。
+                        state.pageOffset = if (horizontalPaged) 0f else hit.line.lineTop
+                        // 不重置 reflowAnchorCp：连续切字体冻结锚点，避免逐次漂移（见记录处注释）。
+                        AppLog.info("PageLevelCore", "  reflow restore cp=$anchorCp → page=${hit.page.pageIndex} off=${state.pageOffset} horizontalPaged=$horizontalPaged")
                     } else {
-                        pageFactory.moveToPage(0)
+                        // cp 在新 layout 命中失败（cp 越界 / 边缘）→ 用章内页比例兜底，定位到
+                        // 对应比例的页，不再粗暴回章首（边缘漂移到章首根因）。保持 anchorCp
+                        // 不清，连续切字体仍稳定。
+                        val lastPage = (layout.pages.size - 1).coerceAtLeast(0)
+                        val targetPage = (reflowAnchorFraction.coerceIn(0f, 1f) * lastPage)
+                            .roundToInt().coerceIn(0, lastPage)
+                        reflowSettlePageIdx = targetPage
+                        pageFactory.moveToPage(targetPage)
                         state.pageOffset = 0f
+                        AppLog.info("PageLevelCore", "  reflow fraction-fallback cp=$anchorCp miss -> frac=$reflowAnchorFraction page=$targetPage")
                     }
-                    reflowAnchorCp = -1
                 } else if (oldPageIdx != 0 || state.pageOffset != 0f) {
                     pageFactory.moveToPage(0)
                     state.pageOffset = 0f
