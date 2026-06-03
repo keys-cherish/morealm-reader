@@ -33,7 +33,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
-import java.util.UUID
 import javax.inject.Inject
 
 /**
@@ -178,7 +177,8 @@ class ImportService : Service() {
 
             try {
                 val topChildren = FastFileScanner.listImmediateChildren(this@ImportService, treeUri)
-                val subFolders = topChildren.filter { it.isDirectory }
+                // 忽略 . 开头的隐藏目录（.git / .thumbnails / .trash 等系统目录，不含正文书）
+                val subFolders = topChildren.filter { it.isDirectory && !it.name.startsWith(".") }
                 val directFiles = topChildren
                     .filter { !it.isDirectory && detectFormat(it.name) != BookFormat.UNKNOWN }
                     .map { ch -> FastFileScanner.ScanItem(uri = ch.uri, name = ch.name, filePath = ch.filePath) }
@@ -202,7 +202,10 @@ class ImportService : Service() {
                                 maxDepth = MAX_FOLDER_IMPORT_DEPTH,
                             )
                             if (descendants.isEmpty()) null
-                            else BookGroup(id = UUID.randomUUID().toString(), name = folder.name) to descendants
+                            // stable id（localfolder:根名/子名）：重导同一子文件夹复用同组、
+                            // 不再每次建随机 UUID 新组（DAO insert REPLACE 幂等）。与用户手建
+                            // 组的 UUID id / auto: / webdav: 命名空间隔离。
+                            else BookGroup(id = "localfolder:$folderName/${folder.name}", name = folder.name) to descendants
                         }
                     } else emptyList()
 
@@ -253,11 +256,14 @@ class ImportService : Service() {
                         progressOffset = importedSoFar,
                         totalForProgress = grandTotal,
                     )
-                    if (result.phase1Inserted == 0) {
-                        // sub-folder 一本都没成功 → 清空空 group，避免书架出现空文件夹
+                    if (result.phase1Inserted + result.regrouped == 0) {
+                        // sub-folder 没有任何书入组（新增 + 收编都为 0）→ 清空空 group，避免
+                        // 书架出现空文件夹。regrouped > 0 时组里已有收编的旧书，必须保留。
                         groupRepo.deleteById(group.id)
                     }
-                    importedSoFar += result.phase1Inserted
+                    // imported 计数纳入 regrouped：收编的旧书也算「这次整理进组」，
+                    // 否则全是已存在书时 done 显示 imported=0，用户误以为没成功。
+                    importedSoFar += result.phase1Inserted + result.regrouped
 
                     // chunk 边界已检查 cancel；如果整个 batch 完成时 state 是 cancelled，
                     // 跳出 sub-folder 循环（剩下的不再 process）。
@@ -265,28 +271,34 @@ class ImportService : Service() {
                     if (s is ImportState.Phase1 && s.cancelled) break
                 }
 
-                val cancelled = (ImportStateBus.state.value as? ImportState.Phase1)?.cancelled == true
-                if (!cancelled && directFiles.isNotEmpty()) {
+                // ── 顶层直接的书 + 深扫兜底 → 归入以「选中文件夹名」命名的组 ──
+                //
+                // 原先这两批 folderId=null 平铺散落（用户报「导入文件夹全是散落的文件」）。
+                // 现按文件夹名建一个组：导入 X 文件夹 → 书架出现「X」组，文件夹内直接的书
+                // 都进去；子文件夹仍各自成组（上面的 perSubFolder）。
+                // directFiles 与 deepFiles 互斥（deepFiles 仅在 sub/direct 全空时才扫出），
+                // 共用同一个 rootGroup；两者皆空（纯子文件夹结构）则不建根组。
+                val rootGroupFiles = if (directFiles.isNotEmpty()) directFiles else deepFiles
+                val cancelledBeforeRoot = (ImportStateBus.state.value as? ImportState.Phase1)?.cancelled == true
+                if (!cancelledBeforeRoot && rootGroupFiles.isNotEmpty()) {
+                    // stable id（localfolder:根名）：重导同名文件夹复用同一根组、不再
+                    // 每次建新 UUID 组（避免「书在旧组、新建空组又被删、imported=0」）。
+                    val rootGroup = BookGroup(id = "localfolder:$folderName", name = folderName)
+                    groupRepo.insert(rootGroup)
                     val result = importEngine.importBatch(
-                        files = directFiles,
-                        folderId = null,
+                        files = rootGroupFiles,
+                        folderId = rootGroup.id,
                         folderName = folderName,
                         progressOffset = importedSoFar,
                         totalForProgress = grandTotal,
                     )
-                    importedSoFar += result.phase1Inserted
-                }
-
-                val cancelled2 = (ImportStateBus.state.value as? ImportState.Phase1)?.cancelled == true
-                if (!cancelled2 && deepFiles.isNotEmpty()) {
-                    val result = importEngine.importBatch(
-                        files = deepFiles,
-                        folderId = null,
-                        folderName = folderName,
-                        progressOffset = importedSoFar,
-                        totalForProgress = grandTotal,
-                    )
-                    importedSoFar += result.phase1Inserted
+                    if (result.phase1Inserted + result.regrouped == 0) {
+                        // 没有任何书入组（新增 + 收编都为 0）→ 清空空 group
+                        groupRepo.deleteById(rootGroup.id)
+                    }
+                    // imported 计数纳入 regrouped：收编的旧书也算「这次整理进组」，
+                    // 否则全是已存在书时 done 显示 imported=0，用户误以为没成功。
+                    importedSoFar += result.phase1Inserted + result.regrouped
                 }
 
                 val wasCancelled = (ImportStateBus.state.value as? ImportState.Phase1)?.cancelled == true

@@ -105,6 +105,8 @@ class ImportEngine @Inject constructor(
         // 信号让取消"立刻"生效（不打断已在跑的 saveAsLocal，但跑完不再进下一 chunk）。
         var importedInBatch = 0
         val pendingForEnrich = ArrayList<PendingBook>(files.size)
+        // 已在书架、但本次需归入导入组的旧书（dedup 命中且原先散落）。统一末尾 bulkUpdate。
+        val regroupAll = ArrayList<Book>()
 
         for (chunk in files.chunked(PHASE1_CHUNK_SIZE)) {
             // chunk 边界：消费取消请求。返回 true 则停止后续 chunk。
@@ -121,7 +123,9 @@ class ImportEngine @Inject constructor(
                 break
             }
 
-            val chunkPending = processChunk(chunk, folderId)
+            val chunkResult = processChunk(chunk, folderId)
+            regroupAll.addAll(chunkResult.regroup)
+            val chunkPending = chunkResult.pending
             if (chunkPending.isEmpty()) continue
 
             bookRepo.bulkInsert(chunkPending.map { it.book }, batchSize = PHASE1_CHUNK_SIZE)
@@ -138,12 +142,22 @@ class ImportEngine @Inject constructor(
             AppLog.info(TAG, "Phase1 chunk done +${chunkPending.size} (total imported=$importedInBatch)")
         }
 
+        // ── 把 dedup 命中的散落旧书归入本次导入组 ──
+        //
+        // 必须放在下面 Phase 2 early-return 之前：否则「重导文件夹、书全已存在」场景
+        // pendingForEnrich 为空会直接 return，regroup 永不落库 → 用户重导看不到变化。
+        // 只动原先未归组（folderId==null）的书，不抢已属于其它组的书。
+        if (regroupAll.isNotEmpty()) {
+            bookRepo.bulkUpdate(regroupAll, batchSize = PHASE1_CHUNK_SIZE)
+            AppLog.info(TAG, "Regrouped ${regroupAll.size} existing book(s) into folder=$folderName")
+        }
+
         // ── Phase 2: 并发 enrich + bulkUpdate ──
         //
         // Phase 2 不消费 cancel flag —— Phase 1 已入库的书 enrich 失败也不回滚，
         // 让用户立刻能看到书在书架，metadata/cover 是次要的（[BookFormatProbeViewModel]
         // 兜底 detect）。
-        if (pendingForEnrich.isEmpty()) return@coroutineScope BatchResult(importedInBatch, 0)
+        if (pendingForEnrich.isEmpty()) return@coroutineScope BatchResult(importedInBatch, 0, regroupAll.size)
 
         val enrichDispatcher = Dispatchers.IO.limitedParallelism(MAX_ENRICH_PARALLELISM)
         val enrichJobs = pendingForEnrich.map { pb ->
@@ -161,7 +175,7 @@ class ImportEngine @Inject constructor(
             bookRepo.bulkUpdate(enriched, batchSize = PHASE1_CHUNK_SIZE)
             AppLog.info(TAG, "Phase2 enriched ${enriched.size}/${pendingForEnrich.size}")
         }
-        BatchResult(importedInBatch, enriched.size)
+        BatchResult(importedInBatch, enriched.size, regroupAll.size)
     }
 
     /**
@@ -173,8 +187,9 @@ class ImportEngine @Inject constructor(
     private suspend fun processChunk(
         chunk: List<FastFileScanner.ScanItem>,
         folderId: String?,
-    ): List<PendingBook> {
-        val result = ArrayList<PendingBook>(chunk.size)
+    ): ChunkResult {
+        val pending = ArrayList<PendingBook>(chunk.size)
+        val regroup = ArrayList<Book>()
         for ((idx, item) in chunk.withIndex()) {
             val format = detectFormat(item.name)
             if (format == BookFormat.UNKNOWN) continue
@@ -188,8 +203,20 @@ class ImportEngine @Inject constructor(
                 AppLog.warn(TAG, "saveAsLocal failed for ${item.name}")
                 continue
             }
-            // 跨 chunk dedup：之前 chunk 已 insert / 历史已有相同 hash file → 跳过
-            if (bookRepo.findByLocalPath(localUri.toString()) != null) continue
+            // 跨 chunk dedup：之前 chunk 已 insert / 历史已有相同 hash file。
+            val existing = bookRepo.findByLocalPath(localUri.toString())
+            if (existing != null) {
+                // 已在书架：把它收编进本次导入组（除非已经在该组）。「重新导入文件夹」是
+                // 强意图——文件夹里的书就该归这个文件夹组，不管之前是散落（folderId==null）、
+                // 在已删的旧组（孤儿）、还是在别的组。否则 dedup 命中后直接 skip → imported=0、
+                // 书进不去（用户反复报「删分组后重导无法导入」的根因：book row 顽固存在 +
+                // 旧条件只收编 null）。trade-off：曾被手动移到别组的书会被拉回文件夹组，
+                // 但用户主动重导该文件夹即表达了「按文件夹重新组织」的意图，可接受。
+                if (folderId != null && existing.folderId != folderId) {
+                    regroup.add(existing.copy(folderId = folderId))
+                }
+                continue
+            }
 
             val parsed = parseBookFilename(item.name)
             val book = applyAutoGroup(
@@ -203,9 +230,9 @@ class ImportEngine @Inject constructor(
                     addedAt = System.currentTimeMillis() + idx,
                 )
             )
-            result.add(PendingBook(book, item, format))
+            pending.add(PendingBook(book, item, format))
         }
-        return result
+        return ChunkResult(pending, regroup)
     }
 
     // ── Helper（短期复制自 ShelfImportController，Step 4 dedup） ──
@@ -298,9 +325,17 @@ class ImportEngine @Inject constructor(
         val format: BookFormat,
     )
 
+    /** [processChunk] 返回：本 chunk 待 insert 的新书 + 需归组的已存在旧书。 */
+    private data class ChunkResult(
+        val pending: List<PendingBook>,
+        val regroup: List<Book>,
+    )
+
     /** [importBatch] 返回值。 */
     data class BatchResult(
         val phase1Inserted: Int,
         val phase2Enriched: Int,
+        /** dedup 命中、被收编进本次导入组的已存在旧书数（重导收编散落书）。 */
+        val regrouped: Int = 0,
     )
 }

@@ -113,6 +113,8 @@ object FastFileScanner {
         val result = ArrayList<ScanItem>(256)
         root.walkTopDown()
             .maxDepth(maxDepth)
+            // 跳过 . 开头的隐藏目录（.git / .thumbnails / .trash 等，不进入递归）
+            .onEnter { dir -> !dir.name.startsWith(".") }
             .forEach { f ->
                 if (f.isFile && isWanted(f.name)) {
                     result.add(
@@ -164,7 +166,10 @@ object FastFileScanner {
                     val name = cursor.getString(1) ?: continue
                     val mime = cursor.getString(2) ?: ""
                     if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                        scanSafRecursive(context, treeUri, docId, isWanted, out, depth + 1, maxDepth)
+                        // 跳过 . 开头的隐藏目录（.git / .thumbnails / .trash 等）
+                        if (!name.startsWith(".")) {
+                            scanSafRecursive(context, treeUri, docId, isWanted, out, depth + 1, maxDepth)
+                        }
                     } else if (isWanted(name)) {
                         out.add(
                             ScanItem(
