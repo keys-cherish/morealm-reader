@@ -65,7 +65,7 @@ object LocalBookParser {
         epubContainingBlockWidthPx: Int = 0,
     ): String = withContext(Dispatchers.IO) {
         val raw = when (format) {
-            BookFormat.TXT -> readTxtChapter(context, uri, chapter)
+            BookFormat.TXT -> collapseBlankLines(readTxtChapter(context, uri, chapter))
             BookFormat.EPUB -> EpubParser.readChapter(context, uri, chapter, epubContainingBlockWidthPx)
             BookFormat.MOBI, BookFormat.AZW3 -> MobiParser.readChapter(context, uri, chapter)
             BookFormat.PDF -> PdfParser.readChapter(context, uri, chapter)
@@ -90,6 +90,20 @@ object LocalBookParser {
             raw
         }
     }
+
+    /**
+     * 压缩 txt 段间「连续多空行」为「单空行」。
+     *
+     * txt 原文段落间常有多个空行（每段后 1-2 个），引擎按 `\n` 切段时每个空行排成一个
+     * 占整行高的空段，紧凑段距也缩不了空段那一整行 → 大空白（用户反馈）。这里把「2 个以上
+     * 连续换行（含行内空白）」压成单个空行，保留段落分隔，对齐 MOBI 已有的换行压缩。
+     *
+     * 仅匹配换行序列、不吃段落首字符前导空白（与首行缩进归一化解耦）。会改变章内 cp
+     * （被压掉的空行不再占 cp）——「紧凑」取舍下用户已确认（2026-06-03）。
+     */
+    private fun collapseBlankLines(text: String): String =
+        text.replace("\r\n", "\n").replace("\r", "\n")
+            .replace(Regex("\\n([ \\t\\u3000\\u00A0]*\\n){2,}"), "\n\n")
 
     private fun String.isEmptyChapter(): Boolean {
         val t = this.trim()
