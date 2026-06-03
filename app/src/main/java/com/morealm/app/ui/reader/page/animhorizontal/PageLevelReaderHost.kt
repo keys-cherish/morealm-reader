@@ -55,6 +55,7 @@ import com.morealm.app.ui.reader.page.animation.PageAnimType
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.SelectionToolbar
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
+import com.morealm.app.ui.reader.renderer.rememberBottomCornerInsetDp
 import com.morealm.app.ui.reader.renderer.scroll.PAGED_INFO_BAR_LINE_DP
 import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
@@ -833,6 +834,11 @@ fun PageLevelReaderHost(
             val infoNavBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
             val infoTopInsetDp = if (infoStatusBarTop.value >= infoCutoutTop.value) infoStatusBarTop else infoCutoutTop
             val infoBottomInsetDp = if (infoNavBarBottom.value >= infoCutoutBottom.value) infoNavBarBottom else infoCutoutBottom
+            // 底部圆角让位：footer 左右额外内缩，避免全面屏 R 角裁切角落电量 / 时间。
+            val infoCornerInsetDp = rememberBottomCornerInsetDp(
+                existingHorizontalDp = (infoBar?.paddingHorizontal ?: 0).dp,
+                bottomSystemInsetDp = infoBottomInsetDp,
+            )
             val pageInfoBarProvider: (ScrollPage) -> PageInfoBarSpec? = provider@{ page ->
                 val cfg = infoBar ?: return@provider null
                 if (page.chapterIndex < 0) return@provider null
@@ -856,6 +862,7 @@ fun PageLevelReaderHost(
                     currentTime = currentTime,
                     topInsetDp = infoTopInsetDp,
                     bottomInsetDp = infoBottomInsetDp,
+                    cornerInsetDp = infoCornerInsetDp,
                 )
             }
 
@@ -1077,6 +1084,11 @@ fun PageLevelReaderHost(
                 val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
                 val topInsetDp = if (statusBarTop.value >= cutoutTop.value) statusBarTop else cutoutTop
                 val bottomInsetDp = if (navBarBottom.value >= cutoutBottom.value) navBarBottom else cutoutBottom
+                // 底部圆角让位（仿真 overlay InfoBar）：footer 左右额外内缩避 R 角裁切。
+                val cornerInsetDp = rememberBottomCornerInsetDp(
+                    existingHorizontalDp = infoBar.paddingHorizontal.dp,
+                    bottomSystemInsetDp = bottomInsetDp,
+                )
 
                 val chapterTitle = currentLayout.title
 
@@ -1141,8 +1153,8 @@ fun PageLevelReaderHost(
                                 )
                             )
                         )
-                        .padding(top = 8.dp, start = infoBar.paddingHorizontal.dp,
-                            end = infoBar.paddingHorizontal.dp, bottom = bottomInsetDp),
+                        .padding(top = 8.dp, start = infoBar.paddingHorizontal.dp + cornerInsetDp,
+                            end = infoBar.paddingHorizontal.dp + cornerInsetDp, bottom = bottomInsetDp),
                 )
             }
         }

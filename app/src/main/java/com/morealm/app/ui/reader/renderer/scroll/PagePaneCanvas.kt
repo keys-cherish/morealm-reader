@@ -159,6 +159,8 @@ data class PageInfoBarSpec(
     val currentTime: String,
     val topInsetDp: Dp,
     val bottomInsetDp: Dp,
+    /** 底部屏幕圆角（R 角）让位：footer 左右额外内缩，避免角落时间 / 电量被圆角裁切。 */
+    val cornerInsetDp: Dp = 0.dp,
 )
 
 /**
@@ -217,8 +219,8 @@ private fun BoxScope.PageInfoBars(spec: PageInfoBarSpec) {
             .height(PAGED_INFO_BAR_LINE_DP.dp + spec.bottomInsetDp)
             .padding(
                 top = 4.dp,
-                start = cfg.paddingHorizontal.dp,
-                end = cfg.paddingHorizontal.dp,
+                start = cfg.paddingHorizontal.dp + spec.cornerInsetDp,
+                end = cfg.paddingHorizontal.dp + spec.cornerInsetDp,
                 bottom = spec.bottomInsetDp,
             ),
     )
