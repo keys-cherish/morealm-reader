@@ -119,12 +119,20 @@ fun SlidePageTransition(
     // Host zone tap 注入：走本 Transition 的 animateAndCommit 让 zone tap 也有平移动画。
     DisposableEffect(turnCtrl) {
         turnCtrl?.animateToNext = {
-            val viewportW = viewportWidthPx.toFloat()
-            if (viewportW > 0f) animateAndCommit(viewportW, viewportW)
+            // 守门补在 animate 执行点（cancelAndJoin 之后），而非只靠 zone tap 拦截点：快速连续双击时
+            // tap 拦截读的是旧 pageIndex（章内 hasNext=true 放行），但 cancelAndJoin 让前一次翻页 commit
+            // 后 pageIndex 已到章末、此刻 nextChapter 可能尚未预加载完（=null）→ 不补这道守门就会 animate
+            // 滑入 EMPTY_PAGE（深背景）造成黑色一闪。
+            if (pageFactory.hasNext()) {
+                val viewportW = viewportWidthPx.toFloat()
+                if (viewportW > 0f) animateAndCommit(viewportW, viewportW)
+            }
         }
         turnCtrl?.animateToPrev = {
-            val viewportW = viewportWidthPx.toFloat()
-            if (viewportW > 0f) animateAndCommit(-viewportW, viewportW)
+            if (pageFactory.hasPrev()) {
+                val viewportW = viewportWidthPx.toFloat()
+                if (viewportW > 0f) animateAndCommit(-viewportW, viewportW)
+            }
         }
         onDispose {
             turnCtrl?.animateToNext = null

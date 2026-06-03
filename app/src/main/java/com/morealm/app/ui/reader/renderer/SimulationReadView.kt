@@ -57,6 +57,15 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     var onTapCenter: (() -> Unit)? = null
     var onTapPrev: (() -> Unit)? = null
     var onTapNext: (() -> Unit)? = null
+    /**
+     * 点击区域翻页动作（对齐 PageLevelReaderHost / 旧 renderer.Reader 九宫格）：4 角随
+     * 用户设置（默认跟随「轻按页面左侧/右侧」），中列上=prev / 下=next、正中=menu 固定。
+     * 此前 [handleTap] 硬编码 3 列「左 prev / 右 next」，与非仿真路径一样不读这套配置。
+     */
+    var tapActionTopLeft: String = "prev"
+    var tapActionTopRight: String = "next"
+    var tapActionBottomLeft: String = "prev"
+    var tapActionBottomRight: String = "next"
     var onLongPress: ((x: Float, y: Float) -> Unit)? = null
     /**
      * Pre-zone tap callback — invoked before [handleTap] routes the tap to
@@ -377,28 +386,43 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         // highlight anywhere on screen to bring up its action menu without
         // having to dodge the prev/next page zones.
         if (onSingleTap?.invoke(x, y) == true) return
+        // 9 宫格映射（与 PageLevelReaderHost 非仿真路径同款）：4 角随配置、中列上 prev /
+        // 下 next、正中 menu。prev/next 仍走仿真内部 keyTurnPage（带 canTurn* guard），
+        // 仅 guard 为假时退化到 onTapPrev/onTapNext fallback。
         val third = width / 3f
-        when {
-            x < third -> {
-                // Left zone → prev page
-                if (canTurnPrev?.invoke() == true) {
-                    keyTurnPage(isNext = false)
-                } else {
-                    onTapPrev?.invoke()
-                }
+        val thirdH = height / 3f
+        val col = when {
+            x < third -> 0
+            x < third * 2 -> 1
+            else -> 2
+        }
+        val row = when {
+            y < thirdH -> 0
+            y < thirdH * 2 -> 1
+            else -> 2
+        }
+        val action = when (row to col) {
+            0 to 0 -> tapActionTopLeft       // TL
+            0 to 1 -> "prev"                 // TC
+            0 to 2 -> tapActionTopRight      // TR
+            1 to 0 -> tapActionBottomLeft    // ML：跟随「轻按左侧」
+            1 to 2 -> tapActionBottomRight   // MR：跟随「轻按右侧」
+            2 to 0 -> tapActionBottomLeft    // BL
+            2 to 2 -> tapActionBottomRight   // BR
+            2 to 1 -> "next"                 // BC
+            else -> "menu"                   // MC (1,1)
+        }
+        when (action) {
+            "prev" -> {
+                if (canTurnPrev?.invoke() == true) keyTurnPage(isNext = false)
+                else onTapPrev?.invoke()
             }
-            x > third * 2 -> {
-                // Right zone → next page
-                if (canTurnNext?.invoke() == true) {
-                    keyTurnPage(isNext = true)
-                } else {
-                    onTapNext?.invoke()
-                }
+            "next" -> {
+                if (canTurnNext?.invoke() == true) keyTurnPage(isNext = true)
+                else onTapNext?.invoke()
             }
-            else -> {
-                // Center zone → menu
-                onTapCenter?.invoke()
-            }
+            // "menu" 及无对应入口的动作（tts/bookmark/none）退化为呼出/隐藏菜单。
+            else -> onTapCenter?.invoke()
         }
     }
 
