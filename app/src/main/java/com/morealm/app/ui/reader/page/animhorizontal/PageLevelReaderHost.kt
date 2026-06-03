@@ -201,6 +201,17 @@ fun PageLevelReaderHost(
     onPageTurnCommandConsumed: () -> Unit = {},
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
+    /**
+     * 点击区域翻页动作（对齐旧 renderer.Reader 九宫格）：4 角动作由用户设置驱动，
+     * `tapActionTopLeft/BottomLeft` 默认跟随「轻按页面左侧」、右两角跟随右侧；
+     * 中列上=prev / 下=next、正中=menu 固定。取值 prev / next / menu（其它如 tts /
+     * bookmark 本 Host 无对应入口，退化为 menu）。此前本 Host 硬编码「左=prev / 右=next」、
+     * 不读这套配置，导致设置里改「轻按页面左侧→翻到下一页」对 page-level 横翻不生效。
+     */
+    tapActionTopLeft: String = "prev",
+    tapActionTopRight: String = "next",
+    tapActionBottomLeft: String = "prev",
+    tapActionBottomRight: String = "next",
     modifier: Modifier = Modifier,
 ) {
     // ── paint 派生（与 ScrollCanvasReaderHost L225-260 同算法）──
@@ -670,7 +681,14 @@ fun PageLevelReaderHost(
     // pointerInput 注册（虽然事件到不了它，但 modifier 链路本身不浪费再好）。
     val hostTapModifier =
         if (animType != PageAnimType.SIMULATION) {
-            Modifier.pointerInput(animType, selection.isActive, highlightActionTarget != null, chapterHighlightsRaw) {
+            Modifier.pointerInput(
+                animType, selection.isActive, highlightActionTarget != null, chapterHighlightsRaw,
+                // tap 配置必须进 key：否则 detectTapGestures 闭包在 pointerInput 启动时
+                // 捕获的 tapAction* 不会随参数更新（pointerInput 不因捕获值变化重启），
+                // 表现为「设置改了不生效，退出重进 / 再改一次才生效」。把四角动作纳入 key，
+                // 配置一变即重启手势识别、捕获最新动作。
+                tapActionTopLeft, tapActionTopRight, tapActionBottomLeft, tapActionBottomRight,
+            ) {
                 detectTapGestures(
                     onTap = { offset ->
                         // 优先级 1: 选区 active → tap 取消选区
@@ -685,18 +703,42 @@ fun PageLevelReaderHost(
                         }
                         // 优先级 3: tap-on-highlight 命中已存高亮 → 弹菜单
                         if (resolveTapOnHighlight(offset)) return@detectTapGestures
-                        // 优先级 4: zone tap 翻页（所有横向 page-level 模式）。
-                        // NONE / COVER / SLIDE 都通过 Host 共享层 zone tap 翻页（瞬切语义）。
-                        // drag 期间的动画由各 Transition 内部 own (settle-to-edge)。
+                        // 优先级 4: zone tap 翻页（所有横向 page-level 模式：NONE/COVER/SLIDE/SIMULATION）。
+                        // 9 宫格映射对齐旧 renderer.Reader：4 角动作随用户配置（tapAction* 默认
+                        // 跟随「轻按页面左侧/右侧」），中列上=prev / 下=next、正中=menu 固定。
+                        // 此前这里硬编码「左=prev / 右=next」，用户在设置里把「轻按页面左侧」
+                        // 改成「翻到下一页」对 page-level 横翻完全不生效（根因）。
                         val w = size.width.toFloat()
-                        val zone = when {
-                            offset.x < w * 0.33f -> "L"
-                            offset.x > w * 0.67f -> "R"
-                            else -> "M"
+                        val h = size.height.toFloat()
+                        val tapCol = when {
+                            offset.x < w * 0.33f -> 0
+                            offset.x < w * 0.66f -> 1
+                            else -> 2
                         }
-                        com.morealm.app.core.log.AppLog.info("PageLvlHost", "DIAG onTap zone=$zone animType=$animType x=${offset.x} w=$w")
-                        when {
-                            offset.x < w * 0.33f -> {
+                        val tapRow = when {
+                            offset.y < h * 0.33f -> 0
+                            offset.y < h * 0.66f -> 1
+                            else -> 2
+                        }
+                        val action = when (tapRow to tapCol) {
+                            0 to 0 -> tapActionTopLeft       // TL
+                            0 to 1 -> "prev"                 // TC
+                            0 to 2 -> tapActionTopRight      // TR
+                            1 to 0 -> tapActionBottomLeft    // ML：跟随「轻按左侧」
+                            1 to 2 -> tapActionBottomRight   // MR：跟随「轻按右侧」
+                            2 to 0 -> tapActionBottomLeft    // BL
+                            2 to 2 -> tapActionBottomRight   // BR
+                            2 to 1 -> "next"                 // BC
+                            else -> "menu"                   // MC (1,1)
+                        }
+                        com.morealm.app.core.log.AppLog.info(
+                            "PageLvlHost",
+                            "DIAG onTap action=$action row=$tapRow col=$tapCol animType=$animType " +
+                                "corners=[TL=$tapActionTopLeft,TR=$tapActionTopRight," +
+                                "BL=$tapActionBottomLeft,BR=$tapActionBottomRight]",
+                        )
+                        when (action) {
+                            "prev" -> {
                                 if (!core.pageFactory.hasPrev()) {
                                     com.morealm.app.core.log.AppLog.info(
                                         "PageLvlHost",
@@ -713,7 +755,7 @@ fun PageLevelReaderHost(
                                     }
                                 } else core.pageFactory.moveToPrev()
                             }
-                            offset.x > w * 0.67f -> {
+                            "next" -> {
                                 if (!core.pageFactory.hasNext()) {
                                     com.morealm.app.core.log.AppLog.info(
                                         "PageLvlHost",
@@ -730,6 +772,8 @@ fun PageLevelReaderHost(
                                     }
                                 } else core.pageFactory.moveToNext()
                             }
+                            // "menu" 及无对应入口的动作（tts/bookmark/none —— 本 Host 没有这些
+                            // callback）一律退化为呼出/隐藏菜单，避免点击无反馈。
                             else -> onTapCenter()
                         }
                     },
@@ -890,6 +934,10 @@ fun PageLevelReaderHost(
                         backgroundColor = bgColorArgb,
                         bgMeanColor = bgColorArgb,
                         onTapCenter = onTapCenter,
+                        tapActionTopLeft = tapActionTopLeft,
+                        tapActionTopRight = tapActionTopRight,
+                        tapActionBottomLeft = tapActionBottomLeft,
+                        tapActionBottomRight = tapActionBottomRight,
                         onTapOnHighlight = resolveTapOnHighlight,
                         onLongPress = resolveLongPress,
                         // popup 弹出门控：选区 / 高亮 action menu 任一活跃即视为 popup 弹出。

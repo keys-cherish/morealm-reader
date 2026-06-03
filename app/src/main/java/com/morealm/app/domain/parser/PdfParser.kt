@@ -112,12 +112,11 @@ object PdfParser {
                 }
             }
             if (imgFile.exists()) {
-                val pageCount = withPdfRenderer(context, uri) { it.pageCount } ?: 0
-                sb.append("<div class=\"pdf-page\" style=\"margin-bottom:8px;\">")
-                sb.append("<img src=\"file://${imgFile.absolutePath}\" style=\"width:100%;\" loading=\"lazy\" />")
-                sb.append("<div style=\"text-align:center;font-size:11px;color:#888;\">")
-                sb.append("${pageIdx + 1} / $pageCount")
-                sb.append("</div></div>")
+                // 每页直接输出 <img> + 换行分段。page-level 排版引擎 ScrollLayoutEngine 只识别
+                // <img>、不剥其它 HTML 标签，原先的 <div class="pdf-page"> 容器 + 页码 <div> 会被
+                // 当正文字面显示（用户实测正文顶部冒出 `<div class="pdf-page" style=...>`）。
+                // 页码由 InfoBar 进度呈现，无需正文内嵌；换行让每页图各自成段、满宽渲染。
+                sb.append("<img src=\"file://${imgFile.absolutePath}\" style=\"width:100%;\" />\n")
             }
         }
         return sb.toString().ifEmpty { "（PDF 渲染失败）" }

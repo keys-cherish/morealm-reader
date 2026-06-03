@@ -974,6 +974,12 @@ fun ReaderScreen(
                     if (toolbarEditing) toolBarViewModel.exitEditMode()
                     else viewModel.toggleControls()
                 },
+                // 点击区域翻页动作（与设置「轻按页面左侧」联动）。此前只喂给旧 renderer.Reader，
+                // page-level 横翻 Host 漏接 → 设置不生效；四角值 ReaderScreen 早已 collect。
+                tapActionTopLeft = tapTL,
+                tapActionTopRight = tapTR,
+                tapActionBottomLeft = tapBL,
+                tapActionBottomRight = tapBR,
                 // v1.5 page-level 重构遗留桥梁缺失修复：音量键 / 蓝牙 / TTS / 顶栏按钮路径
                 // 在 COVER/SLIDE/NONE 模式下通过 Host 内 LaunchedEffect 桥到 turnCtrl 动画 / fallback 瞬切
                 pageTurnCommand = pageTurnCommand,
