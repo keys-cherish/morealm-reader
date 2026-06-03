@@ -348,6 +348,7 @@ fun PageLevelReaderHost(
         onChapterIndexChange = onChapterIndexChange,
         loadChapterContent = loadChapterContent,
         engine = engine,
+        horizontalPaged = true, // 横向翻页：reflow 恢复整页对齐（pageOffset=0），不卡半页
     )
 
     // ── 跳书签 / 续读 / 搜索定位 / Slider 拖动 in-place seek ──
