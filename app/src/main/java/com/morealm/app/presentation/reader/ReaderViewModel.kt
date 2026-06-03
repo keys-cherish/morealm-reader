@@ -262,6 +262,13 @@ class ReaderViewModel @Inject constructor(
     // ── UI-only state (stays in ViewModel) ──
     private val _isControlsVisible = MutableStateFlow(false)
     val isControlsVisible: StateFlow<Boolean> = _isControlsVisible.asStateFlow()
+    /**
+     * 控制栏是否由「空内容占位自动弹出」触发（见 [chapterContent] collect），用于区别
+     * 用户手动开。内容恢复后据此自动收起，避免 showControls 残留 true → 返回键被
+     * 「先关控制栏」吃掉一次（用户报「正文页返回偶发要按两次」）。用户手动 toggle/hide
+     * 过即清零，不再自动收起，尊重用户操作。
+     */
+    private var controlsAutoShownForEmpty = false
 
     private val _isTtsPanelVisible = MutableStateFlow(false)
     val isTtsPanelVisible: StateFlow<Boolean> = _isTtsPanelVisible.asStateFlow()
@@ -603,8 +610,8 @@ class ReaderViewModel @Inject constructor(
     fun exportAsTxt(outputUri: Uri) = contentEdit.exportAsTxt(outputUri)
 
     // ── UI toggles ──
-    fun toggleControls() { _isControlsVisible.value = !_isControlsVisible.value }
-    fun hideControls() { _isControlsVisible.value = false }
+    fun toggleControls() { _isControlsVisible.value = !_isControlsVisible.value; controlsAutoShownForEmpty = false }
+    fun hideControls() { _isControlsVisible.value = false; controlsAutoShownForEmpty = false }
     fun toggleTtsPanel() { _isTtsPanelVisible.value = !_isTtsPanelVisible.value }
     fun hideTtsPanel() { _isTtsPanelVisible.value = false }
     fun toggleSettingsPanel() { _isSettingsPanelVisible.value = !_isSettingsPanelVisible.value }
@@ -748,8 +755,15 @@ class ReaderViewModel @Inject constructor(
         // blank screen and assumes the app is broken.
         viewModelScope.launch {
             chapter.chapterContent.collect { text ->
-                if (isEmptyContentPlaceholder(text) && !_isControlsVisible.value) {
+                val emptyPlaceholder = isEmptyContentPlaceholder(text)
+                if (emptyPlaceholder && !_isControlsVisible.value) {
                     _isControlsVisible.value = true
+                    controlsAutoShownForEmpty = true
+                } else if (!emptyPlaceholder && controlsAutoShownForEmpty) {
+                    // 空占位自动弹出的控制栏，内容恢复后自动收起（用户没手动动过时）。
+                    // 否则残留 showControls=true 会让返回键先关控制栏、再退出 → 按两次。
+                    _isControlsVisible.value = false
+                    controlsAutoShownForEmpty = false
                 }
                 // If TTS triggered the chapter switch, hand the new content to the host
                 // so playback continues from paragraph 0.
