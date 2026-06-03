@@ -355,6 +355,14 @@ fun ReaderScreen(
 
     // Back button: dismiss overlays first, then exit
     BackHandler(enabled = true) {
+        // 诊断「返回键偶发要按两次才退出」：记录每次返回时各分支状态，复现时一眼定位
+        // 是哪个面板状态残留 true（吃掉了第一次返回、却没有可见 UI 变化）。
+        com.morealm.app.core.log.AppLog.info(
+            "ReaderBack",
+            "back: editing=$toolbarEditing search=$showFullSearch bookmarks=$showBookmarks " +
+                "chapterList=$showChapterList tts=$showTtsPanel settings=$showSettings " +
+                "image=${viewingImageSrc != null} autoPage=$autoPageInterval controls=$showControls",
+        )
         when {
             toolbarEditing -> toolBarViewModel.exitEditMode()
             showFullSearch -> showFullSearch = false
