@@ -2,7 +2,6 @@ package com.morealm.app.presentation.reader
 
 import android.content.Context
 import android.net.Uri
-import android.widget.Toast
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -626,7 +625,7 @@ class ReaderViewModel @Inject constructor(
     fun copyTextToClipboard(text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("MoRealm", text))
-        Toast.makeText(context, "\u5df2\u590d\u5236", Toast.LENGTH_SHORT).show()
+        // \u590d\u5236\u53cd\u9988\u7531 UI \u5c42\u7edf\u4e00\u8d70\u5c45\u4e2d\u6d6e\u5c42\uff08CenterToastHost\uff09\uff1bVM \u53ea\u7ba1\u526a\u8d34\u677f\uff0c\u5173\u6ce8\u70b9\u5206\u79bb\u3002
     }
 
     fun speakSelectedText() {

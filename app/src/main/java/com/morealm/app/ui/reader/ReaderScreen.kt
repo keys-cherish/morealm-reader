@@ -299,21 +299,23 @@ fun ReaderScreen(
     ) { /* granted or not, TTS still works — notification just won't show */ }
 
     val context = LocalContext.current
+    val centerToast = rememberCenterToastState()
 
     /**
-     * 添加书签 + 立即弹 Toast 反馈。
+     * 添加书签 + 立即弹居中反馈。
      *
      * controller 走 fire-and-forget 协程插 DB（[ReaderBookmarkController.addBookmark]），
      * 在用户视角是"点了按钮屏幕没动静"——之前没有视觉反馈，用户会怀疑是否真的成功。
-     * 用 Toast 而不是 Snackbar：Reader 大量浮层（toolbar / mini-menu / TTS bar）已经
-     * 占着 Snackbar 默认位，再加一个会与现有浮层撞位；Toast 在系统层弹，零冲突。
+     * 用居中浮层 [CenterToastHost] 而不是 Snackbar：Reader 大量浮层（toolbar / mini-menu /
+     * TTS bar）已经占着 Snackbar 默认底位，再加一个会撞位；居中浮层在屏幕正中、短时、
+     * 不拦手势，与现有浮层零冲突（Android 11+ 系统 Toast 也无法再居中）。
      *
      * 没等 DB insert 回来：Repository 层基本不会因常规原因失败（无 unique 约束冲突，
-     * id 用 timestamp），让用户立刻看到反馈比"等 IO 再 toast"更顺手。
+     * id 用 timestamp），让用户立刻看到反馈比"等 IO 再弹"更顺手。
      */
     fun addBookmarkWithToast() {
         viewModel.addBookmark()
-        android.widget.Toast.makeText(context, "已添加书签", android.widget.Toast.LENGTH_SHORT).show()
+        centerToast.show("已添加书签")
     }
 
     fun openWebSearch(query: String) {
@@ -762,7 +764,7 @@ fun ReaderScreen(
                         viewModel.toggleControls()
                     }
                 },
-                onCopyText = { text -> viewModel.copyTextToClipboard(text) },
+                onCopyText = { text -> viewModel.copyTextToClipboard(text); centerToast.show("已复制") },
                 onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
                 onTranslateText = { text -> openTranslate(text) },
                 onLookupWord = { text -> openWebSearch(text) },
@@ -889,7 +891,7 @@ fun ReaderScreen(
                 // P4.4 选区 / 高亮 / 长按（与 V2 SCROLL Host 同款 callback 配置）
                 chapterHighlightsRaw = viewModel.highlights.collectAsStateWithLifecycle().value,
                 selectionMenuConfig = selectionMenuConfig,
-                onCopyText = { text -> viewModel.copyTextToClipboard(text) },
+                onCopyText = { text -> viewModel.copyTextToClipboard(text); centerToast.show("已复制") },
                 onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
                 onTranslateText = { text -> openTranslate(text) },
                 onLookupWord = { text -> openWebSearch(text) },
@@ -1057,7 +1059,7 @@ fun ReaderScreen(
                 readAloudChapterPosition = ttsChapterPosition,
                 onScrollNearBottom = { if (!showControls) viewModel.onScrollNearBottom() },
                 onScrollReachedBottom = { if (!showControls) viewModel.onScrollReachedBottom() },
-                onCopyText = { text -> viewModel.copyTextToClipboard(text) },
+                onCopyText = { text -> viewModel.copyTextToClipboard(text); centerToast.show("已复制") },
                 onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
                 onTranslateText = { text -> openTranslate(text) },
                 onLookupWord = { text -> openWebSearch(text) },
@@ -1670,6 +1672,9 @@ fun ReaderScreen(
 
         // 登录流程 UI —— 直接复用书源管理页同款 overlay，避免阅读器内另起一套。
         SourceLoginOverlay(loginViewModel = loginViewModel)
+
+        // 统一居中瞬时反馈（书签 / 复制等）—— 挂根 Box 顶层、屏幕正中、短时自动消失、不拦手势。
+        CenterToastHost(centerToast)
     }
 }
 
