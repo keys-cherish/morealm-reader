@@ -1121,23 +1121,41 @@ fun ReaderSettingsPanel(
             // ── Font size ──
             Text("字号", style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            // 字号用 −/＋ 步进按钮（每点 1px 精细微调，替代 Slider 拖动不够精准）。范围 12..100px。
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("A", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface)
-                Slider(
-                    value = fontSize, onValueChange = { fontSize = it; onFontSizeChange(it) },
-                    valueRange = 12f..100f, steps = 0,
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                    colors = SliderDefaults.colors(
-                        thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
-                )
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(
+                        onClick = { val v = (fontSize - 1f).coerceIn(12f, 100f); fontSize = v; onFontSizeChange(v) },
+                        enabled = fontSize > 12f,
+                    ) {
+                        Icon(Icons.Default.Remove, "减小字号", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    Text("${fontSize.toInt()}px",
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.widthIn(min = 56.dp).padding(horizontal = 8.dp))
+                    IconButton(
+                        onClick = { val v = (fontSize + 1f).coerceIn(12f, 100f); fontSize = v; onFontSizeChange(v) },
+                        enabled = fontSize < 100f,
+                    ) {
+                        Icon(Icons.Default.Add, "增大字号", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 Text("A", style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface)
             }
-            Text("${fontSize.toInt()}px" + if (fontSize > 50f) " ⚠ 超大字号可能影响排版" else "",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (fontSize > 50f) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+            if (fontSize > 50f) {
+                Text("⚠ 超大字号可能影响排版",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary)
+            }
 
             Spacer(Modifier.height(12.dp))
 
