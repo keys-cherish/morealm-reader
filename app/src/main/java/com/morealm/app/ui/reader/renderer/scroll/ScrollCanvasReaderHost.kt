@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onSizeChanged
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.ImageCache
@@ -281,6 +282,17 @@ fun ScrollCanvasReaderHost(
             this.letterSpacing = letterSpacing + 0.04f
         }
     }
+
+    // **viewport 真实高度修正**（对齐 PageLevelReaderHost 同款修法，根治「息屏重开跳章首」）：
+    // 入参 viewHeight/viewWidth 来自 ReaderScreen 的 configuration.screenHeightDp —— edge-to-edge
+    // 沉浸式下它扣掉状态栏，且会随息屏解锁时状态栏瞬时显隐而波动。该值进 engine remember key +
+    // computeStyleSignature(vh)，一波动就触发 engine 重建 → 清章重排 → 锚点时序缺失时回章首。
+    // 改用渲染容器（下方 Box fillMaxSize）onSizeChanged 实测稳定高度 shadow 掉入参；首帧用入参兜底，
+    // 实测到后刷新触发一次 engine 重建（同章重排由 PageLevelCore.reflowAnchorCp 保位）。
+    var measuredViewWidth by remember { mutableStateOf(viewWidth) }
+    var measuredViewHeight by remember { mutableStateOf(viewHeight) }
+    @Suppress("NAME_SHADOWING") val viewWidth = measuredViewWidth
+    @Suppress("NAME_SHADOWING") val viewHeight = measuredViewHeight
 
     // 给 engine paddingTop / paddingBottom 加上 InfoBar + status bar / nav bar inset 高度，
     // 让正文（含章首大字 title 块）的起始 y 在 InfoBar 之下，避免被 InfoBar 遮挡。
@@ -702,7 +714,17 @@ fun ScrollCanvasReaderHost(
         }
     }
 
-    Box(modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(bgColorArgb))) {
+    Box(
+        modifier
+            .fillMaxSize()
+            // 实测渲染容器尺寸 shadow 掉波动的入参（见上方 measuredViewWidth/Height 注释）。
+            // >0 才更新：避免测量未完成的 0 尺寸把 engine 拉成空布局。
+            .onSizeChanged {
+                if (it.width > 0) measuredViewWidth = it.width
+                if (it.height > 0) measuredViewHeight = it.height
+            }
+            .background(androidx.compose.ui.graphics.Color(bgColorArgb)),
+    ) {
         // 1. 背景图层（固定不滚动，与 LazyScrollRenderer line 742-751 同款）：
         //    在 Box 内但在 ScrollCanvasRenderer 之前先画 → z-order 在文字下方。
         //    bgBitmap 已经按 viewWidth × viewHeight 缓存，center-crop 填满。
