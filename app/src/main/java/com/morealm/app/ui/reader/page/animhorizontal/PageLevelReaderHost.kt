@@ -636,6 +636,20 @@ fun PageLevelReaderHost(
         if (bgBitmap != null) androidx.compose.ui.graphics.Color.Transparent
         else androidx.compose.ui.graphics.Color(bgColorArgb)
 
+    // page-level 把当前页归零画（PagePaneCanvas pageTop=0），但 hit-test / handle 定位走整章
+    // layout（cp / y 章内绝对）。屏幕 view-y 必须补上「当前页页首在整章里的 y」才不会命中章首
+    // ——否则翻到非首页做选区 / 点高亮，cp 全落到章首（修：选区背景不画 / 删高亮失准 / 高亮持久化
+    // 错位，根因实锤 2026-06-03：SCROLL 用 pixelOffset 补了、page-level 漏了等价的页偏移）。
+    val pageTopYInChapter: () -> Float = pageTopY@{
+        val layout = core.state.currentChapter ?: return@pageTopY 0f
+        val curPage = core.pageFactory.curPage
+        if (curPage.chapterIndex != layout.chapterIndex || curPage.lines.isEmpty()) return@pageTopY 0f
+        // findColumnByPixel(ScrollLayoutLookup) 期望「章内绝对 y」：内部累加各 page.height 定位
+        // 命中页、再 yInPage = y - pageTop 页内找。page-level 每页 line.lineTop 页内归零，故当前页
+        // 页首章内 y = 之前所有 page 的 height 累加（用 line.lineTop 是页内小数 → pageTopY≈0 白补）。
+        layout.pages.take(curPage.pageIndex).sumOf { it.height.toDouble() }.toFloat()
+    }
+
     // 优先级 3: tap-on-highlight 命中已存高亮 → 弹删除/分享菜单（NONE/COVER/SLIDE 走
     // pointerInput.detectTapGestures；SIMULATION 走 SimulationReadView.onSingleTap）。
     // 抽成 lambda 让两条路径共用。
@@ -645,7 +659,7 @@ fun PageLevelReaderHost(
         if (layout != null && chapterHighlightsRaw.isNotEmpty()) {
             val hit = layout.findColumnByPixel(
                 offset.x - layout.paddingLeft,
-                offset.y,
+                offset.y + pageTopYInChapter(),
             )
             val cp = hit?.column?.chapterPosition ?: hit?.line?.firstChapterPos
             if (cp != null) {
@@ -671,7 +685,7 @@ fun PageLevelReaderHost(
                 layout = layout,
                 chapterIndex = layout.chapterIndex,
                 x = offset.x - layout.paddingLeft,
-                yInChapter = offset.y,
+                yInChapter = offset.y + pageTopYInChapter(),
                 anchorInBox = offset,
             )
             if (sel.isActive) selection = sel
@@ -823,6 +837,13 @@ fun PageLevelReaderHost(
         if (currentLayout != null) {
             val selectionChapterIndex = if (selection.isActive) selection.chapterIndex else -1
             val selectionCpRange = if (selection.isActive) selection.cpRange else IntRange.EMPTY
+            // [诊断 SelBgDiag] 覆盖翻页 txt 选区背景不显示 —— 数据源（排查完删）
+            if (selection.isActive) {
+                com.morealm.app.core.log.AppLog.info(
+                    "SelBgDiag",
+                    "host active selChapter=$selectionChapterIndex curChapter=${currentLayout.chapterIndex} cpRange=$selectionCpRange",
+                )
+            }
 
             // ── 页内页眉页脚 provider（随页翻，替代旧的悬浮 overlay）──
             // 为每个可见 page（prev/cur/next/nextPlus）按其所属章 layout 现算标题 + 章内进度，
@@ -1006,12 +1027,14 @@ fun PageLevelReaderHost(
             }
 
             // ── 选区 Overlay (handle drag) + SelectionToolbar (菜单) ──
-            // 横向 page-level 模式 pixelOffsetProvider 返回 0（cur page 顶贴 view y=0 不偏移）
+            // page-level handle 定位走整章 layout（cp / y 章内绝对），当前页归零画，pixelOffset
+            // 必须给「当前页页首章内 y」，否则非首页 handle / 选区在整章里落到章首（同 resolveLongPress
+            // 根因，2026-06-03 修；旧值 { 0f } 是漏页偏移的病根）。
             ScrollSelectionOverlay(
                 selection = selection,
                 onSelectionChange = { selection = it },
                 layout = currentLayout,
-                pixelOffsetProvider = { 0f },
+                pixelOffsetProvider = pageTopYInChapter,
                 scrollableState = null,
                 viewportHeightProvider = { viewHeight },
             )

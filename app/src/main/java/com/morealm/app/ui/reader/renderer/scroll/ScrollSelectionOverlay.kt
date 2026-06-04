@@ -142,8 +142,12 @@ private fun SelectionHandles(
     val cpRange = selection.cpRange
     val startHit = layout.findColumnAt(cpRange.first) ?: return
     val endHit = layout.findColumnAt(cpRange.last) ?: return
-    val startCol = startHit.column ?: return
-    val endCol = endHit.column ?: return
+    // column == null 出现在 cp 落段末换行 / 行末边界（findColumnAt 该 cp 无对应 column）。
+    // 跨行 / 跨段选区时 end cp 常落这种位置——之前直接 return 让两个 handle 全消失（用户反馈
+    // 跨行游标不见）。fallback 到该行首 / 末 column，仅整行无 column（空段 / 图片段）才 return。
+    val startCol = startHit.column ?: startHit.line.columns.firstOrNull()
+    val endCol = endHit.column ?: endHit.line.columns.lastOrNull()
+    if (startCol == null || endCol == null) return
 
     val density = LocalDensity.current
     val handleSizePx = with(density) { 12.dp.toPx() }
