@@ -346,6 +346,14 @@ internal fun drawScrollPageOnCanvas(
         }
     }
 
+    // [诊断 SelBgDiag] 覆盖翻页 txt 选区背景不显示 —— 绘制判定（排查完删）
+    if (!selectionCpRange.isEmpty()) {
+        com.morealm.app.core.log.AppLog.info(
+            "SelBgDiag",
+            "canvas pageChapter=${page.chapterIndex} pageCp=$pageFirstCp..$pageLastCp selCp=$selectionCpRange " +
+                "intersects=${rangeIntersectsPage(selectionCpRange, pageFirstCp, pageLastCp)}",
+        )
+    }
     if (!selectionCpRange.isEmpty() && rangeIntersectsPage(selectionCpRange, pageFirstCp, pageLastCp)) {
         bgFillPaint.color = selectionArgb
         drawCpRangeRectsInPage(
