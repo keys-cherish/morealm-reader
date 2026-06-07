@@ -374,8 +374,8 @@ class ReaderSettingsController(
             prefs.setActiveReaderStyle("preset_paper")
 
             // ── 阅读相关 prefs 全面 reset 到默认值 ─────────────────────────
-            prefs.setPageTurnMode(PageTurnMode.SCROLL.key)
-            prefs.setPageAnim("slide")
+            prefs.setPageTurnMode(PageTurnMode.SWIPE_LR.key)
+            prefs.setPageAnim("cover")
             prefs.setReadingDirection("horizontal")
             prefs.setScreenOrientation(-1)
             prefs.setTextSelectable(true)
