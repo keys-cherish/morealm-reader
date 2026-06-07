@@ -193,10 +193,30 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.7",
+        date = "2026-06-07",
+        title = "外部打开 + 翻页体验",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            ChangelogItem(ChangeType.NEW, "从其他应用直接打开书籍文件 —— 在系统文件管理器、QQ、微信、网盘等应用里，点开 txt / epub / pdf / mobi 等格式的书，可以选「墨境」打开，直接进入阅读，并自动收进书架（同一个文件再次打开不会重复添加；不支持的格式会友好提示）"),
+            ChangelogItem(ChangeType.IMPROVE, "默认翻页方式改为「左右覆盖」—— 新安装的用户默认就是左右覆盖翻页（之前是上下滚动）；已经在用的用户保持你自己原来的设置不变，随时可在 阅读设置 →「翻页方式」里切换（上下滚动 / 覆盖 / 平移 / 仿真 / 无动画）"),
+            ChangelogItem(ChangeType.FIX, "息屏后重新打开不再跳回章首 —— 上下滚动阅读时，锁屏 / 息屏再点亮，阅读位置有时会跳回本章开头，现已修复，稳稳停在原处"),
+            ChangelogItem(ChangeType.FIX, "换源后目录空白 / 换不过去修复 —— 给章节很多的长篇换源时，经常换完目录是空的、反复点同一个源都失败；现在拉目录不再被整体超时中断，中途某页抓取失败也会保留已经抓到的章节，长篇换源成功率大幅提升"),
+            ChangelogItem(ChangeType.FIX, "调字号 / 行距不再跳回章首 —— 阅读中途调整字号、行距、字体、边距等，停留位置保持不变，不再弹回本章开头"),
+            ChangelogItem(ChangeType.FIX, "翻页行末字右缘缺角修复 —— 横向翻页时，部分精排电子书（自带字体）每行最后一个字的右侧笔画偶尔被切掉一点，现已修复"),
+            ChangelogItem(ChangeType.FIX, "横向翻页「轻按左侧」翻页方向设置生效 —— 之前把「轻按页面左侧」改成「翻到下一页」横向翻页点左侧仍按旧方向不生效；现在四种翻页都按设置走，而且改了立即生效"),
+            ChangelogItem(ChangeType.FIX, "打开 PDF 正文不再冒出代码标签 —— 之前打开部分 PDF，正文顶部会出现一段代码字面，现已去除"),
+            ChangelogItem(ChangeType.FIX, "章节首尾快速连点两次翻页不再黑屏一闪 —— 在章节最后一页 / 第一页快速连点两次翻页时，平移 / 覆盖翻页会黑屏闪一下，现已修复"),
+            ChangelogItem(ChangeType.FIX, "导入文件夹自动按文件夹名归组 —— 导入一个文件夹后里面的书会自动归到以该文件夹命名的分组；带子文件夹的每个子文件夹各成一组，重新导入同一文件夹能把之前散落的书收进分组"),
+            ChangelogItem(ChangeType.FIX, "返回键偶发要按两次才退出修复 —— 个别书在正文页按返回键偶尔要按两次才退出，现已修复，一次即退"),
+            ChangelogItem(ChangeType.FIX, "换字体 / 调边距偶发卡半页、连续换字体位置漂移修复 —— 横向翻页时换字体 / 字号 / 边距偶尔停在两页中间，连续切换字体位置还逐次偏移；现在按页稳定保持，不卡半页、不漂移"),
+            ChangelogItem(ChangeType.IMPROVE, "横向翻页排版铺满 + 页眉页脚随页翻动 —— 平移 / 覆盖 / 无动画翻页时，顶部章节名、底部进度随当前页一起翻动，正文填满整屏、每页底部对齐到同一基线，不再有大块底部空白"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.6",
         date = "2026-06-01",
         title = "EPUB 富排版增强 + 远程书架层级浏览",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             ChangelogItem(ChangeType.NEW, "搜索改为「先看后加」—— 点搜索结果先进入书籍详情页（可直接开始阅读试看），不再一点就自动进书架；想收藏点「加入书架」才进，看过不要的不留痕迹"),
             ChangelogItem(ChangeType.NEW, "远程书架（WebDAV）层级浏览 —— 远程书架可以按文件夹一层层点进去看，勾选要的书再导入，不用一次性拉全部"),
