@@ -12,6 +12,7 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.presentation.theme.ThemeViewModel
@@ -21,6 +22,7 @@ import dagger.hilt.android.AndroidEntryPoint
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     private val continueReadingRequest = mutableIntStateOf(0)
+    private val pendingOpenBookId = mutableStateOf<String?>(null)
 
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -39,6 +41,7 @@ class MainActivity : ComponentActivity() {
         }
 
         updateContinueReadingRequest(intent)
+        handleOpenBookIntent(intent)
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
@@ -66,6 +69,8 @@ class MainActivity : ComponentActivity() {
                     windowSizeClass = windowSizeClass,
                     themeViewModel = themeViewModel,
                     continueReadingRequest = continueReadingRequest.intValue,
+                    pendingOpenBookId = pendingOpenBookId.value,
+                    onPendingOpenConsumed = { pendingOpenBookId.value = null },
                 )
             }
         }
@@ -75,11 +80,19 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         updateContinueReadingRequest(intent)
+        handleOpenBookIntent(intent)
     }
 
     private fun updateContinueReadingRequest(intent: Intent?) {
         if (intent?.action == "com.morealm.app.CONTINUE_READING") {
             continueReadingRequest.intValue += 1
+        }
+    }
+
+    /** [FileOpenActivity] 导入完外部文件后跳回，带 bookId → 信号给 NavHost 打开阅读器。 */
+    private fun handleOpenBookIntent(intent: Intent?) {
+        if (intent?.action == FileOpenActivity.ACTION_OPEN_BOOK) {
+            intent.getStringExtra(FileOpenActivity.EXTRA_BOOK_ID)?.let { pendingOpenBookId.value = it }
         }
     }
 }
