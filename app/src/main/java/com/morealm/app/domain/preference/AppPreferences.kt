@@ -379,8 +379,10 @@ class AppPreferences @Inject constructor(
     val sourceFilterMaxWords: Flow<Int> = context.dataStore.data
         .map { it[Keys.SOURCE_FILTER_MAX_WORDS] ?: 0 }  // 0 = no max limit
 
+    // 默认翻页方式 = 左右覆盖（swipe_lr 走分页 Host + pageAnim=cover 联动）。仅影响新用户；
+    // 老用户 DataStore 已写过此键，升级后保持原选择不变。
     val pageTurnMode: Flow<String> = context.dataStore.data
-        .map { it[Keys.PAGE_TURN_MODE] ?: "scroll" }
+        .map { it[Keys.PAGE_TURN_MODE] ?: "swipe_lr" }
 
     /** 阅读方向：horizontal（默认）/ vertical_rl。详见 [Keys.READING_DIRECTION]。 */
     val readingDirection: Flow<String> = context.dataStore.data
@@ -481,8 +483,9 @@ class AppPreferences @Inject constructor(
     val disclaimerAccepted: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.DISCLAIMER_ACCEPTED] ?: false }
 
+    // 默认翻页动画 = 覆盖（与 pageTurnMode 默认 swipe_lr 联动）。仅影响新用户。
     val pageAnim: Flow<String> = context.dataStore.data
-        .map { it[Keys.PAGE_ANIM] ?: "vertical" }
+        .map { it[Keys.PAGE_ANIM] ?: "cover" }
 
     val tapLeftAction: Flow<String> = context.dataStore.data
         .map { it[Keys.TAP_LEFT_ACTION] ?: "prev" }
