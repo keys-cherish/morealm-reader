@@ -502,8 +502,8 @@ fun ProfileScreen(
             SettingsItem(
                 icon = Icons.Default.SystemUpdate,
                 title = "检查更新",
-                subtitle = "当前 v${BuildConfig.VERSION_NAME}",
-                onClick = { updateViewModel.checkUpdate(BuildConfig.VERSION_NAME) },
+                subtitle = "网盘下载最新版（当前 v${BuildConfig.VERSION_NAME}）",
+                onClick = { updateViewModel.showChannels() },
             )
             SettingsItem(Icons.Default.BugReport, "应用日志",
                 subtitle = "查看运行日志和错误信息", onClick = onNavigateAppLog)
@@ -569,13 +569,11 @@ fun ProfileScreen(
             onDismiss = { showAnnualReport = false },
         )
     }
-    // 检查更新对话框 / Snackbar 协调器：根据 UpdateViewModel.UiState 渲染。
-    // 共享主屏 snackbarHost，避免叠两个 host。
+    // 检查更新：点击直接弹三网盘下载渠道（不查版本，详见 UpdateViewModel / UpdateDialogHost）。
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     UpdateDialogHost(
         state = updateState,
         onDismiss = updateViewModel::dismiss,
-        snackbarHost = snackbarHost,
     )
 
     // 浮在药丸导航栏之上：pill 高 64dp + 底 padding 16dp ≈ 80dp，
