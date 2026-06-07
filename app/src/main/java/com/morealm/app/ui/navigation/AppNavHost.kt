@@ -66,6 +66,8 @@ fun MoRealmNavHost(
     windowSizeClass: WindowSizeClass,
     themeViewModel: ThemeViewModel,
     continueReadingRequest: Int = 0,
+    pendingOpenBookId: String? = null,
+    onPendingOpenConsumed: () -> Unit = {},
 ) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -87,6 +89,14 @@ fun MoRealmNavHost(
                 globalSnackbarHost.showSnackbar(msg)
             }
         }
+    }
+
+    // 外部「打开方式」用 MoRealm 打开文件：FileOpenActivity 导入完跳回 MainActivity 带 bookId，
+    // MainActivity 置 pendingOpenBookId → 这里消费一次 → 导航到阅读器（去重命中已有书也走此路径）。
+    LaunchedEffect(pendingOpenBookId) {
+        val id = pendingOpenBookId ?: return@LaunchedEffect
+        navController.navigateToReader(id)
+        onPendingOpenConsumed()
     }
 
     val isFullscreen = currentDestination?.route?.let { route ->

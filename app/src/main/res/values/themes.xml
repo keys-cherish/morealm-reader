@@ -14,4 +14,14 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="p">shortEdges</item>
     </style>
+
+    <!-- 外部文件打开入口 FileOpenActivity 的透明主题：导入期半透明遮罩 + loading 圈，完成后跳 reader。 -->
+    <style name="Theme.MoRealm.Transparent" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

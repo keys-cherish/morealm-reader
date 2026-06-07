@@ -41,15 +41,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Handle file open intents -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/plain" />
-                <data android:mimeType="application/epub+zip" />
-                <data android:mimeType="application/pdf" />
-                <data android:mimeType="application/x-mobipocket-ebook" />
-            </intent-filter>
+            <!-- 文件打开走独立透明 FileOpenActivity（见下方），此处不再声明 VIEW filter。 -->
             <!-- Continue reading shortcut -->
             <intent-filter>
                 <action android:name="com.morealm.app.CONTINUE_READING" />
@@ -58,6 +50,53 @@
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!--
+            外部「打开方式」文件入口（透明）。系统/文件管理器/MT/网盘/QQ/微信用 MoRealm 打开书籍
+            文件时 VIEW intent 落到这里：复制入私有存储 + 静默入库 → 跳 MainActivity 打开阅读器。
+            双 intent-filter：Filter1 = 来源已知 mimeType（含 octet-stream 兜底微信/QQ 的 content://）；
+            Filter2 = */* + pathPattern 按扩展名（文件管理器 file:// 无 mimeType 时）。两者互补覆盖各来源。
+        -->
+        <activity
+            android:name=".ui.navigation.FileOpenActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.MoRealm.Transparent">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/x-mobipocket-ebook" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:host="*" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.txt" />
+                <data android:pathPattern=".*\\.TXT" />
+                <data android:pathPattern=".*\\.epub" />
+                <data android:pathPattern=".*\\.EPUB" />
+                <data android:pathPattern=".*\\.pdf" />
+                <data android:pathPattern=".*\\.PDF" />
+                <data android:pathPattern=".*\\.mobi" />
+                <data android:pathPattern=".*\\.MOBI" />
+                <data android:pathPattern=".*\\.azw" />
+                <data android:pathPattern=".*\\.azw3" />
+                <data android:pathPattern=".*\\.zip" />
+                <data android:pathPattern=".*\\.umd" />
+            </intent-filter>
         </activity>
 
         <!--
