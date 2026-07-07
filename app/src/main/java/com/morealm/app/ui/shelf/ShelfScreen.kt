@@ -717,6 +717,7 @@ fun ShelfScreen(
                             name = groupNames[folderId] ?: "文件夹",
                             bookCount = folderBookCounts[folderId] ?: 0,
                             coverUrl = folderCoverUrls[folderId]?.firstOrNull(),
+                            customCoverUrl = allGroups.firstOrNull { it.id == folderId }?.customCoverUrl,
                             hasUpdate = groupHasUpdate[folderId] == true,
                             onClick = { folderClick(folderId) },
                             onLongClick = { folderLongClick(folderId) },

@@ -172,7 +172,9 @@ private fun BoxScope.PageInfoBars(spec: PageInfoBarSpec) {
     val cfg = spec.config
     // 横向 page-level 有「页」概念，slot 保留原义（不像 SCROLL 把 "page" 降级到章进度）
     fun mapSlot(s: String): String = s
-    ReaderInfoBar(
+    // 门控后全空的 bar 直接不组合——正文预留侧（PageLevelReaderHost.effectivePad*）已按
+    // headerHasContent/footerHasContent 不再让位，此处若仍放透明 bar 会叠在正文上方。
+    if (cfg.headerHasContent()) ReaderInfoBar(
         slotLeft = gateInfoSlot(mapSlot(cfg.headerLeft), cfg.showChapterName, cfg.showTimeBattery),
         slotCenter = gateInfoSlot(mapSlot(cfg.headerCenter), cfg.showChapterName, cfg.showTimeBattery),
         slotRight = gateInfoSlot(mapSlot(cfg.headerRight), cfg.showChapterName, cfg.showTimeBattery),
@@ -198,7 +200,7 @@ private fun BoxScope.PageInfoBars(spec: PageInfoBarSpec) {
                 bottom = 4.dp,
             ),
     )
-    ReaderInfoBar(
+    if (cfg.footerHasContent()) ReaderInfoBar(
         slotLeft = gateInfoSlot(mapSlot(cfg.footerLeft), cfg.showChapterName, cfg.showTimeBattery),
         slotCenter = gateInfoSlot(mapSlot(cfg.footerCenter), cfg.showChapterName, cfg.showTimeBattery),
         slotRight = gateInfoSlot(mapSlot(cfg.footerRight), cfg.showChapterName, cfg.showTimeBattery),

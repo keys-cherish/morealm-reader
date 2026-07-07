@@ -7,7 +7,6 @@ import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.parser.ComicBookDetector
 import com.morealm.app.domain.parser.EpubParser
-import com.morealm.app.domain.parser.LocalBookStorage
 import com.morealm.app.domain.parser.MobiParser
 import com.morealm.app.domain.parser.PdfParser
 import com.morealm.app.domain.repository.AutoGroupClassifier
@@ -36,18 +35,19 @@ import javax.inject.Singleton
  *
  * - **ImportEngine**（本 class）：
  *   - 只暴露 [importBatch] 一个 suspend 公开 API
- *   - chunked(50) 内部循环：每 chunk 跑完 save + bulkInsert 立刻 emit Bus 进度
+ *   - chunked(50) 内部循环：每 chunk 校验 + bulkInsert 完立刻 emit Bus 进度
  *   - chunk 边界消费 [ImportStateBus.consumeCancelFlag] —— 取消请求立即生效
  *   - Phase 2 enrich 并发 worker = [MAX_ENRICH_PARALLELISM]
  *
  * ## 与原 importFilesWithDeferredCovers 的关键差异
  *
- * 原实现：所有 `saveAsLocal` 串行完成（5-20 分钟）→ 单次 `bulkInsert(全部)`
- * → emit 一次"已导入 X 本"。中途 cancel / 进程被杀 → 4.35 GB 文件已落盘，
- * 但 Book row 全丢。
+ * 原实现：所有文件 `saveAsLocal` 全量复制（5-20 分钟、磁盘翻倍）→ 单次
+ * `bulkInsert(全部)` → emit 一次"已导入 X 本"。中途 cancel / 进程被杀 →
+ * 已复制的文件落盘但 Book row 全丢。
  *
- * 新实现：每 50 个 `saveAsLocal` 完成 → `bulkInsert(这 50 个)` → emit Phase1
- * (imported=Σ)。中途 cancel 立刻停后续 chunk，已 insert 的本数保留在书架。
+ * 现实现（原位引用后）：**零复制**，localPath 直存原文件 uri；每 50 个纯 DB
+ * insert → emit Phase1 (imported=Σ)。1GB 单文件与万本批量的耗时都只剩
+ * header 校验 + insert；中途 cancel 已 insert 的本数保留在书架。
  *
  * ## 短期 helper 复制
  *
@@ -62,18 +62,72 @@ class ImportEngine @Inject constructor(
     private val autoGroupClassifier: AutoGroupClassifier,
 ) {
 
-    private companion object {
+    companion object {
         private const val TAG = "ImportEngine"
 
         /** Phase 1 chunk 大小。与 [BookRepository.bulkInsert] 默认 batchSize 一致。 */
-        const val PHASE1_CHUNK_SIZE = 50
+        private const val PHASE1_CHUNK_SIZE = 50
 
         /**
          * Phase 2 enrichment 并发上限。每本要 EpubParser.withEpubBook + 封面解码 + bitmap
          * scale，CPU + IO 都占。4 个 worker 在中端机上是甜区（再多触发 IO 队列拥塞 +
          * GC 抖动）。
          */
-        const val MAX_ENRICH_PARALLELISM = 4
+        private const val MAX_ENRICH_PARALLELISM = 4
+
+        /**
+         * ScanItem → 原位引用 Book（Phase 1 placeholder）。
+         *
+         * 契约（单测 ImportEngineInPlaceBookTest 锁定）：
+         * - `localPath == item.uri.toString()` —— 不复制、不改写，file:// 与 content:// 同样成立
+         * - `fileSize/fileMtime == 扫描带出的指纹` —— 首次解析后章节 DB 缓存即可命中
+         * - title/author 来自 [parseBookFilename]
+         *
+         * 放 companion：纯函数、不碰注入依赖，单测无需构造带 Hilt 依赖的实例。
+         */
+        internal fun buildInPlaceBook(
+            item: FastFileScanner.ScanItem,
+            format: BookFormat,
+            folderId: String?,
+            addedAtStamp: Long,
+        ): Book {
+            val parsed = parseBookFilename(item.name)
+            return Book(
+                id = UUID.randomUUID().toString(),
+                title = parsed.first,
+                author = parsed.second,
+                localPath = item.uri.toString(),
+                format = format,
+                folderId = folderId,
+                addedAt = addedAtStamp,
+                fileSize = item.size,
+                fileMtime = item.lastModified,
+            )
+        }
+
+        private fun parseBookFilename(fileName: String): Pair<String, String> {
+            val base = fileName.substringBeforeLast('.').trim()
+
+            val bracketMatch = Regex("^[\\[【](.+?)[\\]】]\\s*(.+)$").find(base)
+            if (bracketMatch != null) {
+                return bracketMatch.groupValues[2].trim() to bracketMatch.groupValues[1].trim()
+            }
+            val parenMatch = Regex("^(.+?)[（(](.+?)[）)]$").find(base)
+            if (parenMatch != null) {
+                return parenMatch.groupValues[1].trim() to parenMatch.groupValues[2].trim()
+            }
+            val sepMatch = Regex("^(.+?)\\s*[-_—]\\s*(.+)$").find(base)
+            if (sepMatch != null) {
+                val left = sepMatch.groupValues[1].trim()
+                val right = sepMatch.groupValues[2].trim()
+                return if (left.length <= right.length && left.length <= 6) {
+                    right to left
+                } else {
+                    left to right
+                }
+            }
+            return base to ""
+        }
     }
 
     /**
@@ -99,10 +153,10 @@ class ImportEngine @Inject constructor(
         if (files.isEmpty()) return@coroutineScope BatchResult(0, 0)
         AppLog.info(TAG, "importBatch start files=${files.size} folder=$folderName")
 
-        // ── Phase 1: chunked(50) save + bulkInsert + emit ──
+        // ── Phase 1: chunked(50) 校验 + bulkInsert + emit（原位引用，无文件复制）──
         //
         // 每 chunk = 1 DB 事务 = 用户书架 +50 本立即可见。chunk 边界消费 cancel
-        // 信号让取消"立刻"生效（不打断已在跑的 saveAsLocal，但跑完不再进下一 chunk）。
+        // 信号让取消"立刻"生效（chunk 内只有 header 校验 + insert，本来就快）。
         var importedInBatch = 0
         val pendingForEnrich = ArrayList<PendingBook>(files.size)
         // 已在书架、但本次需归入导入组的旧书（dedup 命中且原先散落）。统一末尾 bulkUpdate。
@@ -179,8 +233,9 @@ class ImportEngine @Inject constructor(
     }
 
     /**
-     * 处理单个 chunk：format 检测 + header 校验 + saveAsLocal + 文件路径 dedup +
-     * 文件名解析 + applyAutoGroup → 返回待 bulkInsert 的 [PendingBook] 列表。
+     * 处理单个 chunk：format 检测 + header 校验 + **原位引用**（localPath 直存原文件
+     * uri，不复制）+ 原路径 dedup + 文件名解析 + applyAutoGroup → 返回待 bulkInsert
+     * 的 [PendingBook] 列表。
      *
      * 失败 file `continue` skip（跟原 controller 行为一致）。
      */
@@ -197,14 +252,17 @@ class ImportEngine @Inject constructor(
                 AppLog.warn(TAG, "Rejected invalid $format header: ${item.name}")
                 continue
             }
-            val ext = item.name.substringAfterLast('.', "").lowercase()
-            val localUri = LocalBookStorage.saveAsLocal(context, item.uri, ext)
-            if (localUri == null) {
-                AppLog.warn(TAG, "saveAsLocal failed for ${item.name}")
-                continue
-            }
-            // 跨 chunk dedup：之前 chunk 已 insert / 历史已有相同 hash file。
-            val existing = bookRepo.findByLocalPath(localUri.toString())
+            // ── 原位引用（静读天下方式）：localPath = 原文件 uri，导入零复制 ──
+            //
+            // File API 扫描 → file://，SAF 扫描 → tree 派生 document uri（ImportService
+            // 已 takePersistableUriPermission(treeUri)，重启后子文档仍可读）。导入 = 纯
+            // DB insert：1GB 文件秒导、万本不再翻倍占盘。存量书（filesDir/books 副本）
+            // 不迁移，localPath 依旧有效；[LocalBookStorage] 仅保留给旧书语义参考。
+            //
+            // dedup 改按**原路径**判重：同一文件重复导入命中；同内容不同路径视为两本
+            // （内容 hash 需要读全文件，违背零 IO 初衷——用户拍板可接受）。文件后来被
+            // 移动/删除 → reader 打开时指纹探测给「文件已移动或删除」明确提示。
+            val existing = bookRepo.findByLocalPath(item.uri.toString())
             if (existing != null) {
                 // 已在书架：把它收编进本次导入组（除非已经在该组）。「重新导入文件夹」是
                 // 强意图——文件夹里的书就该归这个文件夹组，不管之前是散落（folderId==null）、
@@ -218,17 +276,8 @@ class ImportEngine @Inject constructor(
                 continue
             }
 
-            val parsed = parseBookFilename(item.name)
             val book = applyAutoGroup(
-                Book(
-                    id = UUID.randomUUID().toString(),
-                    title = parsed.first,
-                    author = parsed.second,
-                    localPath = localUri.toString(),
-                    format = format,
-                    folderId = folderId,
-                    addedAt = System.currentTimeMillis() + idx,
-                )
+                buildInPlaceBook(item, format, folderId, addedAtStamp = System.currentTimeMillis() + idx)
             )
             pending.add(PendingBook(book, item, format))
         }
@@ -252,30 +301,6 @@ class ImportEngine @Inject constructor(
             "umd" -> BookFormat.UMD
             else -> BookFormat.UNKNOWN
         }
-    }
-
-    private fun parseBookFilename(fileName: String): Pair<String, String> {
-        val base = fileName.substringBeforeLast('.').trim()
-
-        val bracketMatch = Regex("^[\\[【](.+?)[\\]】]\\s*(.+)$").find(base)
-        if (bracketMatch != null) {
-            return bracketMatch.groupValues[2].trim() to bracketMatch.groupValues[1].trim()
-        }
-        val parenMatch = Regex("^(.+?)[（(](.+?)[）)]$").find(base)
-        if (parenMatch != null) {
-            return parenMatch.groupValues[1].trim() to parenMatch.groupValues[2].trim()
-        }
-        val sepMatch = Regex("^(.+?)\\s*[-_—]\\s*(.+)$").find(base)
-        if (sepMatch != null) {
-            val left = sepMatch.groupValues[1].trim()
-            val right = sepMatch.groupValues[2].trim()
-            return if (left.length <= right.length && left.length <= 6) {
-                right to left
-            } else {
-                left to right
-            }
-        }
-        return base to ""
     }
 
     private suspend fun applyAutoGroup(book: Book): Book {

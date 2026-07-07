@@ -286,11 +286,12 @@ class RemoteBookViewModel @Inject constructor(
                 val folderName = pathStack.lastOrNull()?.substringAfterLast('/') ?: "远程书架"
                 val tempFile = downloadToTemp(file.remotePath, file.name)
                     ?: return@launch  // failedImports 已记
-                val scanItem = FastFileScanner.ScanItem(
-                    uri = Uri.fromFile(tempFile),
-                    name = file.name,
-                    filePath = tempFile.absolutePath,
-                )
+                val scanItem = persistDownloaded(tempFile, file.name) ?: run {
+                    _failedImports.update {
+                        it + FailedImport(file.remotePath, file.name, "落盘失败（磁盘空间不足？）")
+                    }
+                    return@launch
+                }
                 ImportStateBus.update(ImportState.Scanning(folderName))
                 ImportStateBus.update(ImportState.Phase1(folderName, imported = 0, total = 1))
                 val result = importEngine.importBatch(
@@ -347,12 +348,8 @@ class RemoteBookViewModel @Inject constructor(
                         ImportStateBus.update(
                             ImportState.Phase1(folderName, imported = 0, total = downloaded.size)
                         )
-                        val items = downloaded.map { (_, tempFile, originalName) ->
-                            FastFileScanner.ScanItem(
-                                uri = Uri.fromFile(tempFile),
-                                name = originalName,
-                                filePath = tempFile.absolutePath,
-                            )
+                        val items = downloaded.mapNotNull { (_, tempFile, originalName) ->
+                            persistDownloaded(tempFile, originalName)
                         }
                         importEngine.importBatch(items, folderId, folderName)
                         downloaded.forEach { (_, tempFile, _) -> runCatching { tempFile.delete() } }
@@ -404,12 +401,8 @@ class RemoteBookViewModel @Inject constructor(
                     ImportStateBus.update(
                         ImportState.Phase1(folderName, imported = 0, total = downloaded.size)
                     )
-                    val items = downloaded.map { (_, tempFile, originalName) ->
-                        FastFileScanner.ScanItem(
-                            uri = Uri.fromFile(tempFile),
-                            name = originalName,
-                            filePath = tempFile.absolutePath,
-                        )
+                    val items = downloaded.mapNotNull { (_, tempFile, originalName) ->
+                        persistDownloaded(tempFile, originalName)
                     }
                     importEngine.importBatch(items, folderId, folderName)
                     downloaded.forEach { (_, tempFile, _) -> runCatching { tempFile.delete() } }
@@ -476,12 +469,8 @@ class RemoteBookViewModel @Inject constructor(
                         pathToFolderId[key] ?: baseFolderId
                     }
                     for ((folderId, group) in grouped) {
-                        val items = group.map { (_, tempFile, name) ->
-                            FastFileScanner.ScanItem(
-                                uri = Uri.fromFile(tempFile),
-                                name = name,
-                                filePath = tempFile.absolutePath,
-                            )
+                        val items = group.mapNotNull { (_, tempFile, name) ->
+                            persistDownloaded(tempFile, name)
                         }
                         val result = importEngine.importBatch(
                             files = items,
@@ -493,7 +482,7 @@ class RemoteBookViewModel @Inject constructor(
                         )
                         importedSoFar += result.phase1Inserted
                     }
-                    // 2d) 删除已 import 的 tempFile（saveAsLocal 已 copy 到永久位置）
+                    // 2d) 删除已 import 的 tempFile（persistDownloaded 已挪到永久位置）
                     downloaded.forEach { (_, tempFile, _) -> runCatching { tempFile.delete() } }
                 }
             ImportStateBus.update(
@@ -532,6 +521,31 @@ class RemoteBookViewModel @Inject constructor(
         val root = pathStack.firstOrNull() ?: return emptyList()
         if (currentPath == root) return emptyList()
         return currentPath.removePrefix("$root/").split('/').filter { it.isNotBlank() }
+    }
+
+    /**
+     * 远程下载的 tempFile → 永久私有位置（filesDir/books/{hash}.{ext}）→ ScanItem。
+     *
+     * 导入引擎已改「原位引用」（localPath 直存 ScanItem.uri，不再复制）——远程书的
+     * "原位"必须是永久目录而不是 tempFile：temp 导入后立刻被删（各调用点的 2d 步），
+     * 直接引用会让书秒变死链。走 [com.morealm.app.domain.parser.LocalBookStorage]
+     * 原有 hash 落盘还顺带 dedup 重复下载。返回 null = 落盘失败（磁盘满等），caller skip。
+     */
+    private fun persistDownloaded(tempFile: File, name: String): FastFileScanner.ScanItem? {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val permanentUri = com.morealm.app.domain.parser.LocalBookStorage
+            .saveAsLocal(context, Uri.fromFile(tempFile), ext) ?: run {
+            AppLog.error(TAG, "persistDownloaded failed for $name")
+            return null
+        }
+        val f = File(requireNotNull(permanentUri.path) { "file uri without path: $permanentUri" })
+        return FastFileScanner.ScanItem(
+            uri = permanentUri,
+            name = name,
+            filePath = f.absolutePath,
+            size = f.length(),
+            lastModified = f.lastModified(),
+        )
     }
 
     /**

@@ -33,6 +33,12 @@ object FastFileScanner {
         val name: String,
         /** File API 路径下的绝对路径；SAF 路径下为 null。 */
         val filePath: String?,
+        /**
+         * 扫描时顺手带出的文件大小 / lastModified（ms）——导入原位引用时直接落
+         * Book.fileSize/fileMtime 指纹，免得对上万文件再逐个 stat 一轮。拿不到 = 0。
+         */
+        val size: Long = 0L,
+        val lastModified: Long = 0L,
     )
 
     /**
@@ -122,6 +128,8 @@ object FastFileScanner {
                             uri = Uri.fromFile(f),
                             name = f.name,
                             filePath = f.absolutePath,
+                            size = f.length(),
+                            lastModified = f.lastModified(),
                         )
                     )
                 }
@@ -158,6 +166,8 @@ object FastFileScanner {
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
         )
         try {
             context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
@@ -176,6 +186,9 @@ object FastFileScanner {
                                 uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId),
                                 name = name,
                                 filePath = null,
+                                // 同一 cursor 顺手带出，零额外 IPC；provider 不给则 0
+                                size = if (cursor.isNull(3)) 0L else cursor.getLong(3),
+                                lastModified = if (cursor.isNull(4)) 0L else cursor.getLong(4),
                             )
                         )
                     }

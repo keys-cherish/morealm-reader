@@ -61,7 +61,9 @@ import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
 import com.morealm.app.ui.reader.renderer.scroll.ScrollSelectionOverlay
 import com.morealm.app.ui.reader.renderer.scroll.ScrollSelectionState
+import com.morealm.app.ui.reader.renderer.scroll.footerHasContent
 import com.morealm.app.ui.reader.renderer.scroll.gateInfoSlot
+import com.morealm.app.ui.reader.renderer.scroll.headerHasContent
 import com.morealm.app.ui.reader.renderer.scroll.handleCancelSelection
 import com.morealm.app.ui.reader.renderer.scroll.handleLongPress
 import androidx.compose.ui.geometry.Offset
@@ -288,8 +290,15 @@ fun PageLevelReaderHost(
     // page-level 模式 padding 仅"状态栏 + InfoBar"让位，不再叠加用户配置的 paddingTop/Bottom
     // —— 后者本意是"正文与边界留白"，但 InfoBar 让位已经远超它（infoBarHeightPx=192>paddingTop=120），
     // 叠加会浪费 ~120px 屏幕空间（截图章中 page 顶/底两块大空白）。
-    val effectivePadTop = if (infoBar != null) topInsetPx + infoBarHeightPx else topInsetPx + paddingTop
-    val effectivePadBottom = if (infoBar != null) bottomInsetPx + infoBarHeightPx else bottomInsetPx + paddingBottom
+    //
+    // 2026-07-07 修复「关时间电量后底部空一截」：预留改按「gateInfoSlot 门控后 header/footer
+    // 是否真有内容」分别判定（与 PagePaneCanvas.PageInfoBars 绘制同口径，Reader.kt:358 旧滚动
+    // 模式同款语义）。footer 全空 → 正文下沉占用该行；但保留 bottomInset + 用户 paddingBottom
+    // 作安全边距（仿页脚自身的 inset 让位逻辑，防止末行贴导航栏 / 屏幕底被切）。
+    val infoHeaderHasContent = infoBar?.headerHasContent() == true
+    val infoFooterHasContent = infoBar?.footerHasContent() == true
+    val effectivePadTop = if (infoHeaderHasContent) topInsetPx + infoBarHeightPx else topInsetPx + paddingTop
+    val effectivePadBottom = if (infoFooterHasContent) bottomInsetPx + infoBarHeightPx else bottomInsetPx + paddingBottom
 
     val engine = remember(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,

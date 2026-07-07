@@ -27,7 +27,7 @@ sealed interface ImportState {
     data class Scanning(val folderName: String) : ImportState
 
     /**
-     * Phase 1：saveAsLocal + bulkInsert chunk 循环。
+     * Phase 1：header 校验 + bulkInsert chunk 循环（原位引用后无文件复制）。
      *
      * @param imported 已批量入库的本数（chunk 边界 emit，实时增长）
      * @param total    扫描发现的可导入 file 总数（Scanning 阶段算出后 immutable）

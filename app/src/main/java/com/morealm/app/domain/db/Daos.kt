@@ -106,6 +106,13 @@ interface BookDao {
     @Query("UPDATE books SET inBookshelf = :inShelf WHERE id = :id")
     suspend fun setInBookshelf(id: String, inShelf: Boolean)
 
+    /**
+     * 清掉所有本地 TXT 书的文件指纹 → 下次打开时章节 DB 缓存判定失效，强制重新分章。
+     * 唯一调用点：用户修改「自定义章节正则」时（章节切分规则变了，缓存的目录作废）。
+     */
+    @Query("UPDATE books SET fileSize = 0, fileMtime = 0 WHERE format = 'TXT' AND localPath IS NOT NULL")
+    suspend fun invalidateTxtChapterFingerprints()
+
     /** Books eligible for batch toc refresh (web-format only, opt-in)。仅书架内的书参与自动刷新。 */
     @Query("SELECT * FROM books WHERE format = 'WEB' AND canUpdate = 1 AND inBookshelf = 1 ORDER BY lastReadAt DESC")
     suspend fun getRefreshableBooks(): List<Book>

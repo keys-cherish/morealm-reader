@@ -92,6 +92,9 @@ import com.morealm.app.domain.entity.*
         // v34→v35: books 加 inBookshelf 列（@ColumnInfo defaultValue="1" → 老书迁移后全部保留在架）。
         // 纯加列，Room 自动 ALTER TABLE ADD COLUMN。
         AutoMigration(from = 34, to = 35),
+        // v35→v36: books 加 fileSize/fileMtime 列（本地书文件指纹，章节 DB 缓存失效校验用）。
+        // 纯加列 defaultValue=0，Room 自动 ALTER TABLE ADD COLUMN；老书 0 = 首开解析后回填。
+        AutoMigration(from = 35, to = 36),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -123,6 +126,6 @@ abstract class AppDatabase : RoomDatabase() {
          * 注解直接引用，外部模块（[com.morealm.app.di.APP_DB_SCHEMA_VERSION]）也
          * 通过 const val 编译期同步。
          */
-        const val SCHEMA_VERSION = 35
+        const val SCHEMA_VERSION = 36
     }
 }
