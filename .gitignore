@@ -62,3 +62,7 @@ desktop.ini
 
 # 冗余源代码备份（vim / IDE 重构遗留）
 old_vm_*.txt
+/CLAUDE.md
+/AGENTS.md
+/.quench/
+/.smrmanager/
