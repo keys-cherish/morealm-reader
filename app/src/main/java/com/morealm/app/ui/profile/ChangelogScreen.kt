@@ -193,10 +193,24 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.8",
+        date = "2026-07-07",
+        title = "大文件秒导入 + 阅读排版增强",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            ChangelogItem(ChangeType.IMPROVE, "导入大文件 / 海量书籍飞快，不再占双倍空间 —— 导入改为「原地引用」：不再把书复制一份塞进应用，导入 1GB 大文件、上万个文件都是秒完成，手机存储也不会翻倍（提示：导入后请不要移动 / 删除原文件，否则需要重新导入；软件里删书永远不会动你的原文件）"),
+            ChangelogItem(ChangeType.IMPROVE, "读过的大 txt 再打开秒进 —— 大文本第一次打开解析好目录后会记住，之后再打开直接进入，不用每次重新分章等待（原文件有改动时会自动重新解析）"),
+            ChangelogItem(ChangeType.NEW, "新增「首行缩进」独立设置 —— 阅读设置里可选 顶格 / 1 字 / 2 字，对 txt 全局生效；epub 优先保留原书自带的缩进排版，只有原书没设缩进的段落才套用你的选择"),
+            ChangelogItem(ChangeType.FIX, "段落之间的空行正常显示 —— txt 里作者用来分隔场景的空行不再被吃掉挤成一坨，段与段之间稳定保留一个空行"),
+            ChangelogItem(ChangeType.FIX, "关掉「时间 / 电量」后底部不再空一截 —— 关闭底部时间电量显示后，正文会自动往下铺满，底部不再留一条空白，文字也不会贴边被切"),
+            ChangelogItem(ChangeType.FIX, "从网盘 / WebDav 导入的书打得开了 —— 修复远程导入的书偶尔变成「文件已移动或删除」打不开的问题"),
+            ChangelogItem(ChangeType.IMPROVE, "书架处处显示自定义封面 —— 你给书设置的自定义封面，在书架网格、列表、继续阅读卡片、文件夹里都会正确显示"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.7",
         date = "2026-06-07",
         title = "外部打开 + 翻页体验",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             ChangelogItem(ChangeType.NEW, "从其他应用直接打开书籍文件 —— 在系统文件管理器、QQ、微信、网盘等应用里，点开 txt / epub / pdf / mobi 等格式的书，可以选「墨境」打开，直接进入阅读，并自动收进书架（同一个文件再次打开不会重复添加；不支持的格式会友好提示）"),
             ChangelogItem(ChangeType.IMPROVE, "默认翻页方式改为「左右覆盖」—— 新安装的用户默认就是左右覆盖翻页（之前是上下滚动）；已经在用的用户保持你自己原来的设置不变，随时可在 阅读设置 →「翻页方式」里切换（上下滚动 / 覆盖 / 平移 / 仿真 / 无动画）"),
