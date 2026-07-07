@@ -881,6 +881,9 @@ fun ReaderSettingsPanel(
     onBrightnessChange: (Float) -> Unit = {},
     paragraphSpacing: Int = 8,
     onParagraphSpacingChange: (Int) -> Unit = {},
+    /** 首行缩进字符数：0=顶格 / 1 / 2（默认两字）。见 [ReaderSettingsController.setFirstLineIndent]。 */
+    firstLineIndent: Int = 2,
+    onFirstLineIndentChange: (Int) -> Unit = {},
     marginHorizontal: Int = 24,
     /**
      * 松手时回写 prefs 触发 reflow。设计上**不**走"拖动期间实时预览"——
@@ -1289,6 +1292,28 @@ fun ReaderSettingsPanel(
                     FilterChip(
                         selected = paragraphSpacing == v,
                         onClick = { onParagraphSpacingChange(v) },
+                        label = { Text(l) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                            selectedLabelColor = MaterialTheme.colorScheme.primary),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // ── First-line indent ──
+            // 独立的「首行缩进」控件（用户反馈：之前找不到缩进设置）。值 = 全角空格个数，
+            // 写 ReaderStyle.paragraphIndent。TXT 预埋进正文、EPUB 走引擎 config 自带优先，
+            // 详见 ReaderSettingsController.setFirstLineIndent。selected 直接比对入参，
+            // 与行距 / 段距 chip 同款单一真值流，无 local state。
+            Text("首行缩进", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(0 to "顶格", 1 to "1 字", 2 to "2 字").forEach { (v, l) ->
+                    FilterChip(
+                        selected = firstLineIndent == v,
+                        onClick = { onFirstLineIndentChange(v) },
                         label = { Text(l) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),

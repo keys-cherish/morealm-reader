@@ -146,6 +146,18 @@ class ReaderSettingsController(
         .map { it?.paragraphSpacing ?: 8 }
         .stateIn(scope, SharingStarted.Eagerly, 8)
 
+    /**
+     * 首行缩进「字符数」—— 0=顶格 / 1 / 2（默认，CJK 排版标准两字缩进）。
+     *
+     * 存储在 [ReaderStyle.paragraphIndent] 里（N 个全角空格 U+3000）。派生成 Int 供 UI
+     * chip 选中态比对；写回走 [setFirstLineIndent]。缩进对 TXT 是预埋进正文字符（影响 cp），
+     * 对 EPUB 是排版层 config（EPUB 自带 CSS text-indent 优先，缺失才用这个值），
+     * 详见 [ReaderChapterController.normalizeTxtParagraphIndent] 与 ScrollLayoutEngine。
+     */
+    val firstLineIndent: StateFlow<Int> = activeStyle
+        .map { it?.paragraphIndent?.count { c -> c == '　' } ?: 2 }
+        .stateIn(scope, SharingStarted.Eagerly, 2)
+
     val marginHorizontal: StateFlow<Int> = activeStyle
         .map { it?.paddingLeft ?: 24 }
         .stateIn(scope, SharingStarted.Eagerly, 24)
@@ -312,6 +324,17 @@ class ReaderSettingsController(
     fun setLineHeight(height: Float) = updateStyle { it.copy(lineHeight = height) }
 
     fun setParagraphSpacing(value: Int) = updateStyle { it.copy(paragraphSpacing = value) }
+
+    /**
+     * 设置首行缩进字符数（0..2）。写 [ReaderStyle.paragraphIndent] = N 个全角空格。
+     *
+     * **注意**：TXT 的缩进是烘进正文字符的（[ReaderChapterController.normalizeTxtParagraphIndent]
+     * 按此值预埋），改这个值必须触发**重新取章 + 重排**才生效——由 ReaderViewModel
+     * 监听 paragraphIndent 变化处理（同简繁转换的 reload 模式）。EPUB 侧是排版 config，
+     * activeStyle 回流即自动重排，无需额外 reload。
+     */
+    fun setFirstLineIndent(count: Int) =
+        updateStyle { it.copy(paragraphIndent = "　".repeat(count.coerceIn(0, 4))) }
 
     fun setMarginHorizontal(value: Int) = updateStyle { it.copy(paddingLeft = value, paddingRight = value) }
 
