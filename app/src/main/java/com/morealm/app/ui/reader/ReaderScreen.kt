@@ -193,6 +193,7 @@ fun ReaderScreen(
     val showTimeBatterySetting by viewModel.settings.isTimeBatteryVisible.collectAsStateWithLifecycle()
     val tapLeftAction by viewModel.settings.tapLeftAction.collectAsStateWithLifecycle()
     val paragraphSpacing by viewModel.settings.paragraphSpacing.collectAsStateWithLifecycle()
+    val firstLineIndent by viewModel.settings.firstLineIndent.collectAsStateWithLifecycle()
     val marginHorizontal by viewModel.settings.marginHorizontal.collectAsStateWithLifecycle()
     val marginTopVal by viewModel.settings.marginTop.collectAsStateWithLifecycle()
     val marginBottomVal by viewModel.settings.marginBottom.collectAsStateWithLifecycle()
@@ -592,6 +593,17 @@ fun ReaderScreen(
             }
         }
         val isTxtFormat = book?.format == com.morealm.app.domain.entity.BookFormat.TXT
+        // 首行缩进走「引擎 config」的格式：仅 EPUB/MOBI/AZW3 —— 它们是 HTML 结构、
+        // 自带 CSS text-indent（引擎里 CSS 优先、缺失回退此 config），且**不**预埋段首空格。
+        // TXT（normalizeTxtParagraphIndent）/ WEB（ContentProcessor）已把 "　　" 烘进正文，
+        // 传 config 会双重缩进；PDF/CBZ/UMD 无此需求 → 一律 ""。
+        val indentConfig = when (book?.format) {
+            com.morealm.app.domain.entity.BookFormat.EPUB,
+            com.morealm.app.domain.entity.BookFormat.MOBI,
+            com.morealm.app.domain.entity.BookFormat.AZW3,
+            -> effectiveReaderStyle?.paragraphIndent ?: "　　"
+            else -> ""
+        }
         val displayContent = renderedChapter.content.ifEmpty { content }
         // restoreToken != 0L 表示 ChapterController 至少 publish 过一次有效章节
         // （loadChapter / commitChapterShiftNext/Prev 都赋 System.nanoTime()）。
@@ -701,7 +713,9 @@ fun ReaderScreen(
                 textBold = effectiveReaderStyle?.textBold ?: 0,
                 lineSpacingExtra = readerLineHeight,
                 paragraphSpacing = effectiveReaderStyle?.paragraphSpacing ?: 8,
-                // 段首缩进默认 ""（ContentProcessor 已加 "　　"）；非默认 indent 由 caller 自己处理
+                // 首行缩进：TXT 已由 normalizeTxtParagraphIndent 预埋进正文（传 "" 防双重）；
+                // EPUB/MOBI 走引擎 config——自带 CSS text-indent 优先，缺失段落回退此设置值。
+                paragraphIndent = indentConfig,
                 titleMode = effectiveReaderStyle?.titleMode ?: 0,
                 titleAlign = titleAlign,
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
@@ -877,6 +891,9 @@ fun ReaderScreen(
                 textBold = effectiveReaderStyle?.textBold ?: 0,
                 lineSpacingExtra = readerLineHeight,
                 paragraphSpacing = effectiveReaderStyle?.paragraphSpacing ?: 8,
+                // 首行缩进：TXT 已由 normalizeTxtParagraphIndent 预埋进正文（传 "" 防双重）；
+                // EPUB/MOBI 走引擎 config——自带 CSS text-indent 优先，缺失段落回退此设置值。
+                paragraphIndent = indentConfig,
                 titleMode = effectiveReaderStyle?.titleMode ?: 0,
                 titleAlign = titleAlign,
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
@@ -1417,6 +1434,8 @@ fun ReaderScreen(
                 onBrightnessChange = viewModel::setReaderBrightness,
                 paragraphSpacing = paragraphSpacing,
                 onParagraphSpacingChange = viewModel.settings::setParagraphSpacing,
+                firstLineIndent = firstLineIndent,
+                onFirstLineIndentChange = viewModel.settings::setFirstLineIndent,
                 marginHorizontal = marginHorizontal,
                 onMarginHorizontalCommit = { v ->
                     viewModel.settings.setMarginHorizontal(v)

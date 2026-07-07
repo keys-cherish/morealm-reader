@@ -127,6 +127,7 @@ class ReaderViewModel @Inject constructor(
         context = context,
         scope = viewModelScope,
         chineseConvertMode = { settings.chineseConvertMode.value },
+        firstLineIndentChars = { settings.firstLineIndent.value },
         pageTurnMode = { settings.pageTurnMode.value },
         resetTtsParagraphIndex = { tts.resetParagraphIndex() },
         fontRepo = fontRepo,
@@ -344,6 +345,34 @@ class ReaderViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             prefs.readerBrightness.collect { _readerBrightness.value = it }
+        }
+    }
+
+    init {
+        // 首行缩进改变 → TXT 正文预埋的段首空格数变了 → 必须重新取章重排（EPUB 走
+        // config 由 activeStyle 回流自动重排，但 reload 对它也无害）。drop(1) 跳过
+        // stateIn 的初始 emit（避免进屏即无谓 reload）；distinctUntilChanged 防抖同值。
+        // 注意：调用 reloadForBakedSettingChange()（方法体运行时才访问 chineseConvertMutex，
+        // 该字段声明在本 init 块之后；直接在 collect body 里摸 mutex 会踩「字段未就位」NPE，
+        // 见 readerBrightness init 块注释）。
+        viewModelScope.launch {
+            settings.firstLineIndent
+                .drop(1)
+                .distinctUntilChanged()
+                .collect { reloadForBakedSettingChange() }
+        }
+    }
+
+    /**
+     * 重排当前章 —— 用于「烘进正文的设置」变更（首行缩进等）。clearPreloaded + loadChapter，
+     * 与 [setChineseConvertMode] 共享 [chineseConvertMutex] 串行化，避免和简繁切换的
+     * loadChapter 并行 race。方法体在**运行时**解析 mutex，规避 init 块声明顺序陷阱。
+     */
+    private suspend fun reloadForBakedSettingChange() {
+        chineseConvertMutex.withLock {
+            chapter.clearPreloadedChapters()
+            val idx = chapter.currentChapterIndex.value
+            withContext(Dispatchers.Main) { chapter.loadChapter(idx) }
         }
     }
 

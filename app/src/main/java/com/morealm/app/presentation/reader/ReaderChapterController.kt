@@ -73,6 +73,12 @@ class ReaderChapterController(
     private val scope: CoroutineScope,
     /** Lazily provide the chinese convert mode from settings */
     private val chineseConvertMode: () -> Int,
+    /**
+     * 首行缩进字符数（0..2），来自 activeStyle.paragraphIndent。TXT 正文按此值预埋
+     * 段首全角空格（[normalizeTxtParagraphIndent]）。默认 2（CJK 标准两字缩进），
+     * 单测 / 旧调用方零迁移。
+     */
+    private val firstLineIndentChars: () -> Int = { 2 },
     /** Lazily provide the page turn mode from settings */
     private val pageTurnMode: () -> PageTurnMode,
     /** Reset TTS paragraph index on chapter load */
@@ -1548,28 +1554,33 @@ class ReaderChapterController(
      * 本地 TXT 段落首行缩进归一化。
      *
      * 背景：滚动 / 翻页统一走 [com.morealm.app.domain.render.layout.ScrollLayoutEngine]，
-     * 引擎默认 `paragraphIndent=""`，首行缩进靠**文本里预埋的段首 "　　"** 渲染。
+     * 引擎默认 `paragraphIndent=""`，首行缩进靠**文本里预埋的段首全角空格**渲染。
      * 网络书由 [com.morealm.app.domain.webbook.ContentProcessor] 预埋；本地 TXT 走
      * [com.morealm.app.domain.parser.LocalBookParser.readChapter] 不带缩进 → 两种模式
      * 都顶格。此处补齐：
      *
      *  1. 逐段（按 `\n`，与引擎 `split('\n')` 同口径）trim 掉行首脏缩进（全角空格 / NBSP /
      *     Tab / 普通空格 —— 覆盖整个 Unicode 空白类），抹平源文件五花八门的缩进；
-     *  2. 非空段统一加 "　　"。
+     *  2. 非空段统一加 [firstLineIndentChars] 个全角空格（用户「首行缩进」设置，0=顶格）。
      *
-     * 即源文件本来用 4 空格 / Tab / 全角空格缩进也归一成统一两字缩进，绝不双重缩进。
-     * 标题行即便被加上 "　　"，引擎 `normalizeTitleForCompare` 比对前会剥掉 "　　"，
+     * 即源文件本来用 4 空格 / Tab / 全角空格缩进也归一成统一缩进，绝不双重缩进。
+     * 标题行即便被加上缩进，引擎 `normalizeTitleForCompare` 比对前会剥掉全角空格，
      * 重复标题去重 / 自画标题块不受影响。
      *
+     * 用户改「首行缩进」设置后，缩进字符数变化 → 正文 cp 坐标随之改变，必须**重新取章
+     * 重排**才生效（ReaderViewModel 监听 firstLineIndent 触发，同简繁 reload 模式）。
+     *
      * 仅对 [com.morealm.app.domain.entity.BookFormat.TXT] 调用 —— EPUB / MOBI 等是
-     * HTML / 结构化内容，缩进靠自带 CSS `text-indent`（引擎 cssIndentPx），不能逐行加
-     * "　　"，否则破坏标签结构。
+     * HTML / 结构化内容，缩进靠自带 CSS `text-indent`（引擎 config fallback），不能逐行加
+     * 空格，否则破坏标签结构。
      */
-    private fun normalizeTxtParagraphIndent(content: String): String =
-        content.split('\n').joinToString("\n") { line ->
+    private fun normalizeTxtParagraphIndent(content: String): String {
+        val indent = "　".repeat(firstLineIndentChars().coerceIn(0, 4))
+        return content.split('\n').joinToString("\n") { line ->
             val trimmed = line.trim { it.isWhitespace() || Character.isSpaceChar(it) }
-            if (trimmed.isEmpty()) "" else "　　$trimmed"
+            if (trimmed.isEmpty()) "" else indent + trimmed
         }
+    }
 
     /**
      * SCROLL 模式下视口中心段所属章节漂移到新值时，由 [ChapterWindowSource]（debounced 300ms）
