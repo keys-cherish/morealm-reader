@@ -100,7 +100,30 @@ data class Book(
      */
     @ColumnInfo(defaultValue = "1")
     val inBookshelf: Boolean = true,
-)
+
+    // ── 本地文件指纹 (since v36) ──
+    /**
+     * 导入时记录的文件大小（字节）。与 [fileMtime] 一起构成本地书的文件指纹：
+     * 打开书时若指纹与当前文件一致 → 章节目录直接用 DB 缓存（chapters 表），
+     * 跳过全文件解析（1GB TXT 二次打开秒开的关键）；指纹变化 → 文件被外部
+     * 替换/追更 → 重新解析并刷新缓存。0 = 老书 / 未知（首开解析后回填）。
+     */
+    @ColumnInfo(defaultValue = "0")
+    val fileSize: Long = 0L,
+    /** 导入时记录的文件 lastModified（ms）。语义见 [fileSize]。SAF 拿不到时为 0（仅按 size 校验）。 */
+    @ColumnInfo(defaultValue = "0")
+    val fileMtime: Long = 0L,
+) {
+    /**
+     * 展示用封面：自定义封面优先，空则退回原封面。
+     *
+     * 所有「显示单本书封面」处统一走它，避免各 UI 各写一遍 `customCoverUrl ?: coverUrl`
+     * 造成漂移——列表项 / 继续阅读卡曾因直接读 coverUrl 而漏掉自定义封面即源于此。
+     * 计算属性（非构造参数）→ Room 不建列、kotlinx.serialization 不序列化，无迁移影响。
+     */
+    val displayCoverUrl: String?
+        get() = customCoverUrl?.takeIf { it.isNotBlank() } ?: coverUrl
+}
 
 @Serializable
 enum class BookFormat {

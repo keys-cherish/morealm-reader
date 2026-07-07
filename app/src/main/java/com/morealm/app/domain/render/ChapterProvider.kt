@@ -254,7 +254,7 @@ class ChapterProvider(
             it.startsWith("<") && (it.contains("<p") || it.contains("<div") || it.contains("<img"))
         } || content.contains(StructuredChapterContent.BLOCK_STYLE_MARKER)
         val rawParagraphs = if (isHtml) parseHtmlParagraphs(content) else {
-            content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
+            parsePlainTextParagraphs(content)
         }
         // EPUB 章首常有正文级 h1-h6 章节标题段（典型形如
         // `<h2 class="head1">第一章</h2><h2 class="head">小节名</h2>`）。ChapterProvider
@@ -342,6 +342,15 @@ class ChapterProvider(
             // 不再继续排版下一段。配合 finalizePage 的检查双层防御。
             cancelCheck?.invoke()
             val para = paragraph.text
+            if (paragraph.isBlankSeparator) {
+                // 空行分隔段：占一行正文高的留白，不产字、不占 cp。仅页中生效——
+                // 本页还没有任何行（页首）时吞掉，翻页后顶部悬空行没有排版意义
+                // （传统排版规则同款）；落在页尾溢出时由下一段的翻页逻辑自然吃掉。
+                if (textPages.last().lines.isNotEmpty()) {
+                    durY += contentPaintTextHeight
+                }
+                continue
+            }
             if (paragraph.isChapterTitle) {
                 if (textPages.last().lines.isNotEmpty()) {
                     durY += titleTopSpacing.coerceAtLeast(paragraphSpacing).toFloat()
@@ -529,7 +538,7 @@ class ChapterProvider(
             it.startsWith("<") && (it.contains("<p") || it.contains("<div") || it.contains("<img"))
         } || content.contains(StructuredChapterContent.BLOCK_STYLE_MARKER)
         val rawParagraphs = if (isHtml) parseHtmlParagraphs(content) else {
-            content.lines().mapNotNull { normalizeParagraph(it)?.let(::LayoutParagraph) }
+            parsePlainTextParagraphs(content)
         }
         // 与横排 layoutInternal 同款：剥掉所有正文 h 标题段 + 剥掉拆段普通 <p> 形式的
         // 重复 title 文本。详细思路见横排同步注释。
@@ -631,6 +640,9 @@ class ChapterProvider(
         // ── 正文段落 ──
         for (paragraph in paragraphs) {
             cancelCheck?.invoke()
+            // 空行分隔段：竖排暂不表达（空列的 x 定位与 page.addLine 语义耦合，
+            // 风险大于收益），维持跳过 = 旧行为。横排已渲染成一行高留白。
+            if (paragraph.isBlankSeparator) continue
             paragraphNum++
             // 段首加 paragraphIndent（"　　"两个全角空格）——竖排里就是
             // 列顶部留两格空白，跟横排"行首缩进"等价的视觉暗示。chapterTitle 段不加。
@@ -1178,6 +1190,31 @@ class ChapterProvider(
         }
     }
 
+    /**
+     * 纯文本（TXT / 无 HTML 标记内容）→ 段落列表。
+     *
+     * 历史 bug（用户 2026-07-07 报告）：空行经 [normalizeParagraph] 返回 null 被
+     * mapNotNull 静默丢弃 → `1\n\n2` 渲染成两段无缝衔接，[collapseBlankLines]
+     * "压成单个空行保留段落分隔"的设计在渲染端断链。现在「连续 N 个空行」折叠成
+     * 1 个 [LayoutParagraph.isBlankSeparator] 段；首部空行仍丢（页首留白无语义），
+     * 尾部空行天然丢（pendingBlank 不落地）。
+     */
+    private fun parsePlainTextParagraphs(content: String): List<LayoutParagraph> = buildList {
+        var pendingBlank = false
+        for (line in content.lines()) {
+            val norm = normalizeParagraph(line)
+            if (norm == null) {
+                pendingBlank = isNotEmpty()
+            } else {
+                if (pendingBlank) {
+                    add(LayoutParagraph("", isBlankSeparator = true))
+                    pendingBlank = false
+                }
+                add(LayoutParagraph(norm))
+            }
+        }
+    }
+
     private fun normalizeParagraph(paragraph: String): String? {
         // trim \u8c13\u8bcd\u5fc5\u987b\u8986\u76d6**\u6240\u6709** Unicode \u7a7a\u767d\u5b57\u7b26\u2014\u2014\u5426\u5219\u53ea\u542b NBSP (U+00A0) / FIGURE SPACE
         // (U+2007) / NARROW NBSP (U+202F) \u7b49"\u770b\u4f3c\u7a7a\u767d\u4f46\u975e ASCII"\u5b57\u7b26\u7684\u6bb5\u843d\u4f1a\u88ab\u5f53\u6210\u6709\u5185\u5bb9
@@ -1242,6 +1279,13 @@ class ChapterProvider(
         val isChapterTitle: Boolean = false,
         val isChapterNum: Boolean = false,
         val isChapterSubTitle: Boolean = false,
+        /**
+         * 空行分隔段：TXT 正文里作者用空行表达的场景转换 / 诗节分隔。
+         * [parsePlainTextParagraphs] 把「连续 N 个空行」折叠成 1 个此类段；横排布局
+         * 渲染成一行高留白（页首自动吞掉）、不产字不占 cp。HTML/EPUB 分支永不产生
+         * （<p>&#160;</p> 假空段仍按原样丢弃，见 [normalizeParagraph] 注释）。
+         */
+        val isBlankSeparator: Boolean = false,
         /**
          * **P3-5b Phase 3**：CSS box 装饰（圆角背景 / 边框）。由 [parseHtmlParagraphs]
          * 处理 `__MOREALM_BLOCK_STYLE__` inline marker 后填，[setTypeText] 创建 TextLine

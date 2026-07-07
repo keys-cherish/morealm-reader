@@ -613,6 +613,13 @@ class ReaderChapterController(
                 }
             }
 
+            // 本地书章节 DB 缓存：命中 = 跳过全文件解析（1GB TXT 二次打开秒开）。
+            // usedChapterCache 时下方 saveChapters 也跳过（章节本来就来自 DB，万章书免重写）；
+            // localFingerprint 非 null 时在 totalChapters 写回处一并回填（合并成一次 update，
+            // 防止两次独立 update 用旧 book 对象互相覆盖）。
+            var usedChapterCache = false
+            var localFingerprint: com.morealm.app.domain.storage.LocalFileFingerprint.Fingerprint? = null
+
             var chapters: List<BookChapter> = if (isWebBook) {
                 try {
                     loadWebBookChapters(book)
@@ -637,10 +644,54 @@ class ReaderChapterController(
                     return
                 }
                 val uri = Uri.parse(localPath)
-                val customTxtRegex = prefs.customTxtChapterRegex.first()
-                val rawChapters = LocalBookParser.parseChapters(context, uri, book.format, customTxtRegex)
-                val mapped = rawChapters.map { ch ->
-                    if (ch.bookId != bookId) ch.copy(id = "${bookId}_${ch.index}", bookId = bookId) else ch
+
+                // ── 文件指纹：真打不开 → 明确兜底提示（原位引用导入后文件可能被用户移动/删除）──
+                // 注意指纹取不到 ≠ 文件丢失：奇葩 provider 可能 stat 不了但能读——那种情况
+                // 跳过缓存直接解析（localFingerprint 留 null，不回填、不误拦）。
+                val fingerprint = withContext(Dispatchers.IO) {
+                    com.morealm.app.domain.storage.LocalFileFingerprint.of(context, uri)
+                }
+                if (fingerprint == null) {
+                    val readable = withContext(Dispatchers.IO) {
+                        runCatching {
+                            context.contentResolver.openInputStream(uri)?.use { } != null
+                        }.getOrDefault(false)
+                    }
+                    if (!readable) {
+                        AppLog.warn("Chapter", "Local file inaccessible: $localPath")
+                        publishReaderError(
+                            title = "文件已移动或删除",
+                            detail = "找不到这本书的源文件，或访问授权已失效。\n\n" +
+                                "如果文件还在设备上，请重新导入一次即可继续阅读（阅读进度会保留）。\n\n" +
+                                "原文件位置：\n$localPath",
+                        )
+                        return
+                    }
+                    AppLog.warn("Chapter", "Fingerprint unavailable but file readable, chapter cache disabled: $localPath")
+                }
+                localFingerprint = fingerprint
+
+                // ── 章节 DB 缓存：指纹一致直接用，跳过全文件解析 ──
+                val cachedChapters = withContext(Dispatchers.IO) {
+                    bookRepo.getChaptersList(bookId)
+                }
+                val mapped: List<BookChapter>
+                if (fingerprint != null && cachedChapters.isNotEmpty() &&
+                    com.morealm.app.domain.storage.LocalFileFingerprint.matches(book.fileSize, book.fileMtime, fingerprint)
+                ) {
+                    usedChapterCache = true
+                    mapped = cachedChapters
+                    AppLog.info(
+                        "Chapter",
+                        "Local chapter cache hit: ${cachedChapters.size} chapters " +
+                            "(size=${fingerprint.size} mtime=${fingerprint.mtime})",
+                    )
+                } else {
+                    val customTxtRegex = prefs.customTxtChapterRegex.first()
+                    val rawChapters = LocalBookParser.parseChapters(context, uri, book.format, customTxtRegex)
+                    mapped = rawChapters.map { ch ->
+                        if (ch.bookId != bookId) ch.copy(id = "${bookId}_${ch.index}", bookId = bookId) else ch
+                    }
                 }
 
                 if (book.format == com.morealm.app.domain.entity.BookFormat.EPUB) {
@@ -712,13 +763,33 @@ class ReaderChapterController(
             _chapters.value = chapters
             // 仅持久化真实 toc；fallback placeholder 仅用 in-memory 让 reader 能加载内容
             // 用户下次重新打开时尝试 web fetch 重新拉真实 toc（不会被 fallback wipe 锁死）。
-            if (!isFallback) {
+            // 章节缓存命中时同样跳过——章节本来就来自 DB，万章书重写一遍纯浪费。
+            if (!isFallback && !usedChapterCache) {
                 bookRepo.saveChapters(bookId, chapters)
             }
-            AppLog.info("Chapter", "Parsed ${chapters.size} chapters${if (isFallback) " (fallback, not persisted)" else ""}")
+            AppLog.info(
+                "Chapter",
+                "Parsed ${chapters.size} chapters" +
+                    if (isFallback) " (fallback, not persisted)"
+                    else if (usedChapterCache) " (from DB cache)"
+                    else "",
+            )
 
-            if (book.totalChapters != chapters.size) {
-                bookRepo.update(book.copy(totalChapters = chapters.size))
+            // totalChapters 变化 / 本地书指纹回填合并成**一次** update ——
+            // 两次独立 update 会用各自的旧 book 快照互相覆盖对方刚写的列。
+            // fallback placeholder（web 1 章占位）历史上也会写 totalChapters，保持不变。
+            val updatedBook = book.copy(
+                totalChapters = chapters.size,
+                fileSize = localFingerprint?.size ?: book.fileSize,
+                fileMtime = localFingerprint?.mtime ?: book.fileMtime,
+            )
+            if (updatedBook != book) {
+                bookRepo.update(updatedBook)
+                // 必须同步刷新 _book.value：ReaderProgressController.saveProgressLocked 用
+                // chapterController.book.value 做**整行** update(book.copy(lastRead...))——
+                // 若这里不刷新，首次翻页存进度就会拿旧快照把刚回填的 fileSize/fileMtime
+                // 清回 0，章节缓存永远不会命中（静默失效，极难排查）。
+                _book.value = updatedBook
             }
 
             val progress = bookRepo.getProgress(bookId)
@@ -1454,7 +1525,15 @@ class ReaderChapterController(
                     )
                 }
                 val replaced = applyReplaceRules(raw)
-                com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
+                val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
+                // 本地 TXT 首行缩进归一化（详见 [normalizeTxtParagraphIndent]）：纯文本路径
+                // 没有 ContentProcessor 预埋的段首 "　　"，统一在此补齐，让 TXT 在滚动 /
+                // 翻页两种模式下都有与网络书一致的首行缩进。
+                if (book.format == com.morealm.app.domain.entity.BookFormat.TXT) {
+                    normalizeTxtParagraphIndent(converted)
+                } else {
+                    converted
+                }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             // 结构化并发的取消传递必须重抛，不能吞，否则上层 launch 会以为该协程「成功完成」
@@ -1464,6 +1543,33 @@ class ReaderChapterController(
             null
         }
     }
+
+    /**
+     * 本地 TXT 段落首行缩进归一化。
+     *
+     * 背景：滚动 / 翻页统一走 [com.morealm.app.domain.render.layout.ScrollLayoutEngine]，
+     * 引擎默认 `paragraphIndent=""`，首行缩进靠**文本里预埋的段首 "　　"** 渲染。
+     * 网络书由 [com.morealm.app.domain.webbook.ContentProcessor] 预埋；本地 TXT 走
+     * [com.morealm.app.domain.parser.LocalBookParser.readChapter] 不带缩进 → 两种模式
+     * 都顶格。此处补齐：
+     *
+     *  1. 逐段（按 `\n`，与引擎 `split('\n')` 同口径）trim 掉行首脏缩进（全角空格 / NBSP /
+     *     Tab / 普通空格 —— 覆盖整个 Unicode 空白类），抹平源文件五花八门的缩进；
+     *  2. 非空段统一加 "　　"。
+     *
+     * 即源文件本来用 4 空格 / Tab / 全角空格缩进也归一成统一两字缩进，绝不双重缩进。
+     * 标题行即便被加上 "　　"，引擎 `normalizeTitleForCompare` 比对前会剥掉 "　　"，
+     * 重复标题去重 / 自画标题块不受影响。
+     *
+     * 仅对 [com.morealm.app.domain.entity.BookFormat.TXT] 调用 —— EPUB / MOBI 等是
+     * HTML / 结构化内容，缩进靠自带 CSS `text-indent`（引擎 cssIndentPx），不能逐行加
+     * "　　"，否则破坏标签结构。
+     */
+    private fun normalizeTxtParagraphIndent(content: String): String =
+        content.split('\n').joinToString("\n") { line ->
+            val trimmed = line.trim { it.isWhitespace() || Character.isSpaceChar(it) }
+            if (trimmed.isEmpty()) "" else "　　$trimmed"
+        }
 
     /**
      * SCROLL 模式下视口中心段所属章节漂移到新值时，由 [ChapterWindowSource]（debounced 300ms）

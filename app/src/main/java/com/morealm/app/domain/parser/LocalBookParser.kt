@@ -209,6 +209,151 @@ object LocalBookParser {
         context: Context, uri: Uri,
         cs: java.nio.charset.Charset, pattern: Pattern,
     ): List<BookChapter> {
+        // 1GB 级大文件的性能关键路径：单字节 0x0A 可安全定位行边界的编码（UTF-8/GBK/
+        // GB18030/Big5/ASCII——它们的多字节序列后续字节均不含 0x0A）走字节级扫描，
+        // 只对「候选标题行」解码；UTF-16/32 系列 0x0A 会出现在半个 code unit 里，
+        // fallback 到旧的全文解码字符级实现（此类 txt 罕见，慢点可接受）。
+        val chapters = if (isNewlineByteSafe(cs)) {
+            parseTocBytewise({ context.contentResolver.openInputStream(uri) }, cs, pattern)
+        } else {
+            parseTocCharwise({ context.contentResolver.openInputStream(uri) }, cs, pattern)
+        }
+        val bookId = ""
+        return chapters.flatMap { ch ->
+            val size = ch.endPosition - ch.startPosition
+            if (size <= MAX_LENGTH_WITH_TOC) listOf(ch)
+            else splitLargeChapter(ch, 100 * 1024)
+        }.mapIndexed { i, ch -> ch.copy(id = "${bookId}_$i", index = i) }
+    }
+
+    /** [cs] 的字节流里 0x0A 是否只可能是换行符（而非多字节字符的一部分）。 */
+    internal fun isNewlineByteSafe(cs: java.nio.charset.Charset): Boolean {
+        val n = cs.name().uppercase()
+        return !(n.startsWith("UTF-16") || n.startsWith("UTF-32") || n.startsWith("X-UTF-16") || n.startsWith("X-UTF-32"))
+    }
+
+    /**
+     * 标题候选行的最大字节数。旧实现的匹配条件是 `trim 后 1..50 字符`；一行 trim 前
+     * 含缩进空白，按「全角空格缩进 + 50 个 4 字节字符」上限估算 512 字节绰绰有余。
+     * 超过它的行不可能是章节标题 → 字节级扫描直接跳过、不解码（大正文段零解码开销）。
+     */
+    private const val MAX_TITLE_BYTES = 512
+
+    /**
+     * 字节级 TOC 扫描 —— 与 [parseTocCharwise] 产出语义一致（含「第 0 字节标题行
+     * 并入前言」的历史行为），但：
+     *  - 行边界在字节层找 0x0A，不做全文解码 / split（无海量 String 分配）
+     *  - 偏移量直接按字节累加，去掉旧实现每行 `toByteArray` 反算（1GB 从分钟级 → IO 极限）
+     *  - 只有长度 ≤ [MAX_TITLE_BYTES] 的行才解码 + 正则匹配
+     *
+     * 跨块的未完成行头部缓存在 [MAX_TITLE_BYTES] 大小的 pending buffer 里；一旦超长
+     * 即丢内容只记 overflow（单行几百 MB 的病态文件也不会撑爆内存）。
+     */
+    internal fun parseTocBytewise(
+        open: () -> java.io.InputStream?,
+        cs: java.nio.charset.Charset,
+        pattern: Pattern,
+    ): List<BookChapter> {
+        val chapters = mutableListOf<BookChapter>()
+        val bookId = ""
+        var chapterStart = 0L
+        var chapterTitle: String? = null
+        var chapterIndex = 0
+
+        var lineStartGlobal = 0L          // 当前行起始的全局字节偏移
+        var totalBytes = 0L               // 已消费块的全局字节数（块基址）
+        val pending = ByteArray(MAX_TITLE_BYTES)
+        var pendingLen = 0
+        var pendingOverflow = false
+        val nlByte = 0x0A.toByte()
+
+        // 完整行到手：候选标题则切章。与旧实现同语义（lineStart > chapterStart 才 emit）。
+        fun onLine(bytes: ByteArray, off: Int, len: Int, lineStart: Long) {
+            if (len == 0 || len > MAX_TITLE_BYTES) return
+            val trimmed = String(bytes, off, len, cs).trim()
+            if (trimmed.length in 1..50 && pattern.matcher(trimmed).matches() && lineStart > chapterStart) {
+                chapters.add(BookChapter(
+                    id = "${bookId}_$chapterIndex", bookId = bookId,
+                    index = chapterIndex,
+                    title = (chapterTitle ?: "前言").trim(),
+                    startPosition = chapterStart, endPosition = lineStart,
+                ))
+                chapterIndex++
+                chapterStart = lineStart
+                chapterTitle = trimmed
+            }
+        }
+
+        open()?.use { stream ->
+            val buffer = ByteArray(BLOCK_SIZE)
+            while (true) {
+                val read = stream.read(buffer)
+                if (read <= 0) break
+                var pos = 0
+                while (pos < read) {
+                    var nl = pos
+                    while (nl < read && buffer[nl] != nlByte) nl++
+                    if (nl < read) {
+                        val segLen = nl - pos
+                        if (pendingLen > 0 || pendingOverflow) {
+                            val totalLen = pendingLen + segLen
+                            if (!pendingOverflow && totalLen <= MAX_TITLE_BYTES) {
+                                System.arraycopy(buffer, pos, pending, pendingLen, segLen)
+                                onLine(pending, 0, totalLen, lineStartGlobal)
+                            } // 超长行不可能是标题，直接跳过
+                            pendingLen = 0
+                            pendingOverflow = false
+                        } else {
+                            onLine(buffer, pos, segLen, lineStartGlobal)
+                        }
+                        lineStartGlobal = totalBytes + nl + 1
+                        pos = nl + 1
+                    } else {
+                        // 块尾未完成行 → 累进 pending（超长即丢内容只记 overflow）
+                        val segLen = read - pos
+                        if (!pendingOverflow && pendingLen + segLen <= MAX_TITLE_BYTES) {
+                            System.arraycopy(buffer, pos, pending, pendingLen, segLen)
+                            pendingLen += segLen
+                        } else {
+                            pendingLen = 0
+                            pendingOverflow = true
+                        }
+                        pos = read
+                    }
+                }
+                totalBytes += read
+            }
+        }
+
+        // 文件尾最后一行（无换行结尾）
+        if (pendingLen > 0 && !pendingOverflow) {
+            onLine(pending, 0, pendingLen, lineStartGlobal)
+        }
+        if (totalBytes > chapterStart) {
+            chapters.add(BookChapter(
+                id = "${bookId}_$chapterIndex", bookId = bookId,
+                index = chapterIndex,
+                title = (chapterTitle ?: "正文").trim(),
+                startPosition = chapterStart, endPosition = totalBytes,
+            ))
+        }
+        return chapters
+    }
+
+    /**
+     * 字符级 TOC 扫描（原 parseWithTocPattern 主体）—— 仅 UTF-16/32 等
+     * [isNewlineByteSafe] 为 false 的编码使用；也是 bytewise 实现的单测 oracle。
+     *
+     * 注意其固有误差：每行偏移按 `(line + "\n").toByteArray` 估算，**末章 endPosition
+     * 恒多 1 字节**——文件以 \n 结尾时 split('\n') 产生幻影空尾元素（+1），不以 \n
+     * 结尾时末行被补 \n（+1）。bytewise 实现修正为精确字节数；旧值靠 readTxtChapter
+     * 的 coerce 兜底，读取不受影响。
+     */
+    internal fun parseTocCharwise(
+        open: () -> java.io.InputStream?,
+        cs: java.nio.charset.Charset,
+        pattern: Pattern,
+    ): List<BookChapter> {
         val chapters = mutableListOf<BookChapter>()
         val bookId = ""
         var globalOffset = 0L
@@ -217,7 +362,7 @@ object LocalBookParser {
         var chapterIndex = 0
         var leftover = ""
 
-        context.contentResolver.openInputStream(uri)?.use { stream ->
+        open()?.use { stream ->
             val buffer = ByteArray(BLOCK_SIZE)
             while (true) {
                 val read = stream.read(buffer)
@@ -257,11 +402,7 @@ object LocalBookParser {
             ))
         }
 
-        return chapters.flatMap { ch ->
-            val size = ch.endPosition - ch.startPosition
-            if (size <= MAX_LENGTH_WITH_TOC) listOf(ch)
-            else splitLargeChapter(ch, 100 * 1024)
-        }.mapIndexed { i, ch -> ch.copy(id = "${bookId}_$i", index = i) }
+        return chapters
     }
 
     /**

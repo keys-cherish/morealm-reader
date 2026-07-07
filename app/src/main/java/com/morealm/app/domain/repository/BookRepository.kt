@@ -82,6 +82,9 @@ class BookRepository @Inject constructor(
     /** 显式加入 / 移出书架（只翻 inBookshelf 标志，不动其它字段）。 */
     suspend fun setInBookshelf(id: String, inShelf: Boolean) = bookDao.setInBookshelf(id, inShelf)
 
+    /** 自定义 TXT 章节正则变更后调用：清指纹 → 下次打开强制重新分章（见 DAO 注释）。 */
+    suspend fun invalidateTxtChapterFingerprints() = bookDao.invalidateTxtChapterFingerprints()
+
     suspend fun delete(book: Book) = bookDao.delete(book)
 
     suspend fun deleteById(id: String) = bookDao.deleteById(id)

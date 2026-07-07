@@ -170,7 +170,7 @@ fun BookGridItem(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center,
         ) {
-            val displayCover = book.customCoverUrl?.takeIf { it.isNotBlank() } ?: book.coverUrl
+            val displayCover = book.displayCoverUrl
             if (displayCover != null) {
                 val context = LocalContext.current
                 val imageRequest = remember(context, displayCover) {
@@ -336,11 +336,12 @@ fun ContinueReadingCard(
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center,
             ) {
-                if (book.coverUrl != null) {
+                val displayCover = book.displayCoverUrl
+                if (displayCover != null) {
                     val context = LocalContext.current
                     AsyncImage(
                         model = ImageRequest.Builder(context)
-                            .data(resolveCoverData(book.coverUrl))
+                            .data(resolveCoverData(displayCover))
                             .size(112, 152)
                             .crossfade(80)
                             .memoryCachePolicy(CachePolicy.ENABLED)
@@ -469,6 +470,8 @@ fun FolderListItem(
     name: String,
     bookCount: Int,
     coverUrl: String? = null,
+    /** 文件夹自定义封面，非空时优先于成员书封面 [coverUrl]（与网格 FolderCard 一致）。 */
+    customCoverUrl: String? = null,
     /**
      * 分组内任意书 lastCheckCount > 0 时为 true — UI 在右上角画一颗 8dp 红点。
      * 颜色统一走 colorScheme.error 保证暗色 / 浅色都明显。
@@ -503,12 +506,13 @@ fun FolderListItem(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center,
         ) {
-            if (coverUrl != null) {
+            val cover = customCoverUrl?.takeIf { it.isNotBlank() } ?: coverUrl
+            if (cover != null) {
                 val context = LocalContext.current
                 // remember 同 BookGridItem / FolderCard 修复 — 滚动时不重建 ImageRequest
-                val req = remember(context, coverUrl) {
+                val req = remember(context, cover) {
                     ImageRequest.Builder(context)
-                        .data(resolveCoverData(coverUrl))
+                        .data(resolveCoverData(cover))
                         .size(180, 252)
                         .crossfade(80)
                         .memoryCachePolicy(CachePolicy.ENABLED)
@@ -856,11 +860,12 @@ fun BookListItem(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center,
         ) {
-            if (book.coverUrl != null) {
+            val displayCover = book.displayCoverUrl
+            if (displayCover != null) {
                 val context = LocalContext.current
-                val imageRequest = remember(context, book.coverUrl) {
+                val imageRequest = remember(context, displayCover) {
                     ImageRequest.Builder(context)
-                        .data(resolveCoverData(book.coverUrl))
+                        .data(resolveCoverData(displayCover))
                         .size(180, 252)
                         .crossfade(80)
                         .memoryCachePolicy(CachePolicy.ENABLED)

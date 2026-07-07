@@ -25,6 +25,11 @@ import javax.inject.Inject
  * （根治 QQ/微信 content:// 临时权限：复制后不再依赖原 Uri）+ [BookFileHealthChecker] 校验 +
  * [BookRepository.findByLocalPath] 去重。建书走默认 `inBookshelf=true` → 静默入库即在书架。
  *
+ * **原位引用的合法例外**：导入主链路（ImportEngine / ShelfImportController）已改为 localPath
+ * 直存原文件 uri、零复制——但外部「打开方式」传来的 content:// grant 是一次性的
+ * （不带 FLAG_GRANT_PERSISTABLE，takePersistableUriPermission 会 SecurityException），
+ * 进程重启即失效，**必须**复制才能再次打开。此处保留 saveAsLocal 是有意为之。
+ *
  * 与 ShelfImportController.importLocalBook 的区别：那条是书架 UI 的 fire-and-forget（靠状态广播），
  * 这条是 **suspend 返回 bookId** 供外部打开拿到后导航阅读器。metadata/cover 不在此同步补，
  * 走 BookFormatProbe / 后续打开兜底，避免阻塞首屏。

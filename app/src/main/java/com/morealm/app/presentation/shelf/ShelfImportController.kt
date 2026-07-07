@@ -98,20 +98,19 @@ class ShelfImportController(
                 return@launch
             }
 
-            // ── 落地到私有目录：SAF Uri → filesDir/books/{hash}.{ext} → file:// Uri ──
-            // 之后业务层用稳定 path，不再依赖 SAF 授权 / 不依赖原文件位置（详见
-            // [com.morealm.app.domain.parser.LocalBookStorage]）。
-            val localUri = com.morealm.app.domain.parser.LocalBookStorage
-                .saveAsLocal(context, uri, ext) ?: run {
-                _folderImportState.value = FolderImportState(message = "保存到本地失败：$name")
-                AppLog.error("Import", "LocalBookStorage.saveAsLocal returned null for $name")
-                return@launch
-            }
-            if (bookRepo.findByLocalPath(localUri.toString()) != null) {
+            // ── 原位引用：localPath 直存原文件 uri，不再复制进私有目录 ──
+            //
+            // [tryGrantPermission] 已 takePersistableUriPermission → 重启后仍可读；
+            // 文件被用户移动/删除时 reader 侧 loadBook 指纹探测给「文件已移动或删除」
+            // 明确提示。dedup 按原路径判重（与 ImportEngine 批量路径一致）。
+            // 存量书（filesDir/books 副本）不迁移，localPath 依旧有效。
+            if (bookRepo.findByLocalPath(uri.toString()) != null) {
                 _folderImportState.value = FolderImportState(message = "已在书架：$name")
                 AppLog.info("Import", "Already imported: $name")
                 return@launch
             }
+            // 扫描指纹：章节 DB 缓存失效校验用（拿不到 = 0，首次解析后由 reader 回填）
+            val fingerprint = com.morealm.app.domain.storage.LocalFileFingerprint.of(context, uri)
 
             // ── Phase 1: 用文件名秒入库（< 50ms），UI 立刻报「已导入」──
             //
@@ -127,9 +126,11 @@ class ShelfImportController(
                     id = UUID.randomUUID().toString(),
                     title = parsed.first,
                     author = parsed.second,
-                    localPath = localUri.toString(),
+                    localPath = uri.toString(),
                     format = format,
                     addedAt = System.currentTimeMillis(),
+                    fileSize = fingerprint?.size ?: 0L,
+                    fileMtime = fingerprint?.mtime ?: 0L,
                 )
             )
             try {
@@ -153,7 +154,7 @@ class ShelfImportController(
             // 失败不回滚 placeholder ——「文件名书」比「书消失」体验好得多；
             // 重要的 isComic 字段即便此处失败，BookFormatProbeViewModel 仍会兜底 detect。
             try {
-                val enriched = enrichBookMetadata(placeholderBook, localUri, format)
+                val enriched = enrichBookMetadata(placeholderBook, uri, format)
                 if (enriched != null && enriched != placeholderBook) {
                     bookRepo.update(applyAutoGroup(enriched))
                     AppLog.info(

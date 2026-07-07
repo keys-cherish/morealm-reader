@@ -53,3 +53,21 @@ internal fun gateInfoSlot(slot: String, showChapterName: Boolean, showTimeBatter
             if (showTimeBattery) slot else "none"
         else -> slot
     }
+
+/**
+ * header 三 slot 经 [gateInfoSlot] 门控后是否还有任一内容。
+ *
+ * 正文排版预留（[com.morealm.app.ui.reader.page.animhorizontal.PageLevelReaderHost]
+ * 的 effectivePadTop）与绘制（PagePaneCanvas.PageInfoBars）共用此判定——两侧必须
+ * 同口径：预留了不画 = 白空一行（用户关「时间电量」后底部空一截的根因）；画了不留 = 重叠。
+ */
+internal fun ScrollCanvasInfoBarConfig.headerHasContent(): Boolean =
+    gateInfoSlot(headerLeft, showChapterName, showTimeBattery) != "none" ||
+        gateInfoSlot(headerCenter, showChapterName, showTimeBattery) != "none" ||
+        gateInfoSlot(headerRight, showChapterName, showTimeBattery) != "none"
+
+/** footer 版 [headerHasContent]，语义同上。 */
+internal fun ScrollCanvasInfoBarConfig.footerHasContent(): Boolean =
+    gateInfoSlot(footerLeft, showChapterName, showTimeBattery) != "none" ||
+        gateInfoSlot(footerCenter, showChapterName, showTimeBattery) != "none" ||
+        gateInfoSlot(footerRight, showChapterName, showTimeBattery) != "none"

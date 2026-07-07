@@ -6,6 +6,7 @@ import com.morealm.app.domain.preference.AppPreferences
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -13,6 +14,7 @@ import javax.inject.Inject
 @HiltViewModel
 class ReadingSettingsViewModel @Inject constructor(
     private val prefs: AppPreferences,
+    private val bookRepo: com.morealm.app.domain.repository.BookRepository,
 ) : ViewModel() {
 
     val pageAnim: StateFlow<String> = prefs.pageAnim
@@ -112,7 +114,16 @@ class ReadingSettingsViewModel @Inject constructor(
     fun setShowChapterName(v: Boolean) = viewModelScope.launch { prefs.setShowChapterName(v) }
     fun setShowTimeBattery(v: Boolean) = viewModelScope.launch { prefs.setShowTimeBattery(v) }
     fun setTitleAlign(v: Int) = viewModelScope.launch { prefs.setTitleAlign(v) }
-    fun setCustomTxtChapterRegex(v: String) = viewModelScope.launch { prefs.setCustomTxtChapterRegex(v) }
+    /**
+     * 保存自定义 TXT 章节正则。切分规则**实际变化**时才作废章节缓存：
+     * 清掉本地 TXT 书的文件指纹，下次打开走重新分章（而不是命中 DB 缓存拿到旧目录）。
+     * 值没变（重复点保存）不清——避免无意义地让全部 TXT 重新解析。
+     */
+    fun setCustomTxtChapterRegex(v: String) = viewModelScope.launch {
+        val old = prefs.customTxtChapterRegex.first()
+        prefs.setCustomTxtChapterRegex(v)
+        if (old != v) bookRepo.invalidateTxtChapterFingerprints()
+    }
     fun setInnerSearchMode(v: String) = viewModelScope.launch { prefs.setInnerSearchMode(v) }
     fun setTtsSkipPattern(v: String) = viewModelScope.launch { prefs.setTtsSkipPattern(v) }
     fun setTtsKeepCpuAwake(v: Boolean) = viewModelScope.launch { prefs.setTtsKeepCpuAwake(v) }
