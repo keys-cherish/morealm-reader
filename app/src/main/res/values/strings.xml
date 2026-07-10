@@ -1,33 +1,235 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">墨境</string>
-    <string name="app_description">本地阅读器 · 自定义排版引擎</string>
-    <string name="tab_shelf">书架</string>
-    <string name="tab_listen">听书</string>
-    <string name="tab_profile">我的</string>
-    <string name="continue_reading">继续阅读</string>
-    <string name="empty_shelf">书架空空如也\n导入本地书籍开始阅读</string>
-    <string name="import_local">导入本地书</string>
-    <string name="import_folder">导入文件夹</string>
-    <string name="tts_playing">正在朗读</string>
-    <string name="webdav_sync">WebDAV 同步</string>
-    <string name="data_migration">数据迁移</string>
-    <string name="theme_settings">主题设置</string>
-    <string name="content_rules">内容解析规则</string>
-    <string name="content_rules_desc">管理自定义解析配置</string>
-    <string name="advanced_settings">高级设置</string>
-    <string name="search_shelf">搜索书架内书籍</string>
-    <string name="privacy_notice">墨境是一款本地阅读工具。App 不提供任何内容，用户对自行导入的文件和配置负责。</string>
-    <string name="shortcut_continue">继续阅读</string>
-    <string name="shortcut_continue_long">继续阅读上次的书</string>
+    <string name="app_name">MoRealm</string> # which means The Realm of Ink
+    <string name="app_description">Local e-Reader · Custom Layout Engine</string>
+    <string name="privacy_notice">MoRealm is a tool for local digital reading and does not provide any content, therefore the user is responsible for all files and configurations imported into the application.</string>
 
-    <!-- 桌面小组件相关 -->
-    <string name="widget_continue_reading_label">墨境·继续阅读</string>
-    <string name="widget_continue_reading_title">📖 继续阅读</string>
-    <string name="widget_continue_reading_desc">显示上次阅读的书与今日已读时长，点击直达</string>
-    <string name="widget_preview_book_title">点击直达上次阅读位置</string>
-    <string name="widget_loading">载入中…</string>
-    <string name="widget_empty_title">还没有开始阅读</string>
-    <string name="widget_empty_subtitle">点此打开墨境，挑一本书开始</string>
-    <string name="widget_today_read_format">今日已读 %1$s</string>
+    <!-- BOOKSHELF 书架相关 -->
+    <string name="tab_shelf">Bookshelf</string>
+    <string name="search_shelf">Search bookshelf for books.</string>
+    <string name="empty_shelf">Empty bookshelf\nStart reading by importing an e-book</string>
+    <string name="import_local">Import local book</string>
+    <string name="import_folder">Import local folder</string>
+
+    <!-- READ 阅读相关 -->
+    <string name="continue_reading">Continue reading</string>
+    <string name="shortcut_continue">Continue reading</string>
+    <string name="shortcut_continue_long">Continue reading the last book read</string>
+
+    <!-- EXPLORE 发现相关 -->
+    <string name="tab_explore">Explore</string>
+
+    <!-- TTS 听书相关 -->
+    <string name="tab_listen">Listen</string>
+    <string name="tts_playing">Now listening</string>
+    // TTS 朗读
+    // 跳过内容正则
+    // 匹配xxx
+    // 保存
+    // 锁屏保活 CPU
+    // 开启后耗电略高；仅当锁屏偶发断声时建议开启
+
+    <!-- UI 界面相关 -->
+    <string name="tab_profile">My Profile</string>
+    // 阅读统计-->Reading Statistics
+    // %1 本书-->%1 total books read
+    // %2 总时长-->%2 total time spent
+    // %3 连续天数-->%3 continuous days
+    // 今天已读 %4 分钟-->Read %4 minutes today
+    // 查看年度报告-->View annual report
+    // 年度总结-->Annual Summary
+    // (YYYY)年度阅读报告-->YYYY Annual Reading Report
+    // 陪你走过的书-->Books that accompanied you
+    // (0 h) 阅读-->(0 hr) Read? Spent?
+    // (0 万) 文字-->(0 k) Words
+    // (0 天) 活跃-->(0 days) Active
+    // 最投入: xxx-->Most Engaged In: xxx
+    // 最长 0 分钟-->Longest time
+    // 常在 time 翻书-->Often reading at
+    // 沉浸阅读时长: 0 小时 --> Immersed reading time: 0 hr
+    // 保存到相册的长图含完整指标/标签/最投入书目-->Screenshot saved to gallery will contain complete metrics/tags/most engaged books
+    // 稍后再看-->Save later
+    // 保存长图-->Save screenshot
+    // 墨境 MoRealm · 把阅读留在时间里-->墨境 MoRealm · Keep reading in time
+
+    <!-- THEME 主题相关 -->
+    <string name="theme_settings">Theme Settings</string>
+    // 主题切换
+        // 跟随系统主题
+        // 关闭·用下方瓦片手动选择主题
+        // 已开启·系统切到深色时自动切换
+        // 白天默认主题
+        // 内置·米色书页
+            // 选择白天默认主题
+            // 使用内置默认（米色书页）
+            // 墨水屏
+            // 纸上
+            // 关闭
+        // 夜晚默认主题
+        // 内置·墨境
+            // 选择夜晚默认主题
+            // 使用内置默认（墨境）
+            // 森林
+            // 深夜
+            // 赛博朋克
+            // 关闭
+        // 点击切换主题，实时预览效果
+        // 自定义主题（长按删除）
+            // 我的主题
+            // 已删除主题「我的主题」
+            // 撤销
+        // 自定义主题
+        //暂无自定义主题，可点击下方创建或导入。
+            // 自定义主题
+            // 保存并应用
+            // 主题名字
+            // 暗色主题
+                // 决定「跟随系统」时此主题归到白天/夜晚分类。默认按背景亮度自动判断，可手动覆盖。
+            // 颜色配置
+                // 背景色
+                // 文字色
+                // 强调色
+            // 首页背景图
+                // 未设置
+                // 点击选择图片
+                // 已设置
+                // 点击更换图片
+                // 清除
+            // 阅读 CSS
+                // 自定义 CSS
+                // 快键插入
+                // 取消缩进
+                // 首行缩进两字
+                // 行距紧凑
+                // 行距宽松
+                // 左对齐
+                // 两端对齐
+                // 大字体
+                // 段间距大
+                // 支持的属性
+            // 实时预览
+                // 预览效果
+        // 导出主题
+        // 导入主题
+        // 导出全部自定义主题 (0)
+    
+    <!-- VISUAL 外观设置相关 -->
+    // 外观与阅读
+    // 外观设置
+    // 全局背景图、透明度、模糊度
+        // 外观
+        // 全局背景图
+        // 效果调节
+
+    <!-- READER 阅读设置相关 -->
+    // 阅读设置
+    // 翻页动画、音量键翻页、屏幕常亮、界面提示
+        // 阅读设置
+        // 屏幕交互
+            // 翻页动画：覆盖、仿真、平移、上下、淡入、无
+            // 请按页面左侧：翻到下一页、翻到上一页
+        // 实体按键与设备
+            // 音量键翻页
+            // 耳机/蓝牙翻页器
+        // 启动偏好
+            // 启动后继续上次阅读
+        // 选取与高亮
+            //长按文字划线
+            // 选区菜单按钮
+                // 主行 3/3
+                // 选区菜单按钮
+                // 主行最多三个，始终可见；折叠行点「更多」展开；隐藏不渲染。
+                    // 主行、折叠、隐藏
+                    // 复制、高亮、下划线、查词、朗读、翻译、分享、字体色
+                    // 重置、取消、保存
+        // 阅读界面
+            // 竖排版：横排、竖排（标标在右、正文在左）、竖排（章标在左、正文在右）
+            // 屏幕关闭时间
+                // 屏幕关闭时间
+                // 无、跟随系统、1分钟、2分钟、5分钟、10分钟
+            // 显示系统状态
+            // 显示章节名
+            // 显示时间电量
+            // 章节标题对齐
+                // 章节标题对齐
+                // 居中、左对齐、右对齐
+                // 取消
+        // 文字上色
+            // 文字上色：已开、已关
+            // 标点、数字、字母、引号内……按规则着色
+                // 文字上色
+                    // 按规则给正文自动着色：标点、数字、字母、特殊符号，以及引号内、括号内的文字，提升阅读时的视觉层次。纯本地规则，无需联网。
+                // 总开关
+                    // 正文规则上色
+                    // 关闭后正文按主题默认色显示
+                // 调色板（日间主题）
+                    // 全部恢复默认（日间）
+                    // 标点
+                    // 数字
+                    // 字母
+                    // 特殊符号
+                    // 引号内
+                    // 括号内
+                // 调色板（夜间主题）
+                    // 全部恢复默认（夜间）
+                    // 标点
+                    // 数字
+                    // 字母
+                    // 特殊符号
+                    // 引号内
+                    // 括号内
+                // 高亮词
+                    // 还没有高亮词。添加后，正文每次出现该词都会自动着色（长词优先）。
+                    // 新高亮词
+                    // 颜色
+                    // 添加高亮词
+        // 文内搜索
+            // 搜索方向：全文、前向（之前）、后向（之后）
+            // 前向=当前页之前；后向=当前页之后
+            // 文内搜索方向
+                // 全文搜索：显示全部命中，不区分位置
+                // 前向搜索：只显示当前页之前的命中
+                // 后向搜索：只显示当前页之后的命中
+                // 取消
+        // 阅读器背景
+        // 设置后阅读器背景会随日夜主题自动切换
+            // 日间背景
+                // 点击选择图片
+                // 已设置・点击更换
+                // 清除
+            // 夜间背景
+                // 点击选择图片
+                // 已设置・点击更换
+                // 清除
+        // TXT 章节识别
+            // 自定义章节正规
+            // 留空使用xxx
+            // 保存
+
+    <!-- PARSER 解析规则相关 -->
+    <string name="content_rules">Content Parsing Regex</string>
+    <string name="content_rules_desc">Manage configurations for custom parsing</string>
+    // 正文替换净化
+    // 去广告、净化正文内容，支持正规替换
+
+    <!-- AUTOGROUP 自动分组相关 -->
+    // 自动分组规则
+    // 题材关键词、阈值与忽略列表，可导出分享
+
+    <!-- DATA 数据相关 -->
+    <string name="webdav_sync">WebDAV sync</string>
+    <string name="data_migration">Data migration</string>
+
+    <!-- OTHER 其他相关 -->
+    <string name="advanced_settings">Advanced Settings</string>
+
+    <!-- WIDGET 桌面小组件相关 -->
+    <string name="widget_continue_reading_label">MoRealm · Continue reading</string>
+    <string name="widget_continue_reading_title">📖 Continue reading</string>
+    <string name="widget_continue_reading_desc">Show book last read and today's read time, click to continue</string>
+    <string name="widget_preview_book_title">Click to page last read</string>
+    <string name="widget_loading">Loading...</string>
+    <string name="widget_empty_title">No record yet</string>
+    <string name="widget_empty_subtitle">Click to open, pick a book and start reading in MoRealm</string>
+    <string name="widget_today_read_format">Read for %1$s today</string>
 </resources>

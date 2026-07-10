@@ -13,6 +13,20 @@
           "url": "https://github.com/keys-cherish"
         }
       ]
+    },
+        {
+      "id": "usaywat",
+      "name": "usaywat",
+      "tags": ["L10n"],
+      "contribution": "MoRealm 本土化貢獻者，參與中英翻譯和多語言支持工作。",
+      "joinedAt": "2026-07-13",
+      "links": [
+        {
+          "platform": "github",
+          "handle": "@usaywat",
+          "url": "https://github.com/usaywat"
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">墨境</string>
+    <string name="app_description">本機閱讀器 · 自訂排版引擎</string>
+    <string name="privacy_notice">墨境是一款本機閱讀工具，不提供任何內容，使用者對自行匯入的文件和配置負責。</string>
+
+    <!-- BOOKSHELF 書架相關 -->
+    <string name="tab_shelf">書架</string>
+    <string name="search_shelf">搜尋書架內書籍</string>
+    <string name="empty_shelf">書架空空如也\n匯入本機書籍開始閱讀</string>
+    <string name="import_local">匯入本機書</string>
+    <string name="import_folder">匯入資料夾</string>
+
+    <!-- READ 閱讀相關 -->
+    <string name="continue_reading">繼續閱讀</string>
+    <string name="shortcut_continue">繼續閱讀</string>
+    <string name="shortcut_continue_long">繼續閱讀上次的書</string>
+
+    <!-- EXPLORE 發現相關 -->
+    <string name="tab_explore">發現</string>
+
+    <!-- TTS 聽書相關 -->
+    <string name="tab_listen">聽書</string>
+    <string name="tts_playing">正在朗讀</string>
+
+    <!-- UI 介面相關 -->
+    <string name="tab_profile">我的</string>
+
+    <!-- THEME 主題相關 -->
+    <string name="theme_settings">主題設定</string>
+
+    <!-- PARSER 解析規則相關 -->
+    <string name="content_rules">內容解析規則</string>
+    <string name="content_rules_desc">管理自訂解析配置</string>
+
+    <!-- DATA 資料相關 -->
+    <string name="webdav_sync">WebDAV 同步</string>
+    <string name="data_migration">資料遷移</string>
+
+    <!-- OTHER 其他相關 -->
+    <string name="advanced_settings">進階設定</string>
+
+    <!-- WIDGET 桌面小元件相關 -->
+    <string name="widget_continue_reading_label">墨境·繼續閱讀</string>
+    <string name="widget_continue_reading_title">📖 繼續閱讀</string>
+    <string name="widget_continue_reading_desc">顯示上次閱讀的書與今日已讀時長，點擊直達</string>
+    <string name="widget_preview_book_title">點擊直達上次閱讀位置</string>
+    <string name="widget_loading">載入中…</string>
+    <string name="widget_empty_title">還沒有開始閱讀</string>
+    <string name="widget_empty_subtitle">點此打開墨境，挑一本書開始</string>
+    <string name="widget_today_read_format">今日已讀 %1$s</string>
+</resources>
