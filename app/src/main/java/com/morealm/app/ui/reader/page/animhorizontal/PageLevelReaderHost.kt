@@ -16,10 +16,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -32,9 +29,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -52,17 +47,16 @@ import com.morealm.epub.render.extractText
 import com.morealm.epub.render.findColumnAt
 import com.morealm.epub.render.findColumnByPixel
 import com.morealm.app.ui.reader.page.animation.PageAnimType
-import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.SelectionToolbar
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
 import com.morealm.app.ui.reader.renderer.rememberBottomCornerInsetDp
 import com.morealm.app.ui.reader.renderer.scroll.PAGED_INFO_BAR_LINE_DP
 import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
+import com.morealm.app.ui.reader.renderer.scroll.calculatePageInfoVersion
 import com.morealm.app.ui.reader.renderer.scroll.ScrollSelectionOverlay
 import com.morealm.app.ui.reader.renderer.scroll.ScrollSelectionState
 import com.morealm.app.ui.reader.renderer.scroll.footerHasContent
-import com.morealm.app.ui.reader.renderer.scroll.gateInfoSlot
 import com.morealm.app.ui.reader.renderer.scroll.headerHasContent
 import com.morealm.app.ui.reader.renderer.scroll.handleCancelSelection
 import com.morealm.app.ui.reader.renderer.scroll.handleLongPress
@@ -869,31 +863,56 @@ fun PageLevelReaderHost(
                 existingHorizontalDp = (infoBar?.paddingHorizontal ?: 0).dp,
                 bottomSystemInsetDp = infoBottomInsetDp,
             )
-            val pageInfoBarProvider: (ScrollPage) -> PageInfoBarSpec? = provider@{ page ->
-                val cfg = infoBar ?: return@provider null
-                if (page.chapterIndex < 0) return@provider null
-                val layout = when (page.chapterIndex) {
-                    core.state.currentChapter?.chapterIndex -> core.state.currentChapter
-                    core.state.nextChapter?.chapterIndex -> core.state.nextChapter
-                    core.state.prevChapter?.chapterIndex -> core.state.prevChapter
-                    else -> null
+            val pageInfoVersion = calculatePageInfoVersion(
+                config = infoBar,
+                batteryLevel = batteryStatus.level,
+                batteryCharging = batteryStatus.charging,
+                currentTime = currentTime,
+                topInsetPx = topInsetPx,
+                bottomInsetPx = bottomInsetPx,
+                cornerInsetPx = with(density) { infoCornerInsetDp.toPx() }.toInt(),
+                density = density.density,
+                fontScale = density.fontScale,
+            )
+            val pageInfoBarProvider: (ScrollPage) -> PageInfoBarSpec? = remember(
+                infoBar,
+                core.state.currentChapter,
+                core.state.nextChapter,
+                core.state.prevChapter,
+                pageInfoVersion,
+                infoTopInsetDp,
+                infoBottomInsetDp,
+                infoCornerInsetDp,
+            ) {
+                val currentChapter = core.state.currentChapter
+                val nextChapter = core.state.nextChapter
+                val prevChapter = core.state.prevChapter
+                provider@{ page ->
+                    val cfg = infoBar ?: return@provider null
+                    if (page.chapterIndex < 0) return@provider null
+                    val layout = when (page.chapterIndex) {
+                        currentChapter?.chapterIndex -> currentChapter
+                        nextChapter?.chapterIndex -> nextChapter
+                        prevChapter?.chapterIndex -> prevChapter
+                        else -> null
+                    }
+                    val total = (layout?.pages?.size ?: 1).coerceAtLeast(1)
+                    val pct = ((page.pageIndex + 1).toFloat() / total * 100f).coerceIn(0f, 100f)
+                    PageInfoBarSpec(
+                        config = cfg,
+                        chapterTitle = layout?.title ?: "",
+                        chapterIndex = page.chapterIndex,
+                        pageIndexInChapter = page.pageIndex,
+                        pageCountInChapter = total,
+                        scrollPercent = pct,
+                        batteryLevel = batteryStatus.level,
+                        batteryCharging = batteryStatus.charging,
+                        currentTime = currentTime,
+                        topInsetDp = infoTopInsetDp,
+                        bottomInsetDp = infoBottomInsetDp,
+                        cornerInsetDp = infoCornerInsetDp,
+                    )
                 }
-                val total = (layout?.pages?.size ?: 1).coerceAtLeast(1)
-                val pct = ((page.pageIndex + 1).toFloat() / total * 100f).coerceIn(0f, 100f)
-                PageInfoBarSpec(
-                    config = cfg,
-                    chapterTitle = layout?.title ?: "",
-                    chapterIndex = page.chapterIndex,
-                    pageIndexInChapter = page.pageIndex,
-                    pageCountInChapter = total,
-                    scrollPercent = pct,
-                    batteryLevel = batteryStatus.level,
-                    batteryCharging = batteryStatus.charging,
-                    currentTime = currentTime,
-                    topInsetDp = infoTopInsetDp,
-                    bottomInsetDp = infoBottomInsetDp,
-                    cornerInsetDp = infoCornerInsetDp,
-                )
             }
 
             // dispatch 到具体 Transition（独立 own 自己的动画 + drag；不再接 pointerInput tap）
@@ -964,6 +983,8 @@ fun PageLevelReaderHost(
                         searchHighlightArgb = searchHighlightArgb,
                         selectionChapterIndex = selectionChapterIndex,
                         selectionCpRange = selectionCpRange,
+                        pageInfoBarProvider = pageInfoBarProvider,
+                        pageInfoVersion = pageInfoVersion,
                     )
                     SimulationPageTransition(
                         state = core.state,
@@ -1094,101 +1115,6 @@ fun PageLevelReaderHost(
                 )
             }
 
-            // ── InfoBar 顶/底：仅 SIMULATION（仿真翻页 bitmap 路径无法把页眉页脚画进页）保留悬浮
-            // overlay；NONE/SLIDE/COVER 已改为页内页眉页脚（随页翻、无羽化，见 pageInfoBarProvider）。──
-            if (infoBar != null && animType == PageAnimType.SIMULATION) {
-                // 横向 page-level 模式有"页"概念，slot "page"/"progress"/"page_progress" 保留原义
-                // （不像 SCROLL 把 "page" 降级到 "chapter_progress"）。
-                fun mapSlot(s: String): String = s
-
-                // page-level 进度 = (curPage 在章内 1-based idx) / 章 page 总数 * 100
-                val scrollPercent by remember(currentLayout) {
-                    derivedStateOf {
-                        val total = currentLayout.pages.size.coerceAtLeast(1)
-                        val curIdx = core.pageFactory.pageIndex.coerceIn(0, total - 1)
-                        ((curIdx + 1).toFloat() / total * 100f).coerceIn(0f, 100f)
-                    }
-                }
-
-                val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-                val cutoutTop = WindowInsets.displayCutout.asPaddingValues().calculateTopPadding()
-                val cutoutBottom = WindowInsets.displayCutout.asPaddingValues().calculateBottomPadding()
-                val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-                val topInsetDp = if (statusBarTop.value >= cutoutTop.value) statusBarTop else cutoutTop
-                val bottomInsetDp = if (navBarBottom.value >= cutoutBottom.value) navBarBottom else cutoutBottom
-                // 底部圆角让位（仿真 overlay InfoBar）：footer 左右额外内缩避 R 角裁切。
-                val cornerInsetDp = rememberBottomCornerInsetDp(
-                    existingHorizontalDp = infoBar.paddingHorizontal.dp,
-                    bottomSystemInsetDp = bottomInsetDp,
-                )
-
-                val chapterTitle = currentLayout.title
-
-                ReaderInfoBar(
-                    slotLeft = gateInfoSlot(mapSlot(infoBar.headerLeft), infoBar.showChapterName, infoBar.showTimeBattery),
-                    slotCenter = gateInfoSlot(mapSlot(infoBar.headerCenter), infoBar.showChapterName, infoBar.showTimeBattery),
-                    slotRight = gateInfoSlot(mapSlot(infoBar.headerRight), infoBar.showChapterName, infoBar.showTimeBattery),
-                    chapterTitle = chapterTitle,
-                    pageIndex = core.pageFactory.pageIndex,
-                    pageCount = currentLayout.pages.size,
-                    currentPage = null,
-                    chapterIndex = core.state.currentChapterIndex,
-                    chaptersSize = infoBar.chaptersSize,
-                    batteryLevel = batteryStatus.level,
-                    batteryCharging = batteryStatus.charging,
-                    currentTime = currentTime,
-                    textColor = infoBar.textColor,
-                    scrollPercentOverride = scrollPercent,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .fillMaxWidth()
-                        .height(infoBarHeightDp + topInsetDp)
-                        .then(
-                            if (infoBar.hasBgImage) Modifier
-                            else Modifier.background(
-                                Brush.verticalGradient(
-                                    0f to infoBar.backgroundColor,
-                                    0.72f to infoBar.backgroundColor,
-                                    1f to infoBar.backgroundColor.copy(alpha = 0f),
-                                )
-                            )
-                        )
-                        .padding(top = topInsetDp, start = infoBar.paddingHorizontal.dp,
-                            end = infoBar.paddingHorizontal.dp, bottom = 8.dp),
-                )
-                ReaderInfoBar(
-                    slotLeft = gateInfoSlot(mapSlot(infoBar.footerLeft), infoBar.showChapterName, infoBar.showTimeBattery),
-                    slotCenter = gateInfoSlot(mapSlot(infoBar.footerCenter), infoBar.showChapterName, infoBar.showTimeBattery),
-                    slotRight = gateInfoSlot(mapSlot(infoBar.footerRight), infoBar.showChapterName, infoBar.showTimeBattery),
-                    chapterTitle = chapterTitle,
-                    pageIndex = core.pageFactory.pageIndex,
-                    pageCount = currentLayout.pages.size,
-                    currentPage = null,
-                    chapterIndex = core.state.currentChapterIndex,
-                    chaptersSize = infoBar.chaptersSize,
-                    batteryLevel = batteryStatus.level,
-                    batteryCharging = batteryStatus.charging,
-                    currentTime = currentTime,
-                    textColor = infoBar.textColor,
-                    scrollPercentOverride = scrollPercent,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth()
-                        .height(infoBarHeightDp + bottomInsetDp)
-                        .then(
-                            if (infoBar.hasBgImage) Modifier
-                            else Modifier.background(
-                                Brush.verticalGradient(
-                                    0f to infoBar.backgroundColor.copy(alpha = 0f),
-                                    0.28f to infoBar.backgroundColor,
-                                    1f to infoBar.backgroundColor,
-                                )
-                            )
-                        )
-                        .padding(top = 8.dp, start = infoBar.paddingHorizontal.dp + cornerInsetDp,
-                            end = infoBar.paddingHorizontal.dp + cornerInsetDp, bottom = bottomInsetDp),
-                )
-            }
         }
     }
 }

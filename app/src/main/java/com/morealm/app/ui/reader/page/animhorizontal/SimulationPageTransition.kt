@@ -179,6 +179,7 @@ fun SimulationPageTransition(
             if (w > 0 && h > 0 && curPage.chapterIndex >= 0) {
                 val key = SimulationIdleKey(
                     providerId = System.identityHashCode(bitmapProvider),
+                    infoVersion = bitmapProvider.infoVersion,
                     chapterIndex = curPage.chapterIndex,
                     pageIndex = pgIdx,
                     w = w, h = h,
@@ -209,6 +210,7 @@ fun SimulationPageTransition(
  */
 private data class SimulationIdleKey(
     val providerId: Int,
+    val infoVersion: Long,
     val chapterIndex: Int,
     val pageIndex: Int,
     val w: Int,

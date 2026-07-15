@@ -5,12 +5,16 @@ import android.graphics.Canvas
 import android.text.TextPaint
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalDensity
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.Highlight
 import com.morealm.epub.render.ScrollChapterLayout
 import com.morealm.app.domain.render.layout.ScrollHighlightProjector
 import com.morealm.epub.render.ScrollPage
 import com.morealm.app.ui.reader.renderer.RevealHighlight
+import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
+import com.morealm.app.ui.reader.renderer.scroll.PageInfoCanvasDrawer
+import com.morealm.app.ui.reader.renderer.scroll.PageInfoSnapshotProvider
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
 import com.morealm.app.ui.reader.renderer.scroll.drawScrollPageOnCanvas
 
@@ -54,7 +58,12 @@ class ScrollPagePageBitmapProvider(
     private val selectionChapterIndex: Int = -1,
     private val selectionCpRange: IntRange = IntRange.EMPTY,
     private val selectionArgb: Int = 0x4D5B6CFE.toInt(),
+    private val pageInfoSnapshotProvider: PageInfoSnapshotProvider? = null,
 ) {
+    private val pageInfoCanvasDrawer = PageInfoCanvasDrawer()
+
+    /** 页栏像素版本，供仿真空闲位图键显式失效。 */
+    val infoVersion: Long = pageInfoSnapshotProvider?.infoVersion ?: 0L
 
     /**
      * 渲染 [page] 到 [Bitmap]，按 page.chapterIndex 路由到 prev/cur/next layout 拿
@@ -120,6 +129,10 @@ class ScrollPagePageBitmapProvider(
                 selectionArgb = selectionArgb,
                 readerBgArgb = bgColor,
             )
+            // 页栏必须最后绘制，确保正文、高亮和书签不会覆盖页眉页脚。
+            pageInfoSnapshotProvider?.snapshotFor(page)?.let { snapshot ->
+                pageInfoCanvasDrawer.draw(canvas, snapshot, w, h)
+            }
             bitmap
         } catch (e: OutOfMemoryError) {
             AppLog.error(
@@ -163,7 +176,10 @@ fun rememberScrollPagePageBitmapProvider(
     selectionChapterIndex: Int = -1,
     selectionCpRange: IntRange = IntRange.EMPTY,
     selectionArgb: Int = 0x4D5B6CFE.toInt(),
+    pageInfoBarProvider: ((ScrollPage) -> PageInfoBarSpec?)? = null,
+    pageInfoVersion: Long = 0L,
 ): ScrollPagePageBitmapProvider {
+    val density = LocalDensity.current
     return remember(
         state.currentChapter, state.prevChapter, state.nextChapter,
         titlePaint, contentPaint, chapterNumPaint,
@@ -172,7 +188,16 @@ fun rememberScrollPagePageBitmapProvider(
         revealHighlight,
         searchHighlightChapterIndex, searchHighlightCpRange, searchHighlightArgb,
         selectionChapterIndex, selectionCpRange, selectionArgb,
+        pageInfoBarProvider, pageInfoVersion, density.density, density.fontScale,
     ) {
+        val snapshotProvider = pageInfoBarProvider?.let { provider ->
+            PageInfoSnapshotProvider(
+                infoVersion = pageInfoVersion,
+                density = density.density,
+                fontScale = density.fontScale,
+                specProvider = provider,
+            )
+        }
         ScrollPagePageBitmapProvider(
             state = state,
             titlePaint = titlePaint,
@@ -189,6 +214,7 @@ fun rememberScrollPagePageBitmapProvider(
             selectionChapterIndex = selectionChapterIndex,
             selectionCpRange = selectionCpRange,
             selectionArgb = selectionArgb,
+            pageInfoSnapshotProvider = snapshotProvider,
         )
     }
 }
