@@ -569,22 +569,17 @@ class ReaderChapterController(
 
                     // Show chapters immediately, load first chapter
                     val progress = bookRepo.getProgress(bookId)
-                    val startIndex = (progress?.chapterIndex ?: book.lastReadChapter)
-                        .coerceIn(0, (cachedChapters.size - 1).coerceAtLeast(0))
+                    val resumeCursor = resolveReaderResumeCursor(book, progress, cachedChapters.size)
+                    val startIndex = resumeCursor.chapterIndex
                     lastPreCacheCenter = startIndex
-                    val savedScrollProgress = estimateChapterProgress(book, startIndex, cachedChapters.size)
-                    // DB 容灾：progress?.chapterPosition 可能被旧 bug 刷成 0（ViewModel init
-                    // 阶段 combine collector 初始 emit 抢跑），此时回退到 book.lastReadPosition
-                    // 作为兜底——后者由 saveProgress 同步写入 book 表，不受 reading_progress 表
-                    // 被冲的影响。两者都为 0 时才是真正的章首。
-                    val savedChapterPosition = run {
-                        val fromProgress = progress?.chapterPosition ?: 0
-                        if (fromProgress > 0) fromProgress else book.lastReadPosition
-                    }
+                    val savedScrollProgress = resumeCursor.chapterProgress
+                    val savedChapterPosition = resumeCursor.chapterPosition
                     AppLog.info(
                         "BookmarkDebug",
                         "loadBook ENTRY (web) bookId=$bookId startIndex=$startIndex" +
                             " savedScrollProgress=$savedScrollProgress savedChapterPosition=$savedChapterPosition" +
+                            " cursorSource=${resumeCursor.source}" +
+                            " |" +
                             " bookLastReadChapter=${book.lastReadChapter}" +
                             " bookLastReadPosition=${book.lastReadPosition}" +
                             " dbProgress.chapterIndex=${progress?.chapterIndex}" +
@@ -799,21 +794,18 @@ class ReaderChapterController(
             }
 
             val progress = bookRepo.getProgress(bookId)
-            val startIndex = (progress?.chapterIndex ?: book.lastReadChapter)
-                .coerceIn(0, (chapters.size - 1).coerceAtLeast(0))
+            val resumeCursor = resolveReaderResumeCursor(_book.value ?: book, progress, chapters.size)
+            val startIndex = resumeCursor.chapterIndex
             lastPreCacheCenter = startIndex
 
-            val savedScrollProgress = estimateChapterProgress(book, startIndex, chapters.size)
-            // DB 容灾（同 web 路径注释）：progress?.chapterPosition 被旧 bug 刷 0 时
-            // 回退到 book.lastReadPosition。
-            val savedChapterPosition = run {
-                val fromProgress = progress?.chapterPosition ?: 0
-                if (fromProgress > 0) fromProgress else book.lastReadPosition
-            }
+            val savedScrollProgress = resumeCursor.chapterProgress
+            val savedChapterPosition = resumeCursor.chapterPosition
             AppLog.info(
                 "BookmarkDebug",
                 "loadBook ENTRY (local) bookId=$bookId startIndex=$startIndex" +
                     " savedScrollProgress=$savedScrollProgress savedChapterPosition=$savedChapterPosition" +
+                    " cursorSource=${resumeCursor.source}" +
+                    " |" +
                     " bookLastReadChapter=${book.lastReadChapter}" +
                     " bookLastReadPosition=${book.lastReadPosition}" +
                     " dbProgress.chapterIndex=${progress?.chapterIndex}" +
@@ -1467,13 +1459,6 @@ class ReaderChapterController(
                 if (token.length <= segmentLength) token else token.chunked(segmentLength).joinToString("\n")
             }
         }
-    }
-
-    fun estimateChapterProgress(book: Book, chapterIndex: Int, chapterCount: Int): Int {
-        if (chapterCount <= 0 || book.readProgress <= 0f) return 0
-        val chapterFloat = book.readProgress.coerceIn(0f, 1f) * chapterCount
-        val inChapter = chapterFloat - chapterIndex
-        return (inChapter * 100f).toInt().coerceIn(0, 100)
     }
 
     fun onScrollNearBottom() {

@@ -15,6 +15,7 @@ import com.morealm.epub.render.ScrollChapterLayout
 import com.morealm.epub.render.ScrollLayoutEngine
 import com.morealm.epub.render.findColumnAt
 import com.morealm.app.domain.render.layout.ScrollPageFactory
+import com.morealm.app.domain.render.layout.visibleChapterPosition
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -175,7 +176,11 @@ fun rememberPageLevelCore(
         // 用「整页对齐后的新页首 cp」重记 → 页首单调递减、视口逐次漂移（用户报「切换字体每页
         // 都不同」根因：cp 4124→4028→3947→…）。翻页后由下方 snapshotFlow 清锚点再重记。
         if (cur != null && cur.styleSignature != sig && reflowAnchorCp < 0) {
-            reflowAnchorCp = currentTopCp(cur, pageFactory.pageIndex, state.pageOffset)
+            reflowAnchorCp = visibleChapterPosition(
+                layout = cur,
+                pageIndex = pageFactory.pageIndex,
+                pageOffset = state.pageOffset,
+            ) ?: -1
             // 同时记章内页比例，作 cp 命中失败时的兜底锚（见 reflowAnchorFraction）。
             reflowAnchorFraction = if (cur.pages.isNotEmpty()) {
                 pageFactory.pageIndex.toFloat() / cur.pages.size
@@ -325,14 +330,4 @@ fun rememberPageLevelCore(
     }
 
     return remember(state, pageFactory) { PageLevelCoreHandle(state, pageFactory) }
-}
-
-/**
- * 重排前算当前视口顶部那一行的 cp —— 同章 reflow（改字号/字体/行距）后据此在新 layout 恢复
- * 阅读位置，避免跳章首。视口顶 = 当前 page 内 [pageOffset] 处第一个 lineBottom 越过它的行。
- */
-private fun currentTopCp(layout: ScrollChapterLayout, pageIndex: Int, pageOffset: Float): Int {
-    val page = layout.pages.getOrNull(pageIndex) ?: return -1
-    val line = page.lines.firstOrNull { it.lineBottom > pageOffset } ?: page.lines.firstOrNull()
-    return line?.firstChapterPos ?: -1
 }

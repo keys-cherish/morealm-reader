@@ -39,6 +39,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.ImageCache
+import com.morealm.app.domain.render.layout.visibleChapterPosition
 import com.morealm.epub.render.ScrollImageDimensionsResolver
 import com.morealm.epub.render.ScrollLayoutEngine
 import com.morealm.epub.render.extractText
@@ -168,6 +169,8 @@ fun ScrollCanvasReaderHost(
     onChapterProgressLive: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
     /** 进度 persist 回调 —— debounce 800ms，停手才上报；caller 在此写 DB。 */
     onChapterProgressPersist: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
+    /** 当前视口字符锚点变化；用于持久化与排版无关的精确续读位置。 */
+    onVisibleChapterPositionChanged: (chapterIndex: Int, chapterPosition: Int) -> Unit = { _, _ -> },
     /**
      * 全书所有高亮（含 KIND_BACKGROUND / KIND_TEXT_COLOR / KIND_UNDERLINE）。
      * Host 内按 prev/cur/next 章过滤 + 投影为 spec → 透传给 ChapterPaneCanvas 绘制。
@@ -449,6 +452,27 @@ fun ScrollCanvasReaderHost(
                 " [consumed, won't re-trigger]",
         )
         onProgressRestored()
+    }
+
+    // 滚动恢复会把目标字符放在视口上方 1/3；保存时也取同一视觉锚点，二者互为逆运算。
+    // 若只保存页首再按 1/3 恢复，每次重开都会稳定地向前漂几行。
+    LaunchedEffect(state.currentChapter, viewHeight) {
+        val layout = state.currentChapter ?: return@LaunchedEffect
+        snapshotFlow { pageFactory.pageIndex to state.pageOffset }
+            .map { (pageIndex, pageOffset) ->
+                visibleChapterPosition(
+                    layout = layout,
+                    pageIndex = pageIndex,
+                    pageOffset = pageOffset,
+                    viewportAnchorY = viewHeight.coerceAtLeast(0) / 3f,
+                )?.let { layout.chapterIndex to it }
+            }
+            .distinctUntilChanged()
+            .collect { anchor ->
+                anchor?.let { (chapterIndex, chapterPosition) ->
+                    onVisibleChapterPositionChanged(chapterIndex, chapterPosition)
+                }
+            }
     }
 
     // styleSignature 失效 / 章节加载 (curChapter 即时 + prevNext debounce 预加载) 已抽到

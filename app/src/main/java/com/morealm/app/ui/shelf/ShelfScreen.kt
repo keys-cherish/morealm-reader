@@ -234,20 +234,39 @@ fun ShelfScreen(
         }
     }
 
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? -> uri?.let { viewModel.importLocalBook(it) } }
-
-    val folderPickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? -> uri?.let { viewModel.importFolder(it) } }
-
-    // 默认打开 Download 目录，避免用户从根目录开始找
+    // 首次导入从 Download 开始；成功选择后改用上次文档/目录 URI。Android 8+ 的
+    // DocumentsUI 会把普通文件 URI 解析到父目录，解析失败则按系统规则回退。
     val downloadUri: Uri = remember {
         DocumentsContract.buildDocumentUri(
             "com.android.externalstorage.documents",
             "primary:${Environment.DIRECTORY_DOWNLOADS}"
         )
+    }
+    val lastImportLocationUri by viewModel.lastImportLocationUri.collectAsStateWithLifecycle()
+    val importInitialUri = remember(lastImportLocationUri, downloadUri) {
+        lastImportLocationUri
+            .takeIf { it.isNotBlank() }
+            ?.let { Uri.parse(it) }
+            ?.takeIf { it.scheme == "content" }
+            ?: downloadUri
+    }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        OpenDocumentAtLocation()
+    ) { uri: Uri? ->
+        uri?.let {
+            viewModel.rememberImportLocation(it)
+            viewModel.importLocalBook(it)
+        }
+    }
+
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        uri?.let {
+            viewModel.rememberImportLocation(it)
+            viewModel.importFolder(it)
+        }
     }
 
     // UX-1: Snackbar host 用于「批量删书」的撤销窗口（5s）。原 BatchDeleteDialog 二次确认已下线。
@@ -446,13 +465,15 @@ fun ShelfScreen(
                                 leadingIcon = { Icon(Icons.Default.Description, null) },
                                 onClick = {
                                     showImportMenu = false
-                                    filePickerLauncher.launch(arrayOf("*/*"))
+                                    filePickerLauncher.launch(
+                                        OpenDocumentRequest(arrayOf("*/*"), importInitialUri)
+                                    )
                                 },
                             )
                             DropdownMenuItem(
                                 text = { Text("导入文件夹") },
                                 leadingIcon = { Icon(Icons.Default.Folder, null) },
-                                onClick = { showImportMenu = false; folderPickerLauncher.launch(downloadUri) },
+                                onClick = { showImportMenu = false; folderPickerLauncher.launch(importInitialUri) },
                             )
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                             DropdownMenuItem(
@@ -702,8 +723,10 @@ fun ShelfScreen(
             ShelfGridSkeleton(modifier = Modifier.fillMaxSize())
         } else if (!hasContent) {
             EmptyShelf(
-                onImportFile = { filePickerLauncher.launch(arrayOf("*/*")) },
-                onImportFolder = { folderPickerLauncher.launch(downloadUri) },
+                onImportFile = {
+                    filePickerLauncher.launch(OpenDocumentRequest(arrayOf("*/*"), importInitialUri))
+                },
+                onImportFolder = { folderPickerLauncher.launch(importInitialUri) },
                 modifier = Modifier.fillMaxSize(),
             )
         } else if (isListView) {

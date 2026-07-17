@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
+import com.morealm.app.domain.render.layout.visibleChapterPosition
 import com.morealm.epub.render.ScrollImageDimensionsResolver
 import com.morealm.epub.render.ScrollLayoutEngine
 import com.morealm.epub.render.ScrollPage
@@ -156,6 +157,8 @@ fun PageLevelReaderHost(
     onChapterProgressLive: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
     /** 进度上报 persist 回调 —— debounce 800ms，停止翻页后才上报；caller 在此写 DB。 */
     onChapterProgressPersist: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
+    /** 当前页字符锚点变化；用于持久化与排版无关的精确续读位置。 */
+    onVisibleChapterPositionChanged: (chapterIndex: Int, chapterPosition: Int) -> Unit = { _, _ -> },
     // ── 选区 / 长按 / 高亮（P4.4 接入）──
     /** 全书所有高亮（用于 tap-on-highlight 命中检测）。 */
     chapterHighlightsRaw: List<com.morealm.app.domain.entity.Highlight> = emptyList(),
@@ -408,6 +411,27 @@ fun PageLevelReaderHost(
             "JUMP-DONE token=$restoreToken cp=$initialChapterPosition prog=$initialProgress → page=$targetPageIdx (total=$total) [moveToPage curPgIdx ${curPgIdx} → ${core.pageFactory.pageIndex}]",
         )
         onProgressRestored()
+    }
+
+    // 百分比只能在当前排版参数下近似定位；续读的稳定真值必须是当前页首字符 cp。
+    // 此 effect 声明在恢复 effect 之后，layout 就绪时会先完成 JUMP，再上报目标页锚点，
+    // 避免首帧 page=0 把刚读出的持久化位置反向覆盖。
+    LaunchedEffect(core.state.currentChapter) {
+        val layout = core.state.currentChapter ?: return@LaunchedEffect
+        snapshotFlow { core.pageFactory.pageIndex }
+            .map { pageIndex ->
+                visibleChapterPosition(
+                    layout = layout,
+                    pageIndex = pageIndex,
+                    pageOffset = 0f,
+                )?.let { layout.chapterIndex to it }
+            }
+            .distinctUntilChanged()
+            .collect { anchor ->
+                anchor?.let { (chapterIndex, chapterPosition) ->
+                    onVisibleChapterPositionChanged(chapterIndex, chapterPosition)
+                }
+            }
     }
 
     // ── 进度上报 live (sample 150ms) + persist (debounce 800ms) ──

@@ -549,6 +549,22 @@ class ReaderViewModel @Inject constructor(
     fun updateScrollProgress(pct: Int) = progress.updateScrollProgress(pct)
     fun onVisiblePageChanged(index: Int, title: String, readProgress: String, chapterPosition: Int = 0) =
         progress.onVisiblePageChanged(index, title, readProgress, chapterPosition)
+
+    /**
+     * V2 滚动/分页 Host 只需要上报排版无关的字符锚点；章节标题与展示进度由 VM
+     * 从当前状态补齐，避免两个 UI Host 各自复制一套 VisibleReaderPage 组装逻辑。
+     */
+    fun onVisibleChapterPositionChanged(index: Int, chapterPosition: Int) {
+        val target = chapter.chapters.value.getOrNull(index) ?: return
+        progress.onVisiblePageChanged(
+            index = index,
+            title = target.title,
+            readProgress = progress.visiblePage.value.readProgress,
+            chapterPosition = chapterPosition,
+        )
+        updateVisibleReadAloudPosition(index, chapterPosition)
+    }
+
     fun onVisibleChapterChanged(index: Int) = progress.onVisibleChapterChanged(index)
     fun saveProgressNow() = progress.saveProgressNow()
     suspend fun saveProgressNowAndWait() = progress.saveProgressNowAndWait()

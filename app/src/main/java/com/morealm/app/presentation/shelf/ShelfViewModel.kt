@@ -254,8 +254,18 @@ class ShelfViewModel @Inject constructor(
     val shelfViewMode: StateFlow<String> = prefs.shelfViewMode
         .stateIn(viewModelScope, SharingStarted.Eagerly, "grid")
 
+    /** 系统文件选择器下次启动位置；文件 URI 与 tree URI 均由 DocumentsUI 官方支持。 */
+    val lastImportLocationUri: StateFlow<String> = prefs.lastImportLocationUri
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
     fun setShelfViewMode(mode: String) {
         viewModelScope.launch { prefs.setShelfViewMode(mode) }
+    }
+
+    fun rememberImportLocation(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            prefs.setLastImportLocationUri(uri.toString())
+        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)

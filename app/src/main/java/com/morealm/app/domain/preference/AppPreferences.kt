@@ -98,6 +98,11 @@ class AppPreferences @Inject constructor(
         val WEBDAV_PASS = stringPreferencesKey("webdav_pass")
         val SHELF_VIEW_MODE = stringPreferencesKey("shelf_view_mode")
         /**
+         * 最近一次成功选择的导入文档或目录 URI。普通文档 URI 也可直接作为
+         * DocumentsContract.EXTRA_INITIAL_URI，系统文件管理器会尝试定位其父目录。
+         */
+        val LAST_IMPORT_LOCATION_URI = stringPreferencesKey("last_import_location_uri")
+        /**
          * 书源管理页的列表分组方式。取值见 ui 层的 SourceGroupMode enum 序列化字符串：
          *  - "none"       : 不分组，直接平铺（兼容旧行为，默认）
          *  - "group_name" : 按 BookSource.bookSourceGroup 分组（多分组场景把整个字段当一组）
@@ -415,6 +420,9 @@ class AppPreferences @Inject constructor(
 
     val shelfViewMode: Flow<String> = context.dataStore.data
         .map { it[Keys.SHELF_VIEW_MODE] ?: "grid" }
+
+    val lastImportLocationUri: Flow<String> = context.dataStore.data
+        .map { it[Keys.LAST_IMPORT_LOCATION_URI] ?: "" }
 
     /**
      * 书源管理页的分组模式 Flow。默认 "none"（不分组）—— 旧用户升级到这版本后
@@ -747,6 +755,7 @@ class AppPreferences @Inject constructor(
 
     suspend fun setTtsAutoFollowPage(enabled: Boolean) = update(Keys.TTS_AUTO_FOLLOW_PAGE, enabled)
     suspend fun setShelfViewMode(mode: String) = update(Keys.SHELF_VIEW_MODE, mode)
+    suspend fun setLastImportLocationUri(uri: String) = update(Keys.LAST_IMPORT_LOCATION_URI, uri)
     /** 写入新的书源分组模式；调用方负责传入 [Keys.SOURCE_GROUP_MODE] 注释里列出的字符串。 */
     suspend fun setSourceGroupMode(mode: String) = update(Keys.SOURCE_GROUP_MODE, mode)
 

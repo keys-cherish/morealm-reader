@@ -248,11 +248,13 @@ class ReaderProgressController(
             val totalProgress = if (chapterCount > 0) {
                 (chapterIdx.toFloat() + scrollPct) / chapterCount
             } else 0f
+            val savedAt = System.currentTimeMillis()
             val progress = ReadProgress(
                 bookId = book.id,
                 chapterIndex = chapterIdx,
                 chapterPosition = chapterPosition,
                 totalProgress = totalProgress.coerceIn(0f, 1f),
+                updatedAt = savedAt,
             )
             AppLog.debug("Progress", buildString {
                 append("saveProgress")
@@ -261,14 +263,7 @@ class ReaderProgressController(
                 append(" | scroll=${_scrollProgress.value}%")
                 append(" | total=${String.format("%.4f", totalProgress)}")
             })
-            bookRepo.saveProgress(progress)
-            bookRepo.update(book.copy(
-                lastReadChapter = chapterIdx,
-                lastReadPosition = chapterPosition,
-                lastReadAt = System.currentTimeMillis(),
-                readProgress = progress.totalProgress,
-                totalChapters = chapterCount,
-            ))
+            bookRepo.saveProgress(progress, chapterCount)
             flushReadingStats()
             // Fire-and-forget hook for WebDav progress sync. Wrapped in
             // runCatching because a network failure here must NOT bubble

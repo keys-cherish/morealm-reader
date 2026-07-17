@@ -18,7 +18,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
@@ -26,6 +28,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import androidx.navigation.NavType
@@ -173,23 +176,40 @@ fun MoRealmNavHost(
                 }
                 val onSearchTab = remember(switchTab) { { switchTab(1) } }
                 val onToggleDayNight = remember(themeViewModel) { { themeViewModel.toggleDayNight() } }
-                val onNavWebDav = remember { { navController.safeNavigate("webdav") } }
-                val onNavAbout = remember { { navController.safeNavigate("about") } }
-                val onNavAppearance = remember { { navController.safeNavigate("appearance") } }
-                val onNavSourceManage = remember { { navController.safeNavigate("source_manage") } }
-                val onNavReadingSettings = remember { { navController.safeNavigate("reading_settings") } }
-                val onNavSearchSettings = remember { { navController.safeNavigate("search_settings") } }
-                val onNavReplaceRules = remember { { navController.safeNavigate("replace_rules") } }
-                val onNavAutoGroupRules = remember { { navController.safeNavigate("auto_group_rules") } }
-                val onNavAppLog = remember { { navController.safeNavigate("app_log") } }
-                val onNavCacheBook = remember { { navController.safeNavigate("cache_book") } }
-                val onNavThemeEditor = remember { { navController.safeNavigate("theme_editor") } }
-                val onNavDonate = remember { { navController.safeNavigate("donate") } }
-                val onNavBackupExport = remember { { navController.safeNavigate("backup_export") } }
-                val onNavBackupImport = remember { { navController.safeNavigate("backup_import") } }
-                val onNavLegadoImport = remember { { navController.safeNavigate("legado_import") } }
-                val onNavBookmarks = remember { { navController.safeNavigate("bookmarks") } }
-                val onNavHttpTtsManage = remember { { navController.safeNavigate("http_tts_manage") } }
+                val selectedTabState = rememberUpdatedState(selectedTab)
+                val navigateFromTab = remember(navController) {
+                    { sourceTab: BottomTab, route: String ->
+                        val sourceIndex = tabs.indexOf(sourceTab)
+                        val currentRoute = navController.currentDestination?.route
+                        if (canNavigateFromMainTab(selectedTabState.value, sourceIndex, currentRoute)) {
+                            navController.safeNavigate(route)
+                        } else {
+                            com.morealm.app.core.log.AppLog.warn(
+                                "Nav",
+                                "blocked hidden-tab navigation source=$sourceTab" +
+                                    " selected=${selectedTabState.value} currentRoute=$currentRoute target=$route",
+                            )
+                        }
+                    }
+                }
+                val onNavWebDav = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "webdav") } }
+                val onNavAbout = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "about") } }
+                val onNavAppearance = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "appearance") } }
+                val onNavSourceManage = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "source_manage") } }
+                val onNavReadingSettings = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "reading_settings") } }
+                val onNavSearchSettings = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "search_settings") } }
+                val onNavReplaceRules = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "replace_rules") } }
+                val onProfileAutoGroupRules = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "auto_group_rules") } }
+                val onShelfAutoGroupRules = remember(navigateFromTab) { { navigateFromTab(BottomTab.Shelf, "auto_group_rules") } }
+                val onNavAppLog = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "app_log") } }
+                val onNavCacheBook = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "cache_book") } }
+                val onNavThemeEditor = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "theme_editor") } }
+                val onNavDonate = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "donate") } }
+                val onNavBackupExport = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "backup_export") } }
+                val onNavBackupImport = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "backup_import") } }
+                val onNavLegadoImport = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "legado_import") } }
+                val onNavBookmarks = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "bookmarks") } }
+                val onNavHttpTtsManage = remember(navigateFromTab) { { navigateFromTab(BottomTab.Listen, "http_tts_manage") } }
                 val onSearchBack = remember(switchTab) { { switchTab(0) } }
 
                 var dragAmount by remember { mutableFloatStateOf(0f) }
@@ -261,14 +281,14 @@ fun MoRealmNavHost(
                             // IllegalStateException 并把 Compose 渲染管线打断，遗留 layer/绘制残影
                             // 在状态栏下方（即用户看到的橘色矩形 / 弧形）。
                             //
-                            // 改为：始终 fillMaxSize，用 graphicsLayer.alpha 控制可见性。zIndex 保证
-                            // selectedTab 在最上层接事件；不可见 tab 平铺在底但 alpha=0 看不见也不
-                            // 受 size 切换影响。代价：cached tab 总参与 layout，但本来 cachedTabs 就
-                            // 持久缓存，多一次 measure 可以接受。
+                            // 始终 fillMaxSize + alpha 保留 cached tab 的布局状态；但 alpha/zIndex
+                            // 都不会自动禁止 Compose 命中测试。必须给每个全屏 tab 建独立输入边界，
+                            // 否则当前书架空白处会穿透到下面 alpha=0 的「我的」设置项。
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .zIndex(if (page == selectedTab) 1f else 0f)
+                                    .mainTabInputBoundary(active = page == selectedTab)
                                     .graphicsLayer {
                                         alpha = if (visible) 1f else 0f
                                         translationX = if (visible) offsetX else 0f
@@ -289,7 +309,7 @@ fun MoRealmNavHost(
                                 isNightTheme = isNight,
                                 columns = columns,
                                 continueReadingRequest = continueReadingRequest,
-                                onNavigateAutoGroupRules = onNavAutoGroupRules,
+                                onNavigateAutoGroupRules = onShelfAutoGroupRules,
                             )
                         }
                         BottomTab.Discover -> SearchScreen(
@@ -312,7 +332,7 @@ fun MoRealmNavHost(
                             onNavigateReadingSettings = onNavReadingSettings,
                             onNavigateSearchSettings = onNavSearchSettings,
                             onNavigateReplaceRules = onNavReplaceRules,
-                            onNavigateAutoGroupRules = onNavAutoGroupRules,
+                            onNavigateAutoGroupRules = onProfileAutoGroupRules,
                             onNavigateAppLog = onNavAppLog,
                             onNavigateCacheBook = onNavCacheBook,
                             onNavigateThemeEditor = onNavThemeEditor,
@@ -666,6 +686,34 @@ fun MoRealmNavHost(
         } // Box
     }
 }
+
+/**
+ * 为叠放缓存的主 Tab 隔离触摸、键盘焦点和无障碍语义。
+ *
+ * active 页的全屏 pointer node 只参与命中、不消费事件，因此子控件点击和外层横滑仍正常；
+ * inactive 页在 Initial pass 消费所有变化，作为 zIndex/命中实现差异下的第二道防线。
+ */
+private fun Modifier.mainTabInputBoundary(active: Boolean): Modifier =
+    this
+        .focusProperties { canFocus = active }
+        .pointerInput(active) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    if (!active) {
+                        event.changes.forEach { it.consume() }
+                    }
+                }
+            }
+        }
+        .then(if (active) Modifier else Modifier.clearAndSetSemantics { })
+
+/** 导航层最终防线：只有当前 main_tabs 路由上的激活 Tab 能发起自己的子页导航。 */
+internal fun canNavigateFromMainTab(
+    selectedTab: Int,
+    sourceTab: Int,
+    currentRoute: String?,
+): Boolean = selectedTab == sourceTab && currentRoute == "main_tabs"
 
 /**
  * 走 reader/detail 路由前必须 Uri.encode bookId。

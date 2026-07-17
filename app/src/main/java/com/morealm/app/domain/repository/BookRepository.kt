@@ -140,6 +140,6 @@ class BookRepository @Inject constructor(
     suspend fun getProgress(bookId: String): ReadProgress? =
         progressDao.getProgress(bookId)
 
-    suspend fun saveProgress(progress: ReadProgress) =
-        progressDao.save(progress)
+    suspend fun saveProgress(progress: ReadProgress, totalChapters: Int) =
+        progressDao.saveSnapshot(progress, totalChapters)
 }

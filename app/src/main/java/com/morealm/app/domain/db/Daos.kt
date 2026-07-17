@@ -371,6 +371,41 @@ interface ReadProgressDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun save(progress: ReadProgress)
 
+    /**
+     * books 表中的游标是书架排序/跨设备同步需要的镜像；必须与 read_progress 在同一事务
+     * 更新，并且只改进度列，避免用旧 Book 快照覆盖封面、分组或文件指纹等并发修改。
+     */
+    @Query(
+        """UPDATE books SET
+            lastReadChapter = :chapterIndex,
+            lastReadPosition = :chapterPosition,
+            lastReadAt = :updatedAt,
+            readProgress = :totalProgress,
+            totalChapters = :totalChapters
+            WHERE id = :bookId"""
+    )
+    suspend fun updateBookProgressMirror(
+        bookId: String,
+        chapterIndex: Int,
+        chapterPosition: Int,
+        updatedAt: Long,
+        totalProgress: Float,
+        totalChapters: Int,
+    )
+
+    @Transaction
+    suspend fun saveSnapshot(progress: ReadProgress, totalChapters: Int) {
+        save(progress)
+        updateBookProgressMirror(
+            bookId = progress.bookId,
+            chapterIndex = progress.chapterIndex,
+            chapterPosition = progress.chapterPosition,
+            updatedAt = progress.updatedAt,
+            totalProgress = progress.totalProgress,
+            totalChapters = totalChapters,
+        )
+    }
+
     @Query("SELECT * FROM read_progress")
     suspend fun getAllSync(): List<ReadProgress>
 }

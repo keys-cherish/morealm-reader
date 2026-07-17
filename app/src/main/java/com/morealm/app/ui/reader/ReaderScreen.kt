@@ -741,6 +741,7 @@ fun ReaderScreen(
                 // 故 live 和 persist 都打到这里即可（持久化按 controller 内 snapshot 节流）。
                 onChapterProgressLive = { _, prog -> viewModel.updateScrollProgress(prog) },
                 onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
+                onVisibleChapterPositionChanged = viewModel::onVisibleChapterPositionChanged,
                 // 用户高亮：传整本书所有 highlight，Host 内按章过滤 + 投影
                 chapterHighlightsRaw = viewModel.highlights.collectAsStateWithLifecycle().value,
                 // 书签：传整本书所有 bookmark，Host 内按章过滤 + 画三角标记
@@ -905,6 +906,7 @@ fun ReaderScreen(
                 onProgressRestored = { viewModel.clearNavigateDirection() },
                 onChapterProgressLive = { _, prog -> viewModel.updateScrollProgress(prog) },
                 onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
+                onVisibleChapterPositionChanged = viewModel::onVisibleChapterPositionChanged,
                 // P4.4 选区 / 高亮 / 长按（与 V2 SCROLL Host 同款 callback 配置）
                 chapterHighlightsRaw = viewModel.highlights.collectAsStateWithLifecycle().value,
                 selectionMenuConfig = selectionMenuConfig,
