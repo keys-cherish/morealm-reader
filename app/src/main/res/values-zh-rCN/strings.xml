@@ -3,6 +3,38 @@
     <string name="app_name">墨境</string>
     <string name="app_description">本地阅读器 · 自定义排版引擎</string>
     <string name="privacy_notice">墨境是一款本地阅读工具。App 不提供任何内容，用户对自行导入的文件和配置负责。</string>
+    
+    <!-- =======================================================================================  -->
+    <!-- 备注: 全文使用中国简体中文和半角符号, 如果字母和数字前后有汉字, 记得添加一个半角空格.           -->
+    <!--   ※符号: ，。？！、；：“ ” ‘ ’〔（ ） [ ] { } 〕—— …… ．《 》〈 〉· — ____ /|\『「」』﹃﹄  -->
+    <!--   ※帮助资源: http://developer.android.com/guide/topics/resources/string-resource.html    -->
+    <!-- =======================================================================================  -->
+    
+    <!-- GENERIC 通用 --> 
+    <!-- 对话框【是】按钮的字符串 -->
+    <string name="yes">是</string>
+    <!-- 对话框【否】按钮的字符串 -->
+    <string name="no">否</string>
+    <!-- 对话框【创建】按钮的字符串 -->
+    <string name="create">创建</string>
+    <!-- 对话框【取消】按钮的字符串 -->
+    <string name="cancel">取消</string>
+    <!-- 对话框【打开】按钮的字符串 -->
+    <string name="open">打开</string>
+    <!-- 对话框【保存】按钮的字符串 -->
+    <string name="save">保存</string>
+    <!-- 对话框【分享】按钮的字符串 -->
+    <string name="share">分享</string>
+    <!-- 对话框【允许】按钮的字符串 -->
+    <string name="allow">允许</string>
+    <!-- 对话框【拒绝】按钮的字符串 -->
+    <string name="deny">拒绝</string>
+    <!-- 用在确认对话框中，作为用户将点击以开启该功能的操作。 -->
+    <string name="confirmation_enable">启用</string>
+    <!-- 用在确认对话框中，作为用户将点击以关闭该功能的操作。 -->
+    <string name="confirmation_disable">禁用</string>
+
+    <!-- ======================================================================================= -->
 
     <!-- BOOKSHELF 书架相关 -->
     <string name="tab_shelf">书架</string>
@@ -16,29 +48,308 @@
     <string name="shortcut_continue">继续阅读</string>
     <string name="shortcut_continue_long">继续阅读上次的书</string>
 
+    <!-- ======================================================================================= -->
+
     <!-- EXPLORE 发现相关 -->
     <string name="tab_explore">发现</string>
+    <!-- <string name="">搜索书名、作者或关键词</string> -->
+    <!-- <string name="">搜索</string> -->
+    <!-- <string name="">已加载 % 个文本书源</string> -->
+    <!-- <string name="">输入关键词开始搜索</string> -->
+
+    <!-- ======================================================================================= -->
 
     <!-- TTS 听书相关 -->
+    <!-- <string name="">TTS 朗读</string> -->
+    <!-- <string name="">跳过内容正则</string> -->
+    <!-- <string name="">匹配xxx</string> -->
+    <!-- <string name="">保存</string> -->
+    <!-- <string name="">锁屏保活 CPU</string> -->
+    <!-- <string name="">开启后耗电略高；仅当锁屏偶发断声时建议开启</string> -->
     <string name="tab_listen">听书</string>
     <string name="tts_playing">正在朗读</string>
+    <!-- <string name="">未在播放</string> -->
+    <!-- <string name="">在书架打开一本书，按 ▶️ 开始朗读。</string> -->
+    <!-- <string name="">第 1 段</string> -->
+    <!-- <string name="">共 N 段</string> -->
+    <!-- ※更改：按钮【默认】改为【默认音色】，适配无障碍体验 -->
+    <!-- <string name="">默认音色</string> -->
+        <!-- <string name="">选择发音人</string> -->
+        <!-- <string name="">本机 TTS 引擎，共16种中文音色。</string> -->
+        <!-- <string name="">语速</string> -->
+    <!-- ※更改：按钮【关闭】改为【定时设置】，适配无障碍体验 -->
+    <!-- <string name="">定时设置</string> -->
+        <!-- <string name="">定时关闭</string> -->
+        <!-- <string name="">到点后自动停止朗读</string> -->
+        <!-- <string name="">不定时</string> -->
+        <!-- <string name="">15 分钟</string> -->
+        <!-- <string name="">30 分钟</string> -->
+        <!-- <string name="">60 分钟</string> -->
+        <!-- <string name="">90 分钟</string> -->
+        <!-- <string name="">120 分钟</string> -->
+    <!-- ※更改：按钮【TTS设置】改为【朗读设置】，对齐排版格式 -->
+    <!-- <string name="">朗读设置</string> -->
+        <!-- <string name="">朗读设置</string> -->
+        <!-- <string name="">朗读引擎</string> -->
+        <!-- <string name="">朗读语速</string> -->
+        <!-- <string name="">自定义朗读源</string> -->
+        <!-- <string name="">Edge TTS</string> -->
+        <!-- <string name="">系统 TTS</string> -->
+        <!-- <string name="">打开系统 TTS 设置</string> --> 
+            <!-- <string name="">系统 TTS 引擎包：跟随系统默认</string> -->
+                <!-- <string name="">选择系统 TTS 引擎</string> -->
+                <!-- <string name="">改动后即时生效，无需重启。</string> -->
+                <!-- <string name="">关闭</string> -->
+    
+    <!-- ======================================================================================= -->
 
     <!-- UI 界面相关 -->
     <string name="tab_profile">我的</string>
+    <!-- <string name="">阅读统计</string> -->
+    <!-- <string name="">%1 本书</string> -->
+    <!-- <string name="">%2 总时长</string> -->
+    <!-- <string name="">%3 连续天数</string> -->
+    <!-- <string name="">今天已读 %4 分钟</string> -->
+    <!-- <string name="">查看年度报告</string> -->
+    <!-- <string name="">年度总结</string> -->
+    <!-- <string name="">(YYYY)年度阅读报告</string> -->
+    <!-- <string name="">陪你走过的书</string> -->
+    <!-- <string name="">(0 时) 阅读</string> -->
+    <!-- <string name="">(0 万) 文字</string> -->
+    <!-- <string name="">(0 天) 活跃</string> -->
+    <!-- <string name="">最投入: xxx</string> -->
+    <!-- <string name="">最长 0 分钟</string> -->
+    <!-- <string name="">常在 time 翻书</string> -->
+    <!-- <string name="">沉浸阅读时长: 0 小时</string> -->
+    <!-- <string name="">保存到相册的长图含完整指标/标签/最投入书目</string> -->
+    <!-- <string name="">稍后再看</string> -->
+    <!-- <string name="">保存长图</string> -->
+    <!-- <string name="">墨境 MoRealm · 把阅读留在时间里</string> -->
 
     <!-- THEME 主题相关 -->
     <string name="theme_settings">主题设置</string>
+    <!-- <string name="">主题切换</string> -->
+        <!-- <string name="">跟随系统主题</string> -->
+        <!-- <string name="">关闭·用下方瓦片手动选择主题</string> -->
+        <!-- <string name="">已开启·系统切到深色时自动切换</string> -->
+        <!-- <string name="">白天默认主题</string> -->
+        <!-- <string name="">内置·米色书页</string> -->
+            <!-- <string name="">选择白天默认主题</string> -->
+            <!-- <string name="">使用内置默认（米色书页）</string> -->
+            <!-- <string name="">墨水屏</string> -->
+            <!-- <string name="">纸上</string> -->
+            <!-- <string name="">关闭</string> -->
+        <!-- <string name="">夜晚默认主题</string> -->
+        <!-- <string name="">内置·墨境</string> -->
+            <!-- <string name="">选择夜晚默认主题</string> -->
+            <!-- <string name="">使用内置默认（墨境）</string> -->
+            <!-- <string name="">森林</string> -->
+            <!-- <string name="">深夜</string> -->
+            <!-- <string name="">赛博朋克</string> -->
+            <!-- <string name="">关闭</string> -->
+        <!-- <string name="">点击切换主题，实时预览效果</string> -->
+        <!-- <string name="">自定义主题（长按删除）</string> -->
+            <!-- <string name="">我的主题</string> -->
+            <!-- <string name="">已删除主题「我的主题」</string> -->
+            <!-- <string name="">撤销</string> -->
+        <string name="custom_theme">自定义主题</string>
+        <string name="custom_theme_desc">暂无自定义主题，可点击下方创建或导入。</string>
+            <!-- <string name="">自定义主题</string> -->
+            <!-- <string name="">保存并应用</string> -->
+            <!-- <string name="">主题名字</string> -->
+            <!-- <string name="">暗色主题</string> -->
+                <!-- <string name="">决定「跟随系统」时此主题归到白天/夜晚分类。默认按背景亮度自动判断，可手动覆盖。</string> -->
+            <!-- <string name="">颜色配置</string> -->
+                <!-- <string name="">背景色</string> -->
+                <!-- <string name="">文字色</string> -->
+                <!-- <string name="">强调色</string> -->
+            <!-- <string name="">首页背景图</string> -->
+                <!-- <string name="">未设置</string> ## None set-->
+                <!-- <string name="">点击选择图片</string> -->
+                <!-- <string name="">已设置</string> -->
+                <!-- <string name="">点击更换图片</string> -->
+                <!-- <string name="">清除</string> -->
+            <!-- <string name="">阅读 CSS</string> -->
+                <!-- <string name="">自定义 CSS</string> -->
+                <!-- <string name="">快键插入</string> -->
+                <!-- <string name="">取消缩进</stirng> -->
+                <!-- <string name="">首行缩进两字</string> -->
+                <!-- <string name="">行距紧凑</string> -->
+                <!-- <string name="">行距宽松</string> -->
+                <!-- <string name="">左对齐</string> -->
+                <!-- <string name="">两端对齐</string> -->
+                <!-- <string name="">大字体</string> -->
+                <!-- <string name="">段间距大</string> -->
+                <!-- <string name="">支持的属性</string> -->
+            <!-- <string name="">实时预览</string> -->
+                <!-- <string name="">预览效果</string> -->
+        <!-- <string name="">导出主题</string> -->
+        <!-- <string name="">导入主题</string> -->
+        <!-- <string name="">导出全部自定义主题 (0)</string> -->
+    
+    <!-- VISUAL 外观设置相关 -->
+    <!-- Title for the language picker -->
+    <!-- <string name="">语言设置：</string> -->
+    <!-- Description for language picker -->
+    <!-- <string name="">跟随系统</string> -->
+    <!-- <string name="">简体中文</string> -->
+    <!-- <string name="">台繁中文</string> -->
+    <!-- <string name="">English</string> -->
+    <!-- <string name="">外观与阅读</string> -->
+    <!-- <string name="">外观设置：</string> -->
+    <!-- <string name="">全域背景圖、透明度、模糊度</string> -->
+        <!-- <string name="">外观</string> -->
+        <!-- <string name="">全局背景图</string> -->
+        <!-- <string name="">效果调节</string> -->
+
+    <!-- READER 阅读设置相关 -->
+    <!-- <string name="">阅读设置</string> -->
+    <!-- <string name="">翻页动画、音量键翻页、屏幕常亮、界面提示</string> -->
+        <!-- <string name="">阅读设置：</string> -->
+        <!-- <string name="">屏幕交互</string> -->
+            <!-- <string name="">翻页动画：覆盖、仿真、平移、上下、淡入、无</string> -->
+            <!-- <string name="">请按页面左侧：</string> -->
+            <!-- <string name="">翻到下一页</string> -->
+            <!-- <string name="">翻到上一页</string> -->
+        <!-- <string name="">实体按键与设备</string> -->
+            <!-- <string name="">音量键翻页</string> -->
+            <!-- <string name="">耳机/蓝牙翻页器</string> -->
+        <!-- <string name="">启动偏好</string> -->
+            <!-- <string name="">启动后继续上次阅读</string> -->
+        <!-- <string name="">选取与高亮</string> -->
+            <!-- <string name="">长按文字划线</string> -->
+            <!-- <string name="">选区菜单按钮</string> -->
+                <!-- <string name="">主行 3/3</string> -->
+                <!-- <string name="">选区菜单按钮</string> -->
+                <!-- <string name="">主行最多三个，始终可见；折叠行点「更多」展开；隐藏不渲染。</string> -->
+                    <!-- <string name="">主行</string> -->
+                    <!-- <string name="">折叠</string> -->
+                    <!-- <string name="">隐藏</string> -->
+                    <!-- <string name="">复制</string> -->
+                    <!-- <string name="">高亮</string> -->
+                    <!-- <string name="">下划线</string> -->
+                    <!-- <string name="">查词</string> -->
+                    <!-- <string name="">朗读</string> -->
+                    <!-- <string name="">翻译</string> -->
+                    <!-- <string name="">分享</string> -->
+                    <!-- <string name="">字体色</string> -->
+                    <!-- <string name="">重置</string> -->
+                    <!-- <string name="">取消</string> -->
+                    <!-- <string name="">保存</string> -->
+        <!-- <string name="">阅读界面</string> -->
+            <!-- ※更改：标题【竖排版】改为【文本排版】，避免略过横排设置 -->
+            <!-- <string name="">排版：</string> -->
+            <!-- <string name="">横排</string> -->
+            <!-- <string name="">竖排（标题在右、正文在左）</string> -->
+            <!-- <string name="">竖排（章标在左、正文在右）</string> -->
+            <!-- <string name="">屏幕关闭时间</string> -->
+                <!-- <string name="">屏幕关闭时间：</string> -->
+                <!-- <string name="">无</string> -->
+                <!-- <string name="">跟随系统</string> -->
+                <!-- <string name="">1 分钟</string> -->
+                <!-- <string name="">2 分钟</string> -->
+                <!-- <string name="">5 分钟</string> -->
+                <!-- <string name="">10分钟</string> -->
+            <!-- <string name="">显示系统状态</string> -->
+            <!-- <string name="">显示章节名</string> -->
+            <!-- <string name="">显示时间和电量</string> -->
+            <!-- <string name="">章节标题对齐</string> -->
+                <!-- <string name="">章节标题对齐：</string> -->
+                <!-- <string name="">居中</string> -->
+                <!-- <string name="">居左</string> -->
+                <!-- <string name="">居右</string> -->
+                <!-- <string name="">取消</string> -->
+        <!-- <string name="">文字上色</string> -->
+            <!-- <string name="">文字上色：</string> -->
+            <!-- <string name="">已开</string> -->
+            <!-- <string name="">已关</string> -->
+            <!-- <string name="">标点、数字、字母、引号内……按规则着色</string> -->
+                <!-- <string name="">文字上色</string> -->
+                    <!-- <string name="">按规则给正文自动着色：标点、数字、字母、特殊符号，以及引号内、括号内的文字，提升阅读时的视觉层次。纯本地规则，无需联网。</string> -->
+                <!-- <string name="">总开关</string> -->
+                    <!-- <string name="">正文规则上色</string> -->
+                    <!-- <string name="">关闭后正文按主题默认色显示</string> -->
+                <!-- <string name="">调色板（日间主题）</string> -->
+                    <!-- <string name="">全部恢复默认（日间）</string> -->
+                    <!-- <string name="">标点</string> -->
+                    <!-- <string name="">数字</string> -->
+                    <!-- <string name="">字母</string> -->
+                    <!-- <string name="">特殊符号</string> -->
+                    <!-- <string name="">引号内</string> -->
+                    <!-- <string name="">括号内</string> -->
+                <!-- <string name="">调色板（夜间主题）</string> -->
+                    <!-- <string name="">全部恢复默认（夜间）</string> -->
+                    <!-- <string name="">标点</string> -->
+                    <!-- <string name="">数字</string> -->
+                    <!-- <string name="">字母</string> -->
+                    <!-- <string name="">特殊符号</string> -->
+                    <!-- <string name="">引号内</string> -->
+                    <!-- <string name="">括号内</string> -->
+                <!-- <string name="">高亮词</string> -->
+                    <!-- <string name="">还没有高亮词。添加后，正文每次出现该词都会自动着色（长词优先）。</string> -->
+                    <!-- <string name="">新高亮词</string> -->
+                    <!-- <string name="">颜色</string> -->
+                    <!-- <string name="">添加高亮词</string> -->
+        <!-- <string name="">文内搜索</string> -->
+            <!-- <string name="">搜索方向：</string> -->
+            <!-- <string name="">全文</string> -->
+            <!-- <string name="">前向（之前）</string> -->
+            <!-- <string name="">后向（之后）</string> -->
+            <!-- <string name="">前向=当前页之前；后向=当前页之后</string> -->
+            <!-- <string name="">文内搜索方向</string> -->
+                <!-- <string name="">全文搜索：显示全部命中，不区分位置</string> -->
+                <!-- <string name="">前向搜索：只显示当前页之前的命中</string> -->
+                <!-- <string name="">后向搜索：只显示当前页之后的命中</string> -->
+                <!-- <string name="">取消</string> -->
+        <!-- <string name="">阅读器背景</string> -->
+            <!-- <string name="">设置后阅读器背景会随日夜主题自动切换</string> -->
+            <!-- <string name="">日间背景</string> -->
+                <!-- <string name="">点击选择图片</string> -->
+                <!-- <string name="">已设置・点击更换</string> -->
+                <!-- <string name="">清除</string> -->
+            <!-- <string name="">夜间背景</string> -->
+                <!-- <string name="">点击选择图片</string> -->
+                <!-- <string name="">已设置・点击更换</string> -->
+                <!-- <string name="">清除</string> -->
+        <!-- <string name="">TXT 章节识别</string> -->
+            <!-- <string name="">自定义章节正规</string> -->
+            <!-- <string name="">留空使用xxx</string> -->
+            <!-- <string name="">保存</string> -->
 
     <!-- PARSER 解析规则相关 -->
     <string name="content_rules">内容解析规则</string>
     <string name="content_rules_desc">管理自定义解析配置</string>
+    <!-- <string name="">正文替换净化</string> -->
+    <!-- <string name="">去广告、净化正文内容，支持正规替换</string> -->
 
-    <!-- DATA 数据相关 -->
-    <string name="webdav_sync">WebDAV 同步</string>
-    <string name="data_migration">数据迁移</string>
+    <!-- AUTOGROUP 自动分组相关 -->
+    <!-- <string name="">自动分组规则</string> -->
+    <!-- <string name="">题材关键词、阈值与忽略列表，可导出分享</string> -->
+
+    <!-- BACKUP 备份相关 -->
+    <!-- <string name="">备份与恢复</string> -->
+        <!-- <string name="">导出备份</string> -->
+        <!-- <string name="">选择需要导出的数据并查看大小</string> -->
+        <!-- <string name="">导入备份</string> -->
+        <!-- <string name="">选择 ZIP 文件并按类别恢复</string> -->
+        <string name="webdav_sync">WebDAV 同步</string>
+        <!-- <string name="">进度、书架、书源、主题，一键同步</string> -->
+        <string name="data_migration">数据迁移</string>
 
     <!-- OTHER 其他相关 -->
     <string name="advanced_settings">高级设置</string>
+    <!-- <string name="book_source_management">书源管理</string> -->
+    <!-- <string name="">导入、启用、删除书源，支持 URL 订阅和 JSON 导入</string> -->
+    <!-- <string name="">搜索设置</string> -->
+    <!-- <string name="">并发搜索数量、单源超时，根据网络情况调节</string> -->
+    <!-- <string name="">我的书签</string> -->
+    <!-- <string name="">跨书查看、按时间过滤、按书分组</string> -->
+    <!-- <string name="">离线缓存</string> -->
+    <!-- <string name="">批量下载章节，支持离线阅读</string> -->
+    <!-- <string name="">Legado 一键搬家</string> -->
+    <!-- <string name="">导入Legado备份，书源、书架、进度全部迁移</string> -->
+    <!-- <string name="">桌面小组件</string> -->
+    <!-- <string name="">把“继续阅读”放到桌面，一键回到上次位置</string> -->
 
     <!-- WIDGET 桌面小组件相关 -->
     <string name="widget_continue_reading_label">墨境·继续阅读</string>
@@ -49,4 +360,57 @@
     <string name="widget_empty_title">还没有开始阅读</string>
     <string name="widget_empty_subtitle">点此打开墨境，挑一本书开始</string>
     <string name="widget_today_read_format">今日已读 %1$s</string>
+
+    <!-- ABOUT 关于 --> 
+    <!-- <string name="about_morealm">关于墨境</string> -->
+        <!-- <string name="">特性</string> -->
+            <!-- <string name="">多格式支持</string> -->
+            <!-- <string name="">TXT、EPUB、PDF</string> -->
+            <!-- <string name="">主题系统</string> -->
+            <!-- <string name="">六套内置主题 + Legado 主题导入</string> -->
+            <!-- <string name="">WebDAV 同步</string> -->
+            <!-- <string name="">进度、书架、书源、主题</string> -->
+            <!-- <string name="">文字转语音</string> -->
+            <!-- <string name="">系统朗读引擎 + 书内控制面板</string> -->
+            <!-- <string name="">智能导入</string> -->
+            <!-- <string name="">文件夹自动识别 + 批量导入</string> -->
+            <!-- <string name="">Legado 兼容</string> -->
+            <!-- <string name="">书源格式 + 一键搬家</string> -->
+        <!-- <string name="">创立纪念</string> -->
+            <!-- <string name="">首个版本：2026 年 4 月 19 日 · v1.0.0-alpha1</string> -->
+            <!-- <string name="">已陪伴你 % 天</string> -->
+        <!-- <string name="">更新日志</string> -->
+        <!-- <string name="">贡献者</string> -->
+            <!-- <string name="">一起把墨境做得更好</string> -->
+                <!-- <string name="">贡献者</string> -->
+                <!-- <string name="">感谢xxx</string> -->
+                <!-- <string name="">按加入时间排序xxx</string> -->
+                <!-- <string name="">想加入？查看xxx</string> -->
+        <!-- <string name="">项目主页</string> -->
+        <!-- <string name="">联系我们</string> -->
+            <!-- <string name="">QQ 交流群 1101519131 · 点击复制群号</string> -->
+        <!-- <string name="">Made with ❤️ for readers</string> -->
+    <!-- <string name="check_update">检查更新</string> -->
+    <!-- <string name="">网盘下载最新版（当前 v1.x）</string> -->
+        <!-- <string name="">下载最新版</string> -->
+        <!-- <string name="">当前版本。选择网盘获取最新安装包。</string> -->
+        <!-- <string name="">GitHub</string> -->
+        <!-- <string name="">百度网盘</string> -->
+        <!-- <string name="">夸克网盘</string> -->
+        <!-- <string name="">123 网盘</string> -->
+        <!-- <string name="">关闭</string> -->
+    <!-- <string name="app_log">应用日志</string> -->
+    <!-- <string name="app_log_desc">查看运行日志和错误信息</string> -->
+        <!-- <string name="">应用日志</string> -->
+            <!-- <string name="">运行日志</string> -->
+            <!-- <string name="">目录路径</string> -->
+            <!-- <string name="">目录清理</string> -->
+                <!-- <string name="">搜索 message/tag/异常堆栈</string> -->
+            <!-- <string name="">全部</string> -->
+            <!-- <string name="">崩溃记录</string> -->
+            <!-- <string name="">xxx</string> -->
+            <!-- <string name="">崩溃记录</string> -->
+            <!-- <string name="">目录路径</string> -->
+            <!-- <string name="">无崩塌记录\n这是好事</string> -->
+    <!-- <string name="">请作者喝杯咖啡</string> -->
 </resources>
