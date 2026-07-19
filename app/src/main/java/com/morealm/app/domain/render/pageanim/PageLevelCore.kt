@@ -224,7 +224,22 @@ fun rememberPageLevelCore(
                 AppLog.info("PageLevelCore", "  loaded idx=$idx contentLen=${content.content.length}")
                 withContext(Dispatchers.Default) {
                     content.structuredContent?.let { structured ->
-                        engine.layoutStructuredChapter(content.chapterIndex, content.title, structured)
+                        val layout = engine.layoutStructuredChapter(
+                            content.chapterIndex,
+                            content.title,
+                            structured,
+                        )
+                        if (horizontalPaged) {
+                            layout
+                        } else {
+                            expandBackgroundOnlyScrollPage(
+                                layout = layout,
+                                content = structured,
+                                chapterTitle = content.title,
+                                pageWidth = engine.viewWidth,
+                                resolveImageDimensions = engine.imageDimensionsResolver::resolve,
+                            )
+                        }
                     } ?: engine.layoutChapter(content.chapterIndex, content.title, content.content)
                 }
             } catch (e: CancellationException) {
