@@ -687,12 +687,7 @@ fun ReaderScreen(
                     // **D1.b**：传 visibleWidth (viewWidth - paddingH*2) 让 EPUB % margin 解析按
                     // 真实可排版宽算（某 EPUB `table.vol-title { margin: 20% 0 0 auto }`）。
                     val cbwPx = (viewWidthPx - paddingHPx * 2).coerceAtLeast(0)
-                    val content = viewModel.chapter.fetchAndPrepareChapter(idx, cbwPx) ?: return@loadFn null
-                    ScrollChapterContent(
-                        chapterIndex = idx,
-                        title = chap.title,
-                        content = content,
-                    )
+                    viewModel.chapter.fetchAndPrepareScrollChapter(idx, cbwPx)
                 },
                 viewWidth = viewWidthPx,
                 viewHeight = viewHeightPx,
@@ -868,12 +863,7 @@ fun ReaderScreen(
                     val chap = chapters.getOrNull(idx) ?: return@loadFn null
                     // **D1.b**：见 ScrollCanvasReaderHost 同位注释
                     val cbwPx = (viewWidthPx - paddingHPx * 2).coerceAtLeast(0)
-                    val content = viewModel.chapter.fetchAndPrepareChapter(idx, cbwPx) ?: return@loadFn null
-                    com.morealm.app.domain.reader.scroll.ScrollChapterContent(
-                        chapterIndex = idx,
-                        title = chap.title,
-                        content = content,
-                    )
+                    viewModel.chapter.fetchAndPrepareScrollChapter(idx, cbwPx)
                 },
                 viewWidth = viewWidthPx,
                 viewHeight = viewHeightPx,

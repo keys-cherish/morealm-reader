@@ -283,6 +283,16 @@ internal fun drawScrollPageOnCanvas(
     val pageLastCp = page.lines.lastOrNull()?.lastChapterPos ?: -1
     val visibleWidthF = (chapterViewWidth - chapterPaddingLeft * 2).toFloat()
 
+    // EPUB 文档背景属于页内 section region；必须在内容坐标 translate 之前按整页宽绘制。
+    // SCROLL 的 page pane 会随内容移动，横向/仿真则各自绘制目标 page，因此五种模式同源。
+    drawEpubPageBackground(
+        canvas = nc,
+        page = page,
+        pageWidth = chapterViewWidth.toFloat(),
+        pageHeight = viewHeightF,
+        fontSizePx = contentPaint.textSize,
+    )
+
     nc.save()
     nc.translate(chapterPaddingLeft.toFloat(), 0f)
     // **渲染层 clip 兜底**（rendering invariant）：translate 后 nativeCanvas

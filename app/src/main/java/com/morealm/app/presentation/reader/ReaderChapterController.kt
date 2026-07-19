@@ -6,7 +6,10 @@ import com.morealm.app.core.text.sortedNaturalBy
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.entity.BookFormat
+import com.morealm.app.domain.parser.EpubParser
 import com.morealm.app.domain.parser.LocalBookParser
+import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.ReplaceRuleRepository
 import com.morealm.app.domain.repository.SourceRepository
@@ -1532,6 +1535,64 @@ class ReaderChapterController(
         } catch (e: Exception) {
             AppLog.warn("Chapter", "fetchAndPrepareChapter($index) failed: ${e.message}", e)
             null
+        }
+    }
+
+    /**
+     * page-level 阅读器专用入口。EPUB 保留 StructuredChapterContent 的 section/CSS/背景
+     * 作用域；其他格式以及实际命中内容替换的 EPUB 继续使用稳定的字符串路径。
+     */
+    suspend fun fetchAndPrepareScrollChapter(
+        index: Int,
+        epubContainingBlockWidthPx: Int = 0,
+    ): ScrollChapterContent? {
+        val chapterList = _chapters.value
+        if (index !in chapterList.indices) return null
+        val book = _book.value ?: return null
+        val chapter = chapterList[index]
+
+        if (isWebBook(book) || book.format != BookFormat.EPUB) {
+            val text = fetchAndPrepareChapter(index, epubContainingBlockWidthPx) ?: return null
+            return ScrollChapterContent(index, chapter.title, text)
+        }
+
+        val localPath = book.localPath ?: return null
+        return try {
+            val structured = withContext(Dispatchers.IO) {
+                EpubParser.readChapterStructured(
+                    context = context,
+                    uri = Uri.parse(localPath),
+                    chapter = chapter,
+                    containingBlockWidthPx = epubContainingBlockWidthPx,
+                )
+            }
+            if (structured.isEmpty()) {
+                val fallback = fetchAndPrepareChapter(index, epubContainingBlockWidthPx) ?: return null
+                return ScrollChapterContent(index, chapter.title, fallback)
+            }
+
+            val flattened = structured.flattenToString()
+            val replaced = applyReplaceRules(flattened)
+            val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
+            val structureStillMatches = converted == flattened
+            if (!structureStillMatches) {
+                AppLog.warn(
+                    "Chapter",
+                    "EPUB structured layout fallback idx=$index: replace/conversion changed flattened content",
+                )
+            }
+            ScrollChapterContent(
+                chapterIndex = index,
+                title = chapter.title,
+                content = converted,
+                structuredContent = structured.takeIf { structureStillMatches },
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.warn("Chapter", "fetchAndPrepareScrollChapter($index) failed: ${e.message}", e)
+            val fallback = fetchAndPrepareChapter(index, epubContainingBlockWidthPx) ?: return null
+            ScrollChapterContent(index, chapter.title, fallback)
         }
     }
 

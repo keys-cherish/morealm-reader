@@ -223,7 +223,9 @@ fun rememberPageLevelCore(
                 val content = loadChapterContent(idx) ?: return@async null
                 AppLog.info("PageLevelCore", "  loaded idx=$idx contentLen=${content.content.length}")
                 withContext(Dispatchers.Default) {
-                    engine.layoutChapter(content.chapterIndex, content.title, content.content)
+                    content.structuredContent?.let { structured ->
+                        engine.layoutStructuredChapter(content.chapterIndex, content.title, structured)
+                    } ?: engine.layoutChapter(content.chapterIndex, content.title, content.content)
                 }
             } catch (e: CancellationException) {
                 throw e

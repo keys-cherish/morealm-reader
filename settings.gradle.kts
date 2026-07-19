@@ -27,8 +27,10 @@ val workspaceEpubLib = file("temp/epub-lib")
 val sandboxHostEpubLib = file("D:/temp_build/epub-lib")
 includeBuild(
     when {
-        workspaceEpubLib.isDirectory -> workspaceEpubLib
+        // 正式开发始终消费独立的 ../epub-lib；temp 副本仅供无法访问相邻目录的
+        // 沙箱兜底，否则库修复不会进入 App 构建，真机仍运行旧实现。
         localEpubLib.isDirectory -> localEpubLib
-        else -> sandboxHostEpubLib
+        sandboxHostEpubLib.isDirectory -> sandboxHostEpubLib
+        else -> workspaceEpubLib
     }
 )

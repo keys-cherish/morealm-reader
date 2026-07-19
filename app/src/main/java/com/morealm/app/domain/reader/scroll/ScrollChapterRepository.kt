@@ -1,5 +1,7 @@
 package com.morealm.app.domain.reader.scroll
 
+import com.morealm.epub.compat.StructuredChapterContent
+
 /**
  * 滚动 Canvas 引擎章节数据提供接口 —— 让 [com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasRenderer]
  * 不直接耦合 WebBook / LocalBookParser 等具体数据源。
@@ -42,4 +44,6 @@ data class ScrollChapterContent(
     val chapterIndex: Int,
     val title: String,
     val content: String,
+    /** EPUB 原生结构；null 时保持 TXT/Web/MOBI 等字符串排版路径。 */
+    val structuredContent: StructuredChapterContent? = null,
 )

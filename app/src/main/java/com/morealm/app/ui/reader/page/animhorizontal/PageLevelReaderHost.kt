@@ -139,9 +139,9 @@ fun PageLevelReaderHost(
     textFullJustify: Boolean = true,
     bgColorArgb: Int = Color.WHITE,
     /**
-     * 阅读区背景图 uri；空串 = 纯色背景。来自 ReaderScreen 的 readerBgImage。
-     * 优先级：当前章节 EPUB body 背景图 (state.currentChapter.chapterBgImageSrc) >
-     * 本参数 (阅读器全局) > 纯色 [bgColorArgb]。某仙侠 / 仙侠类章节级背景图通过此通路透传。
+     * 用户选择的阅读区背景图 uri；空串 = 纯色背景。
+     * EPUB 文档背景由页内 section region 单独绘制，不能在宿主层拉伸为整页背景，
+     * 否则 no-repeat 背景会穿透到相邻 section/page。
      */
     bgImageUri: String = "",
     restoreToken: Long = 0L,
@@ -632,11 +632,9 @@ fun PageLevelReaderHost(
         }
     }
 
-    // 背景图加载（与 ScrollCanvasReaderHost.kt:475-496 同款逻辑，移植以支持 EPUB 章节级背景图）
-    // 优先级链：当前章节 EPUB body 背景图 (chapterBgImageSrc) > 阅读器全局 (bgImageUri) > 纯色
+    // 宿主层只加载用户主题背景；EPUB section 背景由共享的 page painter 按区域绘制。
     // BgImageManager LRU 缓存（最多 3 张），同 uri 同尺寸命中。
-    val chapterBgSrc = core.state.currentChapter?.chapterBgImageSrc
-    val effectiveBgUri = chapterBgSrc?.takeIf { it.isNotEmpty() } ?: bgImageUri
+    val effectiveBgUri = bgImageUri
     val bgEntry = remember(effectiveBgUri, viewWidth, viewHeight) {
         if (effectiveBgUri.isNotEmpty() && viewWidth > 0 && viewHeight > 0) {
             val t0 = System.currentTimeMillis()
@@ -647,8 +645,7 @@ fun PageLevelReaderHost(
             com.morealm.app.core.log.AppLog.info(
                 "PageLvlHost/Bg",
                 "load bg src='${effectiveBgUri.take(80)}' viewW=$viewWidth viewH=$viewHeight " +
-                    "cost=${dt}ms result=${if (entry?.bitmap != null) "OK (${entry.bitmap.width}x${entry.bitmap.height})" else "NULL"} " +
-                    "chapterLevel=${chapterBgSrc != null}",
+                    "cost=${dt}ms result=${if (entry?.bitmap != null) "OK (${entry.bitmap.width}x${entry.bitmap.height})" else "NULL"}",
             )
             entry
         } else null

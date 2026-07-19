@@ -80,8 +80,7 @@ class ScrollPagePageBitmapProvider(
             val canvas = Canvas(bitmap)
             // 1. 底色
             canvas.drawColor(bgColor)
-            // 2. 背景图（chapterBgImageSrc 暂用全局 bgBitmap；后续可接 BgImageManager
-            //    按 chapter 路径单独加载，先 ship 全局兜底）
+            // 2. 用户主题背景图；EPUB section 背景随后由共享页面绘制器按区域叠加。
             val bg = bgBitmap
             if (bg != null && !bg.isRecycled) {
                 com.morealm.app.ui.reader.renderer.drawBgBitmap(
