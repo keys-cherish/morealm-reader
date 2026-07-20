@@ -224,6 +224,12 @@ fun MoRealmNavHost(
                 val onNavLegadoImport = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "legado_import") } }
                 val onNavBookmarks = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "bookmarks") } }
                 val onNavHttpTtsManage = remember(navigateFromTab) { { navigateFromTab(BottomTab.Listen, "http_tts_manage") } }
+                val onHomeReadingSettings = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "reading_settings") } }
+                val onHomeBookmarks = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "bookmarks") } }
+                val onHomeCacheBook = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "cache_book") } }
+                val onHomeReplaceRules = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "replace_rules") } }
+                val onHomeAppearance = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "appearance") } }
+                val onHomeAppLog = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "app_log") } }
                 val onSearchBack = remember(switchTab) { { switchTab(0) } }
 
                 var dragAmount by remember { mutableFloatStateOf(0f) }
@@ -313,6 +319,12 @@ fun MoRealmNavHost(
                             onBookClick = { bookId ->
                                 navController.navigateToReader(bookId)
                             },
+                            onNavigateReadingSettings = onHomeReadingSettings,
+                            onNavigateBookmarks = onHomeBookmarks,
+                            onNavigateCacheBook = onHomeCacheBook,
+                            onNavigateReplaceRules = onHomeReplaceRules,
+                            onNavigateAppearance = onHomeAppearance,
+                            onNavigateAppLog = onHomeAppLog,
                             continueReadingRequest = continueReadingRequest,
                         )
                         BottomTab.Shelf -> {

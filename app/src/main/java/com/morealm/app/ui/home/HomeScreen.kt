@@ -10,47 +10,67 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.FindReplace
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Wallpaper
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.morealm.app.presentation.home.HomeViewModel
 import com.morealm.app.ui.library.LibraryBookItem
-import com.morealm.app.ui.shelf.ContinueReadingCard
 import kotlinx.coroutines.delay
-import java.util.Calendar
 
 private const val COLUMNS = 3
 
 /**
- * 首页：问候 + 今日阅读时长 + 继续阅读大卡 + 最近阅读网格。
- * 书架完整功能在独立书架 tab；本页只做「回到上次的阅读」。
- * 书目卡复用图书馆的 [LibraryBookItem]，继续阅读卡复用书架的 [ContinueReadingCard]。
+ * 首页只保留一行最近阅读，并提供最常用的功能入口。
+ * 书架完整功能在独立书架 tab；书目卡复用图书馆的 [LibraryBookItem]。
  */
 @Composable
 fun HomeScreen(
     onBookClick: (String) -> Unit,
+    onNavigateReadingSettings: () -> Unit,
+    onNavigateBookmarks: () -> Unit,
+    onNavigateCacheBook: () -> Unit,
+    onNavigateReplaceRules: () -> Unit,
+    onNavigateAppearance: () -> Unit,
+    onNavigateAppLog: () -> Unit,
     /** 外部「继续阅读」请求计数（通知/桌面快捷方式），递增即打开最近一本。 */
     continueReadingRequest: Int = 0,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
-    val todayReadMs by viewModel.todayReadMs.collectAsStateWithLifecycle()
     val lastRead by viewModel.lastReadBook.collectAsStateWithLifecycle()
     val recent by viewModel.recentBooks.collectAsStateWithLifecycle()
+    val quickActions = listOf(
+        HomeQuickAction(Icons.Default.MenuBook, "阅读设置", onNavigateReadingSettings),
+        HomeQuickAction(Icons.Default.Bookmark, "我的书签", onNavigateBookmarks),
+        HomeQuickAction(Icons.Default.CloudDownload, "离线缓存", onNavigateCacheBook),
+        HomeQuickAction(Icons.Default.FindReplace, "正文净化", onNavigateReplaceRules),
+        HomeQuickAction(Icons.Default.Wallpaper, "外观设置", onNavigateAppearance),
+        HomeQuickAction(Icons.Default.BugReport, "应用日志", onNavigateAppLog),
+    )
 
     // 续读请求消费（原 ShelfScreen 逻辑迁来：书架 tab 非默认组合页后由首页承接）
     var handledContinueRequest by rememberSaveable { mutableIntStateOf(0) }
@@ -60,16 +80,6 @@ fun HomeScreen(
             handledContinueRequest = continueReadingRequest
             delay(250)
             onBookClick(book.id)
-        }
-    }
-
-    val greeting = remember {
-        when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
-            in 5..11 -> "早上好"
-            in 12..13 -> "中午好"
-            in 14..17 -> "下午好"
-            in 18..22 -> "晚上好"
-            else -> "深夜好"
         }
     }
 
@@ -85,48 +95,13 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(18.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            item(key = "greeting", span = { GridItemSpan(maxLineSpan) }) {
-                Column(modifier = Modifier.padding(top = 18.dp)) {
-                    Text(
-                        text = greeting,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 30.sp,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    val minutes = (todayReadMs / 60_000L).toInt()
-                    if (minutes > 0) {
-                        val h = minutes / 60
-                        val m = minutes % 60
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = when {
-                                h == 0 -> "今日已阅读 $m 分钟"
-                                m == 0 -> "今日已阅读 $h 小时"
-                                else -> "今日已阅读 $h 小时 $m 分钟"
-                            },
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-            lastRead?.let { book ->
-                item(key = "continue", span = { GridItemSpan(maxLineSpan) }) {
-                    ContinueReadingCard(
-                        book = book,
-                        onClick = { onBookClick(book.id) },
-                    )
-                }
+            item(key = "recent_title", span = { GridItemSpan(maxLineSpan) }) {
+                SectionTitle(
+                    text = "最近阅读",
+                    modifier = Modifier.padding(top = 22.dp),
+                )
             }
             if (recent.isNotEmpty()) {
-                item(key = "recent_title", span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        text = "最近阅读",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.92f),
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
                 items(
                     count = recent.size,
                     key = { i -> "r_${recent[i].id}" },
@@ -134,18 +109,84 @@ fun HomeScreen(
                     val book = recent[i]
                     LibraryBookItem(book = book, onClick = { onBookClick(book.id) })
                 }
-            } else if (lastRead == null) {
+            } else {
                 item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
                     Text(
                         text = "还没有阅读记录，去书架挑一本开始吧",
-                        fontSize = 14.sp,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 48.dp),
+                            .padding(vertical = 28.dp),
                     )
                 }
             }
+
+            item(key = "quick_actions_title", span = { GridItemSpan(maxLineSpan) }) {
+                SectionTitle(
+                    text = "常用功能",
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+            items(
+                count = quickActions.size,
+                key = { index -> quickActions[index].label },
+            ) { index ->
+                val action = quickActions[index]
+                QuickActionCard(action = action)
+            }
+        }
+    }
+}
+
+private data class HomeQuickAction(
+    val icon: ImageVector,
+    val label: String,
+    val onClick: () -> Unit,
+)
+
+@Composable
+private fun SectionTitle(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.92f),
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun QuickActionCard(action: HomeQuickAction) {
+    Surface(
+        onClick = action.onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(88.dp),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(
+                imageVector = action.icon,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = action.label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
         }
     }
 }
