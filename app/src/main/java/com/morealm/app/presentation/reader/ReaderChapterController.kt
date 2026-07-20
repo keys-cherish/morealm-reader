@@ -100,6 +100,8 @@ class ReaderChapterController(
      * 默认 no-op 保证单测 / 旧调用方零迁移。
      */
     private val onInitialChapterLoaded: () -> Unit = {},
+    /** 跨控制器共享状态（visiblePage/scrollProgress/navigateDirection/linkedBooks 真值）。 */
+    private val shared: ReaderSharedState = ReaderSharedState(),
 ) {
     // ── Core State ──
     private val _book = MutableStateFlow<Book?>(null)
@@ -317,15 +319,15 @@ class ReaderChapterController(
         _prevPreloadedChapter.value = PreloadedReaderChapter(curIdx, oldCurTitle, oldCurContent)
         _nextPreloadedChapter.value = null
         // visible state 同步——避免 progress controller 看到 stale chapterIndex 导致进度错配
-        if (::scrollProgressState.isInitialized) scrollProgressState.value = 0
-        if (::visiblePageState.isInitialized) {
+        scrollProgressState.value = 0
+        run {
             visiblePageState.value = visiblePageState.value.copy(
                 chapterIndex = nextIdx,
                 title = chapterList[nextIdx].title,
                 chapterPosition = 0,
             )
         }
-        if (::navigateDirectionState.isInitialized) navigateDirectionState.value = 1
+        navigateDirectionState.value = 1
         clearHitTracking()
 
         // 异步预加载新 next（curIdx+2），不阻塞返回
@@ -435,15 +437,15 @@ class ReaderChapterController(
         _nextPreloadedChapter.value = PreloadedReaderChapter(curIdx, oldCurTitle, oldCurContent)
         _prevPreloadedChapter.value = null
         // 与 initialProgress=0 / initialChapterPosition=0 保持一致：上一章按钮跳章头（Bug 3）
-        if (::scrollProgressState.isInitialized) scrollProgressState.value = 0
-        if (::visiblePageState.isInitialized) {
+        scrollProgressState.value = 0
+        run {
             visiblePageState.value = visiblePageState.value.copy(
                 chapterIndex = prevIdx,
                 title = chapterList[prevIdx].title,
                 chapterPosition = 0,
             )
         }
-        if (::navigateDirectionState.isInitialized) navigateDirectionState.value = -1
+        navigateDirectionState.value = -1
         clearHitTracking()
 
         scope.launch(Dispatchers.IO) {
@@ -500,11 +502,11 @@ class ReaderChapterController(
         return regexCache.getOrPut(pattern) { Regex(pattern) }
     }
 
-    /** Provided by the progress controller for coordinated state updates */
-    internal lateinit var visiblePageState: MutableStateFlow<VisibleReaderPage>
-    internal lateinit var scrollProgressState: MutableStateFlow<Int>
-    internal lateinit var navigateDirectionState: MutableStateFlow<Int>
-    internal lateinit var linkedBooksState: MutableStateFlow<List<Book>>
+    // ── 共享状态别名（真值在 ReaderSharedState，保留旧属性名减小 diff）──
+    private val visiblePageState get() = shared._visiblePage
+    private val scrollProgressState get() = shared._scrollProgress
+    private val navigateDirectionState get() = shared._navigateDirection
+    private val linkedBooksState get() = shared._linkedBooks
 
     fun isWebBook(book: Book): Boolean {
         return book.format == com.morealm.app.domain.entity.BookFormat.WEB ||
@@ -1647,7 +1649,7 @@ class ReaderChapterController(
         // 同步 visiblePageState.chapterIndex —— 防 saveProgress 用 stale chapterIndex
         // 写错章（V2 page-level 4 方验证发现的第 4 个独立真值）。
         // 参考 commitChapterShiftNext line 311-316 同款同步模式。
-        if (::visiblePageState.isInitialized) {
+        run {
             val cur = visiblePageState.value
             if (cur.chapterIndex != index) {
                 val title = _chapters.value.getOrNull(index)?.title.orEmpty()
@@ -1709,9 +1711,7 @@ class ReaderChapterController(
             initialChapterPosition = 0,
             restoreToken = newToken,
         )
-        if (::scrollProgressState.isInitialized) {
-            scrollProgressState.value = clamped
-        }
+        scrollProgressState.value = clamped
         com.morealm.app.core.log.AppLog.info(
             "ProgressSeek",
             "seekProgressInPlace SAME-CH idx=$index progress=$clamped token=$oldToken→$newToken",

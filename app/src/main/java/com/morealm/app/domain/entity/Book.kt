@@ -113,6 +113,15 @@ data class Book(
     /** 导入时记录的文件 lastModified（ms）。语义见 [fileSize]。SAF 拿不到时为 0（仅按 size 校验）。 */
     @ColumnInfo(defaultValue = "0")
     val fileMtime: Long = 0L,
+
+    // ── 弹性扩展列 (since v37) ──
+    /**
+     * JSON 弹性字段容器。此后新增「不参与 SQL WHERE/ORDER」的字段一律进这里
+     * （Kotlin 侧映射 @Serializable data class + 默认值），加/删字段零 migration；
+     * 需要被 SQL 查询/排序时才升级为关系列（那时才写一次 migration）。
+     */
+    @ColumnInfo(defaultValue = "{}")
+    val extras: String = "{}",
 ) {
     /**
      * 展示用封面：自定义封面优先，空则退回原封面。

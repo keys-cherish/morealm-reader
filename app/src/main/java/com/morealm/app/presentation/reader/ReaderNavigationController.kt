@@ -13,12 +13,13 @@ import kotlinx.coroutines.flow.asStateFlow
 class ReaderNavigationController(
     private val chapter: ReaderChapterController,
     private val progress: ReaderProgressController,
+    shared: ReaderSharedState,
 ) {
-    // ── State ──
-    val _navigateDirection = MutableStateFlow(0)
+    // ── State（真值持有在 ReaderSharedState，保留原属性名减小 diff）──
+    val _navigateDirection = shared._navigateDirection
     val navigateDirection: StateFlow<Int> = _navigateDirection.asStateFlow()
 
-    val _linkedBooks = MutableStateFlow<List<Book>>(emptyList())
+    val _linkedBooks = shared._linkedBooks
     val linkedBooks: StateFlow<List<Book>> = _linkedBooks.asStateFlow()
 
     private val _nextBookPrompt = MutableStateFlow<Book?>(null)

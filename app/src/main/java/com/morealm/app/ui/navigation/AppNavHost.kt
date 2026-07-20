@@ -27,6 +27,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -38,14 +39,12 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.morealm.app.ui.detail.BookDetailScreen
+import com.morealm.app.ui.library.LibraryScreen
 import com.morealm.app.ui.listen.ListenScreen
 import com.morealm.app.ui.profile.AboutScreen
 import com.morealm.app.ui.profile.AppearanceScreen
 import com.morealm.app.ui.profile.BackupExportScreen
 import com.morealm.app.ui.profile.BackupImportScreen
-import com.morealm.app.ui.profile.ChangelogScreen
-import com.morealm.app.ui.profile.ContributorsScreen
-import com.morealm.app.ui.profile.DonateScreen
 import com.morealm.app.ui.profile.ProfileScreen
 import com.morealm.app.ui.profile.RemoteBookScreen
 import com.morealm.app.ui.profile.ReplaceRuleScreen
@@ -62,6 +61,7 @@ import com.morealm.app.ui.source.BookSourceManageScreen
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.theme.ThemeViewModel
 import com.morealm.app.ui.common.GlobalBackgroundScaffold
+import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.launch
 
 @Composable
@@ -76,6 +76,19 @@ fun MoRealmNavHost(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
     val moColors = LocalMoRealmColors.current
+
+    // FeatureEntry 注册表：feature 自声明路由，壳层遍历挂载（见 FeatureEntry.kt）
+    val appContext = LocalContext.current.applicationContext
+    val featureEntries = remember {
+        EntryPointAccessors.fromApplication(appContext, FeatureEntriesEntryPoint::class.java)
+            .featureEntries()
+    }
+    val featureNav = remember(navController) {
+        object : FeatureNav {
+            override fun navigate(route: String) { navController.safeNavigate(route) }
+            override fun back() { navController.safePopBackStack() }
+        }
+    }
 
     // Global one-shot toast collector for backup import/export results.
     // Lives at NavHost top-level so it stays subscribed regardless of which
@@ -109,7 +122,7 @@ fun MoRealmNavHost(
     // Track whether we're on a main tab (pager) or a detail screen
     val isOnMainTab = currentDestination?.route == "main_tabs" || currentDestination == null
 
-    val tabs = BottomTab.entries
+    val tabs = BottomTab.visible
     val scope = rememberCoroutineScope()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var targetTab by remember { mutableStateOf<Int?>(null) }
@@ -321,6 +334,11 @@ fun MoRealmNavHost(
                                 navController.navigateToDetail(bookId)
                             },
                         )
+                        BottomTab.Library -> LibraryScreen(
+                            onBookClick = { bookId ->
+                                navController.navigateToReader(bookId)
+                            },
+                        )
                         BottomTab.Listen -> ListenScreen(
                             onNavigateHttpTtsManage = onNavHttpTtsManage,
                         )
@@ -372,18 +390,6 @@ fun MoRealmNavHost(
 
             composable("appearance") {
                 AppearanceScreen(onBack = { navController.safePopBackStack() })
-            }
-
-            composable("changelog") {
-                ChangelogScreen(onBack = { navController.safePopBackStack() })
-            }
-
-            composable("contributors") {
-                ContributorsScreen(onBack = { navController.safePopBackStack() })
-            }
-
-            composable("donate") {
-                DonateScreen(onBack = { navController.safePopBackStack() })
             }
 
             composable("backup_export") {
@@ -486,6 +492,11 @@ fun MoRealmNavHost(
                     themeViewModel = themeViewModel,
                     onBack = { navController.safePopBackStack() },
                 )
+            }
+
+            // ── FeatureEntry 注册表挂载的路由（changelog / contributors / donate …）──
+            featureEntries.forEach { entry ->
+                with(entry) { register(featureNav) }
             }
 
             composable(

@@ -118,7 +118,10 @@ class ReaderViewModel @Inject constructor(
     val settings = ReaderSettingsController(prefs, viewModelScope, context, styleRepo, fontRepo, highlightWordDao)
 
     // ── Extracted Controllers ──
-    val chapter = ReaderChapterController(
+    /** 跨控制器共享状态：先于所有控制器构造，构造期注入（批次3 去 lateinit）。 */
+    private val sharedState = ReaderSharedState()
+
+    val chapter: ReaderChapterController = ReaderChapterController(
         bookId = bookId,
         bookRepo = bookRepo,
         sourceRepo = sourceRepo,
@@ -134,9 +137,10 @@ class ReaderViewModel @Inject constructor(
         onChapterLoaded = { viewModelScope.launch(Dispatchers.IO) { progress.saveProgress() } },
         setSuppressNextProgressSave = { progress.suppressNextProgressSave = it },
         onInitialChapterLoaded = { progress.initialLoadComplete = true },
+        shared = sharedState,
     )
 
-    val progress = ReaderProgressController(
+    val progress: ReaderProgressController = ReaderProgressController(
         bookRepo = bookRepo,
         readStatsRepo = readStatsRepo,
         scope = viewModelScope,
@@ -145,11 +149,14 @@ class ReaderViewModel @Inject constructor(
         // chapter-index change so scroll-only progress saves don't hit the
         // network, and is a no-op when the user has the toggle off.
         onProgressSaved = { book, p -> progressSync.maybeUpload(book, p) },
+        shared = sharedState,
+        chapterProvider = { chapter },
     )
 
     val navigation = ReaderNavigationController(
         chapter = chapter,
         progress = progress,
+        shared = sharedState,
     )
 
     val search = ReaderSearchController(
@@ -181,13 +188,7 @@ class ReaderViewModel @Inject constructor(
 
     // ── Wire shared state flows between controllers ──
     init {
-        // Chapter controller needs mutable access to progress/nav state flows
-        chapter.visiblePageState = progress._visiblePage
-        chapter.scrollProgressState = progress._scrollProgress
-        chapter.navigateDirectionState = navigation._navigateDirection
-        chapter.linkedBooksState = navigation._linkedBooks
-        // Progress controller needs chapter controller reference
-        progress.chapterController = chapter
+        // 共享状态已在构造期注入（ReaderSharedState），无 lateinit 后置接线。
         // 启动进度快照收集器：去掉直接 launch 的 saveProgress 路径，改由
         // combine + distinctUntilChanged + debounce(300) 统一收口，避免翻页时
         // 同状态被反复写 + scroll% 反弹被多次落地（详见 ReaderProgressController.start KDoc）。

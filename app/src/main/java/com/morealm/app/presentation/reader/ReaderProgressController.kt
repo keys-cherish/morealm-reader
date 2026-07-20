@@ -43,12 +43,18 @@ class ReaderProgressController(
      * is a no-op so unit tests / non-sync builds aren't affected.
      */
     private val onProgressSaved: suspend (Book, ReadProgress) -> Unit = { _, _ -> },
+    shared: ReaderSharedState,
+    /**
+     * 章节控制器懒引用：Chapter 与 Progress 构造互有先后（ViewModel 先建 chapter），
+     * 用 provider 打破 lateinit 注入——首次访问在 [start] 之后，此时 chapter 必已构造。
+     */
+    private val chapterProvider: () -> ReaderChapterController,
 ) {
-    // ── State ──
-    val _scrollProgress = MutableStateFlow(0)
+    // ── State（真值持有在 ReaderSharedState，这里保留原属性名减小 diff）──
+    val _scrollProgress = shared._scrollProgress
     val scrollProgress: StateFlow<Int> = _scrollProgress.asStateFlow()
 
-    val _visiblePage = MutableStateFlow(VisibleReaderPage())
+    val _visiblePage = shared._visiblePage
     val visiblePage: StateFlow<VisibleReaderPage> = _visiblePage.asStateFlow()
 
     /**
@@ -112,8 +118,9 @@ class ReaderProgressController(
     var readingStartTime: Long = System.currentTimeMillis()
     var lastStatsSaveTime: Long = readingStartTime
 
-    /** Set by chapter controller so progress can reference book/chapter state */
-    internal lateinit var chapterController: ReaderChapterController
+    /** 章节控制器（经 [chapterProvider] 懒解引用，见构造参数 KDoc）。 */
+    private val chapterController: ReaderChapterController
+        get() = chapterProvider()
 
     /**
      * 启动进度快照收集器：把 (chapterIndex, chapterPosition, scrollProgress)
@@ -126,8 +133,7 @@ class ReaderProgressController(
      *  - L2：仿真翻页 commit 后第二条回调用旧 page.index 把 scroll% 拉回 0%。
      *    debounce 300ms 把 0%→2%→0% 反弹合并为最终值，落地的是稳定态。
      *
-     * 由 [ReaderViewModel] 在 `progress.chapterController = chapter` 之后立即调用。
-     * 必须在 chapterController 注入后才能读 `currentChapterIndex` flow。
+     * 由 [ReaderViewModel] 在控制器全部构造完成后调用。
      */
     @OptIn(FlowPreview::class)
     fun start() {
