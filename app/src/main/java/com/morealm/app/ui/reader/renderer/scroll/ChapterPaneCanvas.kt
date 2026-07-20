@@ -501,17 +501,30 @@ private fun drawCellsRow(
     defaultColor: Int = basePaint.color,
 ) {
     val baseSize = basePaint.textSize
+    val fontScale = baseSize / 16f
     var atomStartCp = line.firstChapterPos
     for (cell in cells) {
-        // 未来 Task 2-D：cell.backgroundColor / borderRadiusPx 装饰盒
+        // SCROLL 与 PAGE 必须消费同一份 cell border box；否则同一本书两种翻页模式几何不同。
+        cell.boxStyle?.let { style ->
+            drawBoxDecorations(
+                canvas = canvas,
+                style = style,
+                rectLeft = cell.contentLeft,
+                rectTop = pageOffsetY + line.lineTop + cell.contentTop,
+                rectRight = cell.contentLeft + cell.boxWidth,
+                rectBottom = pageOffsetY + line.lineTop + cell.contentTop + cell.boxHeight,
+                fontSizeScale = fontScale,
+                dashPhasePx = cell.borderDashPhasePx,
+            )
+        }
         for (atom in cell.atoms) {
             when (atom) {
                 is com.morealm.epub.render.TextRun -> {
                     val scale = atom.sizeScale
                     if (scale != 1f) basePaint.textSize = baseSize * scale
-                    val effectiveX = cell.contentLeft + cell.padding + atom.cellLocalX
+                    val effectiveX = cell.contentLeft + cell.paddingLeft + atom.cellLocalX
                     val effectiveBaselineY = pageOffsetY + line.lineTop + cell.contentTop +
-                        cell.padding + atom.cellLocalY + atom.baseline
+                        cell.paddingTop + cell.contentOffsetY + atom.cellLocalY + atom.baseline
                     // Phase 4：字符级 inline 背景盒子（底层方块），无 bg 时零开销返回
                     drawInlineBg(canvas, atom, effectiveX, effectiveBaselineY, basePaint)
                     val textX = effectiveX + atom.inlineBgPaddingLeftPx
@@ -540,9 +553,9 @@ private fun drawCellsRow(
                 is com.morealm.epub.render.InlineImage -> {
                     val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
                     if (bmp != null) {
-                        val drawX = cell.contentLeft + cell.padding + atom.cellLocalX
-                        val drawY = pageOffsetY + line.lineTop + cell.contentTop + cell.padding +
-                            atom.cellLocalY
+                        val drawX = cell.contentLeft + cell.paddingLeft + atom.cellLocalX
+                        val drawY = pageOffsetY + line.lineTop + cell.contentTop + cell.paddingTop +
+                            cell.contentOffsetY + atom.cellLocalY
                         val scaleF = minOf(atom.width / bmp.width, atom.height / bmp.height)
                         val drawW = bmp.width * scaleF
                         val drawH = bmp.height * scaleF

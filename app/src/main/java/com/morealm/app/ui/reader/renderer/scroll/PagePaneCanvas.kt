@@ -67,6 +67,8 @@ fun PagePaneCanvas(
     chapterPaddingLeft: Int,
     /** body 背景百分比尺寸的视口高度；滚动页自身可能远高于屏幕，不能拿 page.height 当 100%。 */
     backgroundViewportHeight: Float? = null,
+    /** SCROLL 为 true，分页/仿真保持 false，让 body 背景在每页独立定位。 */
+    continuousEpubBackground: Boolean = false,
     contentPaint: TextPaint,
     titlePaint: TextPaint,
     chapterNumPaint: TextPaint,
@@ -113,6 +115,7 @@ fun PagePaneCanvas(
                 page = page,
                 viewHeightF = size.height,
                 backgroundViewportHeightF = backgroundViewportHeight ?: size.height,
+                continuousEpubBackground = continuousEpubBackground,
                 contentPaint = contentPaint,
                 titlePaint = titlePaint,
                 chapterNumPaint = chapterNumPaint,
@@ -247,6 +250,7 @@ internal fun drawScrollPageOnCanvas(
     page: ScrollPage,
     viewHeightF: Float,
     backgroundViewportHeightF: Float = viewHeightF,
+    continuousEpubBackground: Boolean = false,
     contentPaint: TextPaint,
     titlePaint: TextPaint,
     chapterNumPaint: TextPaint,
@@ -296,6 +300,7 @@ internal fun drawScrollPageOnCanvas(
         pageHeight = viewHeightF,
         viewportHeight = backgroundViewportHeightF,
         fontSizePx = contentPaint.textSize,
+        continuousSectionCoordinates = continuousEpubBackground,
     )
 
     nc.save()
@@ -700,14 +705,14 @@ private fun drawByCells(
         // rect = cell 内容包围盒向外扩 padding（CSS content-box：padding/border 在 content 之外）。
         // 复用 drawBoxDecorations（边框 / 圆角 / 若有 bg 走夜间自适应）。
         cell.boxStyle?.let { bs ->
-            val pad = bs.paddingLeftPx * fontScale
             drawBoxDecorations(
                 canvas, bs,
-                cell.contentLeft - pad,
-                line.lineTop + cell.contentTop - pad,
-                cell.contentLeft + cell.contentWidth + pad,
-                line.lineTop + cell.contentTop + cell.contentHeight + pad,
+                cell.contentLeft,
+                line.lineTop + cell.contentTop,
+                cell.contentLeft + cell.boxWidth,
+                line.lineTop + cell.contentTop + cell.boxHeight,
                 fontScale,
+                dashPhasePx = cell.borderDashPhasePx,
             )
         }
         for (atom in cell.atoms) {
@@ -715,9 +720,9 @@ private fun drawByCells(
                 is com.morealm.epub.render.TextRun -> {
                     val scale = atom.sizeScale
                     if (scale != 1f) basePaint.textSize = baseSize * scale
-                    val effectiveX = cell.contentLeft + cell.padding + atom.cellLocalX
-                    val effectiveBaselineY = line.lineTop + cell.contentTop + cell.padding +
-                        atom.cellLocalY + atom.baseline
+                    val effectiveX = cell.contentLeft + cell.paddingLeft + atom.cellLocalX
+                    val effectiveBaselineY = line.lineTop + cell.contentTop + cell.paddingTop +
+                        cell.contentOffsetY + atom.cellLocalY + atom.baseline
                     // Phase 4：字符级 inline 背景盒子（底层方块），无 bg 时零开销返回
                     drawInlineBg(canvas, atom, effectiveX, effectiveBaselineY, basePaint)
                     val textX = effectiveX + atom.inlineBgPaddingLeftPx
@@ -746,8 +751,9 @@ private fun drawByCells(
                 is com.morealm.epub.render.InlineImage -> {
                     val bmp = com.morealm.app.domain.render.ImageCache.get(atom.src, atom.width.toInt())
                     if (bmp != null) {
-                        val drawX = cell.contentLeft + cell.padding + atom.cellLocalX
-                        val drawY = line.lineTop + cell.contentTop + cell.padding + atom.cellLocalY
+                        val drawX = cell.contentLeft + cell.paddingLeft + atom.cellLocalX
+                        val drawY = line.lineTop + cell.contentTop + cell.paddingTop +
+                            cell.contentOffsetY + atom.cellLocalY
                         val scaleF = minOf(atom.width / bmp.width, atom.height / bmp.height)
                         val drawW = bmp.width * scaleF
                         val drawH = bmp.height * scaleF

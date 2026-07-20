@@ -39,6 +39,7 @@ internal fun drawEpubPageBackground(
     pageHeight: Float,
     viewportHeight: Float = pageHeight,
     fontSizePx: Float,
+    continuousSectionCoordinates: Boolean = false,
 ) {
     if (pageWidth <= 0f || pageHeight <= 0f) return
     val regions = if (page.sectionRegions.isNotEmpty()) {
@@ -57,32 +58,83 @@ internal fun drawEpubPageBackground(
     } else {
         emptyList()
     }
+    val isSingleSectionPage = regions.size == 1
     for (region in regions) {
         if (!region.background.isVisible || region.bottom <= region.top) continue
         drawRegion(
             canvas = canvas,
             region = region,
             width = pageWidth,
+            pageHeight = pageHeight,
             viewportHeight = viewportHeight,
             fontSizePx = fontSizePx,
             chapterIndex = page.chapterIndex,
             pageIndex = page.pageIndex,
+            continuousSectionCoordinates = continuousSectionCoordinates,
+            isSingleSectionPage = isSingleSectionPage,
         )
     }
+}
+
+internal data class EpubBackgroundRegionFrame(
+    val top: Float,
+    val bottom: Float,
+    val areaHeight: Float,
+    val offsetY: Float,
+) {
+    fun localY(areaY: Float): Float = top + areaY - offsetY
+}
+
+/**
+ * 分页阅读器里的 body 背景属于当前页，而不是浏览器式的整章长画布。
+ * 单 section 页要使用完整 Canvas 高度，尤其章末页的内容高度通常小于屏幕高度；
+ * 多 section 共页时仍按各自 region 隔离，避免相邻 XHTML 的背景互相覆盖。
+ */
+internal fun resolveEpubBackgroundRegionFrame(
+    region: ScrollPageSectionRegion,
+    pageHeight: Float,
+    continuousSectionCoordinates: Boolean,
+    isSingleSectionPage: Boolean,
+): EpubBackgroundRegionFrame {
+    if (continuousSectionCoordinates) {
+        return EpubBackgroundRegionFrame(
+            top = region.top,
+            bottom = region.bottom,
+            areaHeight = region.sectionHeight.coerceAtLeast(region.height),
+            offsetY = region.sectionOffsetY,
+        )
+    }
+    val top = if (isSingleSectionPage) 0f else region.top
+    val bottom = if (isSingleSectionPage) pageHeight else region.bottom
+    return EpubBackgroundRegionFrame(
+        top = top,
+        bottom = bottom,
+        areaHeight = (bottom - top).coerceAtLeast(0f),
+        offsetY = 0f,
+    )
 }
 
 private fun drawRegion(
     canvas: Canvas,
     region: ScrollPageSectionRegion,
     width: Float,
+    pageHeight: Float,
     viewportHeight: Float,
     fontSizePx: Float,
     chapterIndex: Int,
     pageIndex: Int,
+    continuousSectionCoordinates: Boolean,
+    isSingleSectionPage: Boolean,
 ) {
-    val clipTop = region.top
-    val clipBottom = region.bottom
-    val sectionHeight = region.sectionHeight.coerceAtLeast(region.height)
+    val frame = resolveEpubBackgroundRegionFrame(
+        region = region,
+        pageHeight = pageHeight,
+        continuousSectionCoordinates = continuousSectionCoordinates,
+        isSingleSectionPage = isSingleSectionPage,
+    )
+    val clipTop = frame.top
+    val clipBottom = frame.bottom
+    if (frame.areaHeight <= 0f || clipBottom <= clipTop) return
     val save = canvas.save()
     canvas.clipRect(0f, clipTop, width, clipBottom)
 
@@ -107,8 +159,9 @@ private fun drawRegion(
                 canvas = canvas,
                 uri = image.uri,
                 region = region,
+                frame = frame,
                 areaWidth = width,
-                areaHeight = sectionHeight,
+                areaHeight = frame.areaHeight,
                 fontSizePx = fontSizePx,
                 layer = layer,
                 diagnosticContext = EpubBackgroundDiagnosticContext(
@@ -122,10 +175,10 @@ private fun drawRegion(
                 ),
             )
             is EpubBackgroundImage.LinearGradient -> drawLinearLayer(
-                canvas, image.value, region, width, sectionHeight, fontSizePx, layer,
+                canvas, image.value, frame, width, frame.areaHeight, fontSizePx, layer,
             )
             is EpubBackgroundImage.RadialGradient -> drawRadialLayer(
-                canvas, image.value, region, width, sectionHeight, fontSizePx, layer,
+                canvas, image.value, frame, width, frame.areaHeight, fontSizePx, layer,
             )
             is EpubBackgroundImage.CssFunction -> Unit
         }
@@ -167,6 +220,7 @@ private fun drawUrlLayer(
     canvas: Canvas,
     uri: String,
     region: ScrollPageSectionRegion,
+    frame: EpubBackgroundRegionFrame,
     areaWidth: Float,
     areaHeight: Float,
     fontSizePx: Float,
@@ -201,10 +255,10 @@ private fun drawUrlLayer(
 
     val firstLocalLeft = plan.originX + plan.firstColumn * plan.stepX
     val firstSectionTop = plan.originY + plan.firstRow * plan.stepY
-    val firstLocalTop = region.top + firstSectionTop - region.sectionOffsetY
+    val firstLocalTop = frame.localY(firstSectionTop)
     val lastLocalLeft = plan.originX + plan.lastColumn * plan.stepX
     val lastSectionTop = plan.originY + plan.lastRow * plan.stepY
-    val lastLocalTop = region.top + lastSectionTop - region.sectionOffsetY
+    val lastLocalTop = frame.localY(lastSectionTop)
     logEpubBackgroundDiagnostic(
         key = "$eventPrefix|plan|$uri|$layer",
         message = "$eventPrefix result=plan uri='$uri' bounds=${bounds.first}x${bounds.second} " +
@@ -233,11 +287,11 @@ private fun drawUrlLayer(
     val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     val src = Rect(0, 0, bitmap.width, bitmap.height)
     plan.forEachTile { left, top, right, bottom ->
-        val localTop = region.top + top - region.sectionOffsetY
+        val localTop = frame.localY(top)
         canvas.drawBitmap(
             bitmap,
             src,
-            RectF(left, localTop, right, region.top + bottom - region.sectionOffsetY),
+            RectF(left, localTop, right, frame.localY(bottom)),
             paint,
         )
     }
@@ -283,7 +337,7 @@ private fun logEpubBackgroundDiagnostic(key: String, message: String) {
 private fun drawLinearLayer(
     canvas: Canvas,
     gradient: Gradient.Linear,
-    region: ScrollPageSectionRegion,
+    frame: EpubBackgroundRegionFrame,
     areaWidth: Float,
     areaHeight: Float,
     fontSizePx: Float,
@@ -296,8 +350,8 @@ private fun drawLinearLayer(
     if (colors.size < 2) return
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     plan.forEachTile { left, top, right, bottom ->
-        val localTop = region.top + top - region.sectionOffsetY
-        val localBottom = region.top + bottom - region.sectionOffsetY
+        val localTop = frame.localY(top)
+        val localBottom = frame.localY(bottom)
         val points = linearPoints(gradient.direction, left, localTop, right, localBottom)
         paint.shader = LinearGradient(
             points[0], points[1], points[2], points[3], colors, positions, Shader.TileMode.CLAMP,
@@ -310,7 +364,7 @@ private fun drawLinearLayer(
 private fun drawRadialLayer(
     canvas: Canvas,
     gradient: Gradient.Radial,
-    region: ScrollPageSectionRegion,
+    frame: EpubBackgroundRegionFrame,
     areaWidth: Float,
     areaHeight: Float,
     fontSizePx: Float,
@@ -323,8 +377,8 @@ private fun drawRadialLayer(
     if (colors.size < 2) return
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     plan.forEachTile { left, top, right, bottom ->
-        val localTop = region.top + top - region.sectionOffsetY
-        val localBottom = region.top + bottom - region.sectionOffsetY
+        val localTop = frame.localY(top)
+        val localBottom = frame.localY(bottom)
         val center = radialCenter(gradient.shape, left, localTop, right, localBottom)
         val radius = max(
             hypot(center.first - left, center.second - localTop),

@@ -439,6 +439,8 @@ internal fun drawBoxDecorations(
     rectBottom: Float,
     fontSizeScale: Float,
     readerBgArgb: Int = Color.WHITE,
+    /** 虚线相对统一布局坐标系的偏移；table cell 分片用它延续跨行 dash pattern。 */
+    dashPhasePx: Float = 0f,
 ) {
     val rectW = rectRight - rectLeft
     val rectH = rectBottom - rectTop
@@ -469,11 +471,14 @@ internal fun drawBoxDecorations(
     // 3. border —— 4 边 color/width/style 全等 → uniform path（保 DOUBLE 路径 + drawRoundRect 优化）；
     // 任一边不等 / 部分边 null → sided path
     if (hasSidedBorder(style) && !allSidesIdentical(style)) {
-        drawSidedBorder(canvas, style, rectLeft, rectTop, rectRight, rectBottom, cornerRadii, uniformR, fontSizeScale, paint)
+        drawSidedBorder(
+            canvas, style, rectLeft, rectTop, rectRight, rectBottom,
+            cornerRadii, uniformR, fontSizeScale, dashPhasePx, paint,
+        )
     } else {
         drawUniformBorder(
             canvas, style, rectLeft, rectTop, rectRight, rectBottom,
-            uniformR, cornerRadii, fontSizeScale, paint,
+            uniformR, cornerRadii, fontSizeScale, dashPhasePx, paint,
         )
     }
 }
@@ -542,6 +547,7 @@ private fun drawUniformBorder(
     uniformR: Float,
     cornerRadii: FloatArray?,
     fontSizeScale: Float,
+    dashPhasePx: Float,
     paint: Paint,
 ) {
     // CSS `border: 2px solid red` shorthand 经 Shorthand expander 同时填 uniform border-color/width/style
@@ -590,7 +596,7 @@ private fun drawUniformBorder(
         BlockStyle.BorderStyle.DOTTED,
         -> {
             paint.strokeWidth = borderWidthScaled
-            configureBorderPattern(paint, effectiveStyle, borderWidthScaled)
+            configureBorderPattern(paint, effectiveStyle, borderWidthScaled, dashPhasePx)
             if (cornerRadii == null) {
                 canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, uniformR, uniformR, paint)
             } else {
@@ -621,6 +627,7 @@ private fun drawSidedBorder(
     cornerRadii: FloatArray?,
     uniformR: Float,
     fontSizeScale: Float,
+    dashPhasePx: Float,
     paint: Paint,
 ) {
     paint.style = Paint.Style.STROKE
@@ -646,7 +653,7 @@ private fun drawSidedBorder(
         paint.color = topColor
         paint.alpha = (topColor ushr 24) and 0xFF
         paint.strokeWidth = topW
-        configureBorderPattern(paint, style.borderTopStyle, topW)
+        configureBorderPattern(paint, style.borderTopStyle, topW, dashPhasePx)
         canvas.drawLine(rectLeft + tlInset, rectTop, rectRight - trInset, rectTop, paint)
     }
     // 画 right 边
@@ -654,7 +661,7 @@ private fun drawSidedBorder(
         paint.color = rightColor
         paint.alpha = (rightColor ushr 24) and 0xFF
         paint.strokeWidth = rightW
-        configureBorderPattern(paint, style.borderRightStyle, rightW)
+        configureBorderPattern(paint, style.borderRightStyle, rightW, dashPhasePx)
         canvas.drawLine(rectRight, rectTop + trInset, rectRight, rectBottom - brInset, paint)
     }
     // 画 bottom 边
@@ -662,7 +669,7 @@ private fun drawSidedBorder(
         paint.color = bottomColor
         paint.alpha = (bottomColor ushr 24) and 0xFF
         paint.strokeWidth = bottomW
-        configureBorderPattern(paint, style.borderBottomStyle, bottomW)
+        configureBorderPattern(paint, style.borderBottomStyle, bottomW, dashPhasePx)
         canvas.drawLine(rectLeft + blInset, rectBottom, rectRight - brInset, rectBottom, paint)
     }
     // 画 left 边
@@ -670,7 +677,7 @@ private fun drawSidedBorder(
         paint.color = leftColor
         paint.alpha = (leftColor ushr 24) and 0xFF
         paint.strokeWidth = leftW
-        configureBorderPattern(paint, style.borderLeftStyle, leftW)
+        configureBorderPattern(paint, style.borderLeftStyle, leftW, dashPhasePx)
         canvas.drawLine(rectLeft, rectTop + tlInset, rectLeft, rectBottom - blInset, paint)
     }
 }
@@ -679,14 +686,16 @@ private fun configureBorderPattern(
     paint: Paint,
     style: BlockStyle.BorderStyle,
     strokeWidth: Float,
+    dashPhasePx: Float = 0f,
 ) {
     val unit = strokeWidth.coerceAtLeast(1f)
     paint.strokeCap = Paint.Cap.BUTT
     paint.pathEffect = when (style) {
-        BlockStyle.BorderStyle.DASHED -> DashPathEffect(floatArrayOf(unit * 4f, unit * 2f), 0f)
+        BlockStyle.BorderStyle.DASHED ->
+            DashPathEffect(floatArrayOf(unit * 4f, unit * 2f), dashPhasePx)
         BlockStyle.BorderStyle.DOTTED -> {
             paint.strokeCap = Paint.Cap.ROUND
-            DashPathEffect(floatArrayOf(0.1f, unit * 2.2f), 0f)
+            DashPathEffect(floatArrayOf(0.1f, unit * 2.2f), dashPhasePx)
         }
         BlockStyle.BorderStyle.SOLID,
         BlockStyle.BorderStyle.DOUBLE -> null
