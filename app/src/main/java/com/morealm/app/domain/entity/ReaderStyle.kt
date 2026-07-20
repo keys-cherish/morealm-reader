@@ -82,7 +82,8 @@ data class ReaderStyle(
          * 用它做「升级后刷新内置 preset」守卫，让默认值变更对老用户立即生效（无需手动恢复出厂），
          * 同时只刷一次、不会每次启动重置用户对 preset 的临时调整。
          */
-        const val PRESET_VERSION = 1
+        // v2：刷新早期 preset_paper 的 14sp/8dp/1.5 旧值到当前 17sp/16dp/1.4 基线。
+        const val PRESET_VERSION = 2
 
         /**
          * 5 个内置排版预设。**仅排版差异**，颜色由主题决定。id 保留与历史版本一致避免

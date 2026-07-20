@@ -3,6 +3,7 @@ package com.morealm.app.ui.reader.renderer.scroll
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
@@ -76,6 +77,133 @@ internal fun drawScrollContainerBoxes(
         }
     }
     flush(lines.size)
+}
+
+/**
+ * 按段落绘制块级 CSS 装饰。一个 `<p>` 换行后仍只有一个 border/background 盒；
+ * 若逐条 [ScrollLine] 绘制，`border-top` 会错误地复制到每一行。
+ */
+internal fun drawScrollParagraphBlockStyles(
+    canvas: Canvas,
+    lines: List<ScrollLine>,
+    pageTop: Float,
+    fallbackLeft: Float = 0f,
+    fallbackRight: Float = 0f,
+    fontSizeScale: Float = 1f,
+    readerBgArgb: Int = Color.WHITE,
+) {
+    if (lines.isEmpty()) return
+    var runStart = 0
+    fun flush(endExclusive: Int) {
+        if (endExclusive <= runStart) return
+        val style = lines[runStart].blockStyle
+        if (style === BlockStyle.EMPTY) return
+        drawScrollBlockStyleRun(
+            canvas = canvas,
+            lines = lines,
+            fromIdx = runStart,
+            toIdxInclusive = endExclusive - 1,
+            style = style,
+            pageTop = pageTop,
+            fallbackLeft = fallbackLeft,
+            fallbackRight = fallbackRight,
+            fontSizeScale = fontSizeScale,
+            readerBgArgb = readerBgArgb,
+        )
+    }
+    for (i in 1 until lines.size) {
+        val previous = lines[i - 1]
+        val current = lines[i]
+        if (current.paragraphNum != previous.paragraphNum || current.blockStyle != previous.blockStyle) {
+            flush(i)
+            runStart = i
+        }
+    }
+    flush(lines.size)
+}
+
+private fun drawScrollBlockStyleRun(
+    canvas: Canvas,
+    lines: List<ScrollLine>,
+    fromIdx: Int,
+    toIdxInclusive: Int,
+    style: BlockStyle,
+    pageTop: Float,
+    fallbackLeft: Float,
+    fallbackRight: Float,
+    fontSizeScale: Float,
+    readerBgArgb: Int,
+) {
+    val firstLine = lines[fromIdx]
+    val lastLine = lines[toIdxInclusive]
+    val uniformBorderWidth = style.borderWidthPx * fontSizeScale
+    val halfBorder = uniformBorderWidth / 2f
+    val padLeft = style.paddingLeftPx * fontSizeScale
+    val padRight = style.paddingRightPx * fontSizeScale
+    val padTop = style.paddingTopPx * fontSizeScale
+    val padBottom = style.paddingBottomPx * fontSizeScale
+    val widthScaled = style.widthPx?.let { it * fontSizeScale }
+    val heightScaled = style.heightPx?.let { it * fontSizeScale }
+
+    var minContentLeft = Float.MAX_VALUE
+    var maxContentRight = -Float.MAX_VALUE
+    for (i in fromIdx..toIdxInclusive) {
+        for (column in lines[i].columns) {
+            minContentLeft = minOf(minContentLeft, column.start)
+            maxContentRight = maxOf(maxContentRight, column.end)
+        }
+    }
+    val hasContentBounds = minContentLeft != Float.MAX_VALUE
+    val ibCell = if (widthScaled != null) firstLine.cells?.firstOrNull() else null
+    val rectLeft: Float
+    val rectRight: Float
+    when {
+        ibCell != null && widthScaled != null -> {
+            rectLeft = ibCell.contentLeft - padLeft - halfBorder
+            rectRight = ibCell.contentLeft + widthScaled + padRight + halfBorder
+        }
+        widthScaled != null && hasContentBounds -> {
+            val centerX = (minContentLeft + maxContentRight) / 2f
+            rectLeft = centerX - widthScaled / 2f - padLeft - halfBorder
+            rectRight = centerX + widthScaled / 2f + padRight + halfBorder
+        }
+        else -> {
+            // p/div/table 的 auto width 应填满包含块，不能退化成字形包围盒。
+            rectLeft = fallbackLeft - halfBorder
+            rectRight = fallbackRight + halfBorder
+        }
+    }
+
+    val naturalTop = pageTop + firstLine.lineTop
+    val naturalBottom = pageTop + lastLine.lineBottom
+    val rectTop: Float
+    val rectBottom: Float
+    if (heightScaled != null) {
+        val centerY = (naturalTop + naturalBottom) / 2f
+        rectTop = centerY - heightScaled / 2f - padTop - halfBorder
+        rectBottom = centerY + heightScaled / 2f + padBottom + halfBorder
+    } else {
+        rectTop = naturalTop - padTop - halfBorder
+        val effectiveBottom = if (
+            fromIdx == toIdxInclusive && !firstLine.textBottomRel.isNaN() && isBottomOnlyBorder(style)
+        ) {
+            naturalTop + firstLine.textBottomRel
+        } else {
+            naturalBottom
+        }
+        rectBottom = effectiveBottom + padBottom + halfBorder
+    }
+    if (rectLeft >= rectRight || rectTop >= rectBottom) return
+    drawBoxDecorations(
+        canvas = canvas,
+        style = style,
+        rectLeft = rectLeft,
+        rectTop = rectTop,
+        rectRight = rectRight,
+        rectBottom = rectBottom,
+        fontSizeScale = fontSizeScale,
+        readerBgArgb = readerBgArgb,
+    )
 }
 
 private fun drawSingleContainerBox(
@@ -185,10 +313,10 @@ internal fun drawScrollLineBlockStyle(
     val bs = line.blockStyle
     if (bs === BlockStyle.EMPTY) return
 
-    // 水平：columns 优先 extent；空段 / 图片段用 fallback
+    // 块元素 auto width 占满包含块；只有显式 width 才围绕内容定位。
     val leftX: Float
     val rightX: Float
-    if (line.columns.isNotEmpty()) {
+    if (bs.widthPx != null && line.columns.isNotEmpty()) {
         var minL = Float.MAX_VALUE
         var maxR = 0f
         for (col in line.columns) {
@@ -343,7 +471,10 @@ internal fun drawBoxDecorations(
     if (hasSidedBorder(style) && !allSidesIdentical(style)) {
         drawSidedBorder(canvas, style, rectLeft, rectTop, rectRight, rectBottom, cornerRadii, uniformR, fontSizeScale, paint)
     } else {
-        drawUniformBorder(canvas, style, rectLeft, rectTop, rectRight, rectBottom, uniformR, cornerRadii, paint)
+        drawUniformBorder(
+            canvas, style, rectLeft, rectTop, rectRight, rectBottom,
+            uniformR, cornerRadii, fontSizeScale, paint,
+        )
     }
 }
 
@@ -410,18 +541,23 @@ private fun drawUniformBorder(
     rectLeft: Float, rectTop: Float, rectRight: Float, rectBottom: Float,
     uniformR: Float,
     cornerRadii: FloatArray?,
+    fontSizeScale: Float,
     paint: Paint,
 ) {
     // CSS `border: 2px solid red` shorthand 经 Shorthand expander 同时填 uniform border-color/width/style
     // 与 sided border-{top,right,bottom,left}-{color,width,style}。先 uniform 字段；fallback sided
     // 字段（其中 top 当代表 —— allSidesIdentical 保证 4 边相同）。
     val bc = style.borderColor ?: style.borderTopColor ?: return
-    val borderWidthScaled = if (style.borderWidthPx > 0f) style.borderWidthPx else style.borderTopWidthPx
+    val borderWidthScaled = (
+        if (style.borderWidthPx > 0f) style.borderWidthPx else style.borderTopWidthPx
+    ) * fontSizeScale
     if (borderWidthScaled <= 0f) return
     val effectiveStyle = if (style.borderColor != null) style.borderStyle else style.borderTopStyle
     paint.style = Paint.Style.STROKE
     paint.color = bc
     paint.alpha = (bc ushr 24) and 0xFF
+    paint.pathEffect = null
+    paint.strokeCap = Paint.Cap.BUTT
     when (effectiveStyle) {
         BlockStyle.BorderStyle.DOUBLE -> {
             val third = borderWidthScaled / 3f
@@ -454,6 +590,7 @@ private fun drawUniformBorder(
         BlockStyle.BorderStyle.DOTTED,
         -> {
             paint.strokeWidth = borderWidthScaled
+            configureBorderPattern(paint, effectiveStyle, borderWidthScaled)
             if (cornerRadii == null) {
                 canvas.drawRoundRect(rectLeft, rectTop, rectRight, rectBottom, uniformR, uniformR, paint)
             } else {
@@ -509,6 +646,7 @@ private fun drawSidedBorder(
         paint.color = topColor
         paint.alpha = (topColor ushr 24) and 0xFF
         paint.strokeWidth = topW
+        configureBorderPattern(paint, style.borderTopStyle, topW)
         canvas.drawLine(rectLeft + tlInset, rectTop, rectRight - trInset, rectTop, paint)
     }
     // 画 right 边
@@ -516,6 +654,7 @@ private fun drawSidedBorder(
         paint.color = rightColor
         paint.alpha = (rightColor ushr 24) and 0xFF
         paint.strokeWidth = rightW
+        configureBorderPattern(paint, style.borderRightStyle, rightW)
         canvas.drawLine(rectRight, rectTop + trInset, rectRight, rectBottom - brInset, paint)
     }
     // 画 bottom 边
@@ -523,6 +662,7 @@ private fun drawSidedBorder(
         paint.color = bottomColor
         paint.alpha = (bottomColor ushr 24) and 0xFF
         paint.strokeWidth = bottomW
+        configureBorderPattern(paint, style.borderBottomStyle, bottomW)
         canvas.drawLine(rectLeft + blInset, rectBottom, rectRight - brInset, rectBottom, paint)
     }
     // 画 left 边
@@ -530,7 +670,26 @@ private fun drawSidedBorder(
         paint.color = leftColor
         paint.alpha = (leftColor ushr 24) and 0xFF
         paint.strokeWidth = leftW
+        configureBorderPattern(paint, style.borderLeftStyle, leftW)
         canvas.drawLine(rectLeft, rectTop + tlInset, rectLeft, rectBottom - blInset, paint)
+    }
+}
+
+private fun configureBorderPattern(
+    paint: Paint,
+    style: BlockStyle.BorderStyle,
+    strokeWidth: Float,
+) {
+    val unit = strokeWidth.coerceAtLeast(1f)
+    paint.strokeCap = Paint.Cap.BUTT
+    paint.pathEffect = when (style) {
+        BlockStyle.BorderStyle.DASHED -> DashPathEffect(floatArrayOf(unit * 4f, unit * 2f), 0f)
+        BlockStyle.BorderStyle.DOTTED -> {
+            paint.strokeCap = Paint.Cap.ROUND
+            DashPathEffect(floatArrayOf(0.1f, unit * 2.2f), 0f)
+        }
+        BlockStyle.BorderStyle.SOLID,
+        BlockStyle.BorderStyle.DOUBLE -> null
     }
 }
 

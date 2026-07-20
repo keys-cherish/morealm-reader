@@ -8,10 +8,15 @@ import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.epub.css.EpubBackgroundGeometry
 import com.morealm.epub.css.EpubBackgroundImage
+import com.morealm.epub.css.EpubBackgroundLayer
+import com.morealm.epub.css.EpubBackgroundOffset
+import com.morealm.epub.css.EpubBackgroundSize
 import com.morealm.epub.css.Gradient
+import com.morealm.epub.css.Length
 import com.morealm.epub.render.ScrollPage
 import com.morealm.epub.render.ScrollPageSectionRegion
 import kotlin.math.PI
@@ -22,12 +27,17 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.sin
 
+private const val EPUB_BACKGROUND_DIAG_TAG = "EpubBgDiag"
+private const val EPUB_BACKGROUND_DIAG_LIMIT = 256
+private val epubBackgroundDiagKeys = LinkedHashSet<String>()
+
 /** Android Canvas 只负责消费 epub-lib 的背景语义，不在宿主重新解析 CSS。 */
 internal fun drawEpubPageBackground(
     canvas: Canvas,
     page: ScrollPage,
     pageWidth: Float,
     pageHeight: Float,
+    viewportHeight: Float = pageHeight,
     fontSizePx: Float,
 ) {
     if (pageWidth <= 0f || pageHeight <= 0f) return
@@ -49,7 +59,15 @@ internal fun drawEpubPageBackground(
     }
     for (region in regions) {
         if (!region.background.isVisible || region.bottom <= region.top) continue
-        drawRegion(canvas, region, pageWidth, fontSizePx)
+        drawRegion(
+            canvas = canvas,
+            region = region,
+            width = pageWidth,
+            viewportHeight = viewportHeight,
+            fontSizePx = fontSizePx,
+            chapterIndex = page.chapterIndex,
+            pageIndex = page.pageIndex,
+        )
     }
 }
 
@@ -57,7 +75,10 @@ private fun drawRegion(
     canvas: Canvas,
     region: ScrollPageSectionRegion,
     width: Float,
+    viewportHeight: Float,
     fontSizePx: Float,
+    chapterIndex: Int,
+    pageIndex: Int,
 ) {
     val clipTop = region.top
     val clipBottom = region.bottom
@@ -73,7 +94,14 @@ private fun drawRegion(
     }
 
     // CSS 第一层位于最上方，Canvas 因此从列表末尾向前画。
-    for (layer in region.background.layers.asReversed()) {
+    for ((reverseLayerIndex, rawLayer) in region.background.layers.asReversed().withIndex()) {
+        val layerIndex = region.background.layers.lastIndex - reverseLayerIndex
+        val layer = resolveViewportBackgroundSize(
+            layer = rawLayer,
+            viewportWidth = width,
+            viewportHeight = viewportHeight,
+            fontSizePx = fontSizePx,
+        )
         when (val image = layer.image) {
             is EpubBackgroundImage.Url -> drawUrlLayer(
                 canvas = canvas,
@@ -83,6 +111,15 @@ private fun drawRegion(
                 areaHeight = sectionHeight,
                 fontSizePx = fontSizePx,
                 layer = layer,
+                diagnosticContext = EpubBackgroundDiagnosticContext(
+                    chapterIndex = chapterIndex,
+                    pageIndex = pageIndex,
+                    sectionIndex = region.sectionIndex,
+                    layerIndex = layerIndex,
+                    pageWidth = width,
+                    viewportHeight = viewportHeight,
+                    rawLayer = rawLayer,
+                ),
             )
             is EpubBackgroundImage.LinearGradient -> drawLinearLayer(
                 canvas, image.value, region, width, sectionHeight, fontSizePx, layer,
@@ -96,6 +133,36 @@ private fun drawRegion(
     canvas.restoreToCount(save)
 }
 
+/**
+ * EPUB body 背景的百分比尺寸以阅读视口为基准，而不是整章滚动高度。
+ *
+ * 例如 `background-size:auto 40%` 在 6000px 长章中仍应取 2048px 屏幕的 40%，
+ * 否则同一张人物图会被放大到数千像素，头部和身体分散到页面上下两端。
+ */
+internal fun resolveViewportBackgroundSize(
+    layer: EpubBackgroundLayer,
+    viewportWidth: Float,
+    viewportHeight: Float,
+    fontSizePx: Float,
+): EpubBackgroundLayer {
+    val explicit = layer.size as? EpubBackgroundSize.Explicit ?: return layer
+    if (viewportWidth <= 0f || viewportHeight <= 0f) return layer
+
+    fun resolve(offset: EpubBackgroundOffset?, percentBase: Float): EpubBackgroundOffset? {
+        offset ?: return null
+        val px = percentBase * offset.percent / 100f +
+            (offset.length?.toPx(fontSizePx, viewportWidth, viewportHeight) ?: 0f)
+        return EpubBackgroundOffset(length = Length(px, Length.Unit.Px))
+    }
+
+    return layer.copy(
+        size = EpubBackgroundSize.Explicit(
+            width = resolve(explicit.width, viewportWidth),
+            height = resolve(explicit.height, viewportHeight),
+        ),
+    )
+}
+
 private fun drawUrlLayer(
     canvas: Canvas,
     uri: String,
@@ -104,8 +171,17 @@ private fun drawUrlLayer(
     areaHeight: Float,
     fontSizePx: Float,
     layer: com.morealm.epub.css.EpubBackgroundLayer,
+    diagnosticContext: EpubBackgroundDiagnosticContext,
 ) {
-    val bounds = ImageCache.getBounds(uri) ?: return
+    val eventPrefix = diagnosticContext.eventPrefix(region)
+    val bounds = ImageCache.getBounds(uri)
+    if (bounds == null) {
+        logEpubBackgroundDiagnostic(
+            key = "$eventPrefix|bounds-miss|$uri",
+            message = "$eventPrefix result=bounds-miss uri='$uri' raw=${diagnosticContext.rawLayer}",
+        )
+        return
+    }
     val plan = EpubBackgroundGeometry.plan(
         layer = layer,
         areaWidth = areaWidth,
@@ -113,9 +189,47 @@ private fun drawUrlLayer(
         intrinsicWidth = bounds.first.toFloat(),
         intrinsicHeight = bounds.second.toFloat(),
         fontSizePx = fontSizePx,
-    ) ?: return
-    val bitmap = ImageCache.get(uri, ceil(plan.tileWidth).toInt().coerceAtLeast(1)) ?: return
-    if (bitmap.isRecycled) return
+    )
+    if (plan == null) {
+        logEpubBackgroundDiagnostic(
+            key = "$eventPrefix|plan-null|$uri",
+            message = "$eventPrefix result=plan-null uri='$uri' bounds=${bounds.first}x${bounds.second} " +
+                "resolved=$layer raw=${diagnosticContext.rawLayer}",
+        )
+        return
+    }
+
+    val firstLocalLeft = plan.originX + plan.firstColumn * plan.stepX
+    val firstSectionTop = plan.originY + plan.firstRow * plan.stepY
+    val firstLocalTop = region.top + firstSectionTop - region.sectionOffsetY
+    val lastLocalLeft = plan.originX + plan.lastColumn * plan.stepX
+    val lastSectionTop = plan.originY + plan.lastRow * plan.stepY
+    val lastLocalTop = region.top + lastSectionTop - region.sectionOffsetY
+    logEpubBackgroundDiagnostic(
+        key = "$eventPrefix|plan|$uri|$layer",
+        message = "$eventPrefix result=plan uri='$uri' bounds=${bounds.first}x${bounds.second} " +
+            "rawSize=${diagnosticContext.rawLayer.size} resolvedSize=${layer.size} " +
+            "position=${layer.position} repeat=${layer.repeat} " +
+            "tile=${plan.tileWidth}x${plan.tileHeight} origin=${plan.originX},${plan.originY} " +
+            "grid=${plan.firstColumn}..${plan.lastColumn},${plan.firstRow}..${plan.lastRow} " +
+            "canvasFirst=$firstLocalLeft,$firstLocalTop canvasLast=$lastLocalLeft,$lastLocalTop",
+    )
+
+    val bitmap = ImageCache.get(uri, ceil(plan.tileWidth).toInt().coerceAtLeast(1))
+    if (bitmap == null) {
+        logEpubBackgroundDiagnostic(
+            key = "$eventPrefix|bitmap-miss|$uri|${plan.tileWidth}",
+            message = "$eventPrefix result=bitmap-miss uri='$uri' targetWidth=${ceil(plan.tileWidth).toInt()}",
+        )
+        return
+    }
+    if (bitmap.isRecycled) {
+        logEpubBackgroundDiagnostic(
+            key = "$eventPrefix|bitmap-recycled|$uri",
+            message = "$eventPrefix result=bitmap-recycled uri='$uri' bitmap=${bitmap.width}x${bitmap.height}",
+        )
+        return
+    }
     val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     val src = Rect(0, 0, bitmap.width, bitmap.height)
     plan.forEachTile { left, top, right, bottom ->
@@ -127,6 +241,43 @@ private fun drawUrlLayer(
             paint,
         )
     }
+}
+
+private data class EpubBackgroundDiagnosticContext(
+    val chapterIndex: Int,
+    val pageIndex: Int,
+    val sectionIndex: Int,
+    val layerIndex: Int,
+    val pageWidth: Float,
+    val viewportHeight: Float,
+    val rawLayer: EpubBackgroundLayer,
+) {
+    fun eventPrefix(region: ScrollPageSectionRegion): String =
+        "chapter=$chapterIndex page=$pageIndex section=$sectionIndex layer=$layerIndex " +
+            "pageWidth=$pageWidth viewportHeight=$viewportHeight " +
+            "region=${region.top}..${region.bottom} offset=${region.sectionOffsetY} " +
+            "sectionHeight=${region.sectionHeight}"
+}
+
+/**
+ * Canvas 会高频重绘，同一组背景参数只记录一次；保留上限用于约束长时间阅读时的诊断开销。
+ */
+private fun logEpubBackgroundDiagnostic(key: String, message: String) {
+    val shouldLog = synchronized(epubBackgroundDiagKeys) {
+        if (!epubBackgroundDiagKeys.add(key)) {
+            false
+        } else {
+            while (epubBackgroundDiagKeys.size > EPUB_BACKGROUND_DIAG_LIMIT) {
+                val iterator = epubBackgroundDiagKeys.iterator()
+                if (iterator.hasNext()) {
+                    iterator.next()
+                    iterator.remove()
+                }
+            }
+            true
+        }
+    }
+    if (shouldLog) AppLog.info(EPUB_BACKGROUND_DIAG_TAG, message)
 }
 
 private fun drawLinearLayer(

@@ -65,6 +65,8 @@ fun PagePaneCanvas(
     page: ScrollPage,
     chapterViewWidth: Int,
     chapterPaddingLeft: Int,
+    /** body 背景百分比尺寸的视口高度；滚动页自身可能远高于屏幕，不能拿 page.height 当 100%。 */
+    backgroundViewportHeight: Float? = null,
     contentPaint: TextPaint,
     titlePaint: TextPaint,
     chapterNumPaint: TextPaint,
@@ -110,6 +112,7 @@ fun PagePaneCanvas(
                 nc = canvas.nativeCanvas,
                 page = page,
                 viewHeightF = size.height,
+                backgroundViewportHeightF = backgroundViewportHeight ?: size.height,
                 contentPaint = contentPaint,
                 titlePaint = titlePaint,
                 chapterNumPaint = chapterNumPaint,
@@ -243,6 +246,7 @@ internal fun drawScrollPageOnCanvas(
     nc: android.graphics.Canvas,
     page: ScrollPage,
     viewHeightF: Float,
+    backgroundViewportHeightF: Float = viewHeightF,
     contentPaint: TextPaint,
     titlePaint: TextPaint,
     chapterNumPaint: TextPaint,
@@ -290,6 +294,7 @@ internal fun drawScrollPageOnCanvas(
         page = page,
         pageWidth = chapterViewWidth.toFloat(),
         pageHeight = viewHeightF,
+        viewportHeight = backgroundViewportHeightF,
         fontSizePx = contentPaint.textSize,
     )
 
@@ -320,14 +325,15 @@ internal fun drawScrollPageOnCanvas(
         fontSizeScale = bsScale,
         readerBgArgb = readerBgArgb,
     )
-    for (line in page.lines) {
-        drawScrollLineBlockStyle(
-            nc, line, pageTop = 0f,
-            fallbackLeft = 0f, fallbackRight = visibleWidthF,
-            fontSizeScale = bsScale,
-            readerBgArgb = readerBgArgb,
-        )
-    }
+    drawScrollParagraphBlockStyles(
+        canvas = nc,
+        lines = page.lines,
+        pageTop = 0f,
+        fallbackLeft = 0f,
+        fallbackRight = visibleWidthF,
+        fontSizeScale = bsScale,
+        readerBgArgb = readerBgArgb,
+    )
 
     // ─── 层 1：背景高亮 rect ───
     for (spec in bgSpecs) {

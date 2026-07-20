@@ -198,13 +198,15 @@ fun ChapterPaneCanvas(
                     nc, page.lines, chapter.boxGroupStyles, pageTop, 0f, visibleW,
                     fontSizeScale = contentPaint.textSize / 16f,
                 )
+                drawScrollParagraphBlockStyles(
+                    canvas = nc,
+                    lines = page.lines,
+                    pageTop = pageTop,
+                    fallbackLeft = 0f,
+                    fallbackRight = visibleW,
+                    fontSizeScale = contentPaint.textSize / 16f,
+                )
                 for (line in page.lines) {
-                    // P3-5b Phase 3：CSS box 装饰（圆角背景 / 边框）必须画在文字 / 图片之前
-                    // **阶段 2-H bugfix v3**：fontSizeScale = contentPaint.textSize / 16f
-                    drawScrollLineBlockStyle(
-                        nc, line, pageTop, 0f, visibleW,
-                        fontSizeScale = contentPaint.textSize / 16f,
-                    )
                     if (line.isImage) {
                         // ── 图片段（V1 PageContentDrawer.drawImageColumn 等价路径）──
                         // V2 image line：columns 空，imageSrc 非空，lineHeight = imgHeight
