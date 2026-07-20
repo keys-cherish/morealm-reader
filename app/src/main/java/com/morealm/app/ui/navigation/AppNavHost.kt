@@ -39,6 +39,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.morealm.app.ui.detail.BookDetailScreen
+import com.morealm.app.ui.home.HomeScreen
 import com.morealm.app.ui.library.LibraryScreen
 import com.morealm.app.ui.listen.ListenScreen
 import com.morealm.app.ui.profile.AboutScreen
@@ -308,6 +309,12 @@ fun MoRealmNavHost(
                                     }
                             ) {
                                 when (tab) {
+                        BottomTab.Home -> HomeScreen(
+                            onBookClick = { bookId ->
+                                navController.navigateToReader(bookId)
+                            },
+                            continueReadingRequest = continueReadingRequest,
+                        )
                         BottomTab.Shelf -> {
                             // Read theme state inside ShelfScreen's scope so changes
                             // only recompose this branch, not the entire Pager
@@ -321,8 +328,10 @@ fun MoRealmNavHost(
                                 onToggleDayNight = onToggleDayNight,
                                 isNightTheme = isNight,
                                 columns = columns,
-                                continueReadingRequest = continueReadingRequest,
+                                // 续读请求已由首页 tab 承接（Home 是默认组合页），书架不再消费
+                                continueReadingRequest = 0,
                                 onNavigateAutoGroupRules = onShelfAutoGroupRules,
+                                showContinueReading = false,
                             )
                         }
                         BottomTab.Discover -> SearchScreen(

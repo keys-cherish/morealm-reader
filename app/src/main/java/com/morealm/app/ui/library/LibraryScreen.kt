@@ -292,7 +292,7 @@ private fun SectionHeader(section: LibrarySection) {
 }
 
 @Composable
-private fun LibraryBookItem(book: Book, onClick: () -> Unit) {
+internal fun LibraryBookItem(book: Book, onClick: () -> Unit) {
     Column(modifier = Modifier.clickable(onClick = onClick)) {
         Surface(
             shape = RoundedCornerShape(8.dp),

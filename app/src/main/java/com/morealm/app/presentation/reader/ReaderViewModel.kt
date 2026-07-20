@@ -608,7 +608,7 @@ class ReaderViewModel @Inject constructor(
         }
         return ok
     }
-    fun clearNavigateDirection() { navigation._navigateDirection.value = 0 }
+    fun clearNavigateDirection() { sharedState.commitNavigateDirection(0, "ui clear") }
     fun openNextLinkedBook() = navigation.openNextLinkedBook()
     fun dismissNextBookPrompt() = navigation.dismissNextBookPrompt()
     fun setNavigateToBookCallback(callback: (String) -> Unit) = navigation.setNavigateToBookCallback(callback)

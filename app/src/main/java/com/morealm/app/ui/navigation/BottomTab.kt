@@ -2,6 +2,7 @@ package com.morealm.app.ui.navigation
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.LocalLibrary
 import androidx.compose.material.icons.filled.Person
@@ -13,6 +14,7 @@ enum class BottomTab(
     val icon: ImageVector,
     val route: String,
 ) {
+    Home("首页", Icons.Default.Home, "home"),
     Shelf("书架", Icons.Default.LibraryBooks, "shelf"),
     Discover("发现", Icons.Default.Search, "search"),
     Library("图书馆", Icons.Default.LocalLibrary, "library"),
@@ -22,9 +24,9 @@ enum class BottomTab(
 
     companion object {
         /**
-         * 底部胶囊实际展示的 tab。Listen 暂时下架但枚举与页面代码保留，
+         * 底部胶囊实际展示的 tab。Listen / Library 暂时下架但枚举与页面代码保留，
          * 恢复展示只需从这里去掉过滤。
          */
-        val visible: List<BottomTab> = entries.filter { it != Listen }
+        val visible: List<BottomTab> = entries.filter { it != Listen && it != Library }
     }
 }

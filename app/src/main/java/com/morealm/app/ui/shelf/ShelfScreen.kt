@@ -72,6 +72,11 @@ fun ShelfScreen(
     onBookOpen: ((Book) -> Unit)? = null,
     /** Navigate to the auto-grouping rule editor in Profile. */
     onNavigateAutoGroupRules: () -> Unit = {},
+    /**
+     * false = 隐藏「继续阅读」大卡（首页 tab 已承载该入口，书架 tab 不重复展示）。
+     * 默认 true 保持旧调用方零迁移。
+     */
+    showContinueReading: Boolean = true,
     viewModel: ShelfViewModel = hiltViewModel(),
 ) {
     val allBooks by viewModel.books.collectAsStateWithLifecycle()
@@ -563,11 +568,13 @@ fun ShelfScreen(
 
         // Continue reading card (only at root)
         if (currentFolderId == null) {
-            lastRead?.let { book ->
-                ContinueReadingCard(
-                    book = book, onClick = { onBookClick(book.id) },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
+            if (showContinueReading) {
+                lastRead?.let { book ->
+                    ContinueReadingCard(
+                        book = book, onClick = { onBookClick(book.id) },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
             }
 
             // ── "我的书架"标题行 ──

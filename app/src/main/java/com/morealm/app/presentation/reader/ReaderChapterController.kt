@@ -327,7 +327,7 @@ class ReaderChapterController(
                 chapterPosition = 0,
             )
         }
-        navigateDirectionState.value = 1
+        shared.commitNavigateDirection(1, "commitChapterShiftNext")
         clearHitTracking()
 
         // 异步预加载新 next（curIdx+2），不阻塞返回
@@ -445,7 +445,7 @@ class ReaderChapterController(
                 chapterPosition = 0,
             )
         }
-        navigateDirectionState.value = -1
+        shared.commitNavigateDirection(-1, "commitChapterShiftPrev")
         clearHitTracking()
 
         scope.launch(Dispatchers.IO) {
@@ -545,7 +545,7 @@ class ReaderChapterController(
         )
         visiblePageState.value = VisibleReaderPage(0, title, "0.0%", 0)
         scrollProgressState.value = 0
-        navigateDirectionState.value = 0
+        shared.commitNavigateDirection(0, "loadBook reset")
         _loading.value = false
     }
 
@@ -613,7 +613,7 @@ class ReaderChapterController(
                     if (book.folderId != null) {
                         val folderBooks = bookRepo.getBooksByFolderId(book.folderId!!)
                             .sortedNaturalBy { it.title }
-                        linkedBooksState.value = folderBooks.filter { it.id != bookId }
+                        shared.commitLinkedBooks(folderBooks.filter { it.id != bookId }, "loadBook folder scan")
                     }
                     return
                 }
@@ -822,7 +822,7 @@ class ReaderChapterController(
             if (book.folderId != null) {
                 val folderBooks = bookRepo.getBooksByFolderId(book.folderId!!)
                     .sortedNaturalBy { it.title }
-                linkedBooksState.value = folderBooks.filter { it.id != bookId }
+                shared.commitLinkedBooks(folderBooks.filter { it.id != bookId }, "reloadLinkedBooks")
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -1010,7 +1010,7 @@ class ReaderChapterController(
                 _currentChapterIndex.value = index
                 visiblePageState.value = VisibleReaderPage(index, chapter.title.ifBlank { title }, "0.0%", 0)
                 scrollProgressState.value = 0
-                navigateDirectionState.value = 0
+                shared.commitNavigateDirection(0, "loadChapter reset")
             } finally {
                 if (loadToken == chapterLoadToken) {
                     _loading.value = false

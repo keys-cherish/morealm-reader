@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class ReaderNavigationController(
     private val chapter: ReaderChapterController,
     private val progress: ReaderProgressController,
-    shared: ReaderSharedState,
+    private val shared: ReaderSharedState,
 ) {
     // ── State（真值持有在 ReaderSharedState，保留原属性名减小 diff）──
     val _navigateDirection = shared._navigateDirection
@@ -39,7 +39,7 @@ class ReaderNavigationController(
         val nextIdx = chapter.currentChapterIndex.value + 1
         AppLog.debug("Nav", "nextChapter | from=${chapter.currentChapterIndex.value} | to=$nextIdx | total=${chapter.chapters.value.size}")
         if (nextIdx < chapter.chapters.value.size) {
-            _navigateDirection.value = 1
+            shared.commitNavigateDirection(1, "nextChapter button")
             // Phase 2 一致性修复：所有跨章入口（按钮 / 长按按键 / 滚动 commit）统一
             // 优先走同步腾挪。若不走这条路径，老 loadChapter 不腾挪 _prev/_cur/
             // _nextTextChapter 三个真值流，会导致后续滚动 commit 永久 REJECT。
@@ -74,7 +74,7 @@ class ReaderNavigationController(
         val prevIdx = chapter.currentChapterIndex.value - 1
         AppLog.debug("Nav", "prevChapter | from=${chapter.currentChapterIndex.value} | to=$prevIdx | toLast=$toLast")
         if (prevIdx >= 0) {
-            _navigateDirection.value = -1
+            shared.commitNavigateDirection(-1, "prevChapter button")
             if (chapter.commitChapterShiftPrev(toLast)) {
                 AppLog.debug("Nav", "prevChapter via sync moveToPrevChapter")
                 return
