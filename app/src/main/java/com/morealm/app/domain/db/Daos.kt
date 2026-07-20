@@ -29,6 +29,10 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE inBookshelf = 1 ORDER BY lastReadAt DESC")
     fun getAllBooks(): Flow<List<Book>>
 
+    /** 首页阅读历史：包含已实际打开的试读书，按最近访问优先排列。 */
+    @Query("SELECT * FROM books WHERE lastReadAt > 0 ORDER BY lastReadAt DESC")
+    fun getReadingHistory(): Flow<List<Book>>
+
     @Query("SELECT * FROM books WHERE inBookshelf = 1 ORDER BY title COLLATE NOCASE")
     fun getAllBooksPaging(): PagingSource<Int, Book>
 

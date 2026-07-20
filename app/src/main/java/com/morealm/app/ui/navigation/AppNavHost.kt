@@ -39,6 +39,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.morealm.app.ui.detail.BookDetailScreen
+import com.morealm.app.domain.entity.BuiltinThemes
 import com.morealm.app.ui.home.HomeScreen
 import com.morealm.app.ui.library.LibraryScreen
 import com.morealm.app.ui.listen.ListenScreen
@@ -188,7 +189,10 @@ fun MoRealmNavHost(
                         }
                     }
                 }
-                val onSearchTab = remember(switchTab) { { switchTab(1) } }
+                val discoverTabIndex = remember(tabs) { tabs.indexOf(BottomTab.Discover) }
+                val onSearchTab = remember(switchTab, discoverTabIndex) {
+                    { if (discoverTabIndex >= 0) switchTab(discoverTabIndex) }
+                }
                 val onToggleDayNight = remember(themeViewModel) { { themeViewModel.toggleDayNight() } }
                 val selectedTabState = rememberUpdatedState(selectedTab)
                 val navigateFromTab = remember(navController) {
@@ -315,18 +319,23 @@ fun MoRealmNavHost(
                                     }
                             ) {
                                 when (tab) {
-                        BottomTab.Home -> HomeScreen(
-                            onBookClick = { bookId ->
-                                navController.navigateToReader(bookId)
-                            },
-                            onNavigateReadingSettings = onHomeReadingSettings,
-                            onNavigateBookmarks = onHomeBookmarks,
-                            onNavigateCacheBook = onHomeCacheBook,
-                            onNavigateReplaceRules = onHomeReplaceRules,
-                            onNavigateAppearance = onHomeAppearance,
-                            onNavigateAppLog = onHomeAppLog,
-                            continueReadingRequest = continueReadingRequest,
-                        )
+                        BottomTab.Home -> {
+                            val activeTheme by themeViewModel.activeTheme.collectAsStateWithLifecycle()
+                            HomeScreen(
+                                onBookClick = { bookId ->
+                                    navController.navigateToReader(bookId)
+                                },
+                                onNavigateSearch = onSearchTab,
+                                onNavigateReadingSettings = onHomeReadingSettings,
+                                onNavigateBookmarks = onHomeBookmarks,
+                                onNavigateCacheBook = onHomeCacheBook,
+                                onNavigateReplaceRules = onHomeReplaceRules,
+                                onNavigateAppearance = onHomeAppearance,
+                                onNavigateAppLog = onHomeAppLog,
+                                isEinkTheme = activeTheme?.id == BuiltinThemes.eink.id,
+                                continueReadingRequest = continueReadingRequest,
+                            )
+                        }
                         BottomTab.Shelf -> {
                             // Read theme state inside ShelfScreen's scope so changes
                             // only recompose this branch, not the entire Pager
