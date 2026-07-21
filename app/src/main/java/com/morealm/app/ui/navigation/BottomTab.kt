@@ -6,7 +6,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.LocalLibrary
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.ui.graphics.vector.ImageVector
 
 enum class BottomTab(
@@ -16,7 +16,7 @@ enum class BottomTab(
 ) {
     Home("首页", Icons.Default.Home, "home"),
     Shelf("书架", Icons.Default.LibraryBooks, "shelf"),
-    Discover("发现", Icons.Default.Search, "search"),
+    Discover("发现", Icons.Default.Explore, "discover"),
     Library("图书馆", Icons.Default.LocalLibrary, "library"),
     Listen("听书", Icons.Default.Headphones, "listen"),
     Profile("我的", Icons.Default.Person, "profile"),

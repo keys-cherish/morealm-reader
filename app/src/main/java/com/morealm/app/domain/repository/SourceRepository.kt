@@ -27,6 +27,8 @@ class SourceRepository @Inject constructor(
     /** O(1) count for UI / dispatcher without materializing the full source list. */
     suspend fun getEnabledSourceCount(): Int = sourceDao.getEnabledSourceCount()
 
+    suspend fun getExploreSourcesLite(limit: Int = 12) = sourceDao.getExploreSourcesLite(limit)
+
     fun getAllSources(): Flow<List<BookSource>> = sourceDao.getAllSources()
 
     suspend fun getByUrl(url: String): BookSource? = sourceDao.getByUrl(url)

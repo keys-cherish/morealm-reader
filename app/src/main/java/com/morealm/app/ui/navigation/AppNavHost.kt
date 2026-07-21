@@ -40,6 +40,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.morealm.app.ui.detail.BookDetailScreen
 import com.morealm.app.domain.entity.BuiltinThemes
+import com.morealm.app.ui.discover.DiscoverScreen
 import com.morealm.app.ui.home.HomeScreen
 import com.morealm.app.ui.library.LibraryScreen
 import com.morealm.app.ui.listen.ListenScreen
@@ -118,7 +119,7 @@ fun MoRealmNavHost(
     }
 
     val isFullscreen = currentDestination?.route?.let { route ->
-        route.startsWith("reader") || route == "webdav" || route == "about" || route == "changelog" || route == "contributors" || route == "source_manage" || route == "reading_settings" || route == "rule_color" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route == "legado_import" || route == "appearance" || route.startsWith("theme_editor")
+        route.startsWith("reader") || route == "search" || route == "webdav" || route == "about" || route == "changelog" || route == "contributors" || route == "source_manage" || route == "reading_settings" || route == "rule_color" || route == "font_manager" || route == "bookmarks" || route == "replace_rules" || route == "auto_group_rules" || route == "app_log" || route == "cache_book" || route == "donate" || route == "remote_books" || route == "backup_export" || route == "backup_import" || route == "legado_import" || route == "appearance" || route.startsWith("theme_editor")
     } ?: false
 
     // Track whether we're on a main tab (pager) or a detail screen
@@ -189,10 +190,6 @@ fun MoRealmNavHost(
                         }
                     }
                 }
-                val discoverTabIndex = remember(tabs) { tabs.indexOf(BottomTab.Discover) }
-                val onSearchTab = remember(switchTab, discoverTabIndex) {
-                    { if (discoverTabIndex >= 0) switchTab(discoverTabIndex) }
-                }
                 val onToggleDayNight = remember(themeViewModel) { { themeViewModel.toggleDayNight() } }
                 val selectedTabState = rememberUpdatedState(selectedTab)
                 val navigateFromTab = remember(navController) {
@@ -234,7 +231,8 @@ fun MoRealmNavHost(
                 val onHomeReplaceRules = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "replace_rules") } }
                 val onHomeAppearance = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "appearance") } }
                 val onHomeAppLog = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "app_log") } }
-                val onSearchBack = remember(switchTab) { { switchTab(0) } }
+                val onHomeSearch = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "search") } }
+                val onShelfSearch = remember(navigateFromTab) { { navigateFromTab(BottomTab.Shelf, "search") } }
 
                 var dragAmount by remember { mutableFloatStateOf(0f) }
                 GlobalBackgroundScaffold {
@@ -325,7 +323,7 @@ fun MoRealmNavHost(
                                 onBookClick = { bookId ->
                                     navController.navigateToReader(bookId)
                                 },
-                                onNavigateSearch = onSearchTab,
+                                onNavigateSearch = onHomeSearch,
                                 onNavigateReadingSettings = onHomeReadingSettings,
                                 onNavigateBookmarks = onHomeBookmarks,
                                 onNavigateCacheBook = onHomeCacheBook,
@@ -345,7 +343,7 @@ fun MoRealmNavHost(
                                 onBookClick = onBookClick,
                                 onBookLongClick = onBookLongClick,
                                 onBookOpen = onBookOpen,
-                                onSearch = onSearchTab,
+                                onSearch = onShelfSearch,
                                 onToggleDayNight = onToggleDayNight,
                                 isNightTheme = isNight,
                                 columns = columns,
@@ -355,14 +353,8 @@ fun MoRealmNavHost(
                                 showContinueReading = false,
                             )
                         }
-                        BottomTab.Discover -> SearchScreen(
-                            onBack = onSearchBack,
-                            onNavigateReader = { bookId ->
-                                navController.navigateToReader(bookId)
-                            },
-                            onNavigateDetail = { bookId ->
-                                navController.navigateToDetail(bookId)
-                            },
+                        BottomTab.Discover -> DiscoverScreen(
+                            onNavigateDetail = { bookId -> navController.navigateToDetail(bookId) },
                         )
                         BottomTab.Library -> LibraryScreen(
                             onBookClick = { bookId ->
@@ -397,6 +389,24 @@ fun MoRealmNavHost(
                     }
                 }
                 } // GlobalBackgroundScaffold
+            }
+
+            composable(
+                route = "search?query={query}",
+                arguments = listOf(
+                    navArgument("query") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                ),
+            ) { entry ->
+                SearchScreen(
+                    initialQuery = entry.arguments?.getString("query").orEmpty(),
+                    onBack = { navController.safePopBackStack() },
+                    onNavigateReader = { bookId -> navController.navigateToReader(bookId) },
+                    onNavigateDetail = { bookId -> navController.navigateToDetail(bookId) },
+                )
             }
 
             composable("webdav") {

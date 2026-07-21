@@ -54,6 +54,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SearchScreen(
+    initialQuery: String = "",
     onBack: () -> Unit = {},
     onNavigateReader: (String) -> Unit = {},
     onNavigateDetail: (String) -> Unit = {},
@@ -61,7 +62,8 @@ fun SearchScreen(
 ) {
     // rememberSaveable：把搜索关键词存入 SavedState，跨 reader 跳转返回时保留输入；
     // 同时配合下方 didAutoFocus，让「从 reader 退回」「从其他 tab 切回」不再重弹 IME。
-    var query by rememberSaveable { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf(initialQuery) }
+    var didRunInitialQuery by rememberSaveable { mutableStateOf(false) }
     // didAutoFocus：标记本 NavBackStackEntry 是否已经自动获取过焦点。
     // SavedState 跟随该 tab 的 SaveableStateHolder 持久化 —— 应用本次启动后只 focus 一次，
     // 修复 Bug：从书内退回 / 切 tab 切回时 LaunchedEffect 重新执行导致输入法意外弹出。
@@ -72,6 +74,14 @@ fun SearchScreen(
     val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
     val disclaimerAccepted by viewModel.disclaimerAccepted.collectAsStateWithLifecycle()
     val sourceCount by viewModel.sourceCount.collectAsStateWithLifecycle()
+
+    LaunchedEffect(initialQuery) {
+        if (initialQuery.isNotBlank() && !didRunInitialQuery) {
+            query = initialQuery
+            didRunInitialQuery = true
+            viewModel.search(initialQuery)
+        }
+    }
 
     // UX-1: Snackbar host 用于「清空历史」的撤销窗口。SearchScreen 之前没有 Scaffold，
     // 这里直接在 Box 里手动放 SnackbarHost，避免大改原有 Column 布局。
@@ -132,34 +142,6 @@ fun SearchScreen(
         modifier = Modifier
             .fillMaxSize()
     ) {
-        // Compact top bar with back + title inline
-        TopAppBar(
-            title = {
-                Text(
-                    "发现",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                MaterialTheme.colorScheme.onBackground,
-                                MaterialTheme.colorScheme.primary,
-                            )
-                        )
-                    ),
-                )
-            },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = androidx.compose.ui.graphics.Color.Transparent,
-            ),
-            windowInsets = WindowInsets(0, 0, 0, 0),
-        )
-
-        Spacer(Modifier.height(4.dp))
-
         // Search box: input + button
         // UX-3: 进入搜索页自动 focus + 弹出软键盘，省一次「点输入框」交互。
         val focusRequester = remember { FocusRequester() }
@@ -168,7 +150,7 @@ fun SearchScreen(
         LaunchedEffect(Unit) {
             // didAutoFocus 在 rememberSaveable 中持久化，从 reader 退回 / 切 tab 回来都视为已 focus 过，
             // 不再重弹 IME。仅在用户本次启动后第一次进入「发现」tab 时自动 focus + 弹键盘。
-            if (!didAutoFocus) {
+            if (!didAutoFocus && initialQuery.isBlank()) {
                 focusRequester.requestFocus()
                 didAutoFocus = true
             }
@@ -184,15 +166,17 @@ fun SearchScreen(
                 focusManager.clearFocus(force = true)
             }
         }
-        // **2026-05-25** —— mockup #14 设计：单胶囊容器内嵌 放大镜 icon + 输入框 + 「搜索」按钮
-        // 不再用独立 Button + 间距 8dp 的两件套；改为 Surface(圆角 18) 整体外壳，内含 Row 自布局
+        // 独立搜索页顶栏：返回箭头和输入胶囊同一行，不再显示原搜索 Tab 的「发现」标题。
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            Modifier.fillMaxWidth().padding(start = 6.dp, end = 16.dp, top = 8.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
+            }
             Surface(
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.weight(1f).height(48.dp),
+                shape = RoundedCornerShape(24.dp),
                 color = MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
@@ -238,7 +222,7 @@ fun SearchScreen(
                             .fillMaxHeight()
                             .padding(vertical = 4.dp)
                             .clickable { viewModel.search(query) },
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = MaterialTheme.colorScheme.primary,
                     ) {
                         Box(

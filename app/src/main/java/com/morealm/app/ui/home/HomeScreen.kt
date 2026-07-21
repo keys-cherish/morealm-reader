@@ -631,37 +631,49 @@ private fun QuickActionsBar(
     isEinkTheme: Boolean,
 ) {
     val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.45f
-    val backgroundRes = when (quickActionsThemeRow(isDarkTheme, isEinkTheme)) {
-        2 -> R.drawable.home_quick_actions_eink
-        1 -> R.drawable.home_quick_actions_dark
-        else -> R.drawable.home_quick_actions_light
-    }
+    val themeRow = quickActionsThemeRow(isDarkTheme, isEinkTheme)
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(1280f / 227f),
+            .height(72.dp),
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.64f),
         shadowElevation = 1.dp,
     ) {
-        Box(Modifier.fillMaxSize()) {
-            Image(
-                painter = painterResource(backgroundRes),
-                contentDescription = null,
-                contentScale = ContentScale.FillBounds,
-                modifier = Modifier.fillMaxSize(),
-            )
-            Row(Modifier.fillMaxSize()) {
-                actions.forEach { action ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .clickable(
-                                role = Role.Button,
-                                onClick = action.onClick,
-                            )
-                            .semantics { contentDescription = action.label },
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(8.dp)),
+        ) {
+            actions.forEachIndexed { index, action ->
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(
+                            role = Role.Button,
+                            onClick = action.onClick,
+                        )
+                        .padding(horizontal = 1.dp, vertical = 7.dp)
+                        .semantics { contentDescription = action.label },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Image(
+                        painter = painterResource(quickActionResource(themeRow, index)),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.size(30.dp),
+                    )
+                    Spacer(Modifier.height(5.dp))
+                    Text(
+                        text = action.label,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 11.sp,
+                        lineHeight = 13.sp,
+                        letterSpacing = 0.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
                     )
                 }
             }
@@ -669,7 +681,37 @@ private fun QuickActionsBar(
     }
 }
 
-/** 精灵图2从上到下依次为浅色、低饱和深色和墨水屏单色。 */
+private fun quickActionResource(themeRow: Int, index: Int): Int {
+    val resources = when (themeRow) {
+        2 -> intArrayOf(
+            R.drawable.home_quick_eink_reading_settings,
+            R.drawable.home_quick_eink_bookmarks,
+            R.drawable.home_quick_eink_offline_cache,
+            R.drawable.home_quick_eink_text_clean,
+            R.drawable.home_quick_eink_appearance,
+            R.drawable.home_quick_eink_app_log,
+        )
+        1 -> intArrayOf(
+            R.drawable.home_quick_dark_reading_settings,
+            R.drawable.home_quick_dark_bookmarks,
+            R.drawable.home_quick_dark_offline_cache,
+            R.drawable.home_quick_dark_text_clean,
+            R.drawable.home_quick_dark_appearance,
+            R.drawable.home_quick_dark_app_log,
+        )
+        else -> intArrayOf(
+            R.drawable.home_quick_light_reading_settings,
+            R.drawable.home_quick_light_bookmarks,
+            R.drawable.home_quick_light_offline_cache,
+            R.drawable.home_quick_light_text_clean,
+            R.drawable.home_quick_light_appearance,
+            R.drawable.home_quick_light_app_log,
+        )
+    }
+    return resources[index.coerceIn(0, resources.lastIndex)]
+}
+
+/** 精灵图2拆为透明图标；浅色降低饱和度，深色进一步柔化，墨水屏统一灰色。 */
 internal fun quickActionsThemeRow(
     isDarkTheme: Boolean,
     isEinkTheme: Boolean,

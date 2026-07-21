@@ -191,6 +191,11 @@ data class BookSourceLite(
     val bookSourceType: Int = 0,
 )
 
+data class ExploreSourceLite(
+    val bookSourceUrl: String,
+    val bookSourceName: String,
+)
+
 @Dao
 interface BookSourceDao {
     @Query("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY customOrder")
@@ -211,6 +216,14 @@ interface BookSourceDao {
     /** Fast count of enabled sources — avoid pulling 100k rows just to display a number. */
     @Query("SELECT COUNT(*) FROM book_sources WHERE enabled = 1")
     suspend fun getEnabledSourceCount(): Int
+
+    /** 发现页只调度带发现 URL 的源，完整规则在真正请求前按 URL 单条加载。 */
+    @Query(
+        "SELECT bookSourceUrl, bookSourceName FROM book_sources " +
+            "WHERE enabled = 1 AND enabledExplore = 1 AND exploreUrl IS NOT NULL " +
+            "AND TRIM(exploreUrl) != '' ORDER BY customOrder LIMIT :limit"
+    )
+    suspend fun getExploreSourcesLite(limit: Int): List<ExploreSourceLite>
 
     @Query("SELECT * FROM book_sources ORDER BY customOrder")
     fun getAllSources(): Flow<List<BookSource>>
