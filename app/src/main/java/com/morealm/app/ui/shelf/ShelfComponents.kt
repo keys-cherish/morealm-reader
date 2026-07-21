@@ -84,6 +84,60 @@ private fun coverColorForBook(title: String, folderId: String?): Color {
     return coverColorPalette[hash % coverColorPalette.size]
 }
 
+/**
+ * 书架卡片左上角的阅读状态。它只由已有阅读进度派生，不新增数据库状态，
+ * 因而在网格/列表切换、同步和重新解析后始终保持一致。
+ */
+@Composable
+private fun ShelfStatusBadge(
+    book: Book,
+    modifier: Modifier = Modifier,
+) {
+    val moColors = LocalMoRealmColors.current
+    val status = when {
+        book.readProgress >= 0.995f -> "finished"
+        book.lastReadAt > 0L || book.readProgress > 0f -> "reading"
+        else -> "wanted"
+    }
+    val label = when (status) {
+        "finished" -> "已读"
+        "reading" -> "在读"
+        else -> "想读"
+    }
+    val (containerColor, contentColor) = when {
+        moColors.isEink -> {
+            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.78f) to
+                MaterialTheme.colorScheme.background
+        }
+        moColors.isNight -> when (status) {
+            "finished" -> MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.94f) to
+                MaterialTheme.colorScheme.onSurfaceVariant
+            "reading" -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.94f) to
+                MaterialTheme.colorScheme.onPrimaryContainer
+            else -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.94f) to
+                MaterialTheme.colorScheme.onSecondaryContainer
+        }
+        else -> when (status) {
+            "finished" -> Color(0xFF6B7280).copy(alpha = 0.90f) to Color.White
+            "reading" -> Color(0xFFE7A44C).copy(alpha = 0.90f) to Color.White
+            else -> Color(0xFF68A98B).copy(alpha = 0.90f) to Color.White
+        }
+    }
+    Box(
+        modifier = modifier
+            .background(containerColor, RoundedCornerShape(6.dp))
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+    ) {
+        Text(
+            text = label,
+            color = contentColor,
+            fontSize = 10.sp,
+            lineHeight = 12.sp,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
 private fun formatIcon(format: BookFormat): ImageVector = when (format) {
     BookFormat.TXT -> Icons.Default.Description
     BookFormat.PDF -> Icons.Default.PictureAsPdf
@@ -229,6 +283,11 @@ fun BookGridItem(
                     Spacer(Modifier.height(2.dp))
                 }
             }
+
+            ShelfStatusBadge(
+                book = book,
+                modifier = Modifier.align(Alignment.TopStart).padding(5.dp),
+            )
 
             // Progress indicator
             if (book.readProgress > 0f) {
@@ -895,6 +954,10 @@ fun BookListItem(
                     )
                 }
             }
+            ShelfStatusBadge(
+                book = book,
+                modifier = Modifier.align(Alignment.TopStart).padding(3.dp),
+            )
             // Progress bar at bottom of cover
             if (book.readProgress > 0f) {
                 LinearProgressIndicator(

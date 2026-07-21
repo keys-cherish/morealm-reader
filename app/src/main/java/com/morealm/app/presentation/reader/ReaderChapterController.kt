@@ -1338,6 +1338,39 @@ class ReaderChapterController(
         scope.launch(Dispatchers.Main) { loadChapter(idx) }
     }
 
+    /**
+     * TXT 原文件写回后强制重建章节字节偏移，并同步刷新 DB 与当前阅读器状态。
+     * 旧章节表绝不能继续使用：任意长度变化都会让后续 start/endPosition 全部失效。
+     */
+    suspend fun reparseLocalTxtAfterEdit(preferredChapterIndex: Int) {
+        val book = _book.value ?: error("书籍尚未加载")
+        require(book.format == BookFormat.TXT && !book.localPath.isNullOrBlank()) {
+            "仅支持编辑本地 TXT"
+        }
+        val uri = Uri.parse(book.localPath)
+        LocalBookParser.clearCharsetCache(uri)
+        LocalBookParser.releaseTxtBuffer()
+        val customRegex = prefs.customTxtChapterRegex.first()
+        val fresh = LocalBookParser.parseChapters(context, uri, BookFormat.TXT, customRegex)
+            .map { item ->
+                if (item.bookId == bookId) item
+                else item.copy(id = "${bookId}_${item.index}", bookId = bookId)
+            }
+        check(fresh.isNotEmpty()) { "替换后未能重新解析章节" }
+        bookRepo.saveChapters(bookId, fresh)
+        val fingerprint = com.morealm.app.domain.storage.LocalFileFingerprint.of(context, uri)
+        val updated = book.copy(
+            totalChapters = fresh.size,
+            fileSize = fingerprint?.size ?: 0L,
+            fileMtime = fingerprint?.mtime ?: 0L,
+        )
+        bookRepo.update(updated)
+        _book.value = updated
+        _chapters.value = fresh
+        clearPreloadedChapters()
+        loadChapter(preferredChapterIndex.coerceIn(0, fresh.lastIndex))
+    }
+
     private fun publishHits() {
         _hitContentRules.value = hitContentRulesSet.toList()
         _hitTitleRules.value = hitTitleRulesSet.toList()

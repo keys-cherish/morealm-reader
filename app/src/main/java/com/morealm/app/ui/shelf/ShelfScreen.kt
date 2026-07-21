@@ -38,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -53,7 +54,6 @@ import com.morealm.app.ui.widget.ThemedSnackbarHost
 import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.Calendar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -109,6 +109,7 @@ fun ShelfScreen(
     val isListView = shelfViewMode == "list"
     // Folder navigation state: null = root (show all groups + ungrouped)
     var currentFolderId by rememberSaveable { mutableStateOf<String?>(null) }
+    var shelfFilter by rememberSaveable { mutableStateOf("all") }
 
     // Inline search
     var showDeleteFolderConfirm by remember { mutableStateOf<String?>(null) }
@@ -202,12 +203,22 @@ fun ShelfScreen(
         }
     }
 
-    // Derive display books based on current folder
-    val displayBooks = remember(allBooks, currentFolderId) {
+    // 先按文件夹确定作用域，再做纯展示筛选；筛选不写回 Book，避免破坏书架分组数据。
+    val scopedBooks = remember(allBooks, currentFolderId) {
         if (currentFolderId != null) {
             allBooks.filter { it.folderId == currentFolderId }
         } else {
             allBooks.filter { it.folderId == null }
+        }
+    }
+    val displayBooks = remember(scopedBooks, shelfFilter) {
+        when (shelfFilter) {
+            "reading" -> scopedBooks.filter {
+                (it.lastReadAt > 0L || it.readProgress > 0f) && it.readProgress < 0.995f
+            }
+            "wanted" -> scopedBooks.filter { it.lastReadAt <= 0L && it.readProgress <= 0f }
+            "finished" -> scopedBooks.filter { it.readProgress >= 0.995f }
+            else -> scopedBooks
         }
     }
     val folderIds = remember(groupNames) { groupNames.keys.toList() }
@@ -283,18 +294,6 @@ fun ShelfScreen(
     Column(
         modifier = Modifier.fillMaxSize()
     ) {
-        // Time-based greeting
-        val greeting = remember {
-            val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-            when (hour) {
-                in 5..11 -> "早上好"
-                in 12..13 -> "中午好"
-                in 14..17 -> "下午好"
-                in 18..22 -> "晚上好"
-                else -> "深夜好"
-            }
-        }
-
         TopAppBar(
             title = {
                 when {
@@ -308,40 +307,24 @@ fun ShelfScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                     )
-                    else -> {
-                        // 副文本从静态"享受阅读时光"改成今日阅读时长。
-                        //   - 0 分钟：保留原有问候副文本，避免显示"今日已阅读 0 分钟"过于冷淡
-                        //   - 1-59 分钟：显示分钟数
-                        //   - 60+ 分钟：显示"X 小时 Y 分钟"或仅"X 小时"（整点）
-                        val todayMs by viewModel.todayReadMs.collectAsStateWithLifecycle()
-                        val subtitle = remember(todayMs) {
-                            if (todayMs <= 0L) {
-                                "享受阅读时光"
-                            } else {
-                                val totalMin = (todayMs / 60_000L).toInt()
-                                val h = totalMin / 60
-                                val m = totalMin % 60
-                                when {
-                                    h == 0 -> "今日已阅读 $m 分钟"
-                                    m == 0 -> "今日已阅读 $h 小时"
-                                    else -> "今日已阅读 $h 小时 $m 分钟"
-                                }
-                            }
-                        }
-                        Column {
-                            // greeting 字号从 titleLarge 降到中间档（headlineSmall? 不，
-                            // 改用 titleMedium 加大字号 + Bold）—— 用户要求降低但仍大于
-                            // 「我的书架」(titleMedium SemiBold)。用 22.sp + Bold 是夹在
-                            // titleLarge(22sp default) 和 titleMedium(16sp) 之间的轻量值。
-                            Text(
-                                greeting,
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onBackground,
-                            )
-                            Text(subtitle, style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
-                        }
+                    else -> Column(
+                        modifier = Modifier.padding(end = 20.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            "我的书架",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            maxLines = 1,
+                        )
+                        Text(
+                            "${allBooks.size} 本书 · 继续阅读你的精彩故事",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.52f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             },
@@ -438,17 +421,35 @@ fun ShelfScreen(
                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
                     }
                 } else {
-                // ── 顶栏 actions：胶囊容器包 3 个轻量图标 ──
+                // 搜索保持为独立放大镜入口，不再藏进更多菜单。
+                Box(
+                    modifier = Modifier
+                        .padding(end = 6.dp)
+                        .size(30.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.035f))
+                        .clickable(onClick = onSearch),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = "搜索",
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.78f),
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+
+                // ── 顶栏 actions：胶囊容器包日夜、导入和更多 ──
                 //
                 // 视觉风格：圆角胶囊（外层 surfaceContainer/0.12 alpha）+ 3 个 Lucide 线性
                 // 图标（日夜 / 导入 / 三点）+ 两条 0.5dp 竖线分隔。极度轻量、透气、干净，
                 // 比之前 3 个独立 IconButton 视觉聚拢得多（截图 20）。
                 Row(
                     modifier = Modifier
-                        .padding(end = 6.dp)
+                        .padding(end = 4.dp)
                         .clip(RoundedCornerShape(50))
-                        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
-                        .padding(horizontal = 4.dp),
+                        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.035f))
+                        .padding(horizontal = 1.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CapsuleAction(
@@ -526,14 +527,6 @@ fun ShelfScreen(
                                     showOverflowMenu = false
                                 },
                             )
-                            DropdownMenuItem(
-                                text = { Text("搜索书架") },
-                                leadingIcon = { Icon(Icons.Default.Search, null) },
-                                onClick = {
-                                    showSearch = true
-                                    showOverflowMenu = false
-                                },
-                            )
                         }
                     }
                 }
@@ -577,44 +570,73 @@ fun ShelfScreen(
                 }
             }
 
-            // ── "我的书架"标题行 ──
-            // 在「继续阅读」卡片下方，「书籍列表」上方，作为视觉锚点+控制条。
-            // 排序 / 切换视图入口集中在此（顶栏不再放，overflow 也不再放，避免
-            // 同一动作多入口）。线性矢量图标 (AutoMirrored.Outlined / Outlined)
-            // 匹配图 3 极简轻量风格。
-            //
-            // batchMode / folderBatchMode 下隐藏：批量模式的视觉重心是顶栏的
-            // 选中数 + 删除/移动按钮，标题行此时多余甚至干扰。
+            // 筛选、排序和视图模式集中在一条紧凑控制栏；顶栏已承担书架标题。
             if (!batchMode && !folderBatchMode) {
                 var showShelfSortMenu by remember { mutableStateOf(false) }
+                val filterOptions = remember {
+                    listOf(
+                        "all" to "全部",
+                        "reading" to "在读",
+                        "wanted" to "想读",
+                        "finished" to "已读",
+                    )
+                }
+                val sortLabel = when (sortMode) {
+                    "addTime" -> "导入时间"
+                    "title" -> "书名"
+                    "format" -> "格式"
+                    else -> "最近阅读"
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
+                        .padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        // 字号 titleMedium → SemiBold；比 greeting (22sp Bold) 小一档，
-                        // 形成"主-次"层级（截图 21 视觉关系）。
-                        "我的书架",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.92f),
+                    Row(
                         modifier = Modifier.weight(1f),
-                    )
-                    // 排序入口（独立、轻量、Lucide 线性矢量）—— 截图 21 排序按钮在胶囊外。
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        filterOptions.forEach { (key, label) ->
+                            val selected = shelfFilter == key
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                                },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(
+                                        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.07f)
+                                        else androidx.compose.ui.graphics.Color.Transparent
+                                    )
+                                    .clickable { shelfFilter = key }
+                                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
                     Box {
-                        androidx.compose.foundation.layout.Box(
+                        Row(
                             modifier = Modifier
-                                .size(36.dp)
                                 .clip(RoundedCornerShape(50))
-                                .clickable { showShelfSortMenu = true },
-                            contentAlignment = Alignment.Center,
+                                .clickable { showShelfSortMenu = true }
+                                .padding(horizontal = 7.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            androidx.compose.material3.Icon(
-                                imageVector = Lucide.ArrowDownNarrowWide,
-                                contentDescription = "排序方式",
-                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f),
-                                modifier = Modifier.size(18.dp),
+                            Text(
+                                text = sortLabel,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.72f),
+                            )
+                            Icon(
+                                Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
+                                modifier = Modifier.size(15.dp),
                             )
                         }
                         DropdownMenu(
@@ -644,27 +666,21 @@ fun ShelfScreen(
                             }
                         }
                     }
-                    Spacer(Modifier.width(8.dp))
-                    // 视图切换：胶囊 segmented 容器，列表 / 网格两个按钮（截图 21）。
-                    // 选中态用 primary container 暗示，未选用 transparent；按钮间无分隔
-                    // 线（segmented 风格本身就有圆角差异区分边界）。
-                    Row(
+                    Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
-                            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
-                            .padding(3.dp),
+                            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.035f))
+                            .size(30.dp)
+                            .clickable {
+                                viewModel.setShelfViewMode(if (isListView) "grid" else "list")
+                            },
+                        contentAlignment = Alignment.Center,
                     ) {
-                        SegmentedViewButton(
-                            icon = Lucide.List,
-                            contentDescription = "列表视图",
-                            selected = isListView,
-                            onClick = { viewModel.setShelfViewMode("list") },
-                        )
-                        SegmentedViewButton(
-                            icon = Lucide.LayoutGrid,
-                            contentDescription = "网格视图",
-                            selected = !isListView,
-                            onClick = { viewModel.setShelfViewMode("grid") },
+                        Icon(
+                            imageVector = if (isListView) Lucide.List else Lucide.LayoutGrid,
+                            contentDescription = if (isListView) "切换到网格布局" else "切换到列表布局",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp),
                         )
                     }
                 }
@@ -1546,10 +1562,10 @@ private fun RenameGroupDialog(
 // ── 顶栏胶囊 helper composables ──────────────────────────────────────────────
 //
 // 把书架顶栏右侧 3 个按钮（日夜 / 导入 / 三点）+ 「我的书架」行的视图切换包成
-// 圆角胶囊容器（截图 20 / 21 设计）。统一图标尺寸 18dp + Lucide 线性矢量风格，
+// 圆角胶囊容器（截图 20 / 21 设计）。统一图标尺寸 15dp + Lucide 线性矢量风格，
 // 视觉极轻量、透气、干净。
 
-/** 胶囊容器内的单个动作按钮 —— 36dp 触发区 + 18dp 图标。 */
+/** 胶囊容器内的单个动作按钮。图形稍小于触发区，避免顶栏压迫标题。 */
 @Composable
 private fun CapsuleAction(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -1558,7 +1574,7 @@ private fun CapsuleAction(
 ) {
     androidx.compose.foundation.layout.Box(
         modifier = Modifier
-            .size(36.dp)
+            .size(30.dp)
             .clip(RoundedCornerShape(50))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -1567,7 +1583,7 @@ private fun CapsuleAction(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.78f),
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(15.dp),
         )
     }
 }
@@ -1577,10 +1593,10 @@ private fun CapsuleAction(
 private fun CapsuleDivider() {
     androidx.compose.foundation.layout.Box(
         modifier = Modifier
-            .padding(vertical = 8.dp)
+            .padding(vertical = 6.dp)
             .width(0.5.dp)
-            .height(18.dp)
-            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f)),
+            .height(12.dp)
+            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f)),
     )
 }
 
@@ -1594,7 +1610,7 @@ private fun SegmentedViewButton(
 ) {
     androidx.compose.foundation.layout.Box(
         modifier = Modifier
-            .size(width = 36.dp, height = 28.dp)
+            .size(width = 32.dp, height = 24.dp)
             .clip(RoundedCornerShape(50))
             .background(
                 if (selected) MaterialTheme.colorScheme.surface
@@ -1608,7 +1624,7 @@ private fun SegmentedViewButton(
             contentDescription = contentDescription,
             tint = if (selected) MaterialTheme.colorScheme.onBackground
                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(15.dp),
         )
     }
 }

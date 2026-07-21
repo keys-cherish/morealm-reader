@@ -238,7 +238,7 @@ class ShelfViewModel @Inject constructor(
      * 触发一次"先按 title 排，紧接着切到用户偏好排"的视觉抖动。
      */
     val sortMode: StateFlow<String> = prefs.shelfSortMode
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "title")
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "recent")
 
     fun setSortMode(mode: String) {
         viewModelScope.launch { prefs.setShelfSortMode(mode) }

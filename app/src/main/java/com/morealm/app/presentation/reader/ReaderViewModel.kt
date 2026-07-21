@@ -15,6 +15,7 @@ import com.morealm.app.domain.repository.BookmarkRepository
 import com.morealm.app.domain.repository.ReadStatsRepository
 import com.morealm.app.domain.repository.ReplaceRuleRepository
 import com.morealm.app.domain.repository.SourceRepository
+import com.morealm.app.domain.storage.TxtEditScope
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.core.text.stripHtml
 import com.morealm.app.service.TtsEventBus
@@ -244,7 +245,9 @@ class ReaderViewModel @Inject constructor(
     val searchResults: StateFlow<List<ReaderSearchController.SearchResult>> = search.searchResults
     val pendingSearchSelection: StateFlow<ReaderSearchController.SearchSelection?> = search.pendingSearchSelection
     val searching: StateFlow<Boolean> = search.searching
+    val searchError: StateFlow<String?> = search.searchError
     val editingContent: StateFlow<Boolean> = contentEdit.editingContent
+    val txtReplaceState: StateFlow<TxtReplaceState> = contentEdit.txtReplaceState
 
     // ── EffectiveReplacesDialog forwards (#5) ──
     /** 当前章里 result≠input 的 content 规则集合（真命中），由 ReaderChapterController 跟踪。 */
@@ -619,11 +622,15 @@ class ReaderViewModel @Inject constructor(
      * 全文搜索。同时把 [AppPreferences.innerSearchMode] 与当前阅读位置传给
      * SearchController 做方向过滤；mode = "all" 时与旧行为完全等价。
      */
-    fun searchFullText(query: String) = viewModelScope.launch {
+    fun searchFullText(
+        query: String,
+        isRegex: Boolean = false,
+        isCaseSensitive: Boolean = false,
+    ) = viewModelScope.launch {
         val mode = prefs.innerSearchMode.first()
         val cur = chapter.currentChapterIndex.value
         val pos = progress.visiblePage.value.chapterPosition.coerceAtLeast(0)
-        search.searchFullText(query, mode, cur, pos)
+        search.searchFullText(query, mode, cur, pos, isRegex, isCaseSensitive)
     }
     /**
      * 章内搜索：用已加载的当前章节内容做关键词扫描，列出**所有**命中位置。比
@@ -633,17 +640,67 @@ class ReaderViewModel @Inject constructor(
      * 同样应用 [AppPreferences.innerSearchMode] 方向过滤：前向只列当前页前的命中，
      * 后向只列之后的（同章内按 queryIndexInChapter 与 chapterPosition 比较）。
      */
-    fun searchInChapter(query: String) = viewModelScope.launch {
+    fun searchInChapter(
+        query: String,
+        isRegex: Boolean = false,
+        isCaseSensitive: Boolean = false,
+    ) = viewModelScope.launch {
         val mode = prefs.innerSearchMode.first()
-        val plain = chapter.chapterContent.value.stripHtml()
         val idx = chapter.currentChapterIndex.value
+        val currentBook = chapter.book.value
+        val currentChapter = chapter.chapters.value.getOrNull(idx)
+        val plain = if (
+            currentBook?.format == com.morealm.app.domain.entity.BookFormat.TXT &&
+            !currentBook.localPath.isNullOrBlank() &&
+            currentChapter != null
+        ) {
+            withContext(Dispatchers.IO) {
+                com.morealm.app.domain.parser.LocalBookParser.readTxtChapter(
+                    context,
+                    Uri.parse(currentBook.localPath),
+                    currentChapter,
+                )
+            }
+        } else {
+            chapter.chapterContent.value.stripHtml()
+        }
         val pos = progress.visiblePage.value.chapterPosition.coerceAtLeast(0)
         val title = chapter.chapters.value.getOrNull(idx)?.title ?: ""
-        search.searchCurrentChapter(query, plain, idx, title, mode, pos)
+        search.searchCurrentChapter(query, plain, idx, title, mode, pos, isRegex, isCaseSensitive)
     }
     fun clearSearchResults() = search.clearSearchResults()
     fun openSearchResult(result: ReaderSearchController.SearchResult) = search.openSearchResult(result)
     fun consumeSearchSelection() = search.consumeSearchSelection()
+
+    fun replaceTxtMatch(
+        target: ReaderSearchController.SearchResult,
+        replacement: String,
+        isRegex: Boolean,
+        isCaseSensitive: Boolean,
+    ) = contentEdit.replaceTxt(
+        editScope = TxtEditScope.CHAPTER,
+        query = target.query,
+        replacement = replacement,
+        isRegex = isRegex,
+        isCaseSensitive = isCaseSensitive,
+        target = target,
+    )
+
+    fun replaceTxtAll(
+        query: String,
+        replacement: String,
+        inCurrentChapter: Boolean,
+        isRegex: Boolean,
+        isCaseSensitive: Boolean,
+    ) = contentEdit.replaceTxt(
+        editScope = if (inCurrentChapter) TxtEditScope.CHAPTER else TxtEditScope.FULL_TEXT,
+        query = query,
+        replacement = replacement,
+        isRegex = isRegex,
+        isCaseSensitive = isCaseSensitive,
+    )
+
+    fun clearTxtReplaceMessage() = contentEdit.clearTxtReplaceMessage()
 
     fun addBookmark() = bookmark.addBookmark()
     fun deleteBookmark(id: String) = bookmark.deleteBookmark(id)

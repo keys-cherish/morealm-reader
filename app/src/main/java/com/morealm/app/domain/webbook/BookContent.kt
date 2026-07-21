@@ -10,6 +10,7 @@ import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.rule.ContentRule
 import kotlinx.coroutines.ensureActive
 import org.apache.commons.text.StringEscapeUtils
+import org.jsoup.Jsoup
 import java.net.URL
 import kotlin.coroutines.coroutineContext
 
@@ -135,6 +136,16 @@ object BookContent {
                 AppLog.warn(TAG, "content rule failed: ${e.message?.take(120)}")
                 ""
             }
+            if (content.isBlank()) {
+                content = parseCommonHtmlContent(body, redirectUrl)
+                if (content.isNotBlank()) {
+                    AppLog.warn(
+                        TAG,
+                        "${bookSource.bookSourceName}: configured content rule returned empty; " +
+                            "common HTML fallback matched",
+                    )
+                }
+            }
             // Legado parity: 先把 <usehtml> 段占位 → HtmlFormatter.formatKeepImg
             // (清 HTML 标签但保留 img 并 absolute src) → unescapeHtml4 → 还原占位。
             // 不走这条管道之前 jsoup outerHtml 的 <p>/<br>/<img> 标签会原样进阅读器，
@@ -173,4 +184,25 @@ object BookContent {
             Pair("", emptyList())
         }
     }
+
+    /** 仅在书源正文规则拉空时探测常见正文容器，保留内部图片交给统一格式化管线处理。 */
+    internal fun parseCommonHtmlContent(body: String, baseUrl: String): String {
+        val document = Jsoup.parse(body, baseUrl)
+        for (selector in COMMON_CONTENT_SELECTORS) {
+            val element = document.selectFirst(selector) ?: continue
+            element.select("script, style, noscript").remove()
+            val html = element.html().trim()
+            if (html.isNotEmpty()) return html
+        }
+        return ""
+    }
+
+    private val COMMON_CONTENT_SELECTORS = listOf(
+        "#content",
+        "#chaptercontent",
+        "#chapter-content",
+        ".read-content",
+        ".chapter-content",
+        ".content_read",
+    )
 }

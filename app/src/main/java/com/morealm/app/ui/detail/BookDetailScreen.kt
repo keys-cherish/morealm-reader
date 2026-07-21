@@ -3,6 +3,7 @@ package com.morealm.app.ui.detail
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.presentation.profile.BookDetailViewModel
 import com.morealm.app.presentation.source.SearchStatus
@@ -23,6 +24,11 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Login
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -32,7 +38,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.morealm.app.domain.entity.BookFormat
@@ -58,12 +66,19 @@ fun BookDetailScreen(
     val changeProgress by viewModel.changeSourceProgress.collectAsStateWithLifecycle()
     val changeSearching by viewModel.changeSourceSearching.collectAsStateWithLifecycle()
     val saving by viewModel.saving.collectAsStateWithLifecycle()
+    val isPreparingRead by viewModel.isPreparingRead.collectAsStateWithLifecycle()
+    val isReadReady by viewModel.isReadReady.collectAsStateWithLifecycle()
+    val readPreparationError by viewModel.readPreparationError.collectAsStateWithLifecycle()
+    val chapters by viewModel.chapters.collectAsStateWithLifecycle()
     val moColors = LocalMoRealmColors.current
     val context = LocalContext.current
     val isDownloading by viewModel.isCacheDownloading.collectAsStateWithLifecycle()
     val downloadProgress by viewModel.cacheDownloadProgress.collectAsStateWithLifecycle()
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
+    var showTopMenu by remember { mutableStateOf(false) }
+    var introExpanded by remember { mutableStateOf(false) }
+    var chapterDescending by remember { mutableStateOf(false) }
     // 预览态（inBookshelf=false）退出处理：读过才提示「加入书架?」，纯浏览静默清除（不留残记录）。
     var hasOpenedReader by remember { mutableStateOf(false) }
     var showAddPrompt by remember { mutableStateOf(false) }
@@ -85,6 +100,22 @@ fun BookDetailScreen(
         }
     }
 
+    val loginSource = currentSource?.takeIf { !it.loginUrl.isNullOrBlank() }
+    val sourceLoggedIn = loginSource?.let { loginStatusMap[it.bookSourceUrl] == true } == true
+    // 详情页所有承载层均来自当前主题，避免浅色主题被固定白色卡片割裂。
+    val detailBackgroundColor = MaterialTheme.colorScheme.background
+    val detailSurfaceColor = MaterialTheme.colorScheme.surface
+    val detailDividerColor = MaterialTheme.colorScheme.onSurface.copy(
+        alpha = if (moColors.isNight) 0.12f else 0.065f,
+    )
+    val detailOutlineColor = MaterialTheme.colorScheme.onSurface.copy(
+        alpha = if (moColors.isNight) 0.18f else 0.11f,
+    )
+    val detailCardElevation = if (moColors.isNight) 1.dp else 0.5.dp
+    LaunchedEffect(loginSource?.bookSourceUrl) {
+        loginSource?.let { loginViewModel.refreshLoginStatuses(listOf(it)) }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -95,205 +126,377 @@ fun BookDetailScreen(
                     }
                 },
                 actions = {
-                    // B2：只有当前书是 web 书且源配了 loginUrl 时显示"登录源"入口。
-                    // 已登录态展示已登录 tint + 点击走退出；未登录态走登录。状态流共享
-                    // SourceLoginViewModel.loginStatusMap，与书源管理页 chip 即时联动。
-                    currentSource?.takeIf { !it.loginUrl.isNullOrBlank() }?.let { src ->
-                        val loggedIn = loginStatusMap[src.bookSourceUrl] == true
-                        // 进屏幕时触发一次状态预算。仅刷当前源，避免全表跑 JS。
-                        LaunchedEffect(src.bookSourceUrl) {
-                            loginViewModel.refreshLoginStatuses(listOf(src))
+                    Box {
+                        IconButton(onClick = { showTopMenu = true }) {
+                            Icon(Icons.Default.MoreVert, "更多")
                         }
-                        IconButton(onClick = {
-                            if (loggedIn) loginViewModel.logout(src)
-                            else loginViewModel.showLoginDialog(src)
-                        }) {
-                            Icon(
-                                Icons.Default.Login,
-                                contentDescription = if (loggedIn) "退出登录" else "登录源",
-                                tint = if (loggedIn) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onBackground,
-                            )
-                        }
-                    }
-                    // 编辑元数据 / 删除（移出书架）只对已在架的书有意义；
-                    // 预览态（搜索查看但未加入）隐藏，避免误删 + 减少干扰。
-                    if (book?.inBookshelf == true) {
-                        IconButton(onClick = { showEditDialog = true }) {
-                            Icon(Icons.Default.Edit, "编辑元数据",
-                                tint = MaterialTheme.colorScheme.onBackground)
-                        }
-                        IconButton(onClick = { showDeleteConfirm = true }) {
-                            Icon(Icons.Default.Delete, "删除",
-                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f))
+                        DropdownMenu(
+                            expanded = showTopMenu,
+                            onDismissRequest = { showTopMenu = false },
+                        ) {
+                            loginSource?.let { source ->
+                                DropdownMenuItem(
+                                    text = { Text(if (sourceLoggedIn) "退出书源登录" else "登录书源") },
+                                    leadingIcon = { Icon(Icons.Default.Login, null) },
+                                    onClick = {
+                                        showTopMenu = false
+                                        if (sourceLoggedIn) loginViewModel.logout(source)
+                                        else loginViewModel.showLoginDialog(source)
+                                    },
+                                )
+                            }
+                            book?.takeIf { it.sourceId != null && enabledSourcesCount > 0 }?.let {
+                                DropdownMenuItem(
+                                    text = { Text("换源") },
+                                    leadingIcon = { Icon(Icons.Default.SwapHoriz, null) },
+                                    onClick = { showTopMenu = false; viewModel.showSourcePicker() },
+                                )
+                            }
+                            book?.takeIf { it.format == BookFormat.WEB }?.let { current ->
+                                val isThisBookDownloading = isDownloading && downloadProgress.bookId == current.id
+                                DropdownMenuItem(
+                                    text = { Text(if (isThisBookDownloading) "停止离线缓存" else "离线缓存全本") },
+                                    leadingIcon = { Icon(Icons.Default.CloudDownload, null) },
+                                    onClick = {
+                                        showTopMenu = false
+                                        if (isThisBookDownloading) viewModel.stopCacheBook()
+                                        else (current.sourceUrl ?: current.sourceId)?.let {
+                                            viewModel.startCacheBook(current.id, it)
+                                        }
+                                    },
+                                )
+                            }
+                            if (book?.inBookshelf == true) {
+                                DropdownMenuItem(
+                                    text = { Text("编辑书籍信息") },
+                                    leadingIcon = { Icon(Icons.Default.Edit, null) },
+                                    onClick = { showTopMenu = false; showEditDialog = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("移出书架", color = MaterialTheme.colorScheme.error) },
+                                    leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                                    onClick = { showTopMenu = false; showDeleteConfirm = true },
+                                )
+                            }
                         }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
+                    containerColor = detailBackgroundColor,
                 ),
+                windowInsets = WindowInsets(0, 0, 0, 0),
             )
         },
-        containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            book?.let { current ->
+                Surface(
+                    color = detailSurfaceColor,
+                    shadowElevation = 3.dp,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 7.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = viewModel::addToShelf,
+                            enabled = !current.inBookshelf,
+                            modifier = Modifier.weight(0.42f).height(44.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(0.75.dp, detailOutlineColor),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                        ) {
+                            Icon(
+                                if (current.inBookshelf) Icons.Default.Check else Icons.Default.FavoriteBorder,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            Text(if (current.inBookshelf) "已在书架" else "加入书架")
+                        }
+                        Button(
+                            onClick = {
+                                if (current.format == BookFormat.WEB && !isReadReady) {
+                                    viewModel.retryPrepareRead()
+                                } else {
+                                    hasOpenedReader = true
+                                    onRead()
+                                }
+                            },
+                            enabled = !isPreparingRead,
+                            modifier = Modifier.weight(0.58f).height(44.dp),
+                            shape = RoundedCornerShape(14.dp),
+                        ) {
+                            if (isPreparingRead) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(17.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text(
+                                when {
+                                    isPreparingRead -> "加载目录中"
+                                    current.format == BookFormat.WEB && !isReadReady -> "重新加载目录"
+                                    current.lastReadChapter > 0 -> "继续阅读"
+                                    else -> "开始阅读"
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        containerColor = detailBackgroundColor,
     ) { padding ->
-        book?.let { b ->
+        val current = book
+        if (current == null) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+            }
+        } else {
             Column(
                 modifier = Modifier
                     .padding(padding)
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .padding(horizontal = 20.dp),
             ) {
-                Spacer(Modifier.height(16.dp))
-
-                // Cover
-                Box(
-                    modifier = Modifier
-                        .size(140.dp, 200.dp)
-                        .clip(MaterialTheme.shapes.medium)
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    // 优先级：customCoverUrl > coverUrl > 默认图标
-                    val coverToShow = b.customCoverUrl ?: b.coverUrl
-                    if (coverToShow != null) {
-                        AsyncImage(
-                            model = coverToShow,
-                            contentDescription = b.title,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
-                        Icon(
-                            Icons.AutoMirrored.Filled.MenuBook,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(48.dp),
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(16.dp))
-
-                Text(
-                    b.title,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-
-                if (b.author.isNotBlank()) {
-                    Text(
-                        b.author,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                    )
-                }
-
-                Spacer(Modifier.height(24.dp))
-
-                // Stats row
+                Spacer(Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
-                    StatItem("章节", "${b.totalChapters}")
-                    StatItem("进度", "${(b.readProgress * 100).toInt()}%")
-                    StatItem("格式", b.format.name)
-                }
-
-                Spacer(Modifier.height(24.dp))
-
-                Button(
-                    onClick = { hasOpenedReader = true; onRead() },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                    ),
-                    shape = MaterialTheme.shapes.medium,
-                ) {
-                    Text(
-                        if (b.lastReadChapter > 0) "继续阅读" else "开始阅读",
-                        modifier = Modifier.padding(vertical = 4.dp),
-                    )
-                }
-
-                // 预览态：未加入书架的书显示「加入书架」（点击翻 inBookshelf=true）。
-                if (!b.inBookshelf) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.addToShelf() },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
+                    Surface(
+                        modifier = Modifier.size(width = 116.dp, height = 166.dp),
+                        shape = RoundedCornerShape(7.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shadowElevation = 5.dp,
                     ) {
-                        Text("加入书架", modifier = Modifier.padding(vertical = 4.dp))
-                    }
-                }
-
-                // Source switch button (for online books)
-                if (b.sourceId != null && enabledSourcesCount > 0) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.showSourcePicker() },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
-                    ) {
-                        Icon(Icons.Default.SwapHoriz, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("换源 (${b.originName ?: "未知"})")
-                    }
-
-                    // Download / cache button
-                    Spacer(Modifier.height(8.dp))
-                    val isThisBookDownloading = isDownloading && downloadProgress.bookId == b.id
-                    OutlinedButton(
-                        onClick = {
-                            if (isThisBookDownloading) {
-                                viewModel.stopCacheBook()
-                            } else {
-                                val sourceUrl = b.sourceUrl ?: b.sourceId ?: return@OutlinedButton
-                                viewModel.startCacheBook(b.id, sourceUrl)
+                        val coverToShow = current.customCoverUrl ?: current.coverUrl
+                        if (!coverToShow.isNullOrBlank()) {
+                            AsyncImage(
+                                model = coverToShow,
+                                contentDescription = current.title,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.MenuBook,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(42.dp),
+                                )
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
-                    ) {
-                        if (isThisBookDownloading) {
-                            val prog = downloadProgress
-                            val done = prog.completed + prog.failed + prog.cached
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            current.title,
+                            style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp, lineHeight = 23.sp),
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (current.author.isNotBlank()) {
+                            Spacer(Modifier.height(7.dp))
+                            Text(
+                                current.author,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Spacer(Modifier.height(11.dp))
+                        DetailMetaLine("类型", current.kind?.takeIf(String::isNotBlank) ?: "未分类")
+                        DetailMetaLine("来源", current.originName.ifBlank { "本地书籍" })
+                        DetailMetaLine("格式", current.format.name)
+                        if (current.lastCheckTime > 0L) DetailMetaLine("状态", "已同步")
+                        Spacer(Modifier.weight(1f))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            current.rating?.takeIf(String::isNotBlank)?.let { rating ->
+                                Icon(
+                                    Icons.Default.Star,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(rating, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                            } ?: Text(
+                                text = if (current.totalChapters > 0) "${current.totalChapters} 章" else current.format.name,
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                             )
-                            Spacer(Modifier.width(6.dp))
-                            Text("下载中 $done/${prog.total}")
-                        } else {
-                            Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("离线缓存全本")
+                            OutlinedButton(
+                                onClick = viewModel::addToShelf,
+                                enabled = !current.inBookshelf,
+                                modifier = Modifier.height(30.dp),
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(
+                                    0.75.dp,
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.36f),
+                                ),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.primary,
+                                ),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            ) {
+                                Icon(
+                                    if (current.inBookshelf) Icons.Default.Check else Icons.Default.FavoriteBorder,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(13.dp),
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    if (current.inBookshelf) "已收藏" else "收藏",
+                                    fontSize = 10.sp,
+                                )
+                            }
                         }
                     }
                 }
 
-                b.description?.let { desc ->
-                    Spacer(Modifier.height(24.dp))
-                    Text(
-                        "简介",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        desc,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                    )
+                Spacer(Modifier.height(18.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = detailSurfaceColor,
+                    shadowElevation = detailCardElevation,
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                    ) {
+                        StatItem("章节", if (isPreparingRead) "…" else "${current.totalChapters}")
+                        VerticalDivider(
+                            modifier = Modifier.height(42.dp),
+                            thickness = 0.5.dp,
+                            color = detailDividerColor,
+                        )
+                        StatItem("阅读进度", "${(current.readProgress * 100).toInt()}%")
+                        VerticalDivider(
+                            modifier = Modifier.height(42.dp),
+                            thickness = 0.5.dp,
+                            color = detailDividerColor,
+                        )
+                        StatItem("阅读格式", current.format.name)
+                    }
                 }
 
-                Spacer(Modifier.height(32.dp))
+                Spacer(Modifier.height(10.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = detailSurfaceColor,
+                    shadowElevation = detailCardElevation,
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("简介", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                            current.description?.takeIf { it.length > 100 }?.let {
+                                TextButton(onClick = { introExpanded = !introExpanded }) {
+                                    Text(
+                                        if (introExpanded) "收起" else "更多",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            current.description.displayDescription(),
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = if (introExpanded) Int.MAX_VALUE else 5,
+                            overflow = TextOverflow.Ellipsis,
+                            lineHeight = 18.sp,
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = detailSurfaceColor,
+                    shadowElevation = detailCardElevation,
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("章节", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .clickable { chapterDescending = !chapterDescending }
+                                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    if (chapterDescending) "倒序" else "正序",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Icon(
+                                    Icons.Default.Sort,
+                                    contentDescription = "切换章节排序",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        when {
+                            isPreparingRead -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text("正在获取书籍详情与目录", style = MaterialTheme.typography.bodySmall)
+                            }
+                            chapters.isEmpty() -> Column(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text("暂无章节", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    readPreparationError ?: "章节会在作品更新后显示",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (readPreparationError == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                                )
+                            }
+                            else -> (if (chapterDescending) chapters.asReversed() else chapters)
+                                .take(4)
+                                .forEachIndexed { index, chapter ->
+                                if (index > 0) {
+                                    HorizontalDivider(
+                                        thickness = 0.5.dp,
+                                        color = detailDividerColor,
+                                    )
+                                }
+                                Text(
+                                    chapter.title,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
@@ -567,6 +770,32 @@ fun BookDetailScreen(
                 },
             )
         }
+    }
+}
+
+private fun String?.displayDescription(): String = this
+    ?.trim()
+    ?.replace("\\r", "")
+    ?.replace("\\n", "\n")
+    ?.ifBlank { "暂无简介" }
+    ?: "暂无简介"
+
+@Composable
+private fun DetailMetaLine(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "$label：",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

@@ -14,6 +14,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import org.jsoup.Jsoup
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -213,6 +214,18 @@ object BookChapterList {
         }
         coroutineContext.ensureActive()
 
+        if (elements.isEmpty()) {
+            val fallback = parseCommonHtmlChapterList(body, redirectUrl)
+            if (fallback.isNotEmpty()) {
+                AppLog.warn(
+                    TAG,
+                    "${bookSource.bookSourceName}: configured toc rule returned empty; " +
+                        "common HTML fallback parsed ${fallback.size} chapters",
+                )
+                return Pair(fallback, nextUrlList)
+            }
+        }
+
         if (elements.isNotEmpty()) {
             val nameRule = analyzeRule.splitSourceRule(tocRule.chapterName)
             val urlRule = analyzeRule.splitSourceRule(tocRule.chapterUrl)
@@ -259,6 +272,31 @@ object BookChapterList {
         return Pair(chapterList, nextUrlList)
     }
 
+    /**
+     * 部分站点改版只替换目录容器 id，书源规则会暂时落后。这里仅在原规则完全拉空时，
+     * 对少量高置信度的常见目录容器做探测；命中第一个容器后停止，避免把相关推荐混进目录。
+     */
+    internal fun parseCommonHtmlChapterList(body: String, baseUrl: String): List<ChapterResult> {
+        val document = Jsoup.parse(body, baseUrl)
+        for (selector in COMMON_TOC_SELECTORS) {
+            val seenUrls = HashSet<String>()
+            val chapters = document.select(selector).mapNotNull { anchor ->
+                val title = anchor.text().trim()
+                val href = anchor.attr("href").trim()
+                if (title.isEmpty() || href.isEmpty() || href.startsWith("javascript:") || href == "#") {
+                    return@mapNotNull null
+                }
+                val url = anchor.absUrl("href").ifBlank {
+                    AnalyzeRule.getAbsoluteURL(baseUrl, href)
+                }
+                if (url.isBlank() || !seenUrls.add(url)) return@mapNotNull null
+                ChapterResult(title = title, url = url)
+            }
+            if (chapters.isNotEmpty()) return chapters
+        }
+        return emptyList()
+    }
+
     private fun getChapterAbsoluteUrl(
         baseUrl: String,
         url: String,
@@ -275,4 +313,14 @@ object BookChapterList {
             "$absoluteUrlBefore," + url.substring(urlMatcher.end())
         }
     }
+
+    private val COMMON_TOC_SELECTORS = listOf(
+        "#all-chapters-raw li a[href]",
+        "#chapterlist li a[href]",
+        "#chapter-list li a[href]",
+        ".chapter-list li a[href]",
+        ".listmain dd a[href]",
+        ".volume-list li a[href]",
+        ".zhangjie-quanbu li[name=box] a[href]",
+    )
 }

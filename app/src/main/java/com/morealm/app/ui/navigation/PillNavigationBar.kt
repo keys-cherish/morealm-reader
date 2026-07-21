@@ -42,6 +42,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -85,11 +86,17 @@ fun PillNavigationBar(
     val accent = moColors.accent
     val unselected = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
     val pillShape = RoundedCornerShape(100.dp)
+    val pillHeight = 50.dp
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.45f
     // 半透明背景 —— 提到 0.88 alpha：足够"看到内容隐约透过"形成浮起感，但底层
     // 文字不会清晰可读（避免被用户报"看到背景文字"，见 2026-05-10 反馈）。
     // 真正的 backdrop-blur (Compose 没原生 API) 留 TODO；当前用高 alpha + 边缘
     // 高光 + 软阴影三件套近似玻璃感。
-    val navBg = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
+    val navBg = if (isDark) {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
+    } else {
+        Color(0xFFF9FAFC).copy(alpha = 0.96f)
+    }
     // 顶部细高光 —— 模拟玻璃边缘反射，深色模式尤为关键 (没高光的纯黑胶囊很死板)
     val highlightBorder = Color.White.copy(alpha = 0.07f)
     // ── 性能优化：预缓存 brush 颜色列表 ──
@@ -111,13 +118,13 @@ fun PillNavigationBar(
             // 避让系统导航栏（三键 / 手势条）——否则真机(如真我 GT6)导航栏较高时药丸与系统
             // 导航键重叠。各主 tab 的内容底 padding 同步加 navigationBars 高度让位（见各 Screen）。
             .navigationBarsPadding()
-            .padding(start = 24.dp, end = 24.dp, bottom = 16.dp),
+            .padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
         contentAlignment = Alignment.BottomCenter,
     ) {
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(64.dp),
+                .height(pillHeight),
         ) {
             val pillWidth = maxWidth
             val tabWidth = pillWidth / tabs.size.coerceAtLeast(1)
@@ -127,7 +134,7 @@ fun PillNavigationBar(
                 modifier = Modifier
                     .fillMaxSize()
                     // shadow 必须 BEFORE clip+background，否则会被裁出黑色矩形 corner 残影
-                    .shadow(elevation = 18.dp, shape = pillShape, clip = false)
+                    .shadow(elevation = 6.dp, shape = pillShape, clip = false)
                     .background(navBg, pillShape)
                     .border(1.dp, highlightBorder, pillShape),
             )
@@ -152,7 +159,7 @@ fun PillNavigationBar(
             // 见 https://developer.android.com/jetpack/compose/performance#defer-reads
             val dotSize = 4.dp
             val dotContainer = 14.dp
-            val dotContainerYDp = ((64 - dotContainer.value).toInt() - 2).dp  // 贴近胶囊底部 2dp 留白
+            val dotContainerYDp = pillHeight - dotContainer - 1.dp
             val targetDotX = tabWidth * selectedIndex + tabWidth / 2 - dotContainer / 2
             val animatedDotX = animateDpAsState(
                 targetValue = targetDotX,
@@ -232,7 +239,7 @@ fun PillNavigationBar(
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .height(64.dp),
+                            .height(pillHeight),
                     ) {
                         Column(
                             modifier = Modifier
@@ -257,7 +264,7 @@ fun PillNavigationBar(
                             // 颜色列表 [iconGlowColors] 提到 Composable 顶层，跨 tab 共用。
                             val iconModifier = if (selected) {
                                 Modifier
-                                    .size(20.dp)
+                                    .size(18.dp)
                                     .drawWithCache {
                                         val r = size.minDimension * 0.95f
                                         val center = Offset(size.width / 2f, size.height / 2f)
@@ -270,7 +277,7 @@ fun PillNavigationBar(
                                             drawCircle(brush = brush, radius = r, center = center)
                                         }
                                     }
-                            } else Modifier.size(20.dp)
+                            } else Modifier.size(18.dp)
                             Icon(
                                 imageVector = tab.icon,
                                 contentDescription = tab.label,
@@ -280,7 +287,7 @@ fun PillNavigationBar(
                             Text(
                                 text = tab.label,
                                 color = color,
-                                fontSize = 9.sp,
+                                fontSize = 8.sp,
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                                 lineHeight = 12.sp,
                                 modifier = Modifier.padding(top = 1.dp),
@@ -289,7 +296,7 @@ fun PillNavigationBar(
                             // 这里留 6dp Spacer 维持 vertical layout 节奏（让 icon+label 不
                             // 紧贴胶囊底，给共享 dot 留位置）。
                             androidx.compose.foundation.layout.Spacer(
-                                modifier = Modifier.size(6.dp),
+                                modifier = Modifier.size(2.dp),
                             )
                         }
                         // 让调用方在这个 tab 的 Box 里塞 DropdownMenu / Tooltip 等。

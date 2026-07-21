@@ -1,6 +1,7 @@
 package com.morealm.app.ui.home
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -47,12 +48,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,17 +63,27 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.BookOpenText
+import com.composables.icons.lucide.Bookmark
+import com.composables.icons.lucide.Bug
+import com.composables.icons.lucide.CloudDownload
+import com.composables.icons.lucide.Feather
+import com.composables.icons.lucide.Palette
 import com.composables.icons.lucide.Search
 import com.morealm.app.R
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.repository.DailyQuote
 import com.morealm.app.presentation.home.HomeViewModel
+import com.morealm.app.ui.theme.LocalMoRealmColors
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 private const val COLUMNS = 3
+private val HomeCardShape = RoundedCornerShape(8.dp)
+private val HomeLightCardColor = Color(0xFFF9FAFC)
+private val HomeLightCardBorder = Color(0xFFF0F2F5)
 
 /**
  * 首页只保留一行最近阅读，并提供最常用的功能入口。
@@ -98,12 +111,12 @@ fun HomeScreen(
     val dailyQuote by viewModel.dailyQuote.collectAsStateWithLifecycle()
     var showReadingHistory by rememberSaveable { mutableStateOf(false) }
     val quickActions = listOf(
-        HomeQuickAction("阅读设置", onNavigateReadingSettings),
-        HomeQuickAction("我的书签", onNavigateBookmarks),
-        HomeQuickAction("离线缓存", onNavigateCacheBook),
-        HomeQuickAction("正文净化", onNavigateReplaceRules),
-        HomeQuickAction("外观设置", onNavigateAppearance),
-        HomeQuickAction("应用日志", onNavigateAppLog),
+        HomeQuickAction(Lucide.BookOpenText, "阅读设置", Color(0xFF7B6BE8), onNavigateReadingSettings),
+        HomeQuickAction(Lucide.Bookmark, "我的书签", Color(0xFFD16B9A), onNavigateBookmarks),
+        HomeQuickAction(Lucide.CloudDownload, "离线缓存", Color(0xFF5B8FD8), onNavigateCacheBook),
+        HomeQuickAction(Lucide.Feather, "正文净化", Color(0xFF59AA83), onNavigateReplaceRules),
+        HomeQuickAction(Lucide.Palette, "外观设置", Color(0xFFD29A52), onNavigateAppearance),
+        HomeQuickAction(Lucide.Bug, "应用日志", Color(0xFFD16C62), onNavigateAppLog),
     )
 
     // 续读请求消费（原 ShelfScreen 逻辑迁来：书架 tab 非默认组合页后由首页承接）
@@ -147,35 +160,13 @@ fun HomeScreen(
                     isEinkTheme = isEinkTheme,
                 )
             }
-            item(key = "recent_title", span = { GridItemSpan(maxLineSpan) }) {
-                ContinueReadingHeader(
+            item(key = "recent_section", span = { GridItemSpan(maxLineSpan) }) {
+                ContinueReadingSection(
+                    books = recent,
                     onViewAll = { showReadingHistory = true },
+                    onBookClick = onBookClick,
                     modifier = Modifier.padding(top = 4.dp),
                 )
-            }
-            if (recent.isNotEmpty()) {
-                items(
-                    count = recent.size,
-                    key = { i -> "r_${recent[i].id}" },
-                ) { i ->
-                    val book = recent[i]
-                    ContinueReadingBookItem(
-                        book = book,
-                        isLastRead = i == 0,
-                        onClick = { onBookClick(book.id) },
-                    )
-                }
-            } else {
-                item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        text = "还没有阅读记录，去书架挑一本开始吧",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 28.dp),
-                    )
-                }
             }
 
         }
@@ -269,15 +260,21 @@ private fun DailyQuoteCard(
         R.drawable.home_daily_quote_flower
     }
     val contentColor = if (isDark) Color.White else Color(0xFF201D1F)
-    val overlayColor = if (isDark) Color.Black.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.18f)
+    val cardBaseColor = if (isDark) Color(0xFF17171C) else Color(0xFFF1EFF2)
+    val overlayColor = if (isDark) {
+        Color.Black.copy(alpha = 0.16f)
+    } else {
+        Color(0xFFF8F6F5).copy(alpha = 0.14f)
+    }
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .height(136.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shadowElevation = 1.dp,
+        shape = HomeCardShape,
+        color = cardBaseColor,
+        border = if (isDark) null else BorderStroke(0.5.dp, HomeLightCardBorder),
+        shadowElevation = if (isDark) 1.dp else 0.5.dp,
     ) {
         Box(Modifier.fillMaxSize()) {
             Image(
@@ -334,6 +331,79 @@ private fun DailyQuoteCard(
 }
 
 @Composable
+private fun ContinueReadingSection(
+    books: List<Book>,
+    onViewAll: () -> Unit,
+    onBookClick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isNight = LocalMoRealmColors.current.isNight
+    Column(modifier = modifier.fillMaxWidth()) {
+        ContinueReadingHeader(
+            onViewAll = onViewAll,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Spacer(Modifier.height(6.dp))
+        if (books.isEmpty()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = HomeCardShape,
+                color = if (isNight) MaterialTheme.colorScheme.surface else HomeLightCardColor,
+                border = if (isNight) null else BorderStroke(0.5.dp, HomeLightCardBorder),
+                shadowElevation = if (isNight) 1.dp else 0.5.dp,
+            ) {
+                Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Text(
+                        text = "还没有阅读记录，去书架挑一本开始吧",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isNight) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            Color(0xFF88898F)
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 22.dp),
+                    )
+                }
+            }
+        } else {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                // 白色只作为书籍信息的底托，封面上半部分直接融入页面背景。
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(76.dp),
+                    shape = HomeCardShape,
+                    color = if (isNight) MaterialTheme.colorScheme.surface else HomeLightCardColor,
+                    border = if (isNight) null else BorderStroke(0.5.dp, HomeLightCardBorder),
+                    shadowElevation = if (isNight) 1.dp else 0.5.dp,
+                ) {}
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    repeat(COLUMNS) { index ->
+                        val book = books.getOrNull(index)
+                        if (book != null) {
+                            ContinueReadingBookItem(
+                                book = book,
+                                isLastRead = index == 0,
+                                onClick = { onBookClick(book.id) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ContinueReadingHeader(
     onViewAll: () -> Unit,
     modifier: Modifier = Modifier,
@@ -375,10 +445,13 @@ private fun ContinueReadingBookItem(
     book: Book,
     isLastRead: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val progress = book.readProgress.coerceIn(0f, 1f)
+    val isNight = LocalMoRealmColors.current.isNight
+    val coverShape = RoundedCornerShape(6.dp)
     Box(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier,
         contentAlignment = Alignment.TopCenter,
     ) {
         Column(
@@ -390,8 +463,8 @@ private fun ContinueReadingBookItem(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(2f / 2.9f),
-                shape = RoundedCornerShape(6.dp),
-                shadowElevation = 1.dp,
+                shape = coverShape,
+                shadowElevation = if (isNight) 1.dp else 0.5.dp,
                 color = MaterialTheme.colorScheme.surfaceVariant,
             ) {
                 Box(Modifier.fillMaxSize()) {
@@ -621,7 +694,9 @@ internal fun continueReadingChapterLabel(book: Book): String = when {
 }
 
 private data class HomeQuickAction(
+    val icon: ImageVector,
     val label: String,
+    val tint: Color,
     val onClick: () -> Unit,
 )
 
@@ -630,22 +705,30 @@ private fun QuickActionsBar(
     actions: List<HomeQuickAction>,
     isEinkTheme: Boolean,
 ) {
-    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.45f
-    val themeRow = quickActionsThemeRow(isDarkTheme, isEinkTheme)
+    val isNight = LocalMoRealmColors.current.isNight
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(72.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.64f),
-        shadowElevation = 1.dp,
+            .height(68.dp),
+        shape = HomeCardShape,
+        color = if (isNight) MaterialTheme.colorScheme.surface else HomeLightCardColor,
+        border = BorderStroke(
+            0.5.dp,
+            if (isNight) {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.32f)
+            } else {
+                HomeLightCardBorder
+            },
+        ),
+        shadowElevation = if (isNight) 1.dp else 0.5.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .clip(RoundedCornerShape(8.dp)),
+                .clip(RoundedCornerShape(8.dp))
+                .padding(horizontal = 6.dp),
         ) {
-            actions.forEachIndexed { index, action ->
+            actions.forEach { action ->
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -654,25 +737,30 @@ private fun QuickActionsBar(
                             role = Role.Button,
                             onClick = action.onClick,
                         )
-                        .padding(horizontal = 1.dp, vertical = 7.dp)
+                        .padding(horizontal = 1.dp, vertical = 6.dp)
                         .semantics { contentDescription = action.label },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Image(
-                        painter = painterResource(quickActionResource(themeRow, index)),
+                    Icon(
+                        imageVector = action.icon,
                         contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.size(30.dp),
+                        tint = if (isEinkTheme) {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.76f)
+                        } else {
+                            action.tint
+                        },
+                        modifier = Modifier.size(25.dp),
                     )
-                    Spacer(Modifier.height(5.dp))
+                    Spacer(Modifier.height(7.dp))
                     Text(
                         text = action.label,
                         color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 11.sp,
-                        lineHeight = 13.sp,
+                        fontSize = 10.sp,
+                        lineHeight = 12.sp,
                         letterSpacing = 0.sp,
                         maxLines = 1,
+                        textAlign = TextAlign.Center,
                         overflow = TextOverflow.Clip,
                     )
                 }
@@ -681,37 +769,7 @@ private fun QuickActionsBar(
     }
 }
 
-private fun quickActionResource(themeRow: Int, index: Int): Int {
-    val resources = when (themeRow) {
-        2 -> intArrayOf(
-            R.drawable.home_quick_eink_reading_settings,
-            R.drawable.home_quick_eink_bookmarks,
-            R.drawable.home_quick_eink_offline_cache,
-            R.drawable.home_quick_eink_text_clean,
-            R.drawable.home_quick_eink_appearance,
-            R.drawable.home_quick_eink_app_log,
-        )
-        1 -> intArrayOf(
-            R.drawable.home_quick_dark_reading_settings,
-            R.drawable.home_quick_dark_bookmarks,
-            R.drawable.home_quick_dark_offline_cache,
-            R.drawable.home_quick_dark_text_clean,
-            R.drawable.home_quick_dark_appearance,
-            R.drawable.home_quick_dark_app_log,
-        )
-        else -> intArrayOf(
-            R.drawable.home_quick_light_reading_settings,
-            R.drawable.home_quick_light_bookmarks,
-            R.drawable.home_quick_light_offline_cache,
-            R.drawable.home_quick_light_text_clean,
-            R.drawable.home_quick_light_appearance,
-            R.drawable.home_quick_light_app_log,
-        )
-    }
-    return resources[index.coerceIn(0, resources.lastIndex)]
-}
-
-/** 精灵图2拆为透明图标；浅色降低饱和度，深色进一步柔化，墨水屏统一灰色。 */
+/** 仅保留主题优先级契约，位图精灵资源已停止参与首页渲染。 */
 internal fun quickActionsThemeRow(
     isDarkTheme: Boolean,
     isEinkTheme: Boolean,

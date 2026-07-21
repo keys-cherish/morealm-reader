@@ -72,6 +72,7 @@ import com.morealm.app.domain.entity.ReaderStyle
 import com.morealm.app.domain.entity.displayTitle
 import com.morealm.app.domain.entity.isAutoSplitChapter
 import com.morealm.app.presentation.reader.ReaderSearchController
+import com.morealm.app.presentation.reader.TxtReplaceState
 import com.morealm.app.presentation.reader.ReaderToolBarViewModel
 import com.morealm.app.presentation.source.SourceLoginViewModel
 import com.morealm.app.ui.source.SourceLoginOverlay
@@ -1561,9 +1562,23 @@ fun ReaderScreen(
             visible = showFullSearch,
             searchResults = viewModel.searchResults.collectAsStateWithLifecycle().value,
             isSearching = viewModel.searching.collectAsStateWithLifecycle().value,
+            searchError = viewModel.searchError.collectAsStateWithLifecycle().value,
+            txtReplaceState = viewModel.txtReplaceState.collectAsStateWithLifecycle().value,
+            isTxtBook = book?.format == com.morealm.app.domain.entity.BookFormat.TXT &&
+                !book?.localPath.isNullOrBlank(),
             moColors = moColors,
-            onSearch = { query -> viewModel.searchFullText(query) },
-            onSearchInChapter = { query -> viewModel.searchInChapter(query) },
+            onSearch = { query, regex, caseSensitive ->
+                viewModel.searchFullText(query, regex, caseSensitive)
+            },
+            onSearchInChapter = { query, regex, caseSensitive ->
+                viewModel.searchInChapter(query, regex, caseSensitive)
+            },
+            onReplaceMatch = { result, replacement, regex, caseSensitive ->
+                viewModel.replaceTxtMatch(result, replacement, regex, caseSensitive)
+            },
+            onReplaceAll = { query, replacement, inChapter, regex, caseSensitive ->
+                viewModel.replaceTxtAll(query, replacement, inChapter, regex, caseSensitive)
+            },
             onResultClick = { result ->
                 showFullSearch = false
                 viewModel.clearSearchResults()
@@ -2016,9 +2031,14 @@ private fun FullTextSearchPanel(
     visible: Boolean,
     searchResults: List<ReaderSearchController.SearchResult>,
     isSearching: Boolean,
+    searchError: String?,
+    txtReplaceState: TxtReplaceState,
+    isTxtBook: Boolean,
     moColors: MoRealmColors,
-    onSearch: (String) -> Unit,
-    onSearchInChapter: (String) -> Unit,
+    onSearch: (String, Boolean, Boolean) -> Unit,
+    onSearchInChapter: (String, Boolean, Boolean) -> Unit,
+    onReplaceMatch: (ReaderSearchController.SearchResult, String, Boolean, Boolean) -> Unit,
+    onReplaceAll: (String, String, Boolean, Boolean, Boolean) -> Unit,
     onResultClick: (ReaderSearchController.SearchResult) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
@@ -2030,51 +2050,84 @@ private fun FullTextSearchPanel(
         modifier = modifier,
     ) {
         var searchQuery by remember { mutableStateOf("") }
-        // false=全书 true=仅当前章。共用 _searchResults，UI 区分由本地 state 决定。
+        var replacement by remember { mutableStateOf("") }
         var inChapterMode by remember { mutableStateOf(false) }
-        Surface(
-            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f),
-            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f),
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            tonalElevation = 12.dp,
-        ) {
-            Column(modifier = Modifier.navigationBarsPadding().padding(top = 16.dp)) {
-                Box(
-                    Modifier.width(40.dp).height(4.dp)
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f), MaterialTheme.shapes.extraSmall)
-                        .align(Alignment.CenterHorizontally)
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(if (inChapterMode) "章内搜索" else "全文搜索", style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 16.dp))
-                Spacer(Modifier.height(8.dp))
-                // 范围切换：FilterChip 取代 SegmentedButton（依赖更轻、风格统一）。
-                // 切换时立即清空旧结果，避免显示上一个范围的命中（视觉混乱）。
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilterChip(
-                        selected = !inChapterMode,
-                        onClick = { if (inChapterMode) { inChapterMode = false; searchQuery = "" } },
-                        label = { Text("全书", style = MaterialTheme.typography.labelSmall) },
-                    )
-                    FilterChip(
-                        selected = inChapterMode,
-                        onClick = { if (!inChapterMode) { inChapterMode = true; searchQuery = "" } },
-                        label = { Text("当前章", style = MaterialTheme.typography.labelSmall) },
-                    )
+        var isRegex by remember { mutableStateOf(false) }
+        var isCaseSensitive by remember { mutableStateOf(false) }
+        var confirmFullReplace by remember { mutableStateOf(false) }
+        val triggerSearch: () -> Unit = {
+            if (searchQuery.isNotBlank()) {
+                if (inChapterMode) {
+                    onSearchInChapter(searchQuery, isRegex, isCaseSensitive)
+                } else {
+                    onSearch(searchQuery, isRegex, isCaseSensitive)
                 }
-                Spacer(Modifier.height(8.dp))
-                // 当前模式下的搜索动作 —— 支持回车（IME Search）和点击放大镜两条路径，
-                // 用户敲完关键词直接 Enter 即可，不必再点按钮。
-                val triggerSearch: () -> Unit = {
-                    if (searchQuery.isNotBlank()) {
-                        if (inChapterMode) onSearchInChapter(searchQuery) else onSearch(searchQuery)
+            }
+        }
+        LaunchedEffect(txtReplaceState.running, txtReplaceState.replacedCount) {
+            if (!txtReplaceState.running && txtReplaceState.replacedCount > 0) triggerSearch()
+        }
+
+        Box {
+            Surface(
+                modifier = Modifier.fillMaxWidth().fillMaxHeight(if (isTxtBook) 0.76f else 0.6f),
+                color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f),
+                shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                tonalElevation = 12.dp,
+            ) {
+                Column(modifier = Modifier.navigationBarsPadding().padding(top = 14.dp)) {
+                    Box(
+                        Modifier.width(40.dp).height(4.dp)
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f), MaterialTheme.shapes.extraSmall)
+                            .align(Alignment.CenterHorizontally)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (isTxtBook) "TXT 查找与替换" else if (inChapterMode) "章内搜索" else "全文搜索",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.Close, "关闭", modifier = Modifier.size(18.dp))
+                        }
                     }
-                }
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        FilterChip(
+                            selected = !inChapterMode,
+                            onClick = { if (inChapterMode) { inChapterMode = false; searchQuery = "" } },
+                            label = { Text("全书", fontSize = 10.sp) },
+                            modifier = Modifier.height(32.dp),
+                        )
+                        FilterChip(
+                            selected = inChapterMode,
+                            onClick = { if (!inChapterMode) { inChapterMode = true; searchQuery = "" } },
+                            label = { Text("当前章", fontSize = 10.sp) },
+                            modifier = Modifier.height(32.dp),
+                        )
+                        FilterChip(
+                            selected = isRegex,
+                            onClick = { isRegex = !isRegex },
+                            label = { Text("正则", fontSize = 10.sp) },
+                            modifier = Modifier.height(32.dp),
+                        )
+                        FilterChip(
+                            selected = isCaseSensitive,
+                            onClick = { isCaseSensitive = !isCaseSensitive },
+                            label = { Text("Aa", fontSize = 10.sp) },
+                            modifier = Modifier.height(32.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
@@ -2098,33 +2151,110 @@ private fun FullTextSearchPanel(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary),
                 )
-                Spacer(Modifier.height(4.dp))
-                if (searchResults.isEmpty() && !isSearching && searchQuery.isNotEmpty()) {
-                    Text("未找到结果", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                        modifier = Modifier.padding(16.dp))
-                }
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                ) {
-                    items(searchResults, key = { "sr_${it.chapterIndex}_${it.queryIndexInChapter}_${it.snippet.hashCode()}" }) { result ->
+                    if (isTxtBook) {
+                        Spacer(Modifier.height(6.dp))
+                        OutlinedTextField(
+                            value = replacement,
+                            onValueChange = { replacement = it },
+                            placeholder = { Text("替换为（留空表示删除）", style = MaterialTheme.typography.bodySmall) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(48.dp),
+                            textStyle = MaterialTheme.typography.bodySmall,
+                        )
                         Row(
-                            modifier = Modifier.fillMaxWidth()
-                                .clickable { onResultClick(result) }
-                                .padding(horizontal = 4.dp, vertical = 8.dp),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column {
-                                Text(result.chapterTitle, style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(result.snippet, style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            val statusText = txtReplaceState.error ?: txtReplaceState.message
+                            Text(
+                                text = statusText ?: "找到 ${searchResults.size} 处",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (txtReplaceState.error != null) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Button(
+                                onClick = {
+                                    if (inChapterMode) {
+                                        onReplaceAll(searchQuery, replacement, true, isRegex, isCaseSensitive)
+                                    } else {
+                                        confirmFullReplace = true
+                                    }
+                                },
+                                enabled = searchQuery.isNotEmpty() && !txtReplaceState.running,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            ) {
+                                if (txtReplaceState.running) {
+                                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Text(if (inChapterMode) "替换本章" else "替换全书", fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    val feedback = searchError ?: if (
+                        searchResults.isEmpty() && !isSearching && searchQuery.isNotEmpty()
+                    ) "未找到结果" else null
+                    if (feedback != null) {
+                        Text(
+                            feedback,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (searchError != null) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        items(searchResults, key = { "sr_${it.chapterIndex}_${it.queryIndexInChapter}_${it.snippet.hashCode()}" }) { result ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f).clickable { onResultClick(result) }
+                                        .padding(vertical = 3.dp),
+                                ) {
+                                    Text(result.chapterTitle, style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(result.snippet, style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                                if (isTxtBook) {
+                                    TextButton(
+                                        onClick = { onReplaceMatch(result, replacement, isRegex, isCaseSensitive) },
+                                        enabled = !txtReplaceState.running,
+                                    ) { Text("替换", fontSize = 12.sp) }
+                                }
                             }
                         }
                     }
                 }
+            }
+            if (confirmFullReplace) {
+                AlertDialog(
+                    onDismissRequest = { confirmFullReplace = false },
+                    title = { Text("替换整本 TXT？") },
+                    text = {
+                        Text("这会直接修改原始 TXT 文件，随后重新解析章节。全文替换完成后不能撤销。")
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            confirmFullReplace = false
+                            onReplaceAll(searchQuery, replacement, false, isRegex, isCaseSensitive)
+                        }) { Text("继续替换", color = MaterialTheme.colorScheme.error) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmFullReplace = false }) { Text("取消") }
+                    },
+                )
             }
         }
     }

@@ -6,9 +6,12 @@ import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
 import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.domain.entity.BuiltinThemes
 
@@ -163,6 +166,7 @@ data class MoRealmColors(
     val readerBackground: Color,
     val readerText: Color,
     val isNight: Boolean,
+    val isEink: Boolean = false,
     val transparentBars: Boolean = false,
     val backgroundImageUri: String? = null,
 )
@@ -173,6 +177,26 @@ val LocalMoRealmColors = staticCompositionLocalOf {
         readerBackground = Color(0xFF0A0A0F),
         readerText = Color(0xFFEDEDEF),
         isNight = true,
+    )
+}
+
+private val MoRealmTypography = Typography().let { base ->
+    Typography(
+        displayLarge = base.displayLarge.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        displayMedium = base.displayMedium.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        displaySmall = base.displaySmall.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        headlineLarge = base.headlineLarge.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        headlineMedium = base.headlineMedium.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        headlineSmall = base.headlineSmall.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        titleLarge = base.titleLarge.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        titleMedium = base.titleMedium.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        titleSmall = base.titleSmall.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        bodyLarge = base.bodyLarge.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        bodyMedium = base.bodyMedium.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        bodySmall = base.bodySmall.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        labelLarge = base.labelLarge.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        labelMedium = base.labelMedium.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
+        labelSmall = base.labelSmall.copy(fontFamily = FontFamily.Serif, letterSpacing = 0.sp),
     )
 }
 
@@ -263,12 +287,13 @@ fun MoRealmTheme(
         surfaceTint = primary,
     )
 
-    val moRealmColors = remember(accent, readerBg, readerText, t.isNightTheme, t.transparentBars, t.backgroundImageUri) {
+    val moRealmColors = remember(accent, readerBg, readerText, t.id, t.isNightTheme, t.transparentBars, t.backgroundImageUri) {
         MoRealmColors(
             accent = accent,
             readerBackground = readerBg,
             readerText = readerText,
             isNight = t.isNightTheme,
+            isEink = t.id == BuiltinThemes.eink.id,
             transparentBars = t.transparentBars,
             backgroundImageUri = t.backgroundImageUri,
         )
@@ -277,6 +302,7 @@ fun MoRealmTheme(
     CompositionLocalProvider(LocalMoRealmColors provides moRealmColors) {
         MaterialTheme(
             colorScheme = colorScheme,
+            typography = MoRealmTypography,
             content = content,
         )
     }

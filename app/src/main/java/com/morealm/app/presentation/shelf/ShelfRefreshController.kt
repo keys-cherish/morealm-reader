@@ -6,6 +6,7 @@ import com.morealm.app.domain.db.ChapterDao
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.BookFormat
+import com.morealm.app.domain.entity.SearchBook
 import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.domain.webbook.WebBook
 import kotlinx.coroutines.CoroutineScope
@@ -124,72 +125,102 @@ class ShelfRefreshController @Inject constructor(
      */
     private suspend fun refreshOne(book: Book) = withContext(Dispatchers.IO) {
         try {
-            val source = book.sourceUrl?.let { sourceRepo.getByUrl(it) }
-                ?: sourceRepo.getByUrl(book.origin)
-                ?: run {
-                    AppLog.warn(TAG, "no source for ${book.title} (${book.origin})")
-                    bumpProgress()
-                    return@withContext
-                }
-            val toc: List<BookChapter> = WebBook.getChapterListAwait(
-                bookSource = source,
-                bookUrl = book.bookUrl,
-                tocUrl = book.tocUrl?.takeIf { it.isNotBlank() } ?: book.bookUrl,
-            ).mapIndexed { i, ch ->
-                BookChapter(
-                    id = "${book.id}_$i",
-                    bookId = book.id,
-                    index = i,
-                    title = ch.title,
-                    url = ch.url,
-                    isVolume = ch.isVolume,
-                )
-            }
-
-            // Replace chapter list. We replace rather than diff because chapter URLs
-            // can change on some sources between refreshes (cache-buster query params).
-            // The user's read-progress key is `lastReadChapter` (index, not URL), so
-            // a full replace doesn't lose their place.
-            chapterDao.deleteByBookId(book.id)
-            if (toc.isNotEmpty()) {
-                chapterDao.insertAll(toc)
-            }
-
-            // Diff against stored count to compute lastCheckCount. The previous value
-            // is read from DB, not from the [book] arg, because another writer may
-            // have touched the row between when we built the list and now.
-            val current = bookDao.getById(book.id)
-            val oldTotal = current?.totalChapters ?: book.totalChapters
-            val newTotal = toc.size
-            // First-fetch guard: when oldTotal == 0 we're populating TOC for a
-            // book that was just added to the shelf (search → addToShelfAndRead
-            // does not fetch the toc inline). Treat the entire initial chapter
-            // list as "already known" — otherwise every new book would surface
-            // a misleading "N 新" badge equal to its full chapter count.
-            val isInitialFetch = oldTotal == 0
-            val newCount = if (isInitialFetch) 0
-                           else (newTotal - oldTotal).coerceAtLeast(0)
-            bookDao.updateLastCheck(
-                id = book.id,
-                total = newTotal,
-                newCount = if (newCount > 0) newCount else (current?.lastCheckCount ?: 0),
-                time = System.currentTimeMillis(),
-            )
-            AppLog.debug(
-                TAG,
-                "refreshed ${book.title}: $oldTotal → $newTotal " +
-                    when {
-                        isInitialFetch -> "(initial fetch)"
-                        newCount > 0 -> "(+$newCount new)"
-                        else -> ""
-                    }
-            )
+            refreshBook(book)
         } catch (e: Exception) {
             _errorCount.value += 1
             AppLog.warn(TAG, "refresh failed for ${book.title}: ${e.message?.take(160)}")
         } finally {
             bumpProgress()
         }
+    }
+
+    /** 详情页首次预览使用的同步入口；返回成功时章节和详情元数据都已经落库。 */
+    suspend fun refreshNow(book: Book): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching { refreshBook(book) }.onFailure { error ->
+            AppLog.warn(TAG, "prepare ${book.title} failed: ${error.message?.take(160)}")
+        }
+    }
+
+    private suspend fun refreshBook(initialBook: Book): Int {
+        val source = initialBook.sourceUrl?.let { sourceRepo.getByUrl(it) }
+            ?: sourceRepo.getByUrl(initialBook.origin)
+            ?: error("书源已被移除或停用")
+        var book = bookDao.getById(initialBook.id) ?: initialBook
+        var tocUrl = book.tocUrl?.takeIf { it.isNotBlank() } ?: book.bookUrl
+
+        // 发现结果通常只有列表字段。先解析详情，目录依赖 tocUrl 时才有真实入口。
+        if (tocUrl == book.bookUrl && !book.hasDetail) {
+            val detailed = WebBook.getBookInfoAwait(
+                source,
+                SearchBook(
+                    bookUrl = book.bookUrl,
+                    origin = book.origin,
+                    originName = book.originName,
+                    name = book.title,
+                    author = book.author,
+                    coverUrl = book.coverUrl,
+                    intro = book.description,
+                    wordCount = book.wordCount,
+                    tocUrl = book.tocUrl.orEmpty(),
+                    variable = book.variable,
+                ),
+            )
+            book = book.copy(
+                title = detailed.name.ifBlank { book.title },
+                author = detailed.author.ifBlank { book.author },
+                coverUrl = detailed.coverUrl?.takeIf { it.isNotBlank() } ?: book.coverUrl,
+                description = detailed.intro?.takeIf { it.isNotBlank() } ?: book.description,
+                wordCount = detailed.wordCount?.takeIf { it.isNotBlank() } ?: book.wordCount,
+                kind = detailed.kind?.takeIf { it.isNotBlank() } ?: book.kind,
+                tocUrl = detailed.tocUrl.takeIf { it.isNotBlank() },
+                variable = detailed.variable ?: book.variable,
+                hasDetail = true,
+            )
+            bookDao.update(book)
+            tocUrl = book.tocUrl?.takeIf { it.isNotBlank() } ?: book.bookUrl
+        }
+
+        val toc = WebBook.getChapterListAwait(
+            bookSource = source,
+            bookUrl = book.bookUrl,
+            tocUrl = tocUrl,
+        ).mapIndexed { index, chapter ->
+            BookChapter(
+                id = "${book.id}_$index",
+                bookId = book.id,
+                index = index,
+                title = chapter.title,
+                url = chapter.url,
+                isVolume = chapter.isVolume,
+            )
+        }
+        if (toc.isEmpty()) error("书源没有解析到章节目录")
+
+        // 只有完整拉到新目录后才替换，网络错误或规则失效时不能清空旧章节。
+        chapterDao.deleteByBookId(book.id)
+        chapterDao.insertAll(toc)
+
+        val current = bookDao.getById(book.id) ?: book
+        val oldTotal = current.totalChapters
+        val newTotal = toc.size
+        val isInitialFetch = oldTotal == 0
+        val newCount = if (isInitialFetch) 0 else (newTotal - oldTotal).coerceAtLeast(0)
+        bookDao.updateLastCheck(
+            id = book.id,
+            total = newTotal,
+            newCount = if (newCount > 0) newCount else current.lastCheckCount,
+            time = System.currentTimeMillis(),
+        )
+        AppLog.debug(
+            TAG,
+            "refreshed ${book.title}: $oldTotal → $newTotal " +
+                when {
+                    isInitialFetch -> "(initial fetch)"
+                    newCount > 0 -> "(+$newCount new)"
+                    else -> ""
+                },
+        )
+        return newTotal
     }
 
     private fun bumpProgress() {

@@ -24,7 +24,6 @@ class AnalyzeByJSonPath(json: Any) {
                     is ReadContext -> json
                     is String -> JsonPath.parse(json)
                     is Map<*, *> -> JsonPath.parse(json)
-                    is List<*> -> JsonPath.parse(json)
                     // Jsoup Element/Elements are HTML — never valid JSON.
                     // When a source mixes @json: rules with HTML content (晋江文学's search
                     // returns HTML but the source has $.novelName style child rules),
@@ -34,12 +33,15 @@ class AnalyzeByJSonPath(json: Any) {
                     // missing fields degrade gracefully to empty values.
                     is org.jsoup.nodes.Element,
                     is org.jsoup.select.Elements -> {
-                        AppLog.warn(
+                        AppLog.debug(
                             TAG,
                             "JSONPath rule received jsoup ${json.javaClass.simpleName}; fallback to empty doc"
                         )
                         JsonPath.parse("{}")
                     }
+                    // Elements 继承 ArrayList，必须先走上面的 DOM 分支，否则会被误当成
+                    // JSON 数组，`css||$.field` 的备用规则就会产生大量类型不匹配日志。
+                    is List<*> -> JsonPath.parse(json)
                     // Last-resort string conversion for primitives etc.
                     else -> JsonPath.parse(json.toString())
                 }

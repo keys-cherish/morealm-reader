@@ -3,6 +3,7 @@ package com.morealm.app.presentation.reader
 import android.net.Uri
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
+import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.parser.LocalBookParser
 import com.morealm.app.core.text.stripHtml
 import com.morealm.app.core.log.AppLog
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.regex.Pattern
 
 /**
  * Manages full-text search across all chapters.
@@ -30,6 +32,7 @@ class ReaderSearchController(
         val query: String = "",
         val queryIndexInChapter: Int = -1,
         val queryLength: Int = 0,
+        val matchOrdinalInChapter: Int = 0,
     )
 
     data class SearchSelection(
@@ -48,6 +51,9 @@ class ReaderSearchController(
     private val _searching = MutableStateFlow(false)
     val searching: StateFlow<Boolean> = _searching.asStateFlow()
 
+    private val _searchError = MutableStateFlow<String?>(null)
+    val searchError: StateFlow<String?> = _searchError.asStateFlow()
+
     // ── Search Functions ──
 
     /**
@@ -65,8 +71,17 @@ class ReaderSearchController(
         mode: String = "all",
         currentChapterIndex: Int = -1,
         currentChapterPosition: Int = 0,
+        isRegex: Boolean = false,
+        isCaseSensitive: Boolean = false,
     ) {
         if (query.isBlank()) { _searchResults.value = emptyList(); return }
+        val pattern = runCatching { compilePattern(query, isRegex, isCaseSensitive) }
+            .getOrElse {
+                _searchError.value = "正则表达式无效：${it.message?.take(100)}"
+                _searchResults.value = emptyList()
+                return
+            }
+        _searchError.value = null
         _searching.value = true
         scope.launch(Dispatchers.IO) {
             try {
@@ -74,33 +89,45 @@ class ReaderSearchController(
                 val isWebBook = chapter.isWebBook(book)
                 val chapterList = chapter.chapters.value
                 val results = mutableListOf<SearchResult>()
-                val lowerQuery = query.lowercase()
-
                 for (ch in chapterList) {
                     val content = if (isWebBook) {
                         chapter.loadWebChapterContent(book, ch, ch.index)
                     } else {
                         val localPath = book.localPath ?: break
-                        LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, ch)
+                        if (book.format == BookFormat.TXT) {
+                            // TXT 编辑必须以原始章节文本计匹配序号；readChapter 会压缩空行，
+                            // 对跨行正则会让“第 N 个匹配”与原文件错位。
+                            LocalBookParser.readTxtChapter(context, Uri.parse(localPath), ch)
+                        } else {
+                            LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, ch)
+                        }
                     }
-                    val plainText = content.stripHtml()
-                    val idx = plainText.lowercase().indexOf(lowerQuery)
-                    if (idx >= 0 && passDirectionFilter(mode, ch.index, idx, currentChapterIndex, currentChapterPosition)) {
-                        val start = (idx - 20).coerceAtLeast(0)
-                        val end = (idx + query.length + 30).coerceAtMost(plainText.length)
-                        val snippet = (if (start > 0) "..." else "") +
-                            plainText.substring(start, end).trim() +
-                            (if (end < plainText.length) "..." else "")
-                        results.add(
-                            SearchResult(
-                                chapterIndex = ch.index,
-                                chapterTitle = ch.title,
-                                snippet = snippet,
-                                query = query,
-                                queryIndexInChapter = idx,
-                                queryLength = query.length,
-                            ),
-                        )
+                    val plainText = if (book.format == BookFormat.TXT) content else content.stripHtml()
+                    val matcher = pattern.matcher(plainText)
+                    var ordinal = 0
+                    while (matcher.find()) {
+                        val idx = matcher.start()
+                        val length = matcher.end() - matcher.start()
+                        if (passDirectionFilter(mode, ch.index, idx, currentChapterIndex, currentChapterPosition)) {
+                            val start = (idx - 20).coerceAtLeast(0)
+                            val end = (matcher.end() + 30).coerceAtMost(plainText.length)
+                            val snippet = (if (start > 0) "..." else "") +
+                                plainText.substring(start, end).replace('\n', ' ').trim() +
+                                (if (end < plainText.length) "..." else "")
+                            results.add(
+                                SearchResult(
+                                    chapterIndex = ch.index,
+                                    chapterTitle = ch.title,
+                                    snippet = snippet,
+                                    query = query,
+                                    queryIndexInChapter = idx,
+                                    queryLength = length,
+                                    matchOrdinalInChapter = ordinal,
+                                ),
+                            )
+                        }
+                        ordinal++
+                        if (results.size >= 50) break
                     }
                     if (results.size >= 50) break
                 }
@@ -134,7 +161,10 @@ class ReaderSearchController(
         }
     }
 
-    fun clearSearchResults() { _searchResults.value = emptyList() }
+    fun clearSearchResults() {
+        _searchResults.value = emptyList()
+        _searchError.value = null
+    }
 
     /**
      * 仅搜索当前已加载章节，返回章节内**所有**命中位置（不止首个）。
@@ -157,18 +187,27 @@ class ReaderSearchController(
         chapterTitle: String,
         mode: String = "all",
         currentChapterPosition: Int = 0,
+        isRegex: Boolean = false,
+        isCaseSensitive: Boolean = false,
     ) {
         if (query.isBlank()) { _searchResults.value = emptyList(); return }
-        val lowerQuery = query.lowercase()
-        val lowerText = plainText.lowercase()
+        val pattern = runCatching { compilePattern(query, isRegex, isCaseSensitive) }
+            .getOrElse {
+                _searchError.value = "正则表达式无效：${it.message?.take(100)}"
+                _searchResults.value = emptyList()
+                return
+            }
+        _searchError.value = null
         val results = mutableListOf<SearchResult>()
-        var idx = lowerText.indexOf(lowerQuery)
+        val matcher = pattern.matcher(plainText)
         var matchNo = 1
-        while (idx >= 0) {
+        var ordinal = 0
+        while (matcher.find()) {
+            val idx = matcher.start()
             // 章内场景固定 chapterIndex；passDirectionFilter 只比 hitQueryIndex 与 curPos。
             if (passDirectionFilter(mode, chapterIndex, idx, chapterIndex, currentChapterPosition)) {
                 val start = (idx - 16).coerceAtLeast(0)
-                val end = (idx + query.length + 24).coerceAtMost(plainText.length)
+                val end = (matcher.end() + 24).coerceAtMost(plainText.length)
                 val snippet = (if (start > 0) "..." else "") +
                     plainText.substring(start, end).replace('\n', ' ').trim() +
                     (if (end < plainText.length) "..." else "")
@@ -179,14 +218,22 @@ class ReaderSearchController(
                         snippet = snippet,
                         query = query,
                         queryIndexInChapter = idx,
-                        queryLength = query.length,
+                        queryLength = matcher.end() - matcher.start(),
+                        matchOrdinalInChapter = ordinal,
                     ),
                 )
                 matchNo++
             }
-            idx = lowerText.indexOf(lowerQuery, idx + query.length)
+            ordinal++
         }
         _searchResults.value = results
+    }
+
+    private fun compilePattern(query: String, isRegex: Boolean, isCaseSensitive: Boolean): Pattern {
+        val source = if (isRegex) query else Pattern.quote(query)
+        var flags = Pattern.MULTILINE
+        if (!isCaseSensitive) flags = flags or Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
+        return Pattern.compile(source, flags)
     }
 
     fun openSearchResult(result: SearchResult) {

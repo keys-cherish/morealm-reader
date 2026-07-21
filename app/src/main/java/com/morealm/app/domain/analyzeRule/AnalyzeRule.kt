@@ -13,7 +13,9 @@ import kotlinx.serialization.json.JsonArray
 import org.apache.commons.text.StringEscapeUtils
 import org.jsoup.nodes.Node
 import org.mozilla.javascript.NativeObject
+import org.mozilla.javascript.NativeArray
 import org.mozilla.javascript.Scriptable
+import org.mozilla.javascript.Undefined
 import java.lang.ref.WeakReference
 import java.net.URL
 import java.util.Locale
@@ -507,13 +509,29 @@ class AnalyzeRule(
             }
         }
         result?.let {
-            return when (it) {
-                is List<*> -> it.filterNotNull()
-                is org.jsoup.select.Elements -> it.toList()
-                else -> listOf(it)
-            }
+            return normalizeElementList(it)
         }
         return ArrayList()
+    }
+
+    /**
+     * Rhino 的 NativeArray 不实现 Kotlin List。若把它作为一个元素继续传递，子规则
+     * `$.name` 会收到整组 ArrayList 而非单本对象，正是发现页日志中数组根节点告警的来源。
+     */
+    private fun normalizeElementList(value: Any): List<Any> = when (value) {
+        is NativeArray -> buildList {
+            val length = value.length.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            for (index in 0 until length) {
+                val item = value.get(index, value)
+                if (item !== Scriptable.NOT_FOUND && item !is Undefined && item != null) {
+                    addAll(normalizeElementList(item))
+                }
+            }
+        }
+        is List<*> -> value.filterNotNull().flatMap(::normalizeElementList)
+        is Array<*> -> value.filterNotNull().flatMap(::normalizeElementList)
+        is org.jsoup.select.Elements -> value.toList()
+        else -> listOf(value)
     }
 
     // ── 变量存取 ──

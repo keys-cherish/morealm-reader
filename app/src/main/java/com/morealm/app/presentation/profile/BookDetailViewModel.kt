@@ -25,10 +25,12 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -45,13 +47,29 @@ class BookDetailViewModel @Inject constructor(
     private val chapterDao: ChapterDao,
     private val autoGroupClassifier: AutoGroupClassifier,
     private val prefs: AppPreferences,
+    private val refreshController: com.morealm.app.presentation.shelf.ShelfRefreshController,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     private val bookId: String = savedStateHandle["bookId"] ?: ""
 
+    val chapters = bookRepo.getChapters(bookId).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = emptyList(),
+    )
+
     private val _book = MutableStateFlow<Book?>(null)
     val book: StateFlow<Book?> = _book.asStateFlow()
+
+    private val _isPreparingRead = MutableStateFlow(false)
+    val isPreparingRead: StateFlow<Boolean> = _isPreparingRead.asStateFlow()
+
+    private val _isReadReady = MutableStateFlow(false)
+    val isReadReady: StateFlow<Boolean> = _isReadReady.asStateFlow()
+
+    private val _readPreparationError = MutableStateFlow<String?>(null)
+    val readPreparationError: StateFlow<String?> = _readPreparationError.asStateFlow()
 
     /** Enabled sources count — used to gate the change-source button. */
     private val _enabledSourcesCount = MutableStateFlow(0)
@@ -91,7 +109,14 @@ class BookDetailViewModel @Inject constructor(
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            _book.value = bookRepo.getById(bookId)
+            val loadedBook = bookRepo.getById(bookId)
+            _book.value = loadedBook
+            if (loadedBook != null) {
+                val hasCachedChapters = loadedBook.format != BookFormat.WEB ||
+                    chapterDao.getChaptersList(bookId).isNotEmpty()
+                _isReadReady.value = hasCachedChapters
+                if (!hasCachedChapters) prepareWebBook(loadedBook)
+            }
             _enabledSourcesCount.value = sourceRepo.getEnabledSourcesList().count {
                 it.bookSourceType == TEXT_BOOK_SOURCE_TYPE
             }
@@ -126,6 +151,27 @@ class BookDetailViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    fun retryPrepareRead() {
+        val current = _book.value ?: return
+        if (current.format != BookFormat.WEB || _isPreparingRead.value) return
+        viewModelScope.launch(Dispatchers.IO) { prepareWebBook(current) }
+    }
+
+    private suspend fun prepareWebBook(book: Book) {
+        _isPreparingRead.value = true
+        _readPreparationError.value = null
+        refreshController.refreshNow(book)
+            .onSuccess {
+                _book.value = bookRepo.getById(bookId) ?: book
+                _isReadReady.value = true
+            }
+            .onFailure { error ->
+                _isReadReady.value = false
+                _readPreparationError.value = error.message ?: "目录加载失败"
+            }
+        _isPreparingRead.value = false
     }
 
     // ── Change-source action delegates ──────────────────────────────────────

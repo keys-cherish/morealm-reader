@@ -544,9 +544,9 @@ class AppPreferences @Inject constructor(
     val presetSyncedVersion: Flow<Int> = context.dataStore.data
         .map { it[Keys.PRESET_SYNCED_VERSION] ?: 0 }
 
-    /** 书架排序模式持久化。默认 "title"（自然排序），与 ShelfViewModel.sortBooks 的 else 分支对齐。 */
+    /** 书架排序模式持久化。新用户默认最近阅读，优先呈现刚访问过的书。 */
     val shelfSortMode: Flow<String> = context.dataStore.data
-        .map { it[Keys.SHELF_SORT_MODE] ?: "title" }
+        .map { it[Keys.SHELF_SORT_MODE] ?: "recent" }
 
     val longPressUnderline: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.LONG_PRESS_UNDERLINE] ?: true }
