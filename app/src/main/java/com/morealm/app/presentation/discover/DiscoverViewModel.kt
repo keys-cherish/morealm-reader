@@ -17,11 +17,16 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
@@ -65,11 +70,21 @@ class DiscoverViewModel @Inject constructor(
     private val preferences = context.getSharedPreferences("discover_books", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
     private val _state = MutableStateFlow(
-        DiscoverUiState(books = readCache())
+        DiscoverUiState(books = promotePreloadedCache())
     )
     val state: StateFlow<DiscoverUiState> = _state.asStateFlow()
+    private val _refreshResults = MutableSharedFlow<Int>(extraBufferCapacity = 1)
+    val refreshResults: SharedFlow<Int> = _refreshResults.asSharedFlow()
     private var refreshJob: Job? = null
     private var refreshCycle = 0
+    private var hasStartedInitialRefresh = false
+
+    /** 发现页首次创建时刷新一次；缓存 Tab 再次显示不会重复触发。 */
+    fun refreshOnFirstDisplay() {
+        if (hasStartedInitialRefresh) return
+        hasStartedInitialRefresh = true
+        refresh()
+    }
 
     fun refresh() {
         refreshJob?.cancel()
@@ -83,13 +98,22 @@ class DiscoverViewModel @Inject constructor(
                 val sources = sourcePool
                     .rotateFrom(cycle * MAX_SOURCES)
                     .take(MAX_SOURCES)
+                if (sourceCount == 0) {
+                    // 没有书源时旧缓存已失去上下文，保留它会导致下次冷启动短暂显示过期推荐。
+                    clearCaches()
+                    _state.value = _state.value.copy(
+                        sourceCount = 0,
+                        books = emptyList(),
+                        isRefreshing = false,
+                        message = NO_SOURCE_MESSAGE,
+                    )
+                    return@launch
+                }
                 _state.value = _state.value.copy(
                     sourceCount = sourceCount,
                     books = visibleFallback,
                     isRefreshing = sources.isNotEmpty(),
                     message = when {
-                        sourceCount == 0 && fallbackBooks.isNotEmpty() -> "还没有启用书源，正在显示上次内容"
-                        sourceCount == 0 -> "还没有启用书源"
                         sources.isEmpty() && fallbackBooks.isNotEmpty() -> "书源没有发现规则，正在显示上次内容"
                         sources.isEmpty() -> "已启用的书源没有发现规则"
                         else -> null
@@ -98,15 +122,34 @@ class DiscoverViewModel @Inject constructor(
                 if (sources.isEmpty()) return@launch
 
                 val gate = Semaphore(MAX_CONCURRENCY)
+                val resultMutex = Mutex()
+                val progressiveBooks = mutableListOf<DiscoverBook>()
                 val batches = supervisorScope {
                     sources.mapIndexed { sourceIndex, lite ->
                         async {
                             gate.withPermit {
-                                loadSourceBatch(
+                                val batch = loadSourceBatch(
                                     sourceUrl = lite.bookSourceUrl,
                                     cycle = cycle,
                                     sourceIndex = sourceIndex,
                                 )
+                                if (batch.isNotEmpty()) {
+                                    resultMutex.withLock {
+                                        progressiveBooks += batch
+                                        val immediateBooks = (
+                                            progressiveBooks.distinctBy(DiscoverBook::cacheKey) +
+                                                visibleFallback
+                                            )
+                                            .distinctBy(DiscoverBook::cacheKey)
+                                            .take(DISPLAY_BOOKS)
+                                        _state.value = _state.value.copy(
+                                            books = immediateBooks,
+                                            isRefreshing = true,
+                                            message = null,
+                                        )
+                                    }
+                                }
+                                batch
                             }
                         }
                     }.awaitAll()
@@ -115,15 +158,20 @@ class DiscoverViewModel @Inject constructor(
                     .flatten()
                     .distinctBy { "${it.sourceUrl}|${it.bookUrl}|${it.title}" }
                     .rotateFrom((cycle + 1) * RESULT_ROTATION_STEP)
-                    .take(MAX_BOOKS)
+                    .take(TOTAL_CACHE_BOOKS)
 
                 if (freshBooks.isNotEmpty()) {
-                    writeCache(freshBooks)
+                    val displayBooks = freshBooks.take(DISPLAY_BOOKS)
+                    val preloadedBooks = freshBooks
+                        .drop(DISPLAY_BOOKS)
+                        .take(PRELOAD_BOOKS)
+                    writeCaches(displayBooks, preloadedBooks)
                     _state.value = _state.value.copy(
-                        books = freshBooks,
+                        books = displayBooks,
                         isRefreshing = false,
                         message = null,
                     )
+                    _refreshResults.tryEmit(displayBooks.size)
                 } else {
                     _state.value = _state.value.copy(
                         books = visibleFallback,
@@ -259,29 +307,70 @@ class DiscoverViewModel @Inject constructor(
         }.distinct()
     }.getOrDefault(emptyList())
 
-    private fun readCache(): List<DiscoverBook> = runCatching {
+    /** 冷启动优先消费上轮预加载；没有预加载时退回上次展示与旧版单缓存。 */
+    private fun promotePreloadedCache(): List<DiscoverBook> {
+        val preloaded = readCache(PREFETCH_CACHE_KEY)
+        val previousVisible = readCache(VISIBLE_CACHE_KEY).ifEmpty {
+            readCache(LEGACY_CACHE_KEY)
+        }
+        val promoted = preloaded.ifEmpty { previousVisible }.take(DISPLAY_BOOKS)
+        if (promoted.isNotEmpty()) {
+            preferences.edit()
+                .putString(VISIBLE_CACHE_KEY, encodeBooks(promoted))
+                .remove(PREFETCH_CACHE_KEY)
+                .apply()
+        }
+        return promoted
+    }
+
+    private fun readCache(key: String): List<DiscoverBook> = runCatching {
         json.decodeFromString(
             ListSerializer(DiscoverBook.serializer()),
-            preferences.getString("cache", "[]").orEmpty(),
+            preferences.getString(key, "[]").orEmpty(),
         )
     }.getOrDefault(emptyList())
 
-    private fun writeCache(books: List<DiscoverBook>) {
-        val value = json.encodeToString(ListSerializer(DiscoverBook.serializer()), books)
-        preferences.edit().putString("cache", value).apply()
+    private fun writeCaches(
+        visibleBooks: List<DiscoverBook>,
+        preloadedBooks: List<DiscoverBook>,
+    ) {
+        preferences.edit()
+            .putString(VISIBLE_CACHE_KEY, encodeBooks(visibleBooks))
+            .putString(PREFETCH_CACHE_KEY, encodeBooks(preloadedBooks))
+            .remove(LEGACY_CACHE_KEY)
+            .apply()
     }
 
+    private fun clearCaches() {
+        preferences.edit()
+            .remove(VISIBLE_CACHE_KEY)
+            .remove(PREFETCH_CACHE_KEY)
+            .remove(LEGACY_CACHE_KEY)
+            .apply()
+    }
+
+    private fun encodeBooks(books: List<DiscoverBook>): String =
+        json.encodeToString(ListSerializer(DiscoverBook.serializer()), books)
+
     companion object {
-        private const val MAX_SOURCES = 12
-        private const val MAX_SOURCE_POOL = 36
-        private const val MAX_CONCURRENCY = 3
-        private const val SOURCE_TIMEOUT_MS = 10_000L
-        private const val MAX_URLS_PER_SOURCE = 2
+        private const val MAX_SOURCES = 8
+        private const val MAX_SOURCE_POOL = 24
+        private const val MAX_CONCURRENCY = 6
+        private const val SOURCE_TIMEOUT_MS = 6_000L
+        private const val MAX_URLS_PER_SOURCE = 1
         private const val EXPLORE_PAGE_WINDOW = 3
         private const val RESULT_ROTATION_STEP = 17
-        private const val MAX_BOOKS = 120
+        private const val DISPLAY_BOOKS = 72
+        private const val PRELOAD_BOOKS = 48
+        private const val TOTAL_CACHE_BOOKS = DISPLAY_BOOKS + PRELOAD_BOOKS
+        private const val LEGACY_CACHE_KEY = "cache"
+        private const val VISIBLE_CACHE_KEY = "visible_cache"
+        private const val PREFETCH_CACHE_KEY = "prefetch_cache"
+        private const val NO_SOURCE_MESSAGE = "还没有启用书源，请先在书源管理中添加书源"
     }
 }
+
+private fun DiscoverBook.cacheKey(): String = "$sourceUrl|$bookUrl|$title"
 
 internal fun <T> List<T>.rotateFrom(offset: Int): List<T> {
     if (size < 2) return this

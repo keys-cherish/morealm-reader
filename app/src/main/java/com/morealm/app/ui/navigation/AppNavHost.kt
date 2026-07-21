@@ -355,7 +355,6 @@ fun MoRealmNavHost(
                         }
                         BottomTab.Discover -> DiscoverScreen(
                             onNavigateDetail = { bookId -> navController.navigateToDetail(bookId) },
-                            isActive = page == selectedTab,
                         )
                         BottomTab.Library -> LibraryScreen(
                             onBookClick = { bookId ->

@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -476,22 +477,38 @@ fun BookDetailScreen(
                                     color = if (readPreparationError == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                                 )
                             }
-                            else -> (if (chapterDescending) chapters.asReversed() else chapters)
-                                .take(4)
-                                .forEachIndexed { index, chapter ->
-                                if (index > 0) {
-                                    HorizontalDivider(
-                                        thickness = 0.5.dp,
-                                        color = detailDividerColor,
-                                    )
+                            else -> {
+                                val orderedChapters = if (chapterDescending) {
+                                    chapters.asReversed()
+                                } else {
+                                    chapters
                                 }
-                                Text(
-                                    chapter.title,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                                )
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(224.dp),
+                                ) {
+                                    itemsIndexed(
+                                        items = orderedChapters,
+                                        key = { _, chapter -> chapter.id },
+                                    ) { index, chapter ->
+                                        if (index > 0) {
+                                            HorizontalDivider(
+                                                thickness = 0.5.dp,
+                                                color = detailDividerColor,
+                                            )
+                                        }
+                                        Text(
+                                            chapter.title,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 10.dp),
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

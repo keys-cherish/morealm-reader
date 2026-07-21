@@ -1,5 +1,6 @@
 package com.morealm.app.ui.discover
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -50,13 +52,18 @@ import com.morealm.app.ui.theme.LocalMoRealmColors
 @Composable
 fun DiscoverScreen(
     onNavigateDetail: (String) -> Unit,
-    isActive: Boolean = true,
     viewModel: DiscoverViewModel = hiltViewModel(),
     searchViewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    LaunchedEffect(isActive) {
-        if (isActive) viewModel.refresh()
+    val context = LocalContext.current
+    LaunchedEffect(viewModel) {
+        viewModel.refreshOnFirstDisplay()
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.refreshResults.collect { count ->
+            Toast.makeText(context, "发现了 $count 本书", Toast.LENGTH_SHORT).show()
+        }
     }
     LazyColumn(
         modifier = Modifier
@@ -98,9 +105,32 @@ fun DiscoverScreen(
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp))
             }
         }
-        state.message?.let { message ->
+        if (state.books.isEmpty() && !state.isRefreshing) {
             item {
-                Text(message, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(280.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "暂无发现内容",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = state.message ?: "添加书源后即可获取推荐书籍",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                        )
+                    }
+                }
+            }
+        } else {
+            state.message?.let { message ->
+                item {
+                    Text(message, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
         items(
