@@ -39,6 +39,8 @@ import coil.request.ImageRequest
 import coil.size.Size
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
+import com.morealm.app.presentation.shelf.ShelfReadingState
+import com.morealm.app.presentation.shelf.shelfReadingState
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import java.io.File
 
@@ -94,15 +96,11 @@ private fun ShelfStatusBadge(
     modifier: Modifier = Modifier,
 ) {
     val moColors = LocalMoRealmColors.current
-    val status = when {
-        book.readProgress >= 0.995f -> "finished"
-        book.lastReadAt > 0L || book.readProgress > 0f -> "reading"
-        else -> "wanted"
-    }
+    val status = book.shelfReadingState()
     val label = when (status) {
-        "finished" -> "已读"
-        "reading" -> "在读"
-        else -> "想读"
+        ShelfReadingState.FINISHED -> "已读"
+        ShelfReadingState.READING -> "在读"
+        ShelfReadingState.WANTED -> "想读"
     }
     val (containerColor, contentColor) = when {
         moColors.isEink -> {
@@ -110,17 +108,17 @@ private fun ShelfStatusBadge(
                 MaterialTheme.colorScheme.background
         }
         moColors.isNight -> when (status) {
-            "finished" -> MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.94f) to
+            ShelfReadingState.FINISHED -> MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.94f) to
                 MaterialTheme.colorScheme.onSurfaceVariant
-            "reading" -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.94f) to
+            ShelfReadingState.READING -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.94f) to
                 MaterialTheme.colorScheme.onPrimaryContainer
-            else -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.94f) to
+            ShelfReadingState.WANTED -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.94f) to
                 MaterialTheme.colorScheme.onSecondaryContainer
         }
         else -> when (status) {
-            "finished" -> Color(0xFF6B7280).copy(alpha = 0.90f) to Color.White
-            "reading" -> Color(0xFFE7A44C).copy(alpha = 0.90f) to Color.White
-            else -> Color(0xFF68A98B).copy(alpha = 0.90f) to Color.White
+            ShelfReadingState.FINISHED -> Color(0xFF6B7280).copy(alpha = 0.90f) to Color.White
+            ShelfReadingState.READING -> Color(0xFFE7A44C).copy(alpha = 0.90f) to Color.White
+            ShelfReadingState.WANTED -> Color(0xFF68A98B).copy(alpha = 0.90f) to Color.White
         }
     }
     Box(

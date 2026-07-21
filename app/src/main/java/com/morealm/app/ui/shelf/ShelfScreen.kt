@@ -47,6 +47,9 @@ import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.BookGroup
 import com.morealm.app.presentation.shelf.FolderImportState
 import com.morealm.app.presentation.shelf.ImportPhase
+import com.morealm.app.presentation.shelf.aggregateShelfReadingState
+import com.morealm.app.presentation.shelf.matchesShelfFilter
+import com.morealm.app.presentation.shelf.shelfReadingState
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.shelf.ShelfViewModel
 import com.morealm.app.ui.widget.ShelfGridSkeleton
@@ -212,16 +215,19 @@ fun ShelfScreen(
         }
     }
     val displayBooks = remember(scopedBooks, shelfFilter) {
-        when (shelfFilter) {
-            "reading" -> scopedBooks.filter {
-                (it.lastReadAt > 0L || it.readProgress > 0f) && it.readProgress < 0.995f
-            }
-            "wanted" -> scopedBooks.filter { it.lastReadAt <= 0L && it.readProgress <= 0f }
-            "finished" -> scopedBooks.filter { it.readProgress >= 0.995f }
-            else -> scopedBooks
+        scopedBooks.filter { it.shelfReadingState().matchesShelfFilter(shelfFilter) }
+    }
+    val booksByFolderId = remember(allBooks) {
+        allBooks.filter { it.folderId != null }.groupBy { it.folderId!! }
+    }
+    val folderIds = remember(groupNames, booksByFolderId, shelfFilter) {
+        groupNames.keys.filter { folderId ->
+            booksByFolderId[folderId]
+                .orEmpty()
+                .aggregateShelfReadingState()
+                .matchesShelfFilter(shelfFilter)
         }
     }
-    val folderIds = remember(groupNames) { groupNames.keys.toList() }
 
     // Back handler: return to root when inside a folder
     BackHandler(enabled = currentFolderId != null || batchMode || folderBatchMode) {
