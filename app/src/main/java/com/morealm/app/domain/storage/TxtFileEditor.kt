@@ -27,7 +27,21 @@ data class TxtReplaceRequest(
 data class TxtReplaceResult(
     val replacedCount: Int,
     val fileChanged: Boolean,
+    val undoSnapshot: TxtUndoSnapshot? = null,
 )
+
+/**
+ * 一次替换前的原文件事务快照。文件位于应用私有 cache，只用于一次撤销，不会加入书架。
+ */
+data class TxtUndoSnapshot internal constructor(
+    val sourceUri: String,
+    val replacedCount: Int,
+    internal val backupFile: File,
+) {
+    fun discard() {
+        backupFile.delete()
+    }
+}
 
 /**
  * TXT 原文件编辑器。
@@ -51,6 +65,7 @@ object TxtFileEditor {
         val pattern = compilePattern(request)
         val backup = File.createTempFile("morealm-txt-backup-", ".bin", context.cacheDir)
         val output = File.createTempFile("morealm-txt-output-", ".bin", context.cacheDir)
+        var keepBackupForUndo = false
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(backup).use { saved -> input.copyTo(saved) }
@@ -84,12 +99,31 @@ object TxtFileEditor {
             writeBack(context, uri, output, backup)
             LocalBookParser.clearCharsetCache(uri)
             LocalBookParser.releaseTxtBuffer()
+            keepBackupForUndo = true
             AppLog.info(TAG, "replace scope=$scope count=$total uri=$uri")
-            TxtReplaceResult(total, true)
+            TxtReplaceResult(
+                replacedCount = total,
+                fileChanged = true,
+                undoSnapshot = TxtUndoSnapshot(uri.toString(), total, backup),
+            )
         } finally {
-            backup.delete()
+            if (!keepBackupForUndo) backup.delete()
             output.delete()
         }
+    }
+
+    /** 把最近一次替换前的字节快照原样写回，字符编码和换行不会发生二次转换。 */
+    suspend fun restore(
+        context: Context,
+        uri: Uri,
+        snapshot: TxtUndoSnapshot,
+    ) = withContext(Dispatchers.IO) {
+        require(snapshot.sourceUri == uri.toString()) { "撤销快照与当前 TXT 不匹配" }
+        require(snapshot.backupFile.isFile) { "撤销快照已失效" }
+        writeBack(context, uri, snapshot.backupFile, snapshot.backupFile)
+        LocalBookParser.clearCharsetCache(uri)
+        LocalBookParser.releaseTxtBuffer()
+        AppLog.info(TAG, "undo replace count=${snapshot.replacedCount} uri=$uri")
     }
 
     private fun replaceChapter(

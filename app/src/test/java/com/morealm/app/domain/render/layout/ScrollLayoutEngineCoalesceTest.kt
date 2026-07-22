@@ -87,14 +87,15 @@ class ScrollLayoutEngineCoalesceTest {
     }
 
     @Test
-    fun `bg padding 从 marker 还原到 TextRun（scaled 300 = 3px）`() {
+    fun `bg padding 从 marker CSS px 缩放为设备 px`() {
         val eng = engine()
         val content = spanBg("ffff0000", "字", boxId = 1, pad = 300)
         val layout = eng.layoutChapter(0, "T", content, omitChapterTitleBlock = true)
         val run = layout.allAtoms().filterIsInstance<TextRun>().first { it.inlineBgBoxId != null }
-        assertEquals(3f, run.inlineBgPaddingLeftPx)
-        assertEquals(3f, run.inlineBgPaddingTopPx)
-        assertEquals(3f, run.inlineBgPaddingRightPx)
-        assertEquals(3f, run.inlineBgPaddingBottomPx)
+        // marker 300 = 3 CSS px；测试字号 48px 相对 16px 基准放大 3 倍，渲染值为 9px。
+        assertEquals(9f, run.inlineBgPaddingLeftPx)
+        assertEquals(9f, run.inlineBgPaddingTopPx)
+        assertEquals(9f, run.inlineBgPaddingRightPx)
+        assertEquals(9f, run.inlineBgPaddingBottomPx)
     }
 }

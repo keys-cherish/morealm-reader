@@ -641,6 +641,7 @@ fun ReaderScreen(
                 accentColor = MaterialTheme.colorScheme.primary,
                 fontSize = readerFontSize,
                 lineHeight = readerLineHeight,
+                letterSpacing = effectiveReaderStyle?.letterSpacing ?: 0f,
                 typeface = readerTypeface,
                 paddingLeft = marginHorizontal,
                 paddingRight = marginHorizontal,
@@ -685,6 +686,7 @@ fun ReaderScreen(
             ScrollCanvasReaderHost(
                 currentChapterIndex = currentIndex,
                 chapterCount = chapters.size,
+                contentVersion = renderedChapter.contentVersion,
                 loadChapterContent = loadFn@{ idx ->
                     val chap = chapters.getOrNull(idx) ?: return@loadFn null
                     // 用 fetchAndPrepareChapter 统一入口：内部自动 isWebBook 分流
@@ -872,6 +874,7 @@ fun ReaderScreen(
             com.morealm.app.ui.reader.page.animhorizontal.PageLevelReaderHost(
                 currentChapterIndex = currentIndex,
                 chapterCount = chapters.size,
+                contentVersion = renderedChapter.contentVersion,
                 animType = effectiveAnimType,
                 loadChapterContent = loadFn@{ idx ->
                     val chap = chapters.getOrNull(idx) ?: return@loadFn null
@@ -1576,6 +1579,7 @@ fun ReaderScreen(
             searchResults = viewModel.searchResults.collectAsStateWithLifecycle().value,
             isSearching = viewModel.searching.collectAsStateWithLifecycle().value,
             searchError = viewModel.searchError.collectAsStateWithLifecycle().value,
+            searchMode = viewModel.innerSearchMode.collectAsStateWithLifecycle().value,
             txtReplaceState = viewModel.txtReplaceState.collectAsStateWithLifecycle().value,
             isTxtBook = book?.format == com.morealm.app.domain.entity.BookFormat.TXT &&
                 !book?.localPath.isNullOrBlank(),
@@ -1586,12 +1590,14 @@ fun ReaderScreen(
             onSearchInChapter = { query, regex, caseSensitive ->
                 viewModel.searchInChapter(query, regex, caseSensitive)
             },
+            onSearchModeChange = viewModel::setInnerSearchMode,
             onReplaceMatch = { result, replacement, regex, caseSensitive ->
                 viewModel.replaceTxtMatch(result, replacement, regex, caseSensitive)
             },
             onReplaceAll = { query, replacement, inChapter, regex, caseSensitive ->
                 viewModel.replaceTxtAll(query, replacement, inChapter, regex, caseSensitive)
             },
+            onUndoReplace = viewModel::undoLastTxtReplace,
             onResultClick = { result ->
                 showFullSearch = false
                 viewModel.clearSearchResults()
@@ -2045,13 +2051,16 @@ private fun FullTextSearchPanel(
     searchResults: List<ReaderSearchController.SearchResult>,
     isSearching: Boolean,
     searchError: String?,
+    searchMode: String,
     txtReplaceState: TxtReplaceState,
     isTxtBook: Boolean,
     moColors: MoRealmColors,
     onSearch: (String, Boolean, Boolean) -> Unit,
     onSearchInChapter: (String, Boolean, Boolean) -> Unit,
+    onSearchModeChange: (String) -> Unit,
     onReplaceMatch: (ReaderSearchController.SearchResult, String, Boolean, Boolean) -> Unit,
     onReplaceAll: (String, String, Boolean, Boolean, Boolean) -> Unit,
+    onUndoReplace: () -> Unit,
     onResultClick: (ReaderSearchController.SearchResult) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
@@ -2064,10 +2073,12 @@ private fun FullTextSearchPanel(
     ) {
         var searchQuery by remember { mutableStateOf("") }
         var replacement by remember { mutableStateOf("") }
+        var replaceExpanded by remember { mutableStateOf(false) }
         var inChapterMode by remember { mutableStateOf(false) }
         var isRegex by remember { mutableStateOf(false) }
         var isCaseSensitive by remember { mutableStateOf(false) }
-        var confirmFullReplace by remember { mutableStateOf(false) }
+        // null=未确认，false=当前章，true=整本。批量替换统一二次确认，单条替换仍可直接操作。
+        var pendingBulkReplaceFullBook by remember { mutableStateOf<Boolean?>(null) }
         val triggerSearch: () -> Unit = {
             if (searchQuery.isNotBlank()) {
                 if (inChapterMode) {
@@ -2080,10 +2091,15 @@ private fun FullTextSearchPanel(
         LaunchedEffect(txtReplaceState.running, txtReplaceState.replacedCount) {
             if (!txtReplaceState.running && txtReplaceState.replacedCount > 0) triggerSearch()
         }
+        LaunchedEffect(searchMode, inChapterMode) {
+            if (searchQuery.isNotBlank()) triggerSearch()
+        }
 
         Box {
             Surface(
-                modifier = Modifier.fillMaxWidth().fillMaxHeight(if (isTxtBook) 0.76f else 0.6f),
+                modifier = Modifier.fillMaxWidth().fillMaxHeight(
+                    if (isTxtBook && replaceExpanded) 0.76f else 0.62f,
+                ),
                 color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.97f),
                 shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
                 tonalElevation = 12.dp,
@@ -2100,7 +2116,8 @@ private fun FullTextSearchPanel(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            if (isTxtBook) "TXT 查找与替换" else if (inChapterMode) "章内搜索" else "全文搜索",
+                            if (isTxtBook) "查找与替换"
+                            else if (inChapterMode) "章内搜索" else "全文搜索",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -2111,19 +2128,41 @@ private fun FullTextSearchPanel(
                         }
                     }
                     Spacer(Modifier.height(6.dp))
+                    if (isTxtBook) {
+                        // TXT 文件编辑是高风险动作，但入口也不能藏在标题栏角落：明确区分
+                        // “查找”和“替换”两个工作区，搜索方向与范围仍由下面的选项控制。
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            FilterChip(
+                                selected = !replaceExpanded,
+                                onClick = { replaceExpanded = false },
+                                label = { Text("查找", fontSize = 11.sp) },
+                                modifier = Modifier.weight(1f).height(34.dp),
+                            )
+                            FilterChip(
+                                selected = replaceExpanded,
+                                onClick = { replaceExpanded = true },
+                                label = { Text("替换", fontSize = 11.sp) },
+                                modifier = Modifier.weight(1f).height(34.dp),
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                    }
                     Row(
                         modifier = Modifier.padding(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         FilterChip(
                             selected = !inChapterMode,
-                            onClick = { if (inChapterMode) { inChapterMode = false; searchQuery = "" } },
+                            onClick = { inChapterMode = false },
                             label = { Text("全书", fontSize = 10.sp) },
                             modifier = Modifier.height(32.dp),
                         )
                         FilterChip(
                             selected = inChapterMode,
-                            onClick = { if (!inChapterMode) { inChapterMode = true; searchQuery = "" } },
+                            onClick = { inChapterMode = true },
                             label = { Text("当前章", fontSize = 10.sp) },
                             modifier = Modifier.height(32.dp),
                         )
@@ -2139,6 +2178,19 @@ private fun FullTextSearchPanel(
                             label = { Text("Aa", fontSize = 10.sp) },
                             modifier = Modifier.height(32.dp),
                         )
+                    }
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        listOf("all" to "全部", "forward" to "向前", "backward" to "向后").forEach { (mode, label) ->
+                            FilterChip(
+                                selected = searchMode == mode,
+                                onClick = { onSearchModeChange(mode) },
+                                label = { Text(label, fontSize = 10.sp) },
+                                modifier = Modifier.height(30.dp),
+                            )
+                        }
                     }
                     Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
@@ -2164,7 +2216,15 @@ private fun FullTextSearchPanel(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary),
                 )
-                    if (isTxtBook) {
+                    if (!replaceExpanded && searchQuery.isNotEmpty() && !isSearching && searchError == null) {
+                        Text(
+                            "找到 ${searchResults.size} 处",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                    }
+                    if (isTxtBook && replaceExpanded) {
                         Spacer(Modifier.height(6.dp))
                         OutlinedTextField(
                             value = replacement,
@@ -2190,11 +2250,7 @@ private fun FullTextSearchPanel(
                             )
                             Button(
                                 onClick = {
-                                    if (inChapterMode) {
-                                        onReplaceAll(searchQuery, replacement, true, isRegex, isCaseSensitive)
-                                    } else {
-                                        confirmFullReplace = true
-                                    }
+                                    pendingBulkReplaceFullBook = !inChapterMode
                                 },
                                 enabled = searchQuery.isNotEmpty() && !txtReplaceState.running,
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
@@ -2204,6 +2260,13 @@ private fun FullTextSearchPanel(
                                 } else {
                                     Text(if (inChapterMode) "替换本章" else "替换全书", fontSize = 12.sp)
                                 }
+                            }
+                            if (txtReplaceState.canUndo) {
+                                Spacer(Modifier.width(6.dp))
+                                TextButton(
+                                    onClick = onUndoReplace,
+                                    enabled = !txtReplaceState.running,
+                                ) { Text("撤销", fontSize = 12.sp) }
                             }
                         }
                     }
@@ -2240,7 +2303,7 @@ private fun FullTextSearchPanel(
                                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                         maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 }
-                                if (isTxtBook) {
+                                if (isTxtBook && replaceExpanded) {
                                     TextButton(
                                         onClick = { onReplaceMatch(result, replacement, isRegex, isCaseSensitive) },
                                         enabled = !txtReplaceState.running,
@@ -2251,21 +2314,24 @@ private fun FullTextSearchPanel(
                     }
                 }
             }
-            if (confirmFullReplace) {
+            pendingBulkReplaceFullBook?.let { fullBook ->
                 AlertDialog(
-                    onDismissRequest = { confirmFullReplace = false },
-                    title = { Text("替换整本 TXT？") },
+                    onDismissRequest = { pendingBulkReplaceFullBook = null },
+                    title = { Text(if (fullBook) "替换整本 TXT？" else "替换当前章节？") },
                     text = {
-                        Text("这会直接修改原始 TXT 文件，随后重新解析章节。全文替换完成后不能撤销。")
+                        Text(
+                            "将“${searchQuery.take(40)}”替换为“${replacement.take(40)}”。" +
+                                "\n\n这会直接修改原始 TXT，完成后可撤销一次。",
+                        )
                     },
                     confirmButton = {
                         TextButton(onClick = {
-                            confirmFullReplace = false
-                            onReplaceAll(searchQuery, replacement, false, isRegex, isCaseSensitive)
-                        }) { Text("继续替换", color = MaterialTheme.colorScheme.error) }
+                            pendingBulkReplaceFullBook = null
+                            onReplaceAll(searchQuery, replacement, !fullBook, isRegex, isCaseSensitive)
+                        }) { Text("确认替换", color = MaterialTheme.colorScheme.error) }
                     },
                     dismissButton = {
-                        TextButton(onClick = { confirmFullReplace = false }) { Text("取消") }
+                        TextButton(onClick = { pendingBulkReplaceFullBook = null }) { Text("取消") }
                     },
                 )
             }

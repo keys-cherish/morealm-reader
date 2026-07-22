@@ -506,8 +506,11 @@ class ChapterProvider(
         // 调大间距会让一页字数下降（charsPerColumn / columnsPerPage 都减小），
         // 章节总页数同比上升。但「读起来不挤」远比「页数少」对竖排体验更重要。
         // 用户如果觉得太松，可以反过来调小这两个常数；目前没暴露设置项。
-        val charYStep: Float = contentPaint.textSize * 1.5f
-        val columnXStep: Float = contentPaint.textSize * 1.7f
+        // 竖排沿用阅读设置的语义：letterSpacing 控制列内字距，lineHeight 控制列间距。
+        // 两者都按字号换算，字号变化后几何同比例重排，不再依赖固定 1.5/1.7 常量。
+        val charYStep: Float = contentPaint.textSize *
+            (1f + contentPaint.letterSpacing).coerceIn(0.8f, 2f)
+        val columnXStep: Float = contentPaint.textSize * lineSpacingExtra.coerceIn(1f, 3f)
         val charsPerColumn: Int = (visibleHeight / charYStep).toInt().coerceAtLeast(1)
         val columnsPerPage: Int = (visibleWidth / columnXStep).toInt().coerceAtLeast(1)
         val pageWidth: Float = viewWidth.toFloat()

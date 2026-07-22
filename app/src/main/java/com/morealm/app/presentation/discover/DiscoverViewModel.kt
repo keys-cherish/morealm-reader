@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
@@ -69,15 +70,35 @@ class DiscoverViewModel @Inject constructor(
 ) : ViewModel() {
     private val preferences = context.getSharedPreferences("discover_books", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
-    private val _state = MutableStateFlow(
-        DiscoverUiState(books = promotePreloadedCache())
-    )
+    // 缓存要等数据库返回当前启用书源后才能展示；否则书源刚被关闭时，旧推荐会在
+    // 冷启动首帧短暂回流到发现页。
+    private val _state = MutableStateFlow(DiscoverUiState())
     val state: StateFlow<DiscoverUiState> = _state.asStateFlow()
     private val _refreshResults = MutableSharedFlow<Int>(extraBufferCapacity = 1)
     val refreshResults: SharedFlow<Int> = _refreshResults.asSharedFlow()
     private var refreshJob: Job? = null
     private var refreshCycle = 0
     private var hasStartedInitialRefresh = false
+    @Volatile
+    private var activeSourceUrls: Set<String> = emptySet()
+
+    init {
+        // 书源管理页的启用开关会即时影响发现页；只监听 URL 投影，避免每次切换都加载完整规则。
+        viewModelScope.launch(Dispatchers.IO) {
+            sourceRepository.observeEnabledSourceUrls().collectLatest { urls ->
+                val enabled = urls.toSet()
+                activeSourceUrls = enabled
+                pruneCaches(enabled)
+                val current = _state.value
+                val filtered = current.books.filter(::isBookFromEnabledSource)
+                _state.value = current.copy(
+                    sourceCount = enabled.size,
+                    books = filtered,
+                    message = if (enabled.isEmpty()) NO_SOURCE_MESSAGE else current.message,
+                )
+            }
+        }
+    }
 
     /** 发现页首次创建时刷新一次；缓存 Tab 再次显示不会重复触发。 */
     fun refreshOnFirstDisplay() {
@@ -90,10 +111,17 @@ class DiscoverViewModel @Inject constructor(
         refreshJob?.cancel()
         val cycle = refreshCycle++
         refreshJob = viewModelScope.launch(Dispatchers.IO) {
-            val fallbackBooks = _state.value.books
-            val visibleFallback = fallbackBooks.rotateFrom((cycle + 1) * RESULT_ROTATION_STEP)
+            var fallbackBooks = emptyList<DiscoverBook>()
+            var visibleFallback = fallbackBooks
             try {
-                val sourceCount = sourceRepository.getEnabledSourceCount()
+                val enabledSourceUrls = sourceRepository.getEnabledSourcesLite()
+                    .mapTo(HashSet()) { it.bookSourceUrl }
+                activeSourceUrls = enabledSourceUrls
+                val sourceCount = enabledSourceUrls.size
+                // 先按当前启用状态过滤持久化缓存，再允许它进入渐进展示；禁用某一书源后，
+                // 该源的 visible/prefetch/legacy 缓存都不能作为本轮 fallback。
+                fallbackBooks = promotePreloadedCache(enabledSourceUrls)
+                visibleFallback = fallbackBooks.rotateFrom((cycle + 1) * RESULT_ROTATION_STEP)
                 val sourcePool = sourceRepository.getExploreSourcesLite(MAX_SOURCE_POOL)
                 val sources = sourcePool
                     .rotateFrom(cycle * MAX_SOURCES)
@@ -140,6 +168,7 @@ class DiscoverViewModel @Inject constructor(
                                             progressiveBooks.distinctBy(DiscoverBook::cacheKey) +
                                                 visibleFallback
                                             )
+                                            .filter(::isBookFromEnabledSource)
                                             .distinctBy(DiscoverBook::cacheKey)
                                             .take(DISPLAY_BOOKS)
                                         _state.value = _state.value.copy(
@@ -156,6 +185,7 @@ class DiscoverViewModel @Inject constructor(
                 }
                 val freshBooks = batches
                     .flatten()
+                    .filter(::isBookFromEnabledSource)
                     .distinctBy { "${it.sourceUrl}|${it.bookUrl}|${it.title}" }
                     .rotateFrom((cycle + 1) * RESULT_ROTATION_STEP)
                     .take(TOTAL_CACHE_BOOKS)
@@ -209,6 +239,7 @@ class DiscoverViewModel @Inject constructor(
     ): List<DiscoverBook> {
         return try {
             val source = sourceRepository.getByUrl(sourceUrl) ?: return emptyList()
+            if (!source.enabled || source.bookSourceUrl !in activeSourceUrls) return emptyList()
             val urls = resolveExploreUrls(source)
                 .rotateFrom(cycle + sourceIndex)
                 .take(MAX_URLS_PER_SOURCE)
@@ -308,19 +339,41 @@ class DiscoverViewModel @Inject constructor(
     }.getOrDefault(emptyList())
 
     /** 冷启动优先消费上轮预加载；没有预加载时退回上次展示与旧版单缓存。 */
-    private fun promotePreloadedCache(): List<DiscoverBook> {
-        val preloaded = readCache(PREFETCH_CACHE_KEY)
+    private fun promotePreloadedCache(enabledSourceUrls: Set<String>): List<DiscoverBook> {
+        fun validForCurrentSources(book: DiscoverBook): Boolean =
+            book.sourceUrl.isBlank() || book.sourceUrl in enabledSourceUrls
+
+        val preloaded = readCache(PREFETCH_CACHE_KEY).filter(::validForCurrentSources)
         val previousVisible = readCache(VISIBLE_CACHE_KEY).ifEmpty {
             readCache(LEGACY_CACHE_KEY)
-        }
+        }.filter(::validForCurrentSources)
         val promoted = preloaded.ifEmpty { previousVisible }.take(DISPLAY_BOOKS)
         if (promoted.isNotEmpty()) {
             preferences.edit()
                 .putString(VISIBLE_CACHE_KEY, encodeBooks(promoted))
                 .remove(PREFETCH_CACHE_KEY)
                 .apply()
+        } else {
+            // 所有缓存都来自已关闭书源时，主动清空三份缓存，避免下次启动再次读到旧结果。
+            clearCaches()
         }
         return promoted
+    }
+
+    private fun isBookFromEnabledSource(book: DiscoverBook): Boolean =
+        book.sourceUrl.isBlank() || book.sourceUrl in activeSourceUrls
+
+    private fun pruneCaches(enabledSourceUrls: Set<String>) {
+        fun keep(book: DiscoverBook): Boolean =
+            book.sourceUrl.isBlank() || book.sourceUrl in enabledSourceUrls
+        val visible = readCache(VISIBLE_CACHE_KEY).filter(::keep)
+        val preloaded = readCache(PREFETCH_CACHE_KEY).filter(::keep)
+        val legacy = readCache(LEGACY_CACHE_KEY).filter(::keep)
+        preferences.edit()
+            .putString(VISIBLE_CACHE_KEY, encodeBooks(visible))
+            .putString(PREFETCH_CACHE_KEY, encodeBooks(preloaded))
+            .putString(LEGACY_CACHE_KEY, encodeBooks(legacy))
+            .apply()
     }
 
     private fun readCache(key: String): List<DiscoverBook> = runCatching {

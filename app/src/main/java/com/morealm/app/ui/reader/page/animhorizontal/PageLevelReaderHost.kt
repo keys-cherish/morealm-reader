@@ -110,6 +110,8 @@ class PageTurnAnimController {
 fun PageLevelReaderHost(
     currentChapterIndex: Int,
     chapterCount: Int,
+    /** 正文发布版本；变化时同章旧分页必须失效，不能只消费 restoreToken 做位置跳转。 */
+    contentVersion: Long,
     loadChapterContent: suspend (Int) -> ScrollChapterContent?,
     /** 翻页动画类型 —— NONE / COVER / SLIDE，决定内部 dispatch 到哪个 Renderer。 */
     animType: PageAnimType,
@@ -351,6 +353,7 @@ fun PageLevelReaderHost(
     val core = rememberPageLevelCore(
         currentChapterIndex = currentChapterIndex,
         chapterCount = chapterCount,
+        contentVersion = contentVersion,
         restoreToken = restoreToken,
         onChapterIndexChange = onChapterIndexChange,
         loadChapterContent = loadChapterContent,

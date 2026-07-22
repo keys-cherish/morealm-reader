@@ -72,6 +72,9 @@ object ImageCache {
         }
         return try {
             val opts = BitmapFactory.Options()
+            // EPUB 插图经常依赖透明通道叠在纸张/背景图上；显式固定 ARGB_8888，避免
+            // 设备或采样路径选择无 alpha 的配置后把透明区域显示成黑色方块。
+            opts.inPreferredConfig = Bitmap.Config.ARGB_8888
             if (targetWidth > 0) {
                 opts.inJustDecodeBounds = true
                 BitmapFactory.decodeFile(path, opts)
@@ -103,6 +106,7 @@ object ImageCache {
         val bytes = MobiResourceLoader.readBytes(ctx, hash, idx) ?: return null
         return try {
             val opts = BitmapFactory.Options()
+            opts.inPreferredConfig = Bitmap.Config.ARGB_8888
             if (targetWidth > 0) {
                 opts.inJustDecodeBounds = true
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
@@ -132,6 +136,7 @@ object ImageCache {
             val response = okHttpClient.newCall(reqBuilder.build()).execute()
             val bytes = response.body?.bytes() ?: return null
             val opts = BitmapFactory.Options()
+            opts.inPreferredConfig = Bitmap.Config.ARGB_8888
             if (targetWidth > 0) {
                 opts.inJustDecodeBounds = true
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)

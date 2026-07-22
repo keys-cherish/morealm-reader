@@ -118,8 +118,10 @@ fun VerticalReaderView(
     accentColor: Color,
     /** Font size in sp (matches [com.morealm.app.ui.reader.renderer.CanvasRenderer.fontSize]). */
     fontSize: Float,
-    /** Extra line spacing (px) appended to natural ascent+descent gap. */
+    /** 列间距倍率；竖排把横排的 lineHeight 语义映射到列与列之间。 */
     lineHeight: Float,
+    /** 列内字距，单位为 em；与横排阅读设置使用同一份 ReaderStyle。 */
+    letterSpacing: Float,
     typeface: Typeface,
     /** Padding values in DP (interpreted via [androidx.compose.ui.unit.Density]); matches CanvasRenderer convention. */
     paddingLeft: Int,
@@ -174,14 +176,13 @@ fun VerticalReaderView(
     // ── Paint 配置 ──
     // 独立维护、不复用 CanvasRenderer 的 paint cache。竖排版的字号/字重需求
     // 与横排可能不一致（比如未来要给标题用更小字号），但 Phase 2 复用同一组合理默认。
-    val contentPaint = remember(fontSizePx, typeface, textColor) {
+    val contentPaint = remember(fontSizePx, typeface, textColor, letterSpacing) {
         TextPaint().apply {
             color = textColor.toArgb()
             textSize = fontSizePx
             isAntiAlias = true
             this.typeface = typeface
-            // Phase 2 不设 letterSpacing —— 竖排里它是字符之间的"列内 Y 间距"，
-            // 0 已经够用；将来如果排版稀疏可按比例调。
+            this.letterSpacing = letterSpacing.coerceIn(-0.2f, 1f)
         }
     }
     val titlePaint = remember(fontSizePx, typeface, accentColor) {

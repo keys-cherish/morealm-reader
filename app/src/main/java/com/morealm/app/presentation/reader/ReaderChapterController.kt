@@ -312,6 +312,7 @@ class ReaderChapterController(
             index = nextIdx,
             title = chapterList[nextIdx].title,
             content = nextContent,
+            contentVersion = System.nanoTime(),
             initialProgress = 0,
             initialChapterPosition = 0,
             restoreToken = System.nanoTime(),
@@ -424,6 +425,7 @@ class ReaderChapterController(
             index = prevIdx,
             title = chapterList[prevIdx].title,
             content = prevContent,
+            contentVersion = System.nanoTime(),
             // Bug 3 修复：按钮 PREV 跳章头（与"下一章"按钮对称）。
             // **Bug 3 后续修复**（手势 PREV bug）：按 MEMORY.md 「阅读器导航语义」铁则，
             // 手势 PREV（仿真翻页 / 滑动 / 覆盖 / 竖排手势）应跳**上一章末页**——连续阅读
@@ -540,6 +542,7 @@ class ReaderChapterController(
             index = 0,
             title = title,
             content = content,
+            contentVersion = System.nanoTime(),
             initialProgress = 0,
             restoreToken = System.nanoTime(),
         )
@@ -946,6 +949,7 @@ class ReaderChapterController(
                     index = index,
                     title = chapter.title,
                     content = content,
+                    contentVersion = System.nanoTime(),
                     initialProgress = targetProgress,
                     initialChapterPosition = targetChapterPosition,
                     restoreToken = System.nanoTime(),
@@ -1003,6 +1007,7 @@ class ReaderChapterController(
                     index = index,
                     title = chapter.title.ifBlank { title },
                     content = errorContent,
+                    contentVersion = System.nanoTime(),
                     initialProgress = 0,
                     initialChapterPosition = 0,
                     restoreToken = System.nanoTime(),
@@ -1368,7 +1373,16 @@ class ReaderChapterController(
         _book.value = updated
         _chapters.value = fresh
         clearPreloadedChapters()
-        loadChapter(preferredChapterIndex.coerceIn(0, fresh.lastIndex))
+        val targetIndex = preferredChapterIndex.coerceIn(0, fresh.lastIndex)
+        val previousRenderToken = _renderedChapter.value.restoreToken
+        loadChapter(targetIndex)
+        // loadChapter 内部启动异步读取。必须等新正文真正发布后再向 UI 返回“替换成功”，
+        // 否则用户立刻关闭搜索面板时仍会看到旧页，只能退出重进才误以为生效。
+        kotlinx.coroutines.withTimeout(10_000L) {
+            _renderedChapter.first { rendered ->
+                rendered.index == targetIndex && rendered.restoreToken != previousRenderToken
+            }
+        }
     }
 
     private fun publishHits() {

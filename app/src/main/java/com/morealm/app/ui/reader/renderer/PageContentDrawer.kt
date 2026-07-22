@@ -743,7 +743,6 @@ internal fun drawPageContentVertical(
     @Suppress("UNUSED_PARAMETER") canvasWidth: Float = 0f,
 ) {
     val highlightPaint = sharedHighlightPaint
-    val paddingTop = page.paddingTop
 
     // 共享 paint 实例 —— 给三个 paint 都临时打开 vert 特性，画完恢复，避免影响
     // 其他横排路径或后续帧。
@@ -769,18 +768,26 @@ internal fun drawPageContentVertical(
                     // 字符画在列中心 X。Y 用 col.start + paint.textSize（baseline 偏移近似）。
                     // paint.textSize 对应 ascent 区域，把字符 baseline 落在 col.start + textSize
                     // 大致让字符上半在 col.start 之上、下半在之下，符合视觉重心。
-                    val charWidth = paint.measureText(col.charData)
+                    val displayGlyph = verticalPresentationGlyph(col.charData)
+                    val charWidth = paint.measureText(displayGlyph)
                     val charX = centerX - charWidth / 2f
-                    val charY = paddingTop + col.start + paint.textSize
+                    val cellCenterY = (col.start + col.end) / 2f
+                    val metrics = paint.fontMetrics
+                    val charY = cellCenterY - (metrics.ascent + metrics.descent) / 2f
                     if (col is TextColumn && col.rotate90) {
                         // Fallback：layout 显式要求物理旋转（tate-chu-yoko 长串等）。
                         canvas.save()
-                        canvas.translate(centerX, charY - paint.textSize / 2f)
+                        canvas.translate(centerX, cellCenterY)
                         canvas.rotate(90f)
-                        canvas.drawText(col.charData, -charWidth / 2f, paint.textSize / 2f, paint)
+                        canvas.drawText(
+                            displayGlyph,
+                            -charWidth / 2f,
+                            -(metrics.ascent + metrics.descent) / 2f,
+                            paint,
+                        )
                         canvas.restore()
                     } else {
-                        canvas.drawText(col.charData, charX, charY, paint)
+                        canvas.drawText(displayGlyph, charX, charY, paint)
                     }
                 }
             }
@@ -804,6 +811,41 @@ internal fun drawPageContentVertical(
         titlePaint.fontFeatureSettings = originalTitleFeatures
         chapterNumPaint?.let { it.fontFeatureSettings = originalChapterNumFeatures }
     }
+}
+
+/**
+ * 单字 `drawText` 在部分 Android 字体上不会稳定触发 OpenType 竖排替换，因此对 Unicode
+ * 已定义的竖排兼容字形显式映射；正文仍保留原字符，搜索、选择和进度坐标不会变化。
+ */
+internal fun verticalPresentationGlyph(text: String): String = when (text) {
+    "，" -> "︐"
+    "、" -> "︑"
+    "。" -> "︒"
+    "：" -> "︓"
+    "；" -> "︔"
+    "！" -> "︕"
+    "？" -> "︖"
+    "…", "⋯" -> "︙"
+    "—", "―" -> "︱"
+    "（" -> "︵"
+    "）" -> "︶"
+    "｛" -> "︷"
+    "｝" -> "︸"
+    "〔" -> "︹"
+    "〕" -> "︺"
+    "【" -> "︻"
+    "】" -> "︼"
+    "《" -> "︽"
+    "》" -> "︾"
+    "〈" -> "︿"
+    "〉" -> "﹀"
+    "「" -> "﹁"
+    "」" -> "﹂"
+    "『" -> "﹃"
+    "』" -> "﹄"
+    "［" -> "﹇"
+    "］" -> "﹈"
+    else -> text
 }
 
 fun drawRecordedPageContent(

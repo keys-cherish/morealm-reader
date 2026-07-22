@@ -84,6 +84,8 @@ import java.util.Locale
 fun ScrollCanvasReaderHost(
     currentChapterIndex: Int,
     chapterCount: Int,
+    /** 正文发布版本；TXT 原位替换后用于强制丢弃旧 layout。 */
+    contentVersion: Long,
     loadChapterContent: suspend (Int) -> ScrollChapterContent?,
     viewWidth: Int,
     viewHeight: Int,
@@ -374,6 +376,7 @@ fun ScrollCanvasReaderHost(
     val core = com.morealm.app.domain.render.pageanim.rememberPageLevelCore(
         currentChapterIndex = currentChapterIndex,
         chapterCount = chapterCount,
+        contentVersion = contentVersion,
         restoreToken = restoreToken,
         onChapterIndexChange = onChapterIndexChange,
         loadChapterContent = loadChapterContent,

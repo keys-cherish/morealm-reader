@@ -7,6 +7,7 @@ import com.morealm.app.domain.parser.LocalBookParser
 import com.morealm.app.domain.storage.TxtEditScope
 import com.morealm.app.domain.storage.TxtFileEditor
 import com.morealm.app.domain.storage.TxtReplaceRequest
+import com.morealm.app.domain.storage.TxtUndoSnapshot
 import com.morealm.app.core.text.stripHtml
 import com.morealm.app.core.log.AppLog
 import kotlinx.coroutines.CoroutineScope
@@ -21,6 +22,7 @@ data class TxtReplaceState(
     val replacedCount: Int = 0,
     val message: String? = null,
     val error: String? = null,
+    val canUndo: Boolean = false,
 )
 
 /**
@@ -38,6 +40,7 @@ class ReaderContentEditController(
 
     private val _txtReplaceState = MutableStateFlow(TxtReplaceState())
     val txtReplaceState: StateFlow<TxtReplaceState> = _txtReplaceState.asStateFlow()
+    private var undoSnapshot: TxtUndoSnapshot? = null
 
     // ── Content Editing ──
 
@@ -85,12 +88,17 @@ class ReaderContentEditController(
             return
         }
         val preferredIndex = target?.chapterIndex ?: chapter.currentChapterIndex.value
-        _txtReplaceState.value = TxtReplaceState(running = true, message = "正在替换…")
+        _txtReplaceState.value = TxtReplaceState(
+            running = true,
+            message = "正在替换…",
+            canUndo = undoSnapshot != null,
+        )
         scope.launch(Dispatchers.IO) {
             try {
+                val editableUri = resolveEditableTxtUri(book)
                 val result = TxtFileEditor.replace(
                     context = context,
-                    uri = Uri.parse(book.localPath),
+                    uri = editableUri,
                     chapters = chapter.chapters.value,
                     scope = editScope,
                     request = TxtReplaceRequest(query, replacement, isRegex, isCaseSensitive),
@@ -98,6 +106,10 @@ class ReaderContentEditController(
                     targetMatchOrdinal = target?.matchOrdinalInChapter,
                 )
                 if (result.fileChanged) chapter.reparseLocalTxtAfterEdit(preferredIndex)
+                result.undoSnapshot?.let { newSnapshot ->
+                    undoSnapshot?.discard()
+                    undoSnapshot = newSnapshot
+                }
                 _txtReplaceState.value = TxtReplaceState(
                     replacedCount = result.replacedCount,
                     message = if (result.replacedCount > 0) {
@@ -105,16 +117,76 @@ class ReaderContentEditController(
                     } else {
                         "没有可替换的匹配"
                     },
+                    canUndo = undoSnapshot != null,
                 )
             } catch (e: Exception) {
                 AppLog.error("TxtEdit", "TXT replace failed", e)
-                _txtReplaceState.value = TxtReplaceState(error = e.message ?: "替换失败")
+                _txtReplaceState.value = TxtReplaceState(
+                    error = e.message ?: "替换失败",
+                    canUndo = undoSnapshot != null,
+                )
             }
         }
     }
 
+    /** 撤销最近一次成功的 TXT 替换；恢复后同样等待当前章重新解析并发布。 */
+    fun undoLastTxtReplace() {
+        if (_txtReplaceState.value.running) return
+        val snapshot = undoSnapshot ?: run {
+            _txtReplaceState.value = TxtReplaceState(error = "没有可撤销的替换")
+            return
+        }
+        val book = chapter.book.value
+        if (book == null || book.format != BookFormat.TXT || book.localPath.isNullOrBlank()) {
+            _txtReplaceState.value = TxtReplaceState(error = "当前 TXT 已不可用", canUndo = true)
+            return
+        }
+        val uri = Uri.parse(book.localPath)
+        if (snapshot.sourceUri != uri.toString()) {
+            _txtReplaceState.value = TxtReplaceState(error = "撤销快照与当前 TXT 不匹配", canUndo = true)
+            return
+        }
+        val preferredIndex = chapter.currentChapterIndex.value
+        _txtReplaceState.value = TxtReplaceState(running = true, message = "正在撤销…", canUndo = true)
+        scope.launch(Dispatchers.IO) {
+            try {
+                TxtFileEditor.restore(context, uri, snapshot)
+                chapter.reparseLocalTxtAfterEdit(preferredIndex)
+                snapshot.discard()
+                undoSnapshot = null
+                _txtReplaceState.value = TxtReplaceState(message = "已撤销上次替换")
+            } catch (e: Exception) {
+                AppLog.error("TxtEdit", "TXT undo failed", e)
+                _txtReplaceState.value = TxtReplaceState(
+                    error = e.message ?: "撤销失败",
+                    canUndo = true,
+                )
+            }
+        }
+    }
+
+    /**
+     * 替换只允许原位写回用户选中的 TXT，不再静默创建应用私有副本。SAF 提供方若只
+     * 授予读取权限，Android 不允许绕过授权写入；此时明确终止，让用户重新选择原文件
+     * 获取写权限，避免书架路径在用户不知情时切到另一份文件。
+     */
+    private fun resolveEditableTxtUri(book: com.morealm.app.domain.entity.Book): Uri {
+        val source = Uri.parse(requireNotNull(book.localPath))
+        if (canOpenForWrite(source)) return source
+        error("原文件没有写入权限，请在书架重新选择该 TXT 授权后再替换")
+    }
+
+    private fun canOpenForWrite(uri: Uri): Boolean = when (uri.scheme) {
+        null, "file" -> uri.path?.let { java.io.File(it) }?.canWrite() == true
+        else -> runCatching {
+            context.contentResolver.openFileDescriptor(uri, "rw")?.use { true } ?: false
+        }.getOrDefault(false)
+    }
+
     fun clearTxtReplaceMessage() {
-        if (!_txtReplaceState.value.running) _txtReplaceState.value = TxtReplaceState()
+        if (!_txtReplaceState.value.running) {
+            _txtReplaceState.value = TxtReplaceState(canUndo = undoSnapshot != null)
+        }
     }
 
     // ── Export ──

@@ -1,0 +1,416 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MoRealm</string>
+    <string name="app_description">Local e-Reader · Custom Layout Engine</string>
+    <string name="privacy_notice">MoRealm is a tool for local digital reading and does not provide any content, therefore the user is responsible for all files and configurations imported into the application.</string>
+
+    <!-- ======================================================================================= -->
+    <!-- Note: If there are words before and after letters and numbers, remember to add a space. -->
+    <!--   ※Punctuation marks: , . ? ! : ; “ ” ‘ ’ <> [] () {} —— …… ．· — ____ /|\             -->
+    <!--   ※Resource: http://developer.android.com/guide/topics/resources/string-resource.html  -->
+    <!-- ======================================================================================= -->
+
+    <!-- GENERIC 通用 -->
+    <!-- Strings for dialog "yes" button -->
+    <string name="yes">Yes</string>
+    <!-- Strings for dialog "no" button -->
+    <string name="no">No</string>
+    <!-- Strings for dialog "create" button -->
+    <string name="create">Create</string>
+    <!-- Strings for dialog "cancel" button -->
+    <string name="cancel">Cancel</string>
+    <!-- String for dialog [open] button -->
+    <string name="open">Open</string>
+    <!-- String for dialog [save] button -->
+    <string name="save">Save</string>
+    <!-- String for dialog [share] button -->
+    <string name="share">Share</string>
+    <!-- String for dialog [allow] button -->
+    <string name="allow">Allow</string>
+    <!-- String for dialog [deny] button -->
+    <string name="deny">Deny</string>
+    <!-- Used in confirmation dialogs as the action that the user will tap to turn on the feature. [CHAR LIMIT=40]-->
+    <string name="confirmation_enable">Enable</string>
+    <!-- Used in confirmation dialogs as the action that the user will tap to turn off the feature. [CHAR LIMIT=40]-->
+    <string name="confirmation_disable">Disable</string>
+
+    <!-- ======================================================================================= -->
+
+    <!-- BOOKSHELF 书架相关 -->
+    <string name="tab_shelf">Bookshelf</string>
+    <string name="search_shelf">Search bookshelf for books.</string>
+    <string name="empty_shelf">Empty bookshelf\nStart reading by importing an e-book</string>
+    <string name="import_local">Import local book</string>
+    <string name="import_folder">Import local folder</string>
+
+    <!-- READ 阅读相关 -->
+    <string name="continue_reading">Continue reading</string>
+    <string name="shortcut_continue">Continue reading</string>
+    <string name="shortcut_continue_long">Continue reading the last book read</string>
+
+    <!-- ======================================================================================= -->
+
+    <!-- EXPLORE 发现相关 -->
+    <string name="tab_explore">Explore</string>
+    <!-- <string name="">Search for book title, author or keywords</string> -->
+    <!-- <string name="">搜索</string> -->
+    <!-- <string name="">% text sources loaded</string> -->
+    <!-- <string name="">Enter keyword to begin search</string> -->
+
+    <!-- ======================================================================================= -->
+
+    <!-- TTS 听书相关 -->
+    <!-- <string name="">Text-To-Speech (TTS)</string> -->
+    <!-- <string name="">Skip content regex</string> -->
+    <!-- <string name="">Match xxx</string> -->
+    <!-- <string name="">Save</string> -->
+    <!-- <string name="">Lock screen to keep CPU alive (?)</string> -->
+    <!-- <string name="">Enabling will consume more battery than usual; only recommended when lock screen pauses TTS reading</string> -->
+    <string name="tab_listen">Listen</string>
+    <string name="tts_playing">Now playing</string>
+    <!-- <string name="">Nothing playing</string> -->
+    <!-- <string name="">Open a book on the bookshelf and press the play symbol to start TTS reading</string> -->
+    <!-- <string name="">Part 1</string> -->
+    <!-- <string name="">Total %1$d parts</string> -->
+    <!-- ※更改：按钮【默认】改为【默认音色】，适配无障碍体验 -->
+    <!-- <string name="">Default Voice</string> -->
+        <!-- <string name="">Voice Settings</string> -->
+        <!-- <string name="">Local TTS engine, with 16 Chinese voices available</string> -->
+        <!-- <string name="">Voice Speed</string> -->
+    <!-- ※更改：按钮【关闭】改为【定时设置】，适配无障碍体验 -->
+    <!-- <string name="">Set Timer</string> -->
+        <!-- <string name="">Timer Settings</string> -->
+        <!-- <string name="">Stop text-to-speech reading when time is up</string> -->
+        <!-- <string name="">None</string> -->
+        <!-- <string name="">15-minute</string> -->
+        <!-- <string name="">30-minute</string> -->
+        <!-- <string name="">60-minute</string> -->
+        <!-- <string name="">90-minute</string> -->
+        <!-- <string name="">120-minute</string> -->
+    <!-- ※更改：按钮【TTS设置】改为【朗读设置】，对齐排版格式 -->
+    <!-- <string name="">TTS</string> -->
+        <!-- <string name="">TTS Settings</string> -->
+        <!-- <string name="">TTS Engine</string> -->
+        <!-- <string name="">Reading Speed</string> -->
+        <!-- <string name="">Custom TTS source</string> -->
+        <!-- <string name="">Edge TTS</string> -->
+        <!-- <string name="">System TTS</string> -->
+        <!-- <string name="">Open system TTS settings</string> -->
+            <!-- <string name="">System TTS engine package: System default</string> -->
+                <!-- <string name="">Select system TTS engine</string> -->
+                <!-- <string name="">Changes take effect immediately without restarting</string> -->
+                <!-- <string name="">Close</string> -->
+
+    <!-- ======================================================================================= -->
+
+    <!-- UI 界面相关 -->
+    <string name="tab_profile">My Profile</string>
+    <!-- <string name="">Reading Statistics</string> -->
+    <!-- <string name="">%1 total books read</string> -->
+    <!-- <string name="">%2 total time spent</string> -->
+    <!-- <string name="">%3 continuous days</string> -->
+    <!-- <string name="">Read %4 minutes today</string> -->
+    <!-- <string name="">View annual report</string> -->
+    <!-- <string name="">Annual Summary</string> -->
+    <!-- <string name="">YYYY Annual Reading Report</string> -->
+    <!-- <string name="">Books that accompanied you</string> -->
+    <!-- <string name="">(0 hr) Read? Spent?</string> -->
+    <!-- <string name="">(0 k) Words</string> -->
+    <!-- <string name="">(0 days) Active</string> -->
+    <!-- <string name="">Most Engaged In: xxx</string> -->
+    <!-- <string name="">Longest time</string> -->
+    <!-- <string name="">Often reading at time</string> -->
+    <!-- <string name="">Immersed reading time: 0 hr</string> -->
+    <!-- <string name="">Screenshot saved to gallery will contain complete metrics/tags/most engaged books</string> -->
+    <!-- <string name="">Save later</string> -->
+    <!-- <string name="">Save screenshot</string> -->
+    <!-- <string name="">墨境 MoRealm · Keep reading in time</string> -->
+
+    <!-- THEME 主题相关 -->
+    <string name="theme_settings">Theme Settings</string>
+    <!-- <string name="">Theme Switching</string> -->
+        <!-- <string name="">Follow System Theme</string> -->
+        <!-- <string name="">Off · Manually select theme below</string> -->
+        <!-- <string name="">On · Automatically switch to dark theme when system switches to dark mode</string> -->
+        <!-- <string name="">Daytime Default Theme</string> -->
+        <!-- <string name="">Built-in · Beige Page</string> -->
+            <!-- <string name="">Select Daytime Default Theme</string> -->
+            <!-- <string name="">Use Built-in Default (Beige Page)</string> -->
+            <!-- <string name="">E-Ink Screen</string> -->
+            <!-- <string name="">Paper</string> -->
+            <!-- <string name="">Off</string> -->
+        <!-- <string name="">Nighttime Default Theme</string> -->
+        <!-- <string name="">Built-in · MoRealm</string> -->
+            <!-- <string name="">Select Nighttime Default Theme</string> -->
+            <!-- <string name="">Use Built-in Default (MoRealm)</string> -->
+            <!-- <string name="">Forest</string> -->
+            <!-- <string name="">Late Night</string> -->
+            <!-- <string name="">Cyberpunk</string> -->
+            <!-- <string name="">Off</string> -->
+        <!-- <string name="">Tap to switch theme, real-time preview</string> -->
+        <!-- <string name="">Custom theme (Long press to delete)</string> -->
+            <!-- <string name="">My Theme</string> -->
+            <!-- <string name="">Deleted theme "My Theme"</string> -->
+            <!-- <string name="">Cancel</string> -->
+        <string name="custom_theme">Custom theme</string>
+        <string name="custom_theme_desc">No custom themes yet, tap below to create or import.</string>
+            <!-- <string name="">Custom theme</string> -->
+            <!-- <string name="">Save and apply</string> -->
+            <!-- <string name="">Theme name</string> -->
+            <!-- <string name="">Dark theme</string> -->
+                <!-- <string name="">The theme is set to daytime or nighttime when "Follow System" is selected. This default is automatically determined by the phone's background brightness, but can be manually overridden.</string> -->
+            <!-- <string name="">Color Configuration</string> -->
+                <!-- <string name="">Background Color</string> -->
+                <!-- <string name="">Text Color</string> -->
+                <!-- <string name="">Accent Color</string> -->
+            <!-- <string name="">Home Page Background Image</string> -->
+                <!-- <string name="">None set-->
+                <!-- <string name="">Tap to select image</string> -->
+                <!-- <string name="">Already set</string> -->
+                <!-- <string name="">Tap to change image</string> -->
+                <!-- <string name="">Clear</string> -->
+            <!-- <string name="">Reader CSS</string> -->
+                <!-- <string name="">Custom CSS</string> -->
+                <!-- <string name="">Quick Insert</string> -->
+                <!-- <string name="">Cancel Indent</string> -->
+                <!-- <string name="">First line indent two characters</string> -->
+                <!-- <string name="">Compact line spacing</string> -->
+                <!-- <string name="">Comfort line spacing</string> -->
+                <!-- <string name="">Left Alignment</string> -->
+                <!-- <string name="">Justified Alignment</string> -->
+                <!-- <string name="">Large Font</string> -->
+                <!-- <string name="">Large Paragraph Spacing</string> -->
+                <!-- <string name="">Supported Properties</string> -->
+            <!-- <string name="">Real-time Preview</string> -->
+                <!-- <string name="">Preview Effect</string> -->
+        <!-- <string name="">Export Theme</string> -->
+        <!-- <string name="">Import Theme</string> -->
+        <!-- <string name="">Export All Custom Themes (0)</string> -->
+
+    <!-- VISUAL 外观设置相关 -->
+    <!-- Title for the language picker -->
+    <!-- <string name="">Language Settings</string> -->
+    <!-- Description for language picker -->
+    <!-- <string name="">System default</string> -->
+    <!-- <string name="">简体中文</string> -->
+    <!-- <string name="">台繁中文</string> -->
+    <!-- <string name="">English</string> -->
+    <!-- <string name="">Appearance & Reading</string> -->
+    <!-- <string name="">Appearance Settings</string> -->
+    <!-- <string name="">Universal Background Image, Transparency, Blur</string> -->
+        <!-- <string name="">Appearance</string> -->
+        <!-- <string name="">Universal Background Image</string> -->
+        <!-- <string name="">Effect Adjustment</string> -->
+
+    <!-- READER 阅读设置相关 -->
+    <!-- <string name="">Reader Settings</string> -->
+    <!-- <string name="">Flip animation, volume key flip, screen always-on, interface prompts</string> -->
+        <!-- <string name="">Reader Settings</string> -->
+        <!-- <string name="">Screen Interaction</string> -->
+            <!-- <string name="">Flip animation: Cover, Simulation, Slide, Up-Down, Fade-in, None</string> -->
+            <!-- <string name="">Press the left side of the page to:</string> -->
+            <!-- <string name="">Flip to the next page</string> -->
+            <!-- <string name="">Flip to the previous page</string> -->
+        <!-- <string name="">Physical Keys and Devices</string> -->
+            <!-- <string name="">Volume Key Flip</string> -->
+            <!-- <string name="">Headset/Bluetooth Page Turner</string> -->
+        <!-- <string name="">Startup Preferences</string> -->
+            <!-- <string name="">Continue reading from last session on startup</string> -->
+        <!-- <string name="">Selection and Highlighting</string> -->
+            <!-- <string name="">Long press to highlight text</string> -->
+            <!-- <string name="">Selection Menu Buttons</string> -->
+                <!-- <string name="">Main row 3/3</string> -->
+                <!-- <string name="">Selection Menu Buttons</string> -->
+                <!-- <string name="">The main row can have up to three buttons, always visible; the folded row can be expanded by clicking "More"; hidden buttons are not rendered.</string> -->
+                    <!-- <string name="">Main</string> -->
+                    <!-- <string name="">Folded</string> -->
+                    <!-- <string name="">Hidden</string> -->
+                    <!-- <string name="">Copy</string> -->
+                    <!-- <string name="">Hightlight</string> -->
+                    <!-- <string name="">Underline</string> -->
+                    <!-- <string name="">Look up</string> -->
+                    <!-- <string name="">Pronounce</string> -->
+                    <!-- <string name="">Translate</string> -->
+                    <!-- <string name="">Share</string> -->
+                    <!-- <string name="">Text color</string> -->
+                    <!-- <string name="">Reset</string> -->
+                    <!-- <string name="">Cancel</string> -->
+                    <!-- <string name="">Save</string> -->
+        <!-- <string name="">Reading Layout</string> -->
+            <!-- ※更改：标题【竖排版】改为【文本排版】，避免略过横排设置 -->
+            <!-- <string name="">Vertical Layout</string> -->
+            <!-- <string name="">Horizontal Layout</string> -->
+            <!-- <string name="">VL (Chapter on right, Content on left)</string> -->
+            <!-- <string name="">VL (Chapter on left, Content on right)</string> -->
+            <!-- <string name="">Screen-off Settings</string> -->
+                <!-- <string name="">Screen-off Timer</string> -->
+                <!-- <string name="">None</string> -->
+                <!-- <string name="">Follow system</string> -->
+                <!-- <string name="">1-minute</string> -->
+                <!-- <string name="">2-minute</string> -->
+                <!-- <string name="">5-minute</string> -->
+                <!-- <string name="">10-minute</string> -->
+            <!-- <string name="">Display system status</string> -->
+            <!-- <string name="">Display chapter title</string> -->
+            <!-- <string name="">Display time and battery</string> -->
+            <!-- <string name="">Chapter Title Alignment</string> -->
+                <!-- <string name="">Chapter Title Alignment</string> -->
+                <!-- <string name="">Centered</string> -->
+                <!-- <string name="">Left-aligned</string> -->
+                <!-- <string name="">Right-aligned</string> -->
+                <!-- <string name="">Cancel</string> -->
+        <!-- <string name="">Text Color</string> -->
+            <!-- <string name="">Text Coloring</string> -->
+            <!-- <string name="">On</string> -->
+            <!-- <string name="">Off</string> -->
+            <!-- <string name="">Punctuation, numbers, letters, text within quotes... all colored according to regex</string> -->
+                <!-- <string name="">Text Coloring</string></string> -->
+                    <!-- <string name="">Automatically color body text in content according to regex: punctuation, numbers, letters, special symbols, as well as text within quotes and brackets, enhancing the visual hierarchy while reading. Absolute local rules, no internet connection required.</string> -->
+                <!-- <string name="">Master Switch</string> -->
+                    <!-- <string name="">Regex Highlighting</string> -->
+                    <!-- <string name="">When turned off, the text color in content body will follow default colors of current theme.</string> -->
+                <!-- <string name="">Palette (Daytime Theme)</string> -->
+                    <!-- <string name="">Restore all to default (Daytime)</string> -->
+                    <!-- <string name="">Punctuations</string> -->
+                    <!-- <string name="">Numbers</string> -->
+                    <!-- <string name="">Letters</string> -->
+                    <!-- <string name="">Special symbols</string> -->
+                    <!-- <string name="">Quotations</string> -->
+                    <!-- <string name="">Brackets</string> -->
+                <!-- <string name="">Palette (Nighttime Theme)</string> -->
+                    <!-- <string name="">Restore all to default (Nighttime)</string> -->
+                    <!-- <string name="">Punctuations</string> -->
+                    <!-- <string name="">Numbers</string> -->
+                    <!-- <string name="">Letters</string> -->
+                    <!-- <string name="">Special symbols</string> -->
+                    <!-- <string name="">Quotations</string> -->
+                    <!-- <string name="">Brackets</string> -->
+                <!-- <string name="">Highlighted Words</string> -->
+                    <!-- <string name="">No highlighted words yet. After adding a keyword, text in the content body will be automatically colored when the word appears (longer words will have a higher priority).</string> -->
+                    <!-- <string name="">New highlight keyword</string> -->
+                    <!-- <string name="">Color</string> -->
+                    <!-- <string name="">Add highlight keyword</string> -->
+        <!-- <string name="">Content Search</string> -->
+            <!-- <string name="">Search Direction</string> -->
+            <!-- <string name="">Full Text</string> -->
+            <!-- <string name="">Forward (Before)</string> -->
+            <!-- <string name="">Backward (After)</string> -->
+            <!-- <string name="">Forward = search text before current page; Backward = search text after current page</string> -->
+            <!-- <string name="">Content Search Direction-->
+                <!-- <string name="">Full Text Search: Display all matches, regardless of their locations</string> -->
+                <!-- <string name="">Forward Search: Display only matches before the current page, all the way to the front of the book</string> -->
+                <!-- <string name="">Backward Search: Display only matches after the current page, all the way to the back of the book</string> -->
+                <!-- <string name="">Cancel</string> -->
+        <!-- <string name="">Reader Background</string> -->
+            <!-- <string name="">After setting, the reader background will automatically switch with the day and night themes</string> -->
+            <!-- <string name="">Daytime Background</string> -->
+                <!-- <string name="">Tap to select image</string> -->
+                <!-- <string name="">Set・Tap to change</string> -->
+                <!-- <string name="">Clear</string> -->
+            <!-- <string name="">Nighttime Background</string> -->
+                <!-- <string name="">Tap to select image</string> -->
+                <!-- <string name="">Set・Tap to change</string> -->
+                <!-- <string name="">Clear</string> -->
+        <!-- <string name="">Chapter Recognition</string> -->
+            <!-- <string name="">Custom chapter regex</string> -->
+            <!-- <string name="">Empty to use xxx</string> -->
+            <!-- <string name="">Save</string> -->
+
+    <!-- PARSER 解析规则相关 -->
+    <string name="content_rules">Content Parsing Regex</string>
+    <string name="content_rules_desc">Manage configurations for custom parsing</string>
+    <!-- <string name="">Content Replacement and Purification</string> -->
+    <!-- <string name="">Remove ads and purify main content, support regular expression replacement</string> -->
+
+    <!-- AUTOGROUP 自动分组相关 -->
+    <!-- <string name="">Auto Grouping Rules</string> -->
+    <!-- <string name="">Genre keyword, threshold, and ignore list, can be exported and shared</string> -->
+
+    <!-- BACKUP 备份相关 -->
+    <!-- <string name="">Backup and Restore</string> -->
+        <!-- <string name="">Export Backup</string> -->
+        <!-- <string name="">Select the data to be exported and check the size</string> -->
+        <!-- <string name="">Import Backup</string> -->
+        <!-- <string name="">Select ZIP file and restore by category</string> -->
+        <string name="webdav_sync">WebDAV Sync</string>
+        <!-- <string name="">One-click to sync all progress, bookshelf, book sources, themes</string> -->
+        <string name="data_migration">Data Migration</string>
+
+    <!-- OTHER 其他相关 -->
+    <string name="advanced_settings">Advanced Settings</string>
+    <!-- <string name="book_source_management">Book Source Management</string> -->
+    <!-- <string name="">Import, enable, or delete book sources; supports URL subscription and JSON import</string> -->
+    <!-- <string name="">Search Settings</string> -->
+    <!-- <string name="">The number of concurrent searches and single-source timeout can be adjusted according to network conditions.</string> -->
+    <!-- <string name="">My Bookmarks</string> -->
+    <!-- <string name="">View across books, filter by time, group by books</string> -->
+    <!-- <string name="">Offline Cache</string> -->
+    <!-- <string name="">Download chapters in batches to support offline reading</string> -->
+    <!-- <string name="legado_migration">Legado One-click Migration</string> -->
+    <!-- <string name="">Import backup from Legado and migrate all book sources, bookshelf, and progress</string> -->
+    <!-- <string name="desktop_widget">Desktop Widget</string> -->
+    <!-- <string name="">Place "Continue Reading" on your desktop to quickly return to where you left off</string> -->
+
+    <!-- WIDGET 桌面小组件相关 -->
+    <string name="widget_continue_reading_label">MoRealm · Continue reading</string>
+    <string name="widget_continue_reading_title">📖 Continue reading</string>
+    <string name="widget_continue_reading_desc">Show the book last read and today\'s read time, tap here to continue</string>
+    <string name="widget_preview_book_title">Tap to the page last read</string>
+    <string name="widget_loading">Loading...</string>
+    <string name="widget_empty_title">No record yet</string>
+    <string name="widget_empty_subtitle">Tap to open, pick a book and start reading in MoRealm</string>
+    <string name="widget_today_read_format">Read for %1$s today</string>
+
+    <!-- ABOUT 关于 -->
+    <!-- <string name="about_morealm">关于墨境</string> -->
+        <!-- <string name="">Features</string> -->
+            <!-- <string name="">Multi-Format Support</string> -->
+            <!-- <string name="">TXT, EPUB, PDF</string> -->
+            <!-- <string name="">Theme System</string> -->
+            <!-- <string name="">Six built-in themes + Legado theme import</string> -->
+            <!-- <string name="">WebDAV Syncronization</string> -->
+            <!-- <string name="">Progress, Bookshelf, Book Sources, Themes</string> -->
+            <!-- <string name="">Text-To-Speech (TTS)</string> -->
+            <!-- <string name="">System Text-To-Speech Engine + Internal Control Panel</string> -->
+            <!-- <string name="">Smart Import</string> -->
+            <!-- <string name="">Automatic Folder Recognition + Batch Import</string> -->
+            <!-- <string name="">Legado Support</string> -->
+            <!-- <string name="">Book Source Format + One-click Migration</string> -->
+        <!-- <string name="">Founding Anniversary</string> -->
+            <!-- <string name="">First release: April 19, 2026 · v1.0.0-alpha1</string> -->
+            <!-- <string name="">Have been with you for % days</string> -->
+        <!-- <string name="">Update Log</string> -->
+        <!-- <string name="">Contributors</string> -->
+            <!-- <string name="">Let's make MoRealm better, together</string> -->
+                <!-- <string name="">Contributor</string> -->
+                <!-- <string name="">Thank xxx</string> -->
+                <!-- <string name="">Sorted by time joined. xxx</string> -->
+                <!-- <string name="">Want to join? 查看xxx</string> -->
+        <!-- <string name="">Project Homepage</string> -->
+        <!-- <string name="">Contact Us</string> -->
+            <!-- <string name="">QQ group 1101519131 · Copy number to clipboard</string> -->
+        <!-- <string name="">Made with ❤️ for readers</string> -->
+    <!-- <string name="check_update">Check Update</string> -->
+    <!-- <string name="">Download the latest version from a cloud drive (Current v1.x)</string> -->
+        <!-- <string name="">Download the latest version</string> -->
+        <!-- <string name="">Current version. Select a cloud drive to get the latest installation package.</string> -->
+        <!-- <string name="">GitHub</string> -->
+        <!-- <string name="">Baidu Cloud</string> -->
+        <!-- <string name="">Quark Cloud</string> -->
+        <!-- <string name="">123 Cloud</string> -->
+        <!-- <string name="">Close</string> -->
+    <!-- <string name="app_log">App Log</string> -->
+    <!-- <string name="app_log_desc">View runtime logs and error information</string> -->
+        <!-- <string name="">Runtime Log</string> -->
+            <!-- <string name="">Operation Log</string> -->
+            <!-- <string name="">Directory Path</string> -->
+            <!-- <string name="">Clean Directory</string> -->
+                <!-- <string name="">Search in Message/Tag/Exception stack</string> -->
+            <!-- <string name="">All</string> -->
+            <!-- <string name="">Crash Log</string> -->
+            <!-- <string name="">xxx</string> -->
+            <!-- <string name="">Crash Log</string> -->
+            <!-- <string name="">Directory Path</string> -->
+            <!-- <string name="">No collapse record\nThis is a good thing</string> -->
+    <!-- <string name="">Buy the developer a coffee</string> -->
+</resources>

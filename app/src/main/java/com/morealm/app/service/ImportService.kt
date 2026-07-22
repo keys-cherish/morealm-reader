@@ -174,6 +174,12 @@ class ImportService : Service() {
                     Intent.FLAG_GRANT_READ_URI_PERMISSION,
                 )
             }.onFailure { AppLog.warn("ImportSvc", "takePersistableUriPermission failed: ${it.message}") }
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    treeUri,
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }.onFailure { AppLog.debug("ImportSvc", "write permission unavailable: ${it.message}") }
 
             try {
                 val topChildren = FastFileScanner.listImmediateChildren(this@ImportService, treeUri)

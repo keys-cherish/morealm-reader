@@ -96,6 +96,10 @@ class PageLevelCoreHandle internal constructor(
 fun rememberPageLevelCore(
     currentChapterIndex: Int,
     chapterCount: Int,
+    /**
+     * 当前正文发布版本。它与 restoreToken 分离：restoreToken 只负责定位；本值变化才重排。
+     */
+    contentVersion: Long,
     restoreToken: Long,
     onChapterIndexChange: (Int) -> Unit,
     loadChapterContent: suspend (Int) -> ScrollChapterContent?,
@@ -118,6 +122,7 @@ fun rememberPageLevelCore(
     // cp 命中失败时的兜底锚：重排前记下的章内页比例（0-1）。cp 主锚 + 比例兜底两层定位，
     // cp 越界 / 边缘命中失败时按比例就近落页，而非粗暴回章首（边缘漂移到章首根因）。
     var reflowAnchorFraction by remember { mutableFloatStateOf(0f) }
+    var appliedContentVersion by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
     val pageFactory = remember(state) {
         ScrollPageFactory(
             dataSource = state,
@@ -232,17 +237,15 @@ fun rememberPageLevelCore(
                             // 再生成一个视觉标题，否则含 h1 的页面会出现重复标题。
                             omitChapterTitleBlock = true,
                         )
-                        if (horizontalPaged) {
-                            layout
-                        } else {
-                            expandBackgroundOnlyScrollPage(
-                                layout = layout,
-                                content = structured,
-                                chapterTitle = content.title,
-                                pageWidth = engine.viewWidth,
-                                resolveImageDimensions = engine.imageDimensionsResolver::resolve,
-                            )
-                        }
+                        // 背景专页属于 EPUB 内容语义，不属于某一种翻页动画。所有模式都
+                        // 走同一展开逻辑，避免滚动能显示、平移/覆盖/仿真只剩空白页。
+                        expandBackgroundOnlyScrollPage(
+                            layout = layout,
+                            content = structured,
+                            chapterTitle = content.title,
+                            pageWidth = engine.viewWidth,
+                            resolveImageDimensions = engine.imageDimensionsResolver::resolve,
+                        )
                     } ?: engine.layoutChapter(content.chapterIndex, content.title, content.content)
                 }
             } catch (e: CancellationException) {
@@ -279,8 +282,35 @@ fun rememberPageLevelCore(
     // 并行 launch：prev/next 加载相互独立，无依赖关系 → 并行启动比 sequential 快一倍。
     // LaunchedEffect 在 state.currentChapterIndex 或 engine 变化时自动 cancel 旧的子
     // launch（user fling 跨多章时不堆积，新章节立即重 trigger）。
-    LaunchedEffect(state.currentChapterIndex, engine) {
+    LaunchedEffect(state.currentChapterIndex, currentChapterIndex, engine, contentVersion) {
         val curIdx = state.currentChapterIndex
+        // 同章 TXT 写回时 external chapter index 不变，旧逻辑不会走 setExternalChapterIndex，
+        // state.currentChapter 因而一直保留旧分页。正文版本变化后在这里显式失效三章布局；
+        // 同章 Slider/搜索定位只改 restoreToken，不会误触发昂贵重排。
+        if (
+            contentVersion != 0L &&
+            contentVersion != appliedContentVersion &&
+            curIdx == currentChapterIndex
+        ) {
+            val oldLayout = state.currentChapter
+            if (oldLayout != null && reflowAnchorCp < 0) {
+                reflowAnchorCp = visibleChapterPosition(
+                    layout = oldLayout,
+                    pageIndex = pageFactory.pageIndex,
+                    pageOffset = state.pageOffset,
+                ) ?: -1
+                reflowAnchorFraction = if (oldLayout.pages.isNotEmpty()) {
+                    pageFactory.pageIndex.toFloat() / oldLayout.pages.size
+                } else {
+                    0f
+                }
+            }
+            state.prevChapter = null
+            state.currentChapter = null
+            state.nextChapter = null
+            appliedContentVersion = contentVersion
+            AppLog.info("PageLevelCore", "content version changed -> invalidate layouts idx=$curIdx")
+        }
         if (state.currentChapter?.chapterIndex != curIdx) {
             AppLog.info("PageLevelCore", "HOST loadCur idx=$curIdx")
             val layout = loadAndLayout(curIdx)

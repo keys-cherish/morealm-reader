@@ -24,6 +24,8 @@ class SourceRepository @Inject constructor(
      */
     suspend fun getEnabledSourcesLite() = sourceDao.getEnabledSourcesLite()
 
+    fun observeEnabledSourceUrls(): Flow<List<String>> = sourceDao.observeEnabledSourceUrls()
+
     /** O(1) count for UI / dispatcher without materializing the full source list. */
     suspend fun getEnabledSourceCount(): Int = sourceDao.getEnabledSourceCount()
 

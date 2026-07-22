@@ -213,6 +213,10 @@ interface BookSourceDao {
     @Query("SELECT bookSourceUrl, bookSourceName, bookSourceType FROM book_sources WHERE enabled = 1 ORDER BY customOrder")
     suspend fun getEnabledSourcesLite(): List<BookSourceLite>
 
+    /** 发现页只需监听启用源 URL，避免 source 管理页切换开关后继续展示旧缓存。 */
+    @Query("SELECT bookSourceUrl FROM book_sources WHERE enabled = 1 ORDER BY customOrder")
+    fun observeEnabledSourceUrls(): Flow<List<String>>
+
     /** Fast count of enabled sources — avoid pulling 100k rows just to display a number. */
     @Query("SELECT COUNT(*) FROM book_sources WHERE enabled = 1")
     suspend fun getEnabledSourceCount(): Int

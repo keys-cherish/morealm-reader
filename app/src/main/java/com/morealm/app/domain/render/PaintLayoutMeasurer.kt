@@ -6,6 +6,7 @@ import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.font.EpubFontRegistry
 import com.morealm.epub.layout.LayoutMeasurer
 import com.morealm.epub.layout.MeasuredText
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 
 /**
@@ -23,6 +24,12 @@ class PaintLayoutMeasurer(private val paint: TextPaint) : LayoutMeasurer {
 
     /** Custom-font ASCII space fallback width (~0.5 CJK em); see [measureSplitWithFont]. */
     private val asciiSpaceMinWidthWithCustomFont: Float = paint.measureText("一") * 0.5f
+    /**
+     * 视觉右界参与逐行断行，同一汉字会在整本书里反复出现。按字体族分桶缓存结果，避免
+     * 每次排版都分配 Rect 并调用 getTextBounds；ConcurrentHashMap 允许相邻章节并行预排版。
+     */
+    private val visualRightCache = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
+    private val visualBoundsPaint = TextPaint(paint)
 
     override val cjkFullCharWidth: Float = cjkFullCharWidth(paint)
     override val textHeight: Float = paint.textHeight
@@ -41,13 +48,24 @@ class PaintLayoutMeasurer(private val paint: TextPaint) : LayoutMeasurer {
     override fun measureWidth(text: String): Float = paint.measureText(text)
 
     override fun visualRight(text: String, fontFamily: String?): Int {
-        val swap = fontFamily?.let { EpubFontRegistry.resolveActive(it) }
-        val saved = paint.typeface
-        if (swap != null) paint.typeface = swap
-        val bounds = Rect()
-        paint.getTextBounds(text, 0, text.length, bounds)
-        paint.typeface = saved
-        return bounds.right
+        val familyCache = visualRightCache.getOrPut(fontFamily ?: DEFAULT_FONT_CACHE_KEY) {
+            ConcurrentHashMap()
+        }
+        familyCache[text]?.let { return it }
+        val right = synchronized(visualBoundsPaint) {
+            val swap = fontFamily?.let { EpubFontRegistry.resolveActive(it) }
+            val saved = visualBoundsPaint.typeface
+            try {
+                if (swap != null) visualBoundsPaint.typeface = swap
+                val bounds = Rect()
+                visualBoundsPaint.getTextBounds(text, 0, text.length, bounds)
+                bounds.right
+            } finally {
+                visualBoundsPaint.typeface = saved
+            }
+        }
+        familyCache.putIfAbsent(text, right)
+        return right
     }
 
     override fun measureSplitWithFont(text: String, fontFamily: String?): MeasuredText {
@@ -137,5 +155,9 @@ class PaintLayoutMeasurer(private val paint: TextPaint) : LayoutMeasurer {
                 "family='$fontFamily' minW=$minW boostScan=$diag",
             )
         }
+    }
+
+    private companion object {
+        const val DEFAULT_FONT_CACHE_KEY = "\u0000"
     }
 }

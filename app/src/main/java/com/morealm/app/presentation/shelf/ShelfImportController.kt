@@ -234,6 +234,12 @@ class ShelfImportController(
         } catch (e: Exception) {
             AppLog.warn("Import", "Permission grant failed: ${e.message}")
         }
+        // 写授权单独申请：提供方只授予读取时不影响导入；授予写入时 TXT 可原位编辑。
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }.onFailure {
+            AppLog.debug("Import", "Write permission unavailable for $uri: ${it.message}")
+        }
     }
 
     /**

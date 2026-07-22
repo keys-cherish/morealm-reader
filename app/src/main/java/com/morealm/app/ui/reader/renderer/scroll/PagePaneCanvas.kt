@@ -403,7 +403,10 @@ internal fun drawScrollPageOnCanvas(
                 baseX = 0f
                 cacheTargetW = slotW.toInt().coerceAtLeast(1)
             }
-            val slotH = line.lineBottom - line.lineTop
+            // FULLSCREEN/FIT_WINDOW 图片属于独立页面展示语义，不应被标题段的 lineTop 或
+            // content 行高挤到页面中间；在整页 viewport 内按 preserve-aspect-ratio 居中。
+            val slotTop = if (isFullPage) 0f else line.lineTop
+            val slotH = if (isFullPage) viewHeightF else line.lineBottom - line.lineTop
             val bitmap = com.morealm.app.domain.render.ImageCache.get(
                 src, cacheTargetW,
             ) ?: continue
@@ -413,7 +416,7 @@ internal fun drawScrollPageOnCanvas(
             val drawW = bmpW * scale
             val drawH = bmpH * scale
             val offsetX = baseX + (slotW - drawW) / 2f
-            val offsetY = line.lineTop + (slotH - drawH) / 2f
+            val offsetY = slotTop + (slotH - drawH) / 2f
             nc.drawBitmap(
                 bitmap,
                 null,
@@ -539,12 +542,14 @@ internal fun drawScrollPageOnCanvas(
             val overrideColor = textColorByCp[col.chapterPosition] ?: col.colorArgb?.let {
                 adaptAuthoredForegroundForReaderBg(it, readerBgArgb, line.blockStyle.backgroundColor)
             }
-            if (overrideColor != null) {
-                paint.color = overrideColor
-                nc.drawText(col.charData, col.start, baselineY, paint)
-                paint.color = paragraphColor ?: defaultColor
-            } else {
-                nc.drawText(col.charData, col.start, baselineY, paint)
+            paint.withEpubTypeface(col.fontFamily) {
+                if (overrideColor != null) {
+                    paint.color = overrideColor
+                    nc.drawText(col.charData, col.start, baselineY, paint)
+                    paint.color = paragraphColor ?: defaultColor
+                } else {
+                    nc.drawText(col.charData, col.start, baselineY, paint)
+                }
             }
         }
         if (blockRotationSave != null) nc.restoreToCount(blockRotationSave)
@@ -635,50 +640,52 @@ private fun drawByAtoms(
                 val effectiveBaselineY = if (scale != 1f) {
                     line.lineTop + basePaint.textSize * 0.8f
                 } else baselineY
-                val rotationSave = if (atom.rotationDegrees != 0f) {
-                    canvas.save().also {
-                        canvas.rotate(
-                            atom.rotationDegrees,
-                            x + atom.width / 2f,
-                            effectiveBaselineY - basePaint.textSize * 0.3f,
-                        )
+                basePaint.withEpubTypeface(atom.fontFamily) {
+                    val rotationSave = if (atom.rotationDegrees != 0f) {
+                        canvas.save().also {
+                            canvas.rotate(
+                                atom.rotationDegrees,
+                                x + atom.width / 2f,
+                                effectiveBaselineY - basePaint.textSize * 0.3f,
+                            )
+                        }
+                    } else null
+                    // Phase 4：字符级 inline 背景盒子（底层方块），无 bg 时零开销返回
+                    drawInlineBg(canvas, atom, x, effectiveBaselineY, basePaint, readerBgArgb)
+                    val textX = x + atom.inlineBgPaddingLeftPx
+                    // A5 Step 2：检查 atom range 内有无 user 高亮 textColorByCp override
+                    // 命中 → 退化 char-by-char 按 cp 独立涂色；无 → fast path 整 atom drawText
+                    val hasOverride = if (textColorByCp.isNotEmpty()) {
+                        (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
+                    } else false
+                    if (hasOverride) {
+                        var cx = textX
+                        val baseColor = atom.colorArgb?.let {
+                            adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
+                        } ?: defaultColor
+                        for (ci in atom.text.indices) {
+                            val cp = atomStartCp + ci
+                            val color = textColorByCp[cp] ?: baseColor
+                            basePaint.color = color
+                            val ch = atom.text[ci].toString()
+                            canvas.drawText(ch, cx, effectiveBaselineY, basePaint)
+                            cx += basePaint.measureText(ch)
+                        }
+                        basePaint.color = defaultColor
+                    } else {
+                        val origColor = basePaint.color
+                        if (atom.colorArgb != null) {
+                            basePaint.color = adaptAuthoredForegroundForReaderBg(
+                                atom.colorArgb!!,
+                                readerBgArgb,
+                                atom.inlineBgArgb,
+                            )
+                        }
+                        canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
+                        if (atom.colorArgb != null) basePaint.color = origColor
                     }
-                } else null
-                // Phase 4：字符级 inline 背景盒子（底层方块），无 bg 时零开销返回
-                drawInlineBg(canvas, atom, x, effectiveBaselineY, basePaint, readerBgArgb)
-                val textX = x + atom.inlineBgPaddingLeftPx
-                // A5 Step 2：检查 atom range 内有无 user 高亮 textColorByCp override
-                // 命中 → 退化 char-by-char 按 cp 独立涂色；无 → fast path 整 atom drawText
-                val hasOverride = if (textColorByCp.isNotEmpty()) {
-                    (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
-                } else false
-                if (hasOverride) {
-                    var cx = textX
-                    val baseColor = atom.colorArgb?.let {
-                        adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
-                    } ?: defaultColor
-                    for (ci in atom.text.indices) {
-                        val cp = atomStartCp + ci
-                        val color = textColorByCp[cp] ?: baseColor
-                        basePaint.color = color
-                        val ch = atom.text[ci].toString()
-                        canvas.drawText(ch, cx, effectiveBaselineY, basePaint)
-                        cx += basePaint.measureText(ch)
-                    }
-                    basePaint.color = defaultColor
-                } else {
-                    val origColor = basePaint.color
-                    if (atom.colorArgb != null) {
-                        basePaint.color = adaptAuthoredForegroundForReaderBg(
-                            atom.colorArgb!!,
-                            readerBgArgb,
-                            atom.inlineBgArgb,
-                        )
-                    }
-                    canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
-                    if (atom.colorArgb != null) basePaint.color = origColor
+                    if (rotationSave != null) canvas.restoreToCount(rotationSave)
                 }
-                if (rotationSave != null) canvas.restoreToCount(rotationSave)
                 if (scale != 1f) basePaint.textSize = baseSize
                 x += atom.width
             }
@@ -739,12 +746,13 @@ private fun drawByCells(
         // rect = cell 内容包围盒向外扩 padding（CSS content-box：padding/border 在 content 之外）。
         // 复用 drawBoxDecorations（边框 / 圆角 / 若有 bg 走夜间自适应）。
         cell.boxStyle?.let { bs ->
+            val decorationTop = line.lineTop + cell.contentTop + cell.decorationTopOffsetY
             drawBoxDecorations(
                 canvas, bs,
                 cell.contentLeft,
-                line.lineTop + cell.contentTop,
-                cell.contentLeft + cell.boxWidth,
-                line.lineTop + cell.contentTop + cell.boxHeight,
+                decorationTop,
+                cell.contentLeft + cell.decorationWidth,
+                decorationTop + cell.decorationHeight,
                 fontScale,
                 readerBgArgb = readerBgArgb,
                 dashPhasePx = cell.borderDashPhasePx,
@@ -758,47 +766,49 @@ private fun drawByCells(
                     val effectiveX = cell.contentLeft + cell.paddingLeft + atom.cellLocalX
                     val effectiveBaselineY = line.lineTop + cell.contentTop + cell.paddingTop +
                         cell.contentOffsetY + atom.cellLocalY + atom.baseline
-                    val rotationSave = if (atom.rotationDegrees != 0f) {
-                        canvas.save().also {
-                            canvas.rotate(
-                                atom.rotationDegrees,
-                                effectiveX + atom.width / 2f,
-                                effectiveBaselineY - basePaint.textSize * 0.3f,
-                            )
+                    basePaint.withEpubTypeface(atom.fontFamily) {
+                        val rotationSave = if (atom.rotationDegrees != 0f) {
+                            canvas.save().also {
+                                canvas.rotate(
+                                    atom.rotationDegrees,
+                                    effectiveX + atom.width / 2f,
+                                    effectiveBaselineY - basePaint.textSize * 0.3f,
+                                )
+                            }
+                        } else null
+                        // Phase 4：字符级 inline 背景盒子（底层方块），无 bg 时零开销返回
+                        drawInlineBg(canvas, atom, effectiveX, effectiveBaselineY, basePaint, readerBgArgb)
+                        val textX = effectiveX + atom.inlineBgPaddingLeftPx
+                        val hasOverride = if (textColorByCp.isNotEmpty()) {
+                            (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
+                        } else false
+                        if (hasOverride) {
+                            var cx = textX
+                            val baseColor = atom.colorArgb?.let {
+                                adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
+                            } ?: defaultColor
+                            for (ci in atom.text.indices) {
+                                val cp = atomStartCp + ci
+                                basePaint.color = textColorByCp[cp] ?: baseColor
+                                val ch = atom.text[ci].toString()
+                                canvas.drawText(ch, cx, effectiveBaselineY, basePaint)
+                                cx += basePaint.measureText(ch)
+                            }
+                            basePaint.color = defaultColor
+                        } else {
+                            val origColor = basePaint.color
+                            if (atom.colorArgb != null) {
+                                basePaint.color = adaptAuthoredForegroundForReaderBg(
+                                    atom.colorArgb!!,
+                                    readerBgArgb,
+                                    atom.inlineBgArgb,
+                                )
+                            }
+                            canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
+                            if (atom.colorArgb != null) basePaint.color = origColor
                         }
-                    } else null
-                    // Phase 4：字符级 inline 背景盒子（底层方块），无 bg 时零开销返回
-                    drawInlineBg(canvas, atom, effectiveX, effectiveBaselineY, basePaint, readerBgArgb)
-                    val textX = effectiveX + atom.inlineBgPaddingLeftPx
-                    val hasOverride = if (textColorByCp.isNotEmpty()) {
-                        (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
-                    } else false
-                    if (hasOverride) {
-                        var cx = textX
-                        val baseColor = atom.colorArgb?.let {
-                            adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
-                        } ?: defaultColor
-                        for (ci in atom.text.indices) {
-                            val cp = atomStartCp + ci
-                            basePaint.color = textColorByCp[cp] ?: baseColor
-                            val ch = atom.text[ci].toString()
-                            canvas.drawText(ch, cx, effectiveBaselineY, basePaint)
-                            cx += basePaint.measureText(ch)
-                        }
-                        basePaint.color = defaultColor
-                    } else {
-                        val origColor = basePaint.color
-                        if (atom.colorArgb != null) {
-                            basePaint.color = adaptAuthoredForegroundForReaderBg(
-                                atom.colorArgb!!,
-                                readerBgArgb,
-                                atom.inlineBgArgb,
-                            )
-                        }
-                        canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
-                        if (atom.colorArgb != null) basePaint.color = origColor
+                        if (rotationSave != null) canvas.restoreToCount(rotationSave)
                     }
-                    if (rotationSave != null) canvas.restoreToCount(rotationSave)
                     if (scale != 1f) basePaint.textSize = baseSize
                 }
                 is com.morealm.epub.render.InlineImage -> {

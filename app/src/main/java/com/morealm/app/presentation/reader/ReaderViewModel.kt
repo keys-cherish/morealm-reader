@@ -54,6 +54,11 @@ data class RenderedReaderChapter(
     val index: Int = 0,
     val title: String = "",
     val content: String = "",
+    /**
+     * 正文内容版本。仅在重新读取/发布章节正文时变化；同章进度跳转的 copy 保持不变。
+     * page-level 引擎据此区分“只恢复位置”和“正文已改，必须丢弃旧分页”。
+     */
+    val contentVersion: Long = 0L,
     val initialProgress: Int = 0,
     val initialChapterPosition: Int = 0,
     /**
@@ -246,6 +251,8 @@ class ReaderViewModel @Inject constructor(
     val pendingSearchSelection: StateFlow<ReaderSearchController.SearchSelection?> = search.pendingSearchSelection
     val searching: StateFlow<Boolean> = search.searching
     val searchError: StateFlow<String?> = search.searchError
+    val innerSearchMode: StateFlow<String> = prefs.innerSearchMode
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "all")
     val editingContent: StateFlow<Boolean> = contentEdit.editingContent
     val txtReplaceState: StateFlow<TxtReplaceState> = contentEdit.txtReplaceState
 
@@ -669,6 +676,9 @@ class ReaderViewModel @Inject constructor(
         search.searchCurrentChapter(query, plain, idx, title, mode, pos, isRegex, isCaseSensitive)
     }
     fun clearSearchResults() = search.clearSearchResults()
+    fun setInnerSearchMode(mode: String) {
+        viewModelScope.launch { prefs.setInnerSearchMode(mode) }
+    }
     fun openSearchResult(result: ReaderSearchController.SearchResult) = search.openSearchResult(result)
     fun consumeSearchSelection() = search.consumeSearchSelection()
 
@@ -701,6 +711,8 @@ class ReaderViewModel @Inject constructor(
     )
 
     fun clearTxtReplaceMessage() = contentEdit.clearTxtReplaceMessage()
+
+    fun undoLastTxtReplace() = contentEdit.undoLastTxtReplace()
 
     fun addBookmark() = bookmark.addBookmark()
     fun deleteBookmark(id: String) = bookmark.deleteBookmark(id)
