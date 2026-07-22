@@ -239,8 +239,21 @@ private fun drawSingleContainerBox(
         fallbackRight = fallbackRight,
         halfBorder = halfBorder,
     )
-    val rectTop = pageTop + firstLine.lineTop - padTop - halfBorder
-    val rectBottom = pageTop + lastLine.lineBottom + padBottom + halfBorder
+    val naturalTop = pageTop + firstLine.lineTop
+    val naturalBottom = pageTop + lastLine.lineBottom
+    val heightScaled = style.heightPx?.let { it * fontSizeScale }
+    val rectTop: Float
+    val rectBottom: Float
+    if (heightScaled != null) {
+        // 容器子内容可参与行高，但 authored height 仍决定背景盒本身；否则圆形盒会被
+        // 多个浮动子行的自然高度拉成长椭圆，偏离 CSS content-box 与成熟阅读器语义。
+        val centerY = (naturalTop + naturalBottom) / 2f
+        rectTop = centerY - heightScaled / 2f - padTop - halfBorder
+        rectBottom = centerY + heightScaled / 2f + padBottom + halfBorder
+    } else {
+        rectTop = naturalTop - padTop - halfBorder
+        rectBottom = naturalBottom + padBottom + halfBorder
+    }
     com.morealm.app.core.log.AppLog.info(
         "BoxGroup/Draw",
         "drawSingleContainerBox lines=$fromIdx..$toIdxInclusive (count=${toIdxInclusive - fromIdx + 1}) " +
