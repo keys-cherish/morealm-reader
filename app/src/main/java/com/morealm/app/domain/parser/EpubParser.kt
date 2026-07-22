@@ -203,10 +203,11 @@ object EpubParser {
     // 切到含 width 修复的 epub-lib 后 cache key(path) 不变不会自动失效，须再 bump 让旧 cache 失效、
     // 用新 flatten（写 w）重建，否则装饰小图仍读旧 cache 被拉满宽。
     // v56：body 页面背景不再经 table 祖先合并写入标题行 BlockStyle，清除旧缓存中的重复 bgi。
+    // v57：CSS border width 关键字开始保留 medium/thin/thick，旧缓存中的 cutline 宽度为 0。
     // _p<N>：flatten wire 协议版本（StructuredChapterContent.WIRE_PROTOCOL_VERSION）编入目录名——
     // epub-lib 侧任何 emit 字符级变化 bump 该常量即自动失效全部旧缓存，不再依赖人肉记得 bump 此处。
     // 本地渲染语义变化（epub-lib 未动）时仍手动 bump v 前缀。
-    private val CHAPTER_CACHE_DIR = "epub_chapters_v56_p${StructuredChapterContent.WIRE_PROTOCOL_VERSION}"
+    private val CHAPTER_CACHE_DIR = "epub_chapters_v57_p${StructuredChapterContent.WIRE_PROTOCOL_VERSION}"
     private val charset: Charset = Charsets.UTF_8
 
     private val nbspRegex = Regex("(&nbsp;)+", RegexOption.IGNORE_CASE)

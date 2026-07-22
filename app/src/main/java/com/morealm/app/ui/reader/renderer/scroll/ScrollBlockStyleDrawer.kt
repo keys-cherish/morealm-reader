@@ -230,7 +230,7 @@ private fun drawSingleContainerBox(
     // **2026-05-30 widthPx 定宽 box bg 矩形**（几何公式提取到 epub-layout [BoxGeometry]，与
     // ScrollLayoutEngine contentInset 共用同核心 → bg 框两边与文字内缩严格一致）。padding 已 ×
     // fontSizeScale 传入。declWidthPx>0 在 fallback 区间居中窄框；否则满宽减 padding。
-    val (rectLeft, rectRight) = BoxGeometry.bgRectX(
+    val (authoredLeft, authoredRight) = BoxGeometry.bgRectX(
         declWidthPx = style.widthPx,
         fontScale = fontSizeScale,
         paddingLeftScaled = padLeft,
@@ -241,19 +241,42 @@ private fun drawSingleContainerBox(
     )
     val naturalTop = pageTop + firstLine.lineTop
     val naturalBottom = pageTop + lastLine.lineBottom
+    val widthScaled = style.widthPx?.let { it * fontSizeScale }
     val heightScaled = style.heightPx?.let { it * fontSizeScale }
-    val rectTop: Float
-    val rectBottom: Float
-    if (heightScaled != null) {
-        // 容器子内容可参与行高，但 authored height 仍决定背景盒本身；否则圆形盒会被
-        // 多个浮动子行的自然高度拉成长椭圆，偏离 CSS content-box 与成熟阅读器语义。
-        val centerY = (naturalTop + naturalBottom) / 2f
-        rectTop = centerY - heightScaled / 2f - padTop - halfBorder
-        rectBottom = centerY + heightScaled / 2f + padBottom + halfBorder
-    } else {
-        rectTop = naturalTop - padTop - halfBorder
-        rectBottom = naturalBottom + padBottom + halfBorder
+    var minContentLeft = Float.MAX_VALUE
+    var maxContentRight = -Float.MAX_VALUE
+    for (index in fromIdx..toIdxInclusive) {
+        for (column in lines[index].columns) {
+            minContentLeft = minOf(minContentLeft, column.start)
+            maxContentRight = maxOf(maxContentRight, column.end)
+        }
     }
+    val requiredWidth = if (minContentLeft == Float.MAX_VALUE) {
+        0f
+    } else {
+        maxContentRight - minContentLeft + padLeft + padRight + borderWidthScaled
+    }
+    val requiredHeight = naturalBottom - naturalTop + padTop + padBottom + borderWidthScaled
+    val authoredWidth = authoredRight - authoredLeft
+    val authoredHeight = heightScaled?.plus(padTop + padBottom + borderWidthScaled) ?: requiredHeight
+    val keepsEqualAxes = widthScaled != null && heightScaled != null &&
+        kotlin.math.abs(widthScaled - heightScaled) < 0.5f && style.borderRadiusPx > 0f
+    val resolvedWidth: Float
+    val resolvedHeight: Float
+    if (keepsEqualAxes) {
+        val side = maxOf(authoredWidth, authoredHeight, requiredWidth, requiredHeight)
+        resolvedWidth = side
+        resolvedHeight = side
+    } else {
+        resolvedWidth = maxOf(authoredWidth, requiredWidth)
+        resolvedHeight = maxOf(authoredHeight, requiredHeight)
+    }
+    val centerX = (authoredLeft + authoredRight) / 2f
+    val centerY = (naturalTop + naturalBottom) / 2f
+    val rectLeft = centerX - resolvedWidth / 2f
+    val rectRight = centerX + resolvedWidth / 2f
+    val rectTop = centerY - resolvedHeight / 2f
+    val rectBottom = centerY + resolvedHeight / 2f
     com.morealm.app.core.log.AppLog.info(
         "BoxGroup/Draw",
         "drawSingleContainerBox lines=$fromIdx..$toIdxInclusive (count=${toIdxInclusive - fromIdx + 1}) " +
@@ -661,37 +684,53 @@ private fun drawSidedBorder(
     val brInset = cornerRadii?.get(4) ?: uniformR
     val blInset = cornerRadii?.get(6) ?: uniformR
 
+    fun drawHorizontalEdge(color: Int, width: Float, borderStyle: BlockStyle.BorderStyle, y: Float, inside: Float) {
+        paint.color = color
+        paint.alpha = (color ushr 24) and 0xFF
+        if (borderStyle == BlockStyle.BorderStyle.DOUBLE) {
+            val third = width / 3f
+            paint.strokeWidth = third
+            paint.pathEffect = null
+            canvas.drawLine(rectLeft + tlInset, y, rectRight - trInset, y, paint)
+            canvas.drawLine(rectLeft + blInset, y + inside * third * 2f, rectRight - brInset, y + inside * third * 2f, paint)
+        } else {
+            paint.strokeWidth = width
+            configureBorderPattern(paint, borderStyle, width, dashPhasePx)
+            canvas.drawLine(rectLeft + tlInset, y, rectRight - trInset, y, paint)
+        }
+    }
+
+    fun drawVerticalEdge(color: Int, width: Float, borderStyle: BlockStyle.BorderStyle, x: Float, inside: Float) {
+        paint.color = color
+        paint.alpha = (color ushr 24) and 0xFF
+        if (borderStyle == BlockStyle.BorderStyle.DOUBLE) {
+            val third = width / 3f
+            paint.strokeWidth = third
+            paint.pathEffect = null
+            canvas.drawLine(x, rectTop + trInset, x, rectBottom - brInset, paint)
+            canvas.drawLine(x + inside * third * 2f, rectTop + tlInset, x + inside * third * 2f, rectBottom - blInset, paint)
+        } else {
+            paint.strokeWidth = width
+            configureBorderPattern(paint, borderStyle, width, dashPhasePx)
+            canvas.drawLine(x, rectTop + trInset, x, rectBottom - brInset, paint)
+        }
+    }
+
     // 画 top 边（从 TL 圆角 right 端到 TR 圆角 left 端）
     if (topColor != null && topW > 0f) {
-        paint.color = topColor
-        paint.alpha = (topColor ushr 24) and 0xFF
-        paint.strokeWidth = topW
-        configureBorderPattern(paint, style.borderTopStyle, topW, dashPhasePx)
-        canvas.drawLine(rectLeft + tlInset, rectTop, rectRight - trInset, rectTop, paint)
+        drawHorizontalEdge(topColor, topW, style.borderTopStyle, rectTop, 1f)
     }
     // 画 right 边
     if (rightColor != null && rightW > 0f) {
-        paint.color = rightColor
-        paint.alpha = (rightColor ushr 24) and 0xFF
-        paint.strokeWidth = rightW
-        configureBorderPattern(paint, style.borderRightStyle, rightW, dashPhasePx)
-        canvas.drawLine(rectRight, rectTop + trInset, rectRight, rectBottom - brInset, paint)
+        drawVerticalEdge(rightColor, rightW, style.borderRightStyle, rectRight, -1f)
     }
     // 画 bottom 边
     if (bottomColor != null && bottomW > 0f) {
-        paint.color = bottomColor
-        paint.alpha = (bottomColor ushr 24) and 0xFF
-        paint.strokeWidth = bottomW
-        configureBorderPattern(paint, style.borderBottomStyle, bottomW, dashPhasePx)
-        canvas.drawLine(rectLeft + blInset, rectBottom, rectRight - brInset, rectBottom, paint)
+        drawHorizontalEdge(bottomColor, bottomW, style.borderBottomStyle, rectBottom, -1f)
     }
     // 画 left 边
     if (leftColor != null && leftW > 0f) {
-        paint.color = leftColor
-        paint.alpha = (leftColor ushr 24) and 0xFF
-        paint.strokeWidth = leftW
-        configureBorderPattern(paint, style.borderLeftStyle, leftW, dashPhasePx)
-        canvas.drawLine(rectLeft, rectTop + tlInset, rectLeft, rectBottom - blInset, paint)
+        drawVerticalEdge(leftColor, leftW, style.borderLeftStyle, rectLeft, 1f)
     }
 }
 
