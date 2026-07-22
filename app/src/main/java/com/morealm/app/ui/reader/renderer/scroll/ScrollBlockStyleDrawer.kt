@@ -10,7 +10,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.epub.render.ScrollLine
-import com.morealm.app.ui.reader.renderer.adaptDecorationBgForReaderBg
+import com.morealm.app.ui.reader.renderer.adaptAuthoredBlockDecorForReaderBg
 import com.morealm.epub.compat.BlockStyle
 import com.morealm.epub.layout.BoxGeometry
 
@@ -442,18 +442,18 @@ internal fun drawBoxDecorations(
     /** 虚线相对统一布局坐标系的偏移；table cell 分片用它延续跨行 dash pattern。 */
     dashPhasePx: Float = 0f,
 ) {
+    val renderStyle = adaptAuthoredBlockDecorForReaderBg(style, readerBgArgb)
     val rectW = rectRight - rectLeft
     val rectH = rectBottom - rectTop
     if (rectW <= 0f || rectH <= 0f) return
-    val uniformR = if (style.borderRadiusPx.isInfinite()) minOf(rectW, rectH) / 2f
-                   else style.borderRadiusPx * fontSizeScale
+    val uniformR = if (renderStyle.borderRadiusPx.isInfinite()) minOf(rectW, rectH) / 2f
+                   else renderStyle.borderRadiusPx * fontSizeScale
     // Step 9.2 Phase A: 4 角 radius FloatArray(8)：[TL_x, TL_y, TR_x, TR_y, BR_x, BR_y, BL_x, BL_y]
-    val cornerRadii: FloatArray? = buildCornerRadii(style, uniformR, fontSizeScale)
+    val cornerRadii: FloatArray? = buildCornerRadii(renderStyle, uniformR, fontSizeScale)
     val paint = Paint().apply { isAntiAlias = true }
 
     // 1. background-color — fill 在最底层（CSS spec：bg color 在 bg image 之下）
-    style.backgroundColor?.let { bgArgb ->
-        val fill = adaptDecorationBgForReaderBg(bgArgb, readerBgArgb)
+    renderStyle.backgroundColor?.let { fill ->
         paint.color = fill
         paint.alpha = (fill ushr 24) and 0xFF
         drawBoxFill(canvas, rectLeft, rectTop, rectRight, rectBottom, uniformR, cornerRadii, paint)
@@ -461,7 +461,7 @@ internal fun drawBoxDecorations(
 
     // 2. background-image (element-level) — 在 bg color 之上，按 box rect contain 等比绘制；
     // image 加载失败时仅 bg color 兜底（绘制顺序已经先 bg color 再 image，自动满足）
-    style.backgroundImageSrc?.takeIf { it.isNotEmpty() }?.let { src ->
+    renderStyle.backgroundImageSrc?.takeIf { it.isNotEmpty() }?.let { src ->
         val bmp = ImageCache.get(src, rectW.toInt().coerceAtLeast(1))
         if (bmp != null && !bmp.isRecycled) {
             drawContainBitmap(canvas, bmp, rectLeft, rectTop, rectRight, rectBottom, paint)
@@ -470,14 +470,14 @@ internal fun drawBoxDecorations(
 
     // 3. border —— 4 边 color/width/style 全等 → uniform path（保 DOUBLE 路径 + drawRoundRect 优化）；
     // 任一边不等 / 部分边 null → sided path
-    if (hasSidedBorder(style) && !allSidesIdentical(style)) {
+    if (hasSidedBorder(renderStyle) && !allSidesIdentical(renderStyle)) {
         drawSidedBorder(
-            canvas, style, rectLeft, rectTop, rectRight, rectBottom,
+            canvas, renderStyle, rectLeft, rectTop, rectRight, rectBottom,
             cornerRadii, uniformR, fontSizeScale, dashPhasePx, paint,
         )
     } else {
         drawUniformBorder(
-            canvas, style, rectLeft, rectTop, rectRight, rectBottom,
+            canvas, renderStyle, rectLeft, rectTop, rectRight, rectBottom,
             uniformR, cornerRadii, fontSizeScale, dashPhasePx, paint,
         )
     }

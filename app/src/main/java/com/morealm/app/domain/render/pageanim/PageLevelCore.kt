@@ -228,6 +228,9 @@ fun rememberPageLevelCore(
                             content.chapterIndex,
                             content.title,
                             structured,
+                            // EPUB 的标题属于 XHTML 正文。目录标题只用于导航和页眉，不能
+                            // 再生成一个视觉标题，否则含 h1 的页面会出现重复标题。
+                            omitChapterTitleBlock = true,
                         )
                         if (horizontalPaged) {
                             layout

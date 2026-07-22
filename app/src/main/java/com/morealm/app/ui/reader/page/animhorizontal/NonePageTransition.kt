@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
 import com.morealm.app.domain.render.layout.ScrollPageFactory
 import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
@@ -75,6 +76,7 @@ fun NonePageTransition(
             selectionCpRange = selectionRangeForCur,
             selectionArgb = selectionArgb,
             pageInfoBar = pageInfoBarProvider(curPage),
+            readerBgArgb = backgroundColor.toArgb(),
             modifier = Modifier.fillMaxSize(),
         )
     }

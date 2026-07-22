@@ -3,6 +3,7 @@ package com.morealm.app.ui.reader.renderer.scroll
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.text.TextPaint
+import com.morealm.app.ui.reader.renderer.adaptDecorationBgForReaderBg
 import com.morealm.epub.render.TextRun
 
 /**
@@ -32,13 +33,19 @@ internal fun drawInlineBg(
     atomX: Float,
     baselineY: Float,
     textPaint: TextPaint,
+    readerBgArgb: Int,
 ) {
     val bg = run.inlineBgArgb ?: return
-    inlineBgPaint.color = bg
+    inlineBgPaint.color = adaptDecorationBgForReaderBg(bg, readerBgArgb)
     val fm = textPaint.fontMetrics
     val textAdvance = textPaint.measureText(run.text)
     val boxRight = atomX + run.inlineBgPaddingLeftPx + textAdvance + run.inlineBgPaddingRightPx
     val boxTop = baselineY + fm.ascent - run.inlineBgPaddingTopPx
     val boxBottom = baselineY + fm.descent + run.inlineBgPaddingBottomPx
-    canvas.drawRect(atomX, boxTop, boxRight, boxBottom, inlineBgPaint)
+    val radius = if (run.inlineBgBorderRadiusPx.isInfinite()) {
+        minOf(boxRight - atomX, boxBottom - boxTop) / 2f
+    } else {
+        run.inlineBgBorderRadiusPx.coerceAtLeast(0f)
+    }
+    canvas.drawRoundRect(atomX, boxTop, boxRight, boxBottom, radius, radius, inlineBgPaint)
 }

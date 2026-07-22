@@ -169,6 +169,11 @@ fun ReaderScreen(
     // "vertical_rl" 或 "vertical_lr" 都走竖排独立路径；区分 RL/LR 由 VerticalReaderView
     // 内部把 readingDirectionStr 传给 ChapterProvider.layoutChapter 决定列方向。
     val isVerticalReading = readingDirectionStr == "vertical_rl" || readingDirectionStr == "vertical_lr"
+    // EPUB 始终消费文件自身的 XHTML/CSS 结构；不按书名、章名或文件名做特例判断。
+    // 当前竖排引擎只接收扁平字符串，无法表达 float、table、border 与嵌入字体，因此
+    // EPUB 优先进入结构化排版链，TXT/网络正文仍严格服从用户的竖排偏好。
+    val useStructuredEpubLayout = book?.format == com.morealm.app.domain.entity.BookFormat.EPUB &&
+        !book?.localPath.isNullOrEmpty()
     val fontFamily by viewModel.settings.fontFamily.collectAsStateWithLifecycle()
     val fontSize by viewModel.settings.fontSize.collectAsStateWithLifecycle()
     val lineHeight by viewModel.settings.lineHeight.collectAsStateWithLifecycle()
@@ -616,7 +621,7 @@ fun ReaderScreen(
 
         // Keep the last real reader surface on screen. During initial loading, avoid rendering
         // a synthetic 1/1 empty chapter that shows up as a visible white/loading flicker in LDPlayer.
-        if (displayContent.isNotBlank() && isVerticalReading) {
+        if (displayContent.isNotBlank() && isVerticalReading && !useStructuredEpubLayout) {
             // ── 竖排版独立路径 ──
             // 完全跳过 CanvasRenderer / 6 个翻页动画机制，走独立的 VerticalReaderView。
             // 该组件内部用 HorizontalPager(reverseLayout=true) 自管翻页，drawer 走
@@ -839,11 +844,11 @@ fun ReaderScreen(
                 onPageTurnCommandConsumed = { pageTurnCommand = null },
             )
         } else if (
-            (pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.NONE ||
-                pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.COVER ||
-                pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.SLIDE ||
-                pageAnim.toPageAnimType() == com.morealm.app.ui.reader.page.animation.PageAnimType.SIMULATION) &&
-            hasReaderTarget
+            hasReaderTarget &&
+            (
+                useStructuredEpubLayout ||
+                    (!isVerticalReading && pageAnim.toPageAnimType() in EPUB_RICH_PAGE_ANIMATIONS)
+                )
         ) {
             // NONE / COVER / SLIDE / SIMULATION 横向翻页全走新 PageLevelReaderHost
             // (page-level)；SIMULATION 接入后 EPUB 章背景 / 段装饰 / 整屏封面 / 自带字体
@@ -856,10 +861,18 @@ fun ReaderScreen(
             val paddingTopPx = with(density) { marginTopVal.dp.toPx().toInt() }
             val paddingBottomPx = with(density) { marginBottomVal.dp.toPx().toInt() }
             val fontSizePx = with(density) { readerFontSize.sp.toPx().toInt() }
+            val requestedAnimType = pageAnim.toPageAnimType()
+            val effectiveAnimType = if (
+                useStructuredEpubLayout && requestedAnimType !in EPUB_RICH_PAGE_ANIMATIONS
+            ) {
+                com.morealm.app.ui.reader.page.animation.PageAnimType.NONE
+            } else {
+                requestedAnimType
+            }
             com.morealm.app.ui.reader.page.animhorizontal.PageLevelReaderHost(
                 currentChapterIndex = currentIndex,
                 chapterCount = chapters.size,
-                animType = pageAnim.toPageAnimType(),
+                animType = effectiveAnimType,
                 loadChapterContent = loadFn@{ idx ->
                     val chap = chapters.getOrNull(idx) ?: return@loadFn null
                     // **D1.b**：见 ScrollCanvasReaderHost 同位注释
@@ -2259,6 +2272,13 @@ private fun FullTextSearchPanel(
         }
     }
 }
+
+private val EPUB_RICH_PAGE_ANIMATIONS = setOf(
+    com.morealm.app.ui.reader.page.animation.PageAnimType.NONE,
+    com.morealm.app.ui.reader.page.animation.PageAnimType.COVER,
+    com.morealm.app.ui.reader.page.animation.PageAnimType.SLIDE,
+    com.morealm.app.ui.reader.page.animation.PageAnimType.SIMULATION,
+)
 
 @Composable
 private fun NextBookPromptDialog(

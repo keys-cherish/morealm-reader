@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.Layout
@@ -241,6 +242,7 @@ fun CoverPageTransition(
                 selectionCpRange = selectionRangeForCur,
                 selectionArgb = selectionArgb,
                 pageInfoBar = pageInfoBarProvider(curPage),
+                readerBgArgb = backgroundColor.toArgb(),
                 modifier = Modifier
                     .fillMaxSize()
                     .background(backgroundColor)
@@ -293,6 +295,7 @@ fun CoverPageTransition(
                 highlightSpecs = nextPageHighlightSpecs,
                 bookmarkCps = nextPageBookmarkCps,
                 pageInfoBar = pageInfoBarProvider(nextPage),
+                readerBgArgb = backgroundColor.toArgb(),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
             // 索引 2：prevPage（从左滑入覆盖 cur）—— 阴影已搬到 cur 上，prev 这里只画内容
@@ -306,6 +309,7 @@ fun CoverPageTransition(
                 highlightSpecs = prevPageHighlightSpecs,
                 bookmarkCps = prevPageBookmarkCps,
                 pageInfoBar = pageInfoBarProvider(prevPage),
+                readerBgArgb = backgroundColor.toArgb(),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
         },

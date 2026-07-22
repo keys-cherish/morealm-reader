@@ -17,6 +17,7 @@ import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
 import com.morealm.epub.render.ScrollLine
 import com.morealm.epub.render.findColumnAt
 import com.morealm.epub.compat.BlockStyle
+import com.morealm.app.ui.reader.renderer.adaptAuthoredForegroundForReaderBg
 
 /**
  * 单章 Canvas 子树 —— [ScrollCanvasRenderer] 三块面板的子组件。
@@ -68,6 +69,7 @@ fun ChapterPaneCanvas(
     bookmarkCps: List<Int> = emptyList(),
     /** 书签三角颜色（默认 Material error 红橙色，与 V1 hasBookmark 一致） */
     bookmarkArgb: Int = 0xFFD32F2F.toInt(),
+    readerBgArgb: Int = 0xFFFFFFFF.toInt(),
     /** Viewport y 范围 lambda（相对章顶）。null = 该章完全不在 viewport，整章 skip。 */
     viewportRangeProvider: () -> Pair<Float, Float>? = { null },
     modifier: Modifier = Modifier,
@@ -197,6 +199,7 @@ fun ChapterPaneCanvas(
                 drawScrollContainerBoxes(
                     nc, page.lines, chapter.boxGroupStyles, pageTop, 0f, visibleW,
                     fontSizeScale = contentPaint.textSize / 16f,
+                    readerBgArgb = readerBgArgb,
                 )
                 drawScrollParagraphBlockStyles(
                     canvas = nc,
@@ -205,6 +208,7 @@ fun ChapterPaneCanvas(
                     fallbackLeft = 0f,
                     fallbackRight = visibleW,
                     fontSizeScale = contentPaint.textSize / 16f,
+                    readerBgArgb = readerBgArgb,
                 )
                 for (line in page.lines) {
                     if (line.isImage) {
@@ -268,7 +272,9 @@ fun ChapterPaneCanvas(
 
                     val baselineY = pageTop + line.lineTop + ascent
                     // P3-5b Step 2a：段落统一字体色（同 PagePaneCanvas 同位逻辑）
-                    val paragraphColor = line.blockStyle.textColor
+                    val paragraphColor = line.blockStyle.textColor?.let {
+                        adaptAuthoredForegroundForReaderBg(it, readerBgArgb, line.blockStyle.backgroundColor)
+                    }
                     if (paragraphColor != null) paint.color = paragraphColor
                     // P3-5b Step 2b：text-shadow（c-shadow-* 彩色描边光晕，详 PagePaneCanvas 同位）
                     // **bugfix 2026-05-22**：blur < 1px 跳过 setShadowLayer（某 EPUB vol-text
@@ -276,7 +282,12 @@ fun ChapterPaneCanvas(
                     val ts = line.blockStyle.textShadow
                     val shadowApplied = ts != null && ts.blurRadius >= 1f
                     if (shadowApplied) {
-                        paint.setShadowLayer(ts!!.blurRadius, ts.offsetX, ts.offsetY, ts.color)
+                        paint.setShadowLayer(
+                            ts!!.blurRadius,
+                            ts.offsetX,
+                            ts.offsetY,
+                            adaptAuthoredForegroundForReaderBg(ts.color, readerBgArgb),
+                        )
                     }
                     // **D1.a DIAG**：仅当本行 line 有 textShadow 时打 log
                     if (ts != null) {
@@ -284,9 +295,10 @@ fun ChapterPaneCanvas(
                             "D1a/Shadow",
                             "ChapterPane ts blur=${ts.blurRadius} dx=${ts.offsetX} dy=${ts.offsetY} " +
                                 "color=0x${ts.color.toUInt().toString(16)} applied=$shadowApplied " +
-                                "lineText='${line.text.take(15)}'",
+                            "lineText='${line.text.take(15)}'",
                         )
                     }
+                    val blockRotationSave = saveScrollLineRotation(nc, page.lines, line, pageOffsetY)
                     // **D 模型 (阶段 1 重构)** 分发优先级：cells != null → drawCellsRow (table line)
                     // > atoms != null → drawAtomsRow (普通段 atom 路径) > columns 路径
                     val lineCells = line.cells
@@ -296,7 +308,9 @@ fun ChapterPaneCanvas(
                             nc, lineCells, line, paint, pageOffsetY,
                             textColorByCp = textColorByCp,
                             defaultColor = defaultColor,
+                            readerBgArgb = readerBgArgb,
                         )
+                        if (blockRotationSave != null) nc.restoreToCount(blockRotationSave)
                         if (paragraphColor != null) paint.color = defaultColor
                         if (shadowApplied) paint.clearShadowLayer()
                         if (savedTypeface != null) paint.typeface = savedTypeface
@@ -307,7 +321,9 @@ fun ChapterPaneCanvas(
                             nc, lineAtoms, line, paint, baselineY, pageOffsetY,
                             textColorByCp = textColorByCp,
                             defaultColor = defaultColor,
+                            readerBgArgb = readerBgArgb,
                         )
+                        if (blockRotationSave != null) nc.restoreToCount(blockRotationSave)
                         if (paragraphColor != null) paint.color = defaultColor
                         if (shadowApplied) paint.clearShadowLayer()
                         if (savedTypeface != null) paint.typeface = savedTypeface
@@ -338,7 +354,13 @@ fun ChapterPaneCanvas(
                             continue
                         }
                         // 优先级：用户高亮 > col.colorArgb（CSS char-level） > 段落 paragraphColor > paint 默认
-                        val overrideColor = textColorByCp[col.chapterPosition] ?: col.colorArgb
+                        val overrideColor = textColorByCp[col.chapterPosition] ?: col.colorArgb?.let {
+                            adaptAuthoredForegroundForReaderBg(
+                                it,
+                                readerBgArgb,
+                                line.blockStyle.backgroundColor,
+                            )
+                        }
                         if (overrideColor != null) {
                             paint.color = overrideColor
                             nc.drawText(col.charData, col.start, baselineY, paint)
@@ -347,6 +369,7 @@ fun ChapterPaneCanvas(
                             nc.drawText(col.charData, col.start, baselineY, paint)
                         }
                     }
+                    if (blockRotationSave != null) nc.restoreToCount(blockRotationSave)
                     if (paragraphColor != null) paint.color = defaultColor
                     if (shadowApplied) paint.clearShadowLayer()
                     if (savedTypeface != null) paint.typeface = savedTypeface
@@ -416,6 +439,7 @@ private fun drawAtomsRow(
     pageOffsetY: Float,
     textColorByCp: Map<Int, Int> = emptyMap(),
     defaultColor: Int = basePaint.color,
+    readerBgArgb: Int,
 ) {
     // **bugfix 2026-05-22**：用 line.columns[0].start 作初始 x，让 atoms 路径 honor
     // CSS text-align cascade 算出的居中偏移（见 PagePaneCanvas.drawByAtoms 同款修复）
@@ -431,15 +455,26 @@ private fun drawAtomsRow(
                 val effectiveBaselineY = if (scale != 1f) {
                     pageOffsetY + line.lineTop + basePaint.textSize * 0.8f
                 } else baselineY
+                val rotationSave = if (atom.rotationDegrees != 0f) {
+                    canvas.save().also {
+                        canvas.rotate(
+                            atom.rotationDegrees,
+                            x + atom.width / 2f,
+                            effectiveBaselineY - basePaint.textSize * 0.3f,
+                        )
+                    }
+                } else null
                 // Phase 4：字符级 inline 背景盒子（底层方块），无 bg 时零开销返回
-                drawInlineBg(canvas, atom, x, effectiveBaselineY, basePaint)
+                drawInlineBg(canvas, atom, x, effectiveBaselineY, basePaint, readerBgArgb)
                 val textX = x + atom.inlineBgPaddingLeftPx
                 val hasOverride = if (textColorByCp.isNotEmpty()) {
                     (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
                 } else false
                 if (hasOverride) {
                     var cx = textX
-                    val baseColor = atom.colorArgb ?: defaultColor
+                    val baseColor = atom.colorArgb?.let {
+                        adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
+                    } ?: defaultColor
                     for (ci in atom.text.indices) {
                         val cp = atomStartCp + ci
                         val color = textColorByCp[cp] ?: baseColor
@@ -451,10 +486,17 @@ private fun drawAtomsRow(
                     basePaint.color = defaultColor
                 } else {
                     val origColor = basePaint.color
-                    if (atom.colorArgb != null) basePaint.color = atom.colorArgb!!
+                    if (atom.colorArgb != null) {
+                        basePaint.color = adaptAuthoredForegroundForReaderBg(
+                            atom.colorArgb!!,
+                            readerBgArgb,
+                            atom.inlineBgArgb,
+                        )
+                    }
                     canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
                     if (atom.colorArgb != null) basePaint.color = origColor
                 }
+                if (rotationSave != null) canvas.restoreToCount(rotationSave)
                 if (scale != 1f) basePaint.textSize = baseSize
                 x += atom.width
             }
@@ -499,6 +541,7 @@ private fun drawCellsRow(
     pageOffsetY: Float,
     textColorByCp: Map<Int, Int> = emptyMap(),
     defaultColor: Int = basePaint.color,
+    readerBgArgb: Int,
 ) {
     val baseSize = basePaint.textSize
     val fontScale = baseSize / 16f
@@ -514,6 +557,7 @@ private fun drawCellsRow(
                 rectRight = cell.contentLeft + cell.boxWidth,
                 rectBottom = pageOffsetY + line.lineTop + cell.contentTop + cell.boxHeight,
                 fontSizeScale = fontScale,
+                readerBgArgb = readerBgArgb,
                 dashPhasePx = cell.borderDashPhasePx,
             )
         }
@@ -525,15 +569,26 @@ private fun drawCellsRow(
                     val effectiveX = cell.contentLeft + cell.paddingLeft + atom.cellLocalX
                     val effectiveBaselineY = pageOffsetY + line.lineTop + cell.contentTop +
                         cell.paddingTop + cell.contentOffsetY + atom.cellLocalY + atom.baseline
+                    val rotationSave = if (atom.rotationDegrees != 0f) {
+                        canvas.save().also {
+                            canvas.rotate(
+                                atom.rotationDegrees,
+                                effectiveX + atom.width / 2f,
+                                effectiveBaselineY - basePaint.textSize * 0.3f,
+                            )
+                        }
+                    } else null
                     // Phase 4：字符级 inline 背景盒子（底层方块），无 bg 时零开销返回
-                    drawInlineBg(canvas, atom, effectiveX, effectiveBaselineY, basePaint)
+                    drawInlineBg(canvas, atom, effectiveX, effectiveBaselineY, basePaint, readerBgArgb)
                     val textX = effectiveX + atom.inlineBgPaddingLeftPx
                     val hasOverride = if (textColorByCp.isNotEmpty()) {
                         (0 until atom.cpCount).any { textColorByCp.containsKey(atomStartCp + it) }
                     } else false
                     if (hasOverride) {
                         var cx = textX
-                        val baseColor = atom.colorArgb ?: defaultColor
+                        val baseColor = atom.colorArgb?.let {
+                            adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
+                        } ?: defaultColor
                         for (ci in atom.text.indices) {
                             val cp = atomStartCp + ci
                             basePaint.color = textColorByCp[cp] ?: baseColor
@@ -544,10 +599,17 @@ private fun drawCellsRow(
                         basePaint.color = defaultColor
                     } else {
                         val origColor = basePaint.color
-                        if (atom.colorArgb != null) basePaint.color = atom.colorArgb!!
+                        if (atom.colorArgb != null) {
+                            basePaint.color = adaptAuthoredForegroundForReaderBg(
+                                atom.colorArgb!!,
+                                readerBgArgb,
+                                atom.inlineBgArgb,
+                            )
+                        }
                         canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
                         if (atom.colorArgb != null) basePaint.color = origColor
                     }
+                    if (rotationSave != null) canvas.restoreToCount(rotationSave)
                     if (scale != 1f) basePaint.textSize = baseSize
                 }
                 is com.morealm.epub.render.InlineImage -> {

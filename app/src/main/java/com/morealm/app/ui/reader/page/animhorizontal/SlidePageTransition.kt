@@ -16,6 +16,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.Layout
@@ -237,6 +238,7 @@ fun SlidePageTransition(
                 selectionCpRange = selectionRangeForCur,
                 selectionArgb = selectionArgb,
                 pageInfoBar = pageInfoBarProvider(curPage),
+                readerBgArgb = backgroundColor.toArgb(),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
             PagePaneCanvas(
@@ -249,6 +251,7 @@ fun SlidePageTransition(
                 highlightSpecs = nextPageHighlightSpecs,
                 bookmarkCps = nextPageBookmarkCps,
                 pageInfoBar = pageInfoBarProvider(nextPage),
+                readerBgArgb = backgroundColor.toArgb(),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
             PagePaneCanvas(
@@ -261,6 +264,7 @@ fun SlidePageTransition(
                 highlightSpecs = nextPlusPageHighlightSpecs,
                 bookmarkCps = nextPlusPageBookmarkCps,
                 pageInfoBar = pageInfoBarProvider(nextPlusPage),
+                readerBgArgb = backgroundColor.toArgb(),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
             PagePaneCanvas(
@@ -273,6 +277,7 @@ fun SlidePageTransition(
                 highlightSpecs = prevPageHighlightSpecs,
                 bookmarkCps = prevPageBookmarkCps,
                 pageInfoBar = pageInfoBarProvider(prevPage),
+                readerBgArgb = backgroundColor.toArgb(),
                 modifier = Modifier.fillMaxSize().background(backgroundColor),
             )
         },
