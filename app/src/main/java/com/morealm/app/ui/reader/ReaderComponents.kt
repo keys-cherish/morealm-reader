@@ -901,6 +901,12 @@ fun ReaderSettingsPanel(
     readerStyles: List<com.morealm.app.domain.entity.ReaderStyle> = emptyList(),
     activeStyleId: String = "",
     onStyleChange: (String) -> Unit = {},
+    /**
+     * 排版预设导入 / 导出（SAF JSON，与主题 MoRealmThemeBundle 同款信封）。
+     * 见 [ReaderSettingsController.exportActiveStyle] / [ReaderSettingsController.importStylesFromUri]。
+     */
+    onExportStyle: (android.net.Uri) -> Unit = {},
+    onImportStyle: (android.net.Uri) -> Unit = {},
     screenOrientation: Int = -1,
     onScreenOrientationChange: (Int) -> Unit = {},
     textSelectable: Boolean = true,
@@ -972,9 +978,53 @@ fun ReaderSettingsPanel(
 
             // ── Reader Style Presets ──
             if (readerStyles.isNotEmpty()) {
-                // #4：原「阅读样式」与下方「主题」名字撞，改为「排版预设」表明此处只切排版
-                Text("排版预设", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                val styleExportLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.CreateDocument("application/json")
+                ) { uri -> uri?.let(onExportStyle) }
+                val styleImportLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument()
+                ) { uri -> uri?.let(onImportStyle) }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    // #4：原「阅读样式」与下方「主题」名字撞，改为「排版预设」表明此处只切排版
+                    Text("排版预设", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                    Spacer(Modifier.weight(1f))
+                    // 文件管理器常把 .json 报成 octet-stream，OpenDocument 过滤只收
+                    // application/json 会让文件灰掉选不了——放宽到三类，格式由解析端判别。
+                    TextButton(
+                        onClick = {
+                            styleImportLauncher.launch(
+                                arrayOf("application/json", "text/*", "application/octet-stream"),
+                            )
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.FileDownload, null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(2.dp))
+                        Text("导入", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary)
+                    }
+                    TextButton(
+                        onClick = { styleExportLauncher.launch("morealm-styles.json") },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.FileUpload, null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(2.dp))
+                        Text("导出", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),

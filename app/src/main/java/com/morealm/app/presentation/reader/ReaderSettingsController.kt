@@ -12,6 +12,7 @@ import com.morealm.app.domain.repository.ReaderStyleRepository
 import com.morealm.app.core.log.AppLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.serialization.json.Json
 
 /**
  * Manages reader settings/preferences delegation for ReaderViewModel.
@@ -461,6 +462,76 @@ class ReaderSettingsController(
             if (_activeStyleId.value == styleId) {
                 _activeStyleId.value = "preset_paper"
                 prefs.setActiveReaderStyle("preset_paper")
+            }
+        }
+    }
+
+    // ── Style preset import / export（与主题 MoRealmThemeBundle 同款信封模式）──
+
+    private val styleJson = Json { ignoreUnknownKeys = true }
+
+    /** 一次性提示流（导入成功 / 失败、导出完成），UI 层弹 snackbar/toast。 */
+    private val _styleTransferMessage = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val styleTransferMessage: SharedFlow<String> = _styleTransferMessage.asSharedFlow()
+
+    /** 导出当前生效的排版预设（含用户在其上做过的所有调整）为 JSON。 */
+    fun exportActiveStyle(outputUri: Uri) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val style = activeStyle.value ?: return@launch
+                val bundle = MoRealmReaderStyleBundle(styles = listOf(style.toExportData()))
+                val jsonStr = styleJson.encodeToString(
+                    MoRealmReaderStyleBundle.serializer(), bundle,
+                )
+                context.contentResolver.openOutputStream(outputUri)?.use { out ->
+                    out.write(jsonStr.toByteArray(Charsets.UTF_8))
+                } ?: return@launch
+                _styleTransferMessage.emit("已导出排版预设：${style.name}")
+                AppLog.info("Settings", "Exported reader style '${style.name}'")
+            } catch (e: Exception) {
+                AppLog.error("Settings", "Reader style export failed", e)
+                _styleTransferMessage.emit("导出失败：${e.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    /**
+     * 从 JSON 导入排版预设。每条落地为**新的自定义预设**（新 id / 非 builtin），
+     * 不覆盖任何既有预设；重名自动加序号。导入后切换到第一条导入的预设立即生效。
+     */
+    fun importStylesFromUri(uri: Uri) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val text = context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader()?.readText()?.trim() ?: return@launch
+                val imported = parseReaderStyleBundle(styleJson, text)
+                if (imported.isEmpty()) {
+                    _styleTransferMessage.emit("导入失败：不是有效的排版预设文件")
+                    return@launch
+                }
+                val existing = styleRepo.getAllSync()
+                val usedNames = existing.map { it.name }.toMutableSet()
+                var nextOrder = (existing.maxOfOrNull { it.sortOrder } ?: 0) + 1
+                val entities = imported.map { data ->
+                    var name = data.name.ifBlank { "导入预设" }
+                    var n = 2
+                    while (name in usedNames) name = "${data.name} ($n)".also { n++ }
+                    usedNames.add(name)
+                    data.copy(name = name).toEntity(
+                        id = "custom_${System.currentTimeMillis()}_${nextOrder}",
+                        sortOrder = nextOrder++,
+                    )
+                }
+                styleRepo.upsertAll(entities)
+                entities.first().id.let { id ->
+                    _activeStyleId.value = id
+                    prefs.setActiveReaderStyle(id)
+                }
+                _styleTransferMessage.emit("已导入 ${entities.size} 个排版预设")
+                AppLog.info("Settings", "Imported ${entities.size} reader style(s)")
+            } catch (e: Exception) {
+                AppLog.error("Settings", "Reader style import failed", e)
+                _styleTransferMessage.emit("导入失败：${e.message ?: "未知错误"}")
             }
         }
     }
