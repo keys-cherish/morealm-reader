@@ -11,6 +11,7 @@ import com.morealm.app.domain.entity.ReplaceRule
 import com.morealm.app.domain.entity.displayTitle
 import com.morealm.app.domain.parser.LocalBookParser
 import com.morealm.app.domain.preference.AppPreferences
+import com.morealm.app.domain.render.WireMarkerGuard
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.ReplaceRuleRepository
 import com.morealm.app.domain.repository.SourceRepository
@@ -189,6 +190,15 @@ class ChapterContentLoader @Inject constructor(
      */
     private fun applyReplaceRules(content: String, rules: List<ReplaceRule>): String {
         if (rules.isEmpty()) return content
+        // 与阅读器路径同门控：EPUB 精排内容是带排版 marker 的 wire 串，全文 regex 会打碎
+        // 协议（详 ReaderChapterController.skipReplaceForWireContent）。
+        if (WireMarkerGuard.containsWireMarkers(content)) {
+            AppLog.info(
+                "ChapterLoader",
+                "replace rules skipped: content carries layout wire markers (len=${content.length})",
+            )
+            return content
+        }
         var result = content
         for (rule in rules) {
             if (!rule.enabled || !rule.isValid()) continue
