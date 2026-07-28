@@ -204,6 +204,12 @@ fun PageLevelReaderHost(
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
     /**
+     * 点击命中 `<a href>` 区间（脚注号/跳转链接）。href 为书内原始相对路径 + 可选
+     * `#fragment`（未 resolve），anchor 为屏幕 tap 坐标（气泡定位用）。
+     * 优先级在 tap-on-highlight 之前——脚注号被高亮覆盖时点击仍应弹脚注。
+     */
+    onLinkTap: (href: String, anchor: Offset) -> Unit = { _, _ -> },
+    /**
      * 点击区域翻页动作（对齐旧 renderer.Reader 九宫格）：4 角动作由用户设置驱动，
      * `tapActionTopLeft/BottomLeft` 默认跟随「轻按页面左侧」、右两角跟随右侧；
      * 中列上=prev / 下=next、正中=menu 固定。取值 prev / next / menu（其它如 tts /
@@ -677,27 +683,34 @@ fun PageLevelReaderHost(
         layout.pages.take(curPage.pageIndex).sumOf { it.height.toDouble() }.toFloat()
     }
 
-    // 优先级 3: tap-on-highlight 命中已存高亮 → 弹删除/分享菜单（NONE/COVER/SLIDE 走
+    // 优先级 3: tap-on-link（脚注号/跳转，优先于高亮）→ 回调 host 弹脚注气泡 / 开外链；
+    // tap-on-highlight 命中已存高亮 → 弹删除/分享菜单（NONE/COVER/SLIDE 走
     // pointerInput.detectTapGestures；SIMULATION 走 SimulationReadView.onSingleTap）。
     // 抽成 lambda 让两条路径共用。
     val resolveTapOnHighlight: (Offset) -> Boolean = { offset ->
         val layout = core.state.currentChapter
         var consumed = false
-        if (layout != null && chapterHighlightsRaw.isNotEmpty()) {
+        if (layout != null && (chapterHighlightsRaw.isNotEmpty() || layout.links.isNotEmpty())) {
             val hit = layout.findColumnByPixel(
                 offset.x - layout.paddingLeft,
                 offset.y + pageTopYInChapter(),
             )
             val cp = hit?.column?.chapterPosition ?: hit?.line?.firstChapterPos
             if (cp != null) {
-                val highlight = chapterHighlightsRaw.firstOrNull { h ->
-                    h.chapterIndex == layout.chapterIndex &&
-                        cp >= h.startChapterPos && cp < h.endChapterPos
-                }
-                if (highlight != null) {
-                    highlightActionAnchor = offset
-                    highlightActionTarget = highlight
+                val link = layout.linkAt(cp)
+                if (link != null) {
+                    onLinkTap(link.href, offset)
                     consumed = true
+                } else {
+                    val highlight = chapterHighlightsRaw.firstOrNull { h ->
+                        h.chapterIndex == layout.chapterIndex &&
+                            cp >= h.startChapterPos && cp < h.endChapterPos
+                    }
+                    if (highlight != null) {
+                        highlightActionAnchor = offset
+                        highlightActionTarget = highlight
+                        consumed = true
+                    }
                 }
             }
         }

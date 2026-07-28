@@ -25,8 +25,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DarkMode
@@ -307,6 +309,32 @@ fun ReaderScreen(
 
     val context = LocalContext.current
     val centerToast = rememberCenterToastState()
+
+    // 排版预设导入 / 导出结果的一次性反馈（成功 / 格式不对 / IO 失败），走既有居中浮层。
+    LaunchedEffect(Unit) {
+        viewModel.settings.styleTransferMessage.collect { msg -> centerToast.show(msg) }
+    }
+
+    // ── 脚注气泡 ──
+    // tap 命中书内 `<a href>`（排版层 LinkRange 反查）后：http(s) 直接开外部浏览器；
+    // 书内 fragment 异步取目标纯文本 → 底部气泡展示。null = 无气泡。
+    var footnotePopupText by remember { mutableStateOf<String?>(null) }
+    fun handleReaderLinkTap(href: String) {
+        if (href.startsWith("http://") || href.startsWith("https://")) {
+            runCatching {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(href)))
+            }.onFailure { centerToast.show("无法打开链接") }
+            return
+        }
+        screenScope.launch {
+            val text = viewModel.chapter.resolveEpubLinkText(href)
+            if (text != null) {
+                footnotePopupText = text
+            } else {
+                centerToast.show("未找到注释内容")
+            }
+        }
+    }
 
     /**
      * 添加书签 + 立即弹居中反馈。
@@ -782,6 +810,7 @@ fun ReaderScreen(
                         viewModel.toggleControls()
                     }
                 },
+                onLinkTap = { href, _ -> handleReaderLinkTap(href) },
                 onCopyText = { text -> viewModel.copyTextToClipboard(text); centerToast.show("已复制") },
                 onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
                 onTranslateText = { text -> openTranslate(text) },
@@ -1010,6 +1039,7 @@ fun ReaderScreen(
                     if (toolbarEditing) toolBarViewModel.exitEditMode()
                     else viewModel.toggleControls()
                 },
+                onLinkTap = { href, _ -> handleReaderLinkTap(href) },
                 // 点击区域翻页动作（与设置「轻按页面左侧」联动）。此前只喂给旧 renderer.Reader，
                 // page-level 横翻 Host 漏接 → 设置不生效；四角值 ReaderScreen 早已 collect。
                 tapActionTopLeft = tapTL,
@@ -1379,6 +1409,58 @@ fun ReaderScreen(
             }
         }
 
+        // ── 脚注气泡（第一形态：纯文本）──
+        // tap 命中脚注号后展示目标注释：自带轻 scrim（点任意处关闭）+ 底部圆角卡片，
+        // 内容超高可滚动。富排版（注释里的上标/斜体/图）等 SubLayoutBox 第二形态。
+        if (footnotePopupText != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    ) { footnotePopupText = null },
+            )
+        }
+        AnimatedVisibility(
+            visible = footnotePopupText != null,
+            enter = slideInVertically(tween(260, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) { it },
+            exit = slideOutVertically(tween(180, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f))) { it },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            // 退出动画期间 footnotePopupText 已置 null —— 保住最后文本让滑出过程不闪空
+            var lastFootnoteText by remember { mutableStateOf("") }
+            footnotePopupText?.let { lastFootnoteText = it }
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .navigationBarsPadding()
+                    .padding(bottom = 20.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.98f),
+                tonalElevation = 8.dp,
+            ) {
+                Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
+                    Text(
+                        "注释",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        lastFootnoteText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .heightIn(max = 280.dp)
+                            .verticalScroll(rememberScrollState()),
+                    )
+                }
+            }
+        }
+
         // Scrim overlay for panels (tap to dismiss)
         if (showSettings || showTtsPanel || showChapterList || showBookmarks || showFullSearch) {
             Box(
@@ -1462,6 +1544,8 @@ fun ReaderScreen(
                 readerStyles = readerStyles,
                 activeStyleId = activeStyleId,
                 onStyleChange = viewModel.settings::switchStyle,
+                onExportStyle = viewModel.settings::exportActiveStyle,
+                onImportStyle = viewModel.settings::importStylesFromUri,
                 screenOrientation = screenOrientation,
                 onScreenOrientationChange = viewModel.settings::setScreenOrientation,
                 textSelectable = viewModel.settings.textSelectable.collectAsStateWithLifecycle().value,

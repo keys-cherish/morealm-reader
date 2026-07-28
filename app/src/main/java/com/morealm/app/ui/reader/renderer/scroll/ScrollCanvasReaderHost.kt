@@ -216,6 +216,8 @@ fun ScrollCanvasReaderHost(
     onProgressRestored: () -> Unit = {},
     onChapterIndexChange: (Int) -> Unit = {},
     onTapCenter: () -> Unit = {},
+    /** 点击命中 `<a href>` 区间（脚注号/跳转）。语义同 PageLevelReaderHost.onLinkTap。 */
+    onLinkTap: (href: String, anchor: Offset) -> Unit = { _, _ -> },
     // ── M4-revive 选区菜单 callbacks（直接复用 SelectionToolbar）──
     onCopyText: (String) -> Unit = {},
     onSpeakFromHere: (chapterPosition: Int) -> Unit = {},
@@ -801,10 +803,12 @@ fun ScrollCanvasReaderHost(
                     }
                 },
                 onTap = { offset ->
-                    // tap-on-highlight 命中：Phase 6 page-level 坐标转换：
+                    // tap-on-link / tap-on-highlight 命中：Phase 6 page-level 坐标转换：
                     //   view-local y → chapter-local y = pageStartY(curPageIdx) + state.pageOffset + view-y
                     //   （curPage 顶在 view 中 y = -state.pageOffset，所以 view-y 对应 page-y = view-y + pageOffset）
-                    if (chapterHighlightsRaw.isEmpty()) return@ScrollCanvasRenderer false
+                    if (chapterHighlightsRaw.isEmpty() && currentLayout.links.isEmpty()) {
+                        return@ScrollCanvasRenderer false
+                    }
                     var pageStartY = 0f
                     val pageIdx = pageFactory.pageIndex.coerceAtMost(currentLayout.pages.lastIndex)
                     for (i in 0 until pageIdx) pageStartY += currentLayout.pages[i].height
@@ -812,6 +816,12 @@ fun ScrollCanvasReaderHost(
                     val hit = currentLayout.findColumnByPixel(offset.x - currentLayout.paddingLeft, yInChapter)
                         ?: return@ScrollCanvasRenderer false
                     val cp = hit.column?.chapterPosition ?: hit.line.firstChapterPos
+                    // 链接（脚注号/跳转）优先于高亮——脚注号被高亮盖住时点击仍应弹脚注
+                    val link = currentLayout.linkAt(cp)
+                    if (link != null) {
+                        onLinkTap(link.href, offset)
+                        return@ScrollCanvasRenderer true
+                    }
                     val highlight = chapterHighlightsRaw.firstOrNull { h ->
                         h.chapterIndex == currentLayout.chapterIndex &&
                             cp >= h.startChapterPos && cp < h.endChapterPos

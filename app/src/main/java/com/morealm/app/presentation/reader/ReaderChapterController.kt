@@ -10,6 +10,7 @@ import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.parser.EpubParser
 import com.morealm.app.domain.parser.LocalBookParser
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
+import com.morealm.app.domain.render.WireMarkerGuard
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.ReplaceRuleRepository
 import com.morealm.app.domain.repository.SourceRepository
@@ -1390,8 +1391,44 @@ class ReaderChapterController(
         _hitTitleRules.value = hitTitleRulesSet.toList()
     }
 
+    /**
+     * 解析当前章内 `<a href>` 目标为纯文本（脚注气泡数据源）。
+     *
+     * 仅本地 EPUB 有内链语义；WEB/TXT/MOBI → null。href 相对基准 = 当前章 `chapter.url`。
+     * IO 内联在协程里做（打开 zip + 流式扫一个 spine 文件，几十 ms 量级，气泡场景可接受）。
+     */
+    suspend fun resolveEpubLinkText(href: String): String? = withContext(Dispatchers.IO) {
+        val book = _book.value ?: return@withContext null
+        if (book.format != BookFormat.EPUB) return@withContext null
+        val localPath = book.localPath ?: return@withContext null
+        val chapter = _chapters.value.getOrNull(_currentChapterIndex.value) ?: return@withContext null
+        runCatching {
+            EpubParser.readLinkTargetText(context, Uri.parse(localPath), chapter.url, href)
+        }.onFailure {
+            AppLog.warn("Chapter", "resolveEpubLinkText failed href='$href': ${it.message}")
+        }.getOrNull()
+    }
+
+    /**
+     * EPUB 精排内容是带排版 marker 的 wire 串，任何全文 regex 都可能打碎协议
+     * （2026-07-26：一条断行合并规则把行首 BlockStyle marker 并进行中，翻页层只剥行首
+     * marker → marker 字面量画进正文）。含 marker 时整章跳过替换规则。
+     *
+     * 标题不含 marker，这里只是让两个入口共用同一判断。
+     */
+    private fun skipReplaceForWireContent(content: String, isTitle: Boolean): Boolean {
+        if (!WireMarkerGuard.containsWireMarkers(content)) return false
+        AppLog.info(
+            "Chapter",
+            "replace rules skipped: content carries layout wire markers " +
+                "(isTitle=$isTitle len=${content.length})",
+        )
+        return true
+    }
+
     suspend fun applyReplaceRules(content: String, isTitle: Boolean = false): String {
         if (cachedReplaceRules.isEmpty()) return content
+        if (skipReplaceForWireContent(content, isTitle)) return content
         var result = content
         var anyHit = false
         for (rule in cachedReplaceRules) {
@@ -1425,6 +1462,7 @@ class ReaderChapterController(
 
     fun applyLoadedReplaceRulesSync(content: String, isTitle: Boolean = false): String {
         if (cachedReplaceRules.isEmpty()) return content
+        if (skipReplaceForWireContent(content, isTitle)) return content
         var result = content
         var anyHit = false
         for (rule in cachedReplaceRules) {

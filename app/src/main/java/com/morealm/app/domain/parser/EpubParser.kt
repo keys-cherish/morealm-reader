@@ -8,6 +8,7 @@ import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.core.log.AppLog
 import com.morealm.epub.compat.ChapterBlock
 import com.morealm.epub.compat.ChapterReader
+import com.morealm.epub.compat.FragmentTextExtractor
 import com.morealm.epub.compat.StructuredChapterContent
 import org.jsoup.Jsoup
 import java.io.File
@@ -889,6 +890,26 @@ object EpubParser {
         return content
     }
     // ── Structured chapter parsing (streaming via epub-core) ─────────────
+
+    /**
+     * 解析章内 `<a href>` 目标为纯文本 —— 脚注气泡第一形态数据源。
+     *
+     * @param baseChapterUrl 链接所在章的 `chapter.url`（决定相对 href 的基准目录）
+     * @param href 排版层 tap 命中的原始 href（`file#id` / `#id` / `file`）
+     * @return 目标元素纯文本；解析失败 / 目标不存在 → null（调用方提示"未找到脚注内容"）
+     */
+    fun readLinkTargetText(
+        context: Context,
+        uri: Uri,
+        baseChapterUrl: String,
+        href: String,
+    ): String? = EpubCoreBridge.withCoreBook(context, uri) { book ->
+        FragmentTextExtractor.extract(
+            book = book,
+            baseFileHref = baseChapterUrl.substringBeforeLast("#"),
+            href = href,
+        )
+    }
 
     fun readChapterStructured(
         context: Context,

@@ -117,3 +117,14 @@ internal fun adaptAuthoredBlockDecorForReaderBg(style: BlockStyle, readerBgArgb:
         borderLeftColor = border(style.borderLeftColor),
     )
 }
+
+/**
+ * 链接/脚注号前景色 —— 按阅读背景亮度二态：浅底用深链接蓝（对 cream/白底可读），
+ * 深底用亮链接蓝（夜间不刺眼）。不走主题 token：canvas 层拿不到 Compose 主题，
+ * 且链接色语义上要求"稳定可辨识"而非跟随强调色（对齐系统浏览器/阅读器惯例）。
+ */
+internal fun linkForegroundForReaderBg(readerBgArgb: Int): Int {
+    val hsl = FloatArray(3)
+    ColorUtils.colorToHSL(readerBgArgb, hsl)
+    return if (hsl[2] >= 0.45f) 0xFF2B6CB0.toInt() else 0xFF82AEE0.toInt()
+}

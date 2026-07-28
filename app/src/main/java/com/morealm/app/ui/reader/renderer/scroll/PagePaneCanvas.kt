@@ -25,6 +25,7 @@ import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.adaptAuthoredForegroundForReaderBg
+import com.morealm.app.ui.reader.renderer.linkForegroundForReaderBg
 import com.morealm.epub.render.ScrollPage
 
 /**
@@ -539,16 +540,25 @@ internal fun drawScrollPageOnCanvas(
                 }
                 continue
             }
-            val overrideColor = textColorByCp[col.chapterPosition] ?: col.colorArgb?.let {
-                adaptAuthoredForegroundForReaderBg(it, readerBgArgb, line.blockStyle.backgroundColor)
+            // 优先级：用户高亮 > 链接色（脚注号/跳转可辨识，日夜自适应）> CSS char-level 色
+            val overrideColor = textColorByCp[col.chapterPosition]
+                ?: (if (col.isLink) linkForegroundForReaderBg(readerBgArgb) else null)
+                ?: col.colorArgb?.let {
+                    adaptAuthoredForegroundForReaderBg(it, readerBgArgb, line.blockStyle.backgroundColor)
+                }
+            // 上下标：sup 上移 0.35×字号 / sub 下移 0.15×字号（宽度缩放已在排版期完成）
+            val colBaselineY = when {
+                col.baselineShift > 0 -> baselineY - paint.textSize * 0.35f
+                col.baselineShift < 0 -> baselineY + paint.textSize * 0.15f
+                else -> baselineY
             }
             paint.withEpubTypeface(col.fontFamily) {
                 if (overrideColor != null) {
                     paint.color = overrideColor
-                    nc.drawText(col.charData, col.start, baselineY, paint)
+                    nc.drawText(col.charData, col.start, colBaselineY, paint)
                     paint.color = paragraphColor ?: defaultColor
                 } else {
-                    nc.drawText(col.charData, col.start, baselineY, paint)
+                    nc.drawText(col.charData, col.start, colBaselineY, paint)
                 }
             }
         }
@@ -635,11 +645,24 @@ private fun drawByAtoms(
             is com.morealm.epub.render.TextRun -> {
                 val scale = atom.sizeScale
                 if (scale != 1f) basePaint.textSize = baseSize * scale
-                // sizeScale ≠ 1 时 vertical-align: top fallback 让小字号字符顶贴 line 顶。
-                // sizeScale = 1 → 沿用 caller baselineY 兼容现有路径（H2/某日轻 em15 等）。
-                val effectiveBaselineY = if (scale != 1f) {
-                    line.lineTop + basePaint.textSize * 0.8f
-                } else baselineY
+                // 上下标优先（sup 从父字号基线上移 0.33×、sub 下移 0.15×，对齐浏览器
+                // vertical-align: super/sub 视觉）；否则 sizeScale ≠ 1 时沿用
+                // vertical-align: top fallback 让小字号字符顶贴 line 顶；
+                // sizeScale = 1 → caller baselineY 兼容现有路径（H2/某日轻 em15 等）。
+                val effectiveBaselineY = when {
+                    atom.baselineShift > 0 -> baselineY - baseSize * 0.33f
+                    atom.baselineShift < 0 -> baselineY + baseSize * 0.15f
+                    scale != 1f -> line.lineTop + basePaint.textSize * 0.8f
+                    else -> baselineY
+                }
+                // 链接色 > CSS char-level 色（脚注号可辨识；日夜自适应，不烘进排版数据）
+                val atomOverrideColor = if (atom.isLink) {
+                    linkForegroundForReaderBg(readerBgArgb)
+                } else {
+                    atom.colorArgb?.let {
+                        adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
+                    }
+                }
                 basePaint.withEpubTypeface(atom.fontFamily) {
                     val rotationSave = if (atom.rotationDegrees != 0f) {
                         canvas.save().also {
@@ -660,9 +683,7 @@ private fun drawByAtoms(
                     } else false
                     if (hasOverride) {
                         var cx = textX
-                        val baseColor = atom.colorArgb?.let {
-                            adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
-                        } ?: defaultColor
+                        val baseColor = atomOverrideColor ?: defaultColor
                         for (ci in atom.text.indices) {
                             val cp = atomStartCp + ci
                             val color = textColorByCp[cp] ?: baseColor
@@ -674,15 +695,11 @@ private fun drawByAtoms(
                         basePaint.color = defaultColor
                     } else {
                         val origColor = basePaint.color
-                        if (atom.colorArgb != null) {
-                            basePaint.color = adaptAuthoredForegroundForReaderBg(
-                                atom.colorArgb!!,
-                                readerBgArgb,
-                                atom.inlineBgArgb,
-                            )
+                        if (atomOverrideColor != null) {
+                            basePaint.color = atomOverrideColor
                         }
                         canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
-                        if (atom.colorArgb != null) basePaint.color = origColor
+                        if (atomOverrideColor != null) basePaint.color = origColor
                     }
                     if (rotationSave != null) canvas.restoreToCount(rotationSave)
                 }
