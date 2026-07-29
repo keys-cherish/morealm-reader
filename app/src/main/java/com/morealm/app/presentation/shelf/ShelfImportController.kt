@@ -49,6 +49,7 @@ class ShelfImportController(
     private val autoGroupClassifier: AutoGroupClassifier,
     private val context: Context,
     private val scope: CoroutineScope,
+    private val onBookInserted: (Book) -> Unit = {},
 ) {
 
     private val _folderImportState = MutableStateFlow(FolderImportState())
@@ -147,6 +148,8 @@ class ShelfImportController(
                 importedCount = 1,
                 message = "已导入：${placeholderBook.title}",
             )
+            // placeholder 已落库且 id 稳定，此时即可驱动书架定位；无需等待耗时的元数据补全。
+            onBookInserted(placeholderBook)
             AppLog.info("Import", "Phase 1 inserted: ${placeholderBook.title} ($format)")
 
             // ── Phase 2: 异步补 metadata / cover / isComic ──

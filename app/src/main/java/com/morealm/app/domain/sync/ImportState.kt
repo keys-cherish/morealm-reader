@@ -61,12 +61,14 @@ sealed interface ImportState {
      * @param imported    实际入库本数
      * @param durationMs  从 Scanning 到 Done 的总耗时
      * @param cancelled   true = 用户中途取消，已 imported 本仍在书架
+     * @param focusFolderId 首个确实包含本次文件的分组；书架据此定位，非文件夹导入保持 null
      */
     data class Done(
         val folderName: String,
         val imported: Int,
         val durationMs: Long,
         val cancelled: Boolean = false,
+        val focusFolderId: String? = null,
     ) : ImportState
 
     /** 终态：扫描 / 入库不可恢复错误。已 imported 本仍在书架（不回滚）。 */

@@ -253,6 +253,7 @@ class ImportService : Service() {
                 // → deep scan（fallback，无 group）。progressOffset 累加让 Phase1 emit 数
                 // 跨多次调用单调增长。
                 var importedSoFar = 0
+                var focusFolderId: String? = null
                 for ((group, files) in perSubFolder) {
                     groupRepo.insert(group)
                     val result = importEngine.importBatch(
@@ -262,10 +263,12 @@ class ImportService : Service() {
                         progressOffset = importedSoFar,
                         totalForProgress = grandTotal,
                     )
-                    if (result.phase1Inserted + result.regrouped == 0) {
-                        // sub-folder 没有任何书入组（新增 + 收编都为 0）→ 清空空 group，避免
-                        // 书架出现空文件夹。regrouped > 0 时组里已有收编的旧书，必须保留。
+                    val booksInGroup = result.phase1Inserted + result.regrouped + result.matchedInTargetGroup
+                    if (booksInGroup == 0) {
+                        // 新增、收编、同组 dedup 均为 0，才可判定本次稳定组没有对应书。
                         groupRepo.deleteById(group.id)
+                    } else if (focusFolderId == null) {
+                        focusFolderId = group.id
                     }
                     // imported 计数纳入 regrouped：收编的旧书也算「这次整理进组」，
                     // 否则全是已存在书时 done 显示 imported=0，用户误以为没成功。
@@ -298,9 +301,12 @@ class ImportService : Service() {
                         progressOffset = importedSoFar,
                         totalForProgress = grandTotal,
                     )
-                    if (result.phase1Inserted + result.regrouped == 0) {
-                        // 没有任何书入组（新增 + 收编都为 0）→ 清空空 group
+                    val booksInGroup = result.phase1Inserted + result.regrouped + result.matchedInTargetGroup
+                    if (booksInGroup == 0) {
+                        // 新增、收编、同组 dedup 均为 0，才清理真正的空组。
                         groupRepo.deleteById(rootGroup.id)
+                    } else if (focusFolderId == null) {
+                        focusFolderId = rootGroup.id
                     }
                     // imported 计数纳入 regrouped：收编的旧书也算「这次整理进组」，
                     // 否则全是已存在书时 done 显示 imported=0，用户误以为没成功。
@@ -314,6 +320,7 @@ class ImportService : Service() {
                         imported = importedSoFar,
                         durationMs = System.currentTimeMillis() - startTime,
                         cancelled = wasCancelled,
+                        focusFolderId = focusFolderId,
                     )
                 )
                 AppLog.info(

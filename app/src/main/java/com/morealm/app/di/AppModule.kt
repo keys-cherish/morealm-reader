@@ -847,6 +847,7 @@ object AppModule {
     @Provides fun provideChapterDao(db: AppDatabase): ChapterDao = db.chapterDao()
     @Provides fun provideBookSourceDao(db: AppDatabase): BookSourceDao = db.bookSourceDao()
     @Provides fun provideBookGroupDao(db: AppDatabase): BookGroupDao = db.bookGroupDao()
+    @Provides fun provideShelfGroupDao(db: AppDatabase): ShelfGroupDao = db.shelfGroupDao()
     @Provides fun provideBookTagDao(db: AppDatabase): BookTagDao = db.bookTagDao()
     @Provides fun provideTagDefinitionDao(db: AppDatabase): TagDefinitionDao = db.tagDefinitionDao()
     @Provides fun provideReadProgressDao(db: AppDatabase): ReadProgressDao = db.readProgressDao()

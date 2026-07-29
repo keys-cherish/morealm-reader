@@ -16,10 +16,17 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -45,10 +52,13 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.BookGroup
+import com.morealm.app.domain.entity.ShelfGroup
 import com.morealm.app.presentation.shelf.FolderImportState
 import com.morealm.app.presentation.shelf.ImportPhase
+import com.morealm.app.presentation.shelf.ShelfImportFocusTarget
 import com.morealm.app.presentation.shelf.aggregateShelfReadingState
 import com.morealm.app.presentation.shelf.matchesShelfFilter
+import com.morealm.app.presentation.shelf.resolveShelfImportFocusIndex
 import com.morealm.app.presentation.shelf.shelfReadingState
 import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.presentation.shelf.ShelfViewModel
@@ -58,7 +68,7 @@ import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ShelfScreen(
     onBookClick: (String) -> Unit,
@@ -110,6 +120,8 @@ fun ShelfScreen(
     // AppPreferences，下次进入应用直接看到上次的视图模式。
     val shelfViewMode by viewModel.shelfViewMode.collectAsStateWithLifecycle()
     val isListView = shelfViewMode == "list"
+    val shelfListState = rememberLazyListState()
+    val shelfGridState = rememberLazyGridState()
     // Folder navigation state: null = root (show all groups + ungrouped)
     var currentFolderId by rememberSaveable { mutableStateOf<String?>(null) }
     var shelfFilter by rememberSaveable { mutableStateOf("all") }
@@ -158,10 +170,20 @@ fun ShelfScreen(
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showMoveToGroupDialog by remember { mutableStateOf(false) }
     var showRenameGroupDialog by remember { mutableStateOf<String?>(null) }
+    // ── 书架 tab 自定义分组（ShelfGroup 多对多；与上面的文件夹体系并存）──
+    val shelfGroups by viewModel.shelfGroups.collectAsStateWithLifecycle()
+    val shelfGroupBookIds by viewModel.shelfGroupBookIds.collectAsStateWithLifecycle()
+    val hiddenSmartTabs by viewModel.hiddenSmartTabs.collectAsStateWithLifecycle()
+    var showCreateShelfGroupDialog by remember { mutableStateOf(false) }
+    var renameShelfGroupTarget by remember { mutableStateOf<ShelfGroup?>(null) }
+    var deleteShelfGroupTarget by remember { mutableStateOf<ShelfGroup?>(null) }
+    var showAddToShelfGroupDialog by remember { mutableStateOf(false) }
+    var showManageShelfGroupsDialog by remember { mutableStateOf(false) }
     val allGroups by viewModel.allGroups.collectAsStateWithLifecycle()
     val folderBookCounts by viewModel.folderBookCounts.collectAsStateWithLifecycle()
     val folderCoverUrls by viewModel.folderCoverUrls.collectAsStateWithLifecycle()
     val folderImportState by viewModel.folderImportState.collectAsStateWithLifecycle()
+    val importFocusTarget by viewModel.importFocusTarget.collectAsStateWithLifecycle()
     // 后台 toc 刷新状态：顶栏铃铛旋转 + 红点显示。两个 flow 都来自 ShelfRefreshController
     // / books 派生，没有额外订阅成本。
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
@@ -206,6 +228,18 @@ fun ShelfScreen(
         }
     }
 
+    // rememberSaveable 跨进程恢复的 shelfFilter 可能指向一个此后被隐藏的智能 tab——
+    // pill 不在条上却还在隐形过滤书列表；发现即兜底回「全部」。custom 分组指向已删组
+    // 的场景不在这兜（shelfGroups Eagerly 初值 emptyList 无法与「真空表」区分，
+    // 删除路径已显式 reset，残留 case 仅显示空列表、点任意 tab 即恢复）。
+    LaunchedEffect(hiddenSmartTabs) {
+        if (shelfFilter != "all" && !shelfFilter.startsWith("custom:") &&
+            shelfFilter in hiddenSmartTabs
+        ) {
+            shelfFilter = "all"
+        }
+    }
+
     // 先按文件夹确定作用域，再做纯展示筛选；筛选不写回 Book，避免破坏书架分组数据。
     val scopedBooks = remember(allBooks, currentFolderId) {
         if (currentFolderId != null) {
@@ -214,19 +248,68 @@ fun ShelfScreen(
             allBooks.filter { it.folderId == null }
         }
     }
-    val displayBooks = remember(scopedBooks, shelfFilter) {
-        scopedBooks.filter { it.shelfReadingState().matchesShelfFilter(shelfFilter) }
+    // 自定义分组 tab 选中时：组员平铺全库展示（多对多成员与文件夹作用域正交），
+    // 文件夹卡隐藏——无论人在根目录还是文件夹内，看到的都是该组全部成员。
+    val activeShelfGroupId = shelfFilter.takeIf { it.startsWith("custom:") }?.removePrefix("custom:")
+    val displayBooks = remember(scopedBooks, shelfFilter, allBooks, shelfGroupBookIds) {
+        if (activeShelfGroupId != null) {
+            val members = shelfGroupBookIds[activeShelfGroupId].orEmpty()
+            allBooks.filter { it.id in members }
+        } else {
+            scopedBooks.filter { it.shelfReadingState().matchesShelfFilter(shelfFilter) }
+        }
     }
     val booksByFolderId = remember(allBooks) {
         allBooks.filter { it.folderId != null }.groupBy { it.folderId!! }
     }
     val folderIds = remember(groupNames, booksByFolderId, shelfFilter) {
-        groupNames.keys.filter { folderId ->
-            booksByFolderId[folderId]
-                .orEmpty()
-                .aggregateShelfReadingState()
-                .matchesShelfFilter(shelfFilter)
+        if (activeShelfGroupId != null) {
+            emptyList()
+        } else {
+            groupNames.keys.filter { folderId ->
+                booksByFolderId[folderId]
+                    .orEmpty()
+                    .aggregateShelfReadingState()
+                    .matchesShelfFilter(shelfFilter)
+            }
         }
+    }
+
+    // 导入目标可能先于 Room Flow 到达：先切到目标所属作用域并清掉会遮挡目标的 UI
+    // 状态；索引解析返回 null 时保留请求，等下一次 books/groups 投影更新再重试。
+    LaunchedEffect(importFocusTarget, allBooks, folderIds, displayBooks, currentFolderId, shelfFilter, isListView) {
+        val target = importFocusTarget ?: return@LaunchedEffect
+        val targetFolderId = when (target) {
+            is ShelfImportFocusTarget.BookTarget -> {
+                val targetBook = allBooks.find { it.id == target.bookId } ?: return@LaunchedEffect
+                targetBook.folderId
+            }
+            is ShelfImportFocusTarget.FolderTarget -> null
+        }
+        if (shelfFilter != "all" || currentFolderId != targetFolderId) {
+            shelfFilter = "all"
+            currentFolderId = targetFolderId
+            batchMode = false
+            selectedIds = emptySet()
+            folderBatchMode = false
+            selectedFolderIds = emptySet()
+            showSearch = false
+            viewModel.setSearchQuery("")
+            return@LaunchedEffect
+        }
+        val index = resolveShelfImportFocusIndex(
+            target = target,
+            allBooks = allBooks,
+            visibleFolderIds = folderIds,
+            visibleBookIds = displayBooks.map { it.id },
+            currentFolderId = currentFolderId,
+        ) ?: return@LaunchedEffect
+
+        // 等本轮重组把 Lazy 容器挂载并提交 item provider，再启动可见的平滑滚动。
+        withFrameNanos { }
+        if (isListView) shelfListState.animateScrollToItem(index)
+        else shelfGridState.animateScrollToItem(index)
+        viewModel.consumeImportFocusTarget(target)
     }
 
     // Back handler: return to root when inside a folder
@@ -385,6 +468,32 @@ fun ShelfScreen(
                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
                     }
                 } else if (batchMode) {
+                    if (activeShelfGroupId != null) {
+                        // 分组 tab 内多选：移出当前分组（只解除关联，不动书）。
+                        IconButton(
+                            onClick = {
+                                if (selectedIds.isEmpty()) return@IconButton
+                                val gid = activeShelfGroupId
+                                val count = selectedIds.size
+                                viewModel.removeBooksFromShelfGroup(gid, selectedIds)
+                                batchMode = false; selectedIds = emptySet()
+                                scope.launch { snackbarHost.showSnackbar("已从分组移出 $count 本") }
+                            },
+                            enabled = selectedIds.isNotEmpty(),
+                        ) {
+                            Icon(Icons.Default.BookmarkRemove, "移出分组",
+                                tint = if (selectedIds.isNotEmpty()) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
+                        }
+                    }
+                    IconButton(
+                        onClick = { if (selectedIds.isNotEmpty()) showAddToShelfGroupDialog = true },
+                        enabled = selectedIds.isNotEmpty(),
+                    ) {
+                        Icon(Icons.Default.Bookmarks, "加入分组",
+                            tint = if (selectedIds.isNotEmpty()) MaterialTheme.colorScheme.primary
+                                   else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
+                    }
                     IconButton(
                         onClick = { if (selectedIds.isNotEmpty()) showMoveToGroupDialog = true },
                         enabled = selectedIds.isNotEmpty(),
@@ -579,14 +688,18 @@ fun ShelfScreen(
             // 筛选、排序和视图模式集中在一条紧凑控制栏；顶栏已承担书架标题。
             if (!batchMode && !folderBatchMode) {
                 var showShelfSortMenu by remember { mutableStateOf(false) }
-                val filterOptions = remember {
-                    listOf(
-                        "all" to "全部",
-                        "reading" to "在读",
-                        "wanted" to "想读",
-                        "finished" to "已读",
-                    )
+                // 「全部」恒在；智能 tab（按阅读进度自动归类）可长按隐藏；
+                // 自定义分组 tab 追加在后，长按重命名/删除，末尾「＋」新建。
+                val filterOptions = remember(shelfGroups, hiddenSmartTabs) {
+                    buildList {
+                        add("all" to "全部")
+                        if ("reading" !in hiddenSmartTabs) add("reading" to "在读")
+                        if ("wanted" !in hiddenSmartTabs) add("wanted" to "想读")
+                        if ("finished" !in hiddenSmartTabs) add("finished" to "已读")
+                        shelfGroups.forEach { add("custom:${it.id}" to it.name) }
+                    }
                 }
+                var tabMenuTarget by remember { mutableStateOf<String?>(null) }
                 val sortLabel = when (sortMode) {
                     "addTime" -> "导入时间"
                     "title" -> "书名"
@@ -600,29 +713,96 @@ fun ShelfScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Row(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         filterOptions.forEach { (key, label) ->
                             val selected = shelfFilter == key
-                            Text(
-                                text = label,
-                                fontSize = 12.sp,
-                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                color = if (selected) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                                },
+                            Box {
+                                Text(
+                                    text = label,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                                    },
+                                    maxLines = 1,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.07f)
+                                            else androidx.compose.ui.graphics.Color.Transparent
+                                        )
+                                        .combinedClickable(
+                                            onClick = { shelfFilter = key },
+                                            onLongClick = {
+                                                if (key != "all") {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    tabMenuTarget = key
+                                                }
+                                            },
+                                        )
+                                        .padding(horizontal = 9.dp, vertical = 5.dp),
+                                )
+                                DropdownMenu(
+                                    expanded = tabMenuTarget == key,
+                                    onDismissRequest = { tabMenuTarget = null },
+                                ) {
+                                    if (key.startsWith("custom:")) {
+                                        val group = shelfGroups.find { "custom:${it.id}" == key }
+                                        DropdownMenuItem(
+                                            text = { Text("重命名") },
+                                            onClick = { tabMenuTarget = null; renameShelfGroupTarget = group },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("删除分组") },
+                                            onClick = { tabMenuTarget = null; deleteShelfGroupTarget = group },
+                                        )
+                                    } else {
+                                        DropdownMenuItem(
+                                            text = { Text("隐藏") },
+                                            onClick = {
+                                                tabMenuTarget = null
+                                                if (shelfFilter == key) shelfFilter = "all"
+                                                viewModel.setShelfSmartTabHidden(key, true)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        // 「＋」= 分组总入口：新建 / 管理（重命名、删除、恢复隐藏的智能 tab）。
+                        // 长按 tab 仍是快捷方式，但所有操作在管理对话框里都有明面入口。
+                        Box {
+                            var plusMenuOpen by remember { mutableStateOf(false) }
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = "分组管理",
+                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(50))
-                                    .background(
-                                        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.07f)
-                                        else androidx.compose.ui.graphics.Color.Transparent
-                                    )
-                                    .clickable { shelfFilter = key }
-                                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                                    .clickable { plusMenuOpen = true }
+                                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                                    .size(16.dp),
                             )
+                            DropdownMenu(
+                                expanded = plusMenuOpen,
+                                onDismissRequest = { plusMenuOpen = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("新建分组") },
+                                    onClick = { plusMenuOpen = false; showCreateShelfGroupDialog = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("管理分组") },
+                                    onClick = { plusMenuOpen = false; showManageShelfGroupsDialog = true },
+                                )
+                            }
                         }
                     }
                     Box {
@@ -761,6 +941,7 @@ fun ShelfScreen(
         } else if (isListView) {
             // List view
             LazyColumn(
+                state = shelfListState,
                 contentPadding = PaddingValues(top = 4.dp, bottom = 88.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
             ) {
                 if (currentFolderId == null) {
@@ -789,6 +970,7 @@ fun ShelfScreen(
         } else {
             // Grid view
             LazyVerticalGrid(
+                state = shelfGridState,
                 columns = GridCells.Fixed(columns),
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 88.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -960,6 +1142,87 @@ fun ShelfScreen(
                 showRenameGroupDialog = null
             },
             onDismiss = { showRenameGroupDialog = null },
+        )
+    }
+
+    // ── 书架 tab 自定义分组对话框 ──
+    if (showCreateShelfGroupDialog) {
+        CreateShelfGroupDialog(
+            hiddenSmartTabs = hiddenSmartTabs,
+            onRestoreSmartTab = { viewModel.setShelfSmartTabHidden(it, false) },
+            onConfirm = { name ->
+                viewModel.createShelfGroup(name)
+                showCreateShelfGroupDialog = false
+            },
+            onDismiss = { showCreateShelfGroupDialog = false },
+        )
+    }
+
+    renameShelfGroupTarget?.let { group ->
+        RenameShelfGroupDialog(
+            currentName = group.name,
+            onConfirm = { newName ->
+                viewModel.renameShelfGroup(group.id, newName)
+                renameShelfGroupTarget = null
+            },
+            onDismiss = { renameShelfGroupTarget = null },
+        )
+    }
+
+    deleteShelfGroupTarget?.let { group ->
+        AlertDialog(
+            onDismissRequest = { deleteShelfGroupTarget = null },
+            title = { Text("删除分组「${group.name}」？") },
+            text = { Text("只删除分组本身，组内书籍不会被删除。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (shelfFilter == "custom:${group.id}") shelfFilter = "all"
+                    viewModel.deleteShelfGroup(group.id)
+                    deleteShelfGroupTarget = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteShelfGroupTarget = null }) { Text("取消") }
+            },
+        )
+    }
+
+    if (showManageShelfGroupsDialog) {
+        ManageShelfGroupsDialog(
+            groups = shelfGroups,
+            hiddenSmartTabs = hiddenSmartTabs,
+            onRename = { renameShelfGroupTarget = it },
+            onDelete = { deleteShelfGroupTarget = it },
+            onSmartTabHiddenChange = { key, hidden ->
+                if (hidden && shelfFilter == key) shelfFilter = "all"
+                viewModel.setShelfSmartTabHidden(key, hidden)
+            },
+            onCreateNew = {
+                showManageShelfGroupsDialog = false
+                showCreateShelfGroupDialog = true
+            },
+            onDismiss = { showManageShelfGroupsDialog = false },
+        )
+    }
+
+    if (showAddToShelfGroupDialog) {
+        AddToShelfGroupDialog(
+            groups = shelfGroups,
+            onConfirm = { groupIds ->
+                groupIds.forEach { viewModel.addBooksToShelfGroup(it, selectedIds) }
+                val count = selectedIds.size
+                showAddToShelfGroupDialog = false
+                batchMode = false
+                selectedIds = emptySet()
+                scope.launch {
+                    snackbarHost.showSnackbar("已把 $count 本书加入 ${groupIds.size} 个分组")
+                }
+            },
+            onCreateNew = {
+                showAddToShelfGroupDialog = false
+                showCreateShelfGroupDialog = true
+            },
+            onDismiss = { showAddToShelfGroupDialog = false },
         )
     }
 
@@ -1564,6 +1827,237 @@ private fun RenameGroupDialog(
 }
 
 // endregion
+
+// ── 书架 tab 自定义分组对话框 ────────────────────────────────────────────────
+
+/**
+ * 分组管理总入口：自定义分组重命名/删除、智能 tab 显示开关全在这一个对话框里
+ * 有明面按钮 —— 长按 tab 只是快捷方式，不再是唯一入口。
+ */
+@Composable
+private fun ManageShelfGroupsDialog(
+    groups: List<ShelfGroup>,
+    hiddenSmartTabs: Set<String>,
+    onRename: (ShelfGroup) -> Unit,
+    onDelete: (ShelfGroup) -> Unit,
+    onSmartTabHiddenChange: (String, Boolean) -> Unit,
+    onCreateNew: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("管理分组") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text("智能分组", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                listOf("reading" to "在读", "wanted" to "想读", "finished" to "已读")
+                    .forEach { (key, label) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(label, style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.weight(1f))
+                            Switch(
+                                checked = key !in hiddenSmartTabs,
+                                onCheckedChange = { shown -> onSmartTabHiddenChange(key, !shown) },
+                                colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
+                            )
+                        }
+                    }
+                Spacer(Modifier.height(10.dp))
+                Text("自定义分组", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                if (groups.isEmpty()) {
+                    Text("还没有自定义分组",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(vertical = 8.dp))
+                } else {
+                    groups.forEach { group ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(group.name, style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { onRename(group) }) { Text("重命名") }
+                            TextButton(onClick = { onDelete(group) }) {
+                                Text("删除", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onCreateNew) { Text("新建分组", color = MaterialTheme.colorScheme.primary) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("完成") }
+        },
+    )
+}
+
+@Composable
+private fun CreateShelfGroupDialog(
+    hiddenSmartTabs: Set<String>,
+    onRestoreSmartTab: (String) -> Unit,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新建书架分组") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    placeholder = { Text("分组名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
+                Text("分组显示在书架顶部；多选书籍可同时加入多个分组。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                if (hiddenSmartTabs.isNotEmpty()) {
+                    Text("已隐藏的智能分组", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        hiddenSmartTabs.forEach { key ->
+                            val label = when (key) {
+                                "reading" -> "在读"
+                                "wanted" -> "想读"
+                                "finished" -> "已读"
+                                else -> key
+                            }
+                            AssistChip(
+                                onClick = { onRestoreSmartTab(key) },
+                                label = { Text("恢复「$label」") },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (name.isNotBlank()) onConfirm(name.trim()) },
+                enabled = name.isNotBlank(),
+            ) {
+                Text("创建", color = if (name.isNotBlank()) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
+
+@Composable
+private fun RenameShelfGroupDialog(
+    currentName: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var newName by remember { mutableStateOf(currentName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("重命名分组") },
+        text = {
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary, cursorColor = MaterialTheme.colorScheme.primary,
+                ),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (newName.isNotBlank()) onConfirm(newName.trim()) },
+                enabled = newName.isNotBlank(),
+            ) { Text("保存", color = MaterialTheme.colorScheme.primary) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
+
+/** 多选书籍加入分组（可勾多个组）；无自定义分组时降级为「去新建」。 */
+@Composable
+private fun AddToShelfGroupDialog(
+    groups: List<ShelfGroup>,
+    onConfirm: (Set<String>) -> Unit,
+    onCreateNew: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var checked by remember { mutableStateOf(setOf<String>()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("加入分组") },
+        text = {
+            if (groups.isEmpty()) {
+                Text("还没有自定义分组，先新建一个。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            } else {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                ) {
+                    groups.forEach { group ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    checked = if (group.id in checked) checked - group.id
+                                    else checked + group.id
+                                }
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = group.id in checked,
+                                onCheckedChange = {
+                                    checked = if (it) checked + group.id else checked - group.id
+                                },
+                            )
+                            Text(group.name, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (groups.isEmpty()) {
+                TextButton(onClick = onCreateNew) {
+                    Text("新建分组", color = MaterialTheme.colorScheme.primary)
+                }
+            } else {
+                TextButton(
+                    onClick = { if (checked.isNotEmpty()) onConfirm(checked) },
+                    enabled = checked.isNotEmpty(),
+                ) {
+                    Text("加入", color = if (checked.isNotEmpty()) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
 
 // ── 顶栏胶囊 helper composables ──────────────────────────────────────────────
 //

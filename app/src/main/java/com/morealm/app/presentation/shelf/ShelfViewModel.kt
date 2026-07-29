@@ -8,10 +8,12 @@ import com.morealm.app.domain.entity.Book
 import com.morealm.app.core.text.sortedNaturalBy
 import com.morealm.app.core.text.sortedNaturalWith
 import com.morealm.app.domain.entity.BookGroup
+import com.morealm.app.domain.entity.ShelfGroup
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.repository.AutoGroupClassifier
 import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.BookGroupRepository
+import com.morealm.app.domain.repository.ShelfGroupRepository
 import com.morealm.app.domain.repository.SourceRepository
 import com.morealm.app.core.log.AppLog
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -51,6 +53,7 @@ enum class ImportPhase { Idle, Scanning, Phase1, Phase2, Done, Error }
 class ShelfViewModel @Inject constructor(
     private val bookRepo: BookRepository,
     private val groupRepo: BookGroupRepository,
+    private val shelfGroupRepo: ShelfGroupRepository,
     private val autoGroupClassifier: AutoGroupClassifier,
     private val prefs: AppPreferences,
     private val cacheRepo: com.morealm.app.domain.repository.CacheRepository,
@@ -61,6 +64,11 @@ class ShelfViewModel @Inject constructor(
     private val readStatsRepo: com.morealm.app.domain.repository.ReadStatsRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    // StateFlow 保留尚未消费的目标：文件夹导入在前台服务中完成时，即使用户暂时离开
+    // 书架，返回后仍能定位；SharedFlow(replay=0) 会在页面未组合时丢事件。
+    private val _importFocusTarget = MutableStateFlow<ShelfImportFocusTarget?>(null)
+    val importFocusTarget: StateFlow<ShelfImportFocusTarget?> = _importFocusTarget.asStateFlow()
 
     // ── 今日阅读时长 ──
     // 顶栏副文本要显示「今日已阅读 X 小时 Y 分钟」，从 read_stats 表里取今天那条。
@@ -80,6 +88,9 @@ class ShelfViewModel @Inject constructor(
         autoGroupClassifier = autoGroupClassifier,
         context = context,
         scope = viewModelScope,
+        onBookInserted = { book ->
+            _importFocusTarget.value = ShelfImportFocusTarget.BookTarget(book.id)
+        },
     )
 
     val organize = ShelfOrganizeController(
@@ -110,6 +121,11 @@ class ShelfViewModel @Inject constructor(
             com.morealm.app.domain.sync.ImportStateBus.state.collect { busState ->
                 val mapped = mapBusToFolderImportState(busState) ?: return@collect
                 import.setFolderImportState(mapped)
+                if (busState is com.morealm.app.domain.sync.ImportState.Done) {
+                    busState.focusFolderId?.let { folderId ->
+                        _importFocusTarget.value = ShelfImportFocusTarget.FolderTarget(folderId)
+                    }
+                }
             }
         }
     }
@@ -213,12 +229,78 @@ class ShelfViewModel @Inject constructor(
         import.setFolderImportState(FolderImportState())
     }
 
+    /** 仅消费仍为同一实例的请求，避免滚动期间到达的新导入目标被旧协程清掉。 */
+    fun consumeImportFocusTarget(target: ShelfImportFocusTarget) {
+        _importFocusTarget.compareAndSet(target, null)
+    }
+
     val allGroups: StateFlow<List<BookGroup>> = groupRepo.getAllGroups()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val groupNames: StateFlow<Map<String, String>> = allGroups
         .map { groups -> groups.associate { it.id to it.name } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    // ── 书架 tab 自定义分组（与文件夹体系并存，见 ShelfGroup KDoc）──
+
+    /** Eagerly：tab 条参与书架首帧，Lazily 会闪一下「只有全部」。 */
+    val shelfGroups: StateFlow<List<ShelfGroup>> = shelfGroupRepo.getAllGroups()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** groupId → 成员 bookId 集。全量订阅（百级行数），切 tab 零查询延迟。 */
+    val shelfGroupBookIds: StateFlow<Map<String, Set<String>>> = shelfGroupRepo.getAllRelations()
+        .map { rels -> rels.groupBy({ it.groupId }, { it.bookId }).mapValues { it.value.toSet() } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    /** 被用户隐藏的预置智能 tab key（reading/wanted/finished）；「全部」不可隐藏。 */
+    val hiddenSmartTabs: StateFlow<Set<String>> = prefs.shelfHiddenSmartTabs
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    fun createShelfGroup(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val nextOrder = (shelfGroups.value.maxOfOrNull { it.sortOrder } ?: 0) + 1
+            shelfGroupRepo.insert(
+                ShelfGroup(
+                    id = java.util.UUID.randomUUID().toString(),
+                    name = trimmed,
+                    sortOrder = nextOrder,
+                )
+            )
+        }
+    }
+
+    fun renameShelfGroup(groupId: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val group = shelfGroups.value.find { it.id == groupId } ?: return@launch
+            shelfGroupRepo.insert(group.copy(name = trimmed))
+        }
+    }
+
+    fun deleteShelfGroup(groupId: String) {
+        viewModelScope.launch(Dispatchers.IO) { shelfGroupRepo.deleteGroup(groupId) }
+    }
+
+    fun addBooksToShelfGroup(groupId: String, bookIds: Collection<String>) {
+        if (bookIds.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            shelfGroupRepo.addBooks(groupId, bookIds.toList())
+        }
+    }
+
+    fun removeBooksFromShelfGroup(groupId: String, bookIds: Collection<String>) {
+        if (bookIds.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            shelfGroupRepo.removeBooks(groupId, bookIds.toList())
+        }
+    }
+
+    fun setShelfSmartTabHidden(key: String, hidden: Boolean) {
+        viewModelScope.launch { prefs.setShelfSmartTabHidden(key, hidden) }
+    }
 
     private val _navigateToFolder = MutableSharedFlow<String?>(
         replay = 0,
@@ -363,8 +445,15 @@ class ShelfViewModel @Inject constructor(
         }
     }
 
-    fun importLocalBook(uri: Uri) = import.importLocalBook(uri)
-    fun importFolder(uri: Uri) = import.importFolder(uri)
+    fun importLocalBook(uri: Uri) {
+        _importFocusTarget.value = null
+        import.importLocalBook(uri)
+    }
+
+    fun importFolder(uri: Uri) {
+        _importFocusTarget.value = null
+        import.importFolder(uri)
+    }
 
     // ── Search (Flow-based) ──
     private val _searchQuery = MutableStateFlow("")

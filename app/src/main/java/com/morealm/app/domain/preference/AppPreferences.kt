@@ -44,6 +44,8 @@ class AppPreferences @Inject constructor(
          */
         val READING_DIRECTION = stringPreferencesKey("reading_direction")
         val FULLSCREEN_TAP = booleanPreferencesKey("fullscreen_tap")
+        /** 书架顶部被隐藏的预置智能分组 tab key（reading/wanted/finished）。 */
+        val SHELF_HIDDEN_SMART_TABS = stringSetPreferencesKey("shelf_hidden_smart_tabs")
         val TTS_ENGINE = stringPreferencesKey("tts_engine")
         /**
          * 当 [TTS_ENGINE] = "system" 时绑定的具体 Android TTS 引擎包名（如
@@ -358,10 +360,10 @@ class AppPreferences @Inject constructor(
         .map { it[Keys.ACTIVE_THEME_ID] ?: "morealm_default" }
 
     val readerFontSize: Flow<Float> = context.dataStore.data
-        .map { it[Keys.READER_FONT_SIZE] ?: 17f }
+        .map { it[Keys.READER_FONT_SIZE] ?: 18f }
 
     val readerLineHeight: Flow<Float> = context.dataStore.data
-        .map { it[Keys.READER_LINE_HEIGHT] ?: 2.0f }
+        .map { it[Keys.READER_LINE_HEIGHT] ?: 1.4f }
 
     val readerMargin: Flow<Int> = context.dataStore.data
         .map { it[Keys.READER_MARGIN] ?: 24 }
@@ -395,6 +397,10 @@ class AppPreferences @Inject constructor(
 
     val fullscreenTap: Flow<Boolean> = context.dataStore.data
         .map { it[Keys.FULLSCREEN_TAP] ?: false }
+
+    /** 见 [Keys.SHELF_HIDDEN_SMART_TABS]。 */
+    val shelfHiddenSmartTabs: Flow<Set<String>> = context.dataStore.data
+        .map { it[Keys.SHELF_HIDDEN_SMART_TABS] ?: emptySet() }
 
     val ttsEngine: Flow<String> = context.dataStore.data
         .map { it[Keys.TTS_ENGINE] ?: "system" }
@@ -743,6 +749,13 @@ class AppPreferences @Inject constructor(
     suspend fun setPageTurnMode(mode: String) = update(Keys.PAGE_TURN_MODE, mode)
     suspend fun setReadingDirection(value: String) = update(Keys.READING_DIRECTION, value)
     suspend fun setFullscreenTap(enabled: Boolean) = update(Keys.FULLSCREEN_TAP, enabled)
+
+    suspend fun setShelfSmartTabHidden(key: String, hidden: Boolean) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[Keys.SHELF_HIDDEN_SMART_TABS] ?: emptySet()
+            prefs[Keys.SHELF_HIDDEN_SMART_TABS] = if (hidden) current + key else current - key
+        }
+    }
     suspend fun setTtsEngine(engine: String) = update(Keys.TTS_ENGINE, engine)
 
     /** 设置系统 TTS 引擎包；传空字符串恢复"跟系统默认"。 */

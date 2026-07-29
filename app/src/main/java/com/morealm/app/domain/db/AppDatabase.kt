@@ -76,6 +76,8 @@ import com.morealm.app.domain.entity.*
         SearchKeyword::class,
         ReadRecord::class,
         HighlightWord::class,
+        ShelfGroup::class,
+        ShelfGroupBook::class,
     ],
     version = AppDatabase.SCHEMA_VERSION,
     exportSchema = true,
@@ -99,6 +101,9 @@ import com.morealm.app.domain.entity.*
         // 纯加列，Room 自动 ALTER TABLE ADD COLUMN。此后不参与 SQL 查询的新字段
         // 一律进 extras（改 Kotlin data class 即可），不再逐字段 bump schema。
         AutoMigration(from = 36, to = 37),
+        // v37→v38: 加表 shelf_groups + shelf_group_books（书架 tab 自定义分组，
+        // 多对多成员制）。纯新增表，Room 自动 CREATE TABLE。
+        AutoMigration(from = 37, to = 38),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -123,6 +128,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun searchKeywordDao(): SearchKeywordDao
     abstract fun readRecordDao(): ReadRecordDao
     abstract fun highlightWordDao(): HighlightWordDao
+    abstract fun shelfGroupDao(): ShelfGroupDao
 
     companion object {
         /**
@@ -130,6 +136,6 @@ abstract class AppDatabase : RoomDatabase() {
          * 注解直接引用，外部模块（[com.morealm.app.di.APP_DB_SCHEMA_VERSION]）也
          * 通过 const val 编译期同步。
          */
-        const val SCHEMA_VERSION = 37
+        const val SCHEMA_VERSION = 38
     }
 }

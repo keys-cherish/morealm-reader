@@ -298,6 +298,38 @@ interface BookGroupDao {
     suspend fun getAllGroupsSync(): List<BookGroup>
 }
 
+@Dao
+interface ShelfGroupDao {
+    @Query("SELECT * FROM shelf_groups ORDER BY sortOrder, createdAt")
+    fun getAllGroups(): Flow<List<ShelfGroup>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(group: ShelfGroup)
+
+    /** 全量关联流：书架规模（百级×组数）直接整表订阅，切 tab 零查询延迟。 */
+    @Query("SELECT * FROM shelf_group_books")
+    fun getAllRelations(): Flow<List<ShelfGroupBook>>
+
+    /** IGNORE：重复加入保留原 addedAt，不刷新入组时间。 */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun addBooks(entries: List<ShelfGroupBook>)
+
+    @Query("DELETE FROM shelf_group_books WHERE groupId = :groupId AND bookId IN (:bookIds)")
+    suspend fun removeBooks(groupId: String, bookIds: List<String>)
+
+    @Query("DELETE FROM shelf_groups WHERE id = :id")
+    suspend fun deleteGroupRow(id: String)
+
+    @Query("DELETE FROM shelf_group_books WHERE groupId = :groupId")
+    suspend fun deleteGroupRelations(groupId: String)
+
+    @Transaction
+    suspend fun deleteGroupWithMembers(id: String) {
+        deleteGroupRelations(id)
+        deleteGroupRow(id)
+    }
+}
+
 /**
  * Many-to-many join between [Book] and [TagDefinition].
  *
