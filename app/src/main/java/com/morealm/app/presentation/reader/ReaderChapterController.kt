@@ -1410,6 +1410,108 @@ class ReaderChapterController(
     }
 
     /**
+     * 书内 `<a href>` → 章节跳转目标（目录页超链接）。纯路径匹配，不开书。
+     *
+     * 匹配优先级：
+     *  1. 完整 `file#frag` 命中 navPoint（同 xhtml 多 navPoint 书，chapter.url 含 fragment）
+     *  2. 无 fragment：按文件匹配整章（多 navPoint 共享文件时取第一个 = 章头）
+     *  3. 有 fragment 但不是 navPoint → null，交给脚注提取；提取失败后调用方
+     *     用 [fallbackToFile]=true 重查，退回整章跳转（锚点在章内某处的粗定位）
+     *
+     * @return 章节 index（喂 loadChapter，章头语义）；无法对应任何章节 → null
+     */
+    fun resolveEpubLinkChapterIndex(
+        href: String,
+        fallbackToFile: Boolean = false,
+        sourceChapterIndex: Int = _currentChapterIndex.value,
+    ): Int? {
+        val book = _book.value ?: return null
+        if (book.format != BookFormat.EPUB) return null
+        val chapters = _chapters.value
+        val current = chapters.getOrNull(sourceChapterIndex) ?: return null
+        val filePart = href.substringBefore('#')
+        if (filePart.isEmpty()) return null // 同文件锚 = 脚注/章内锚，不做章跳转
+        val fragment = href.substringAfter('#', "")
+        val target = resolveRelativeHref(current.url.substringBeforeLast("#"), filePart)
+        if (fragment.isNotEmpty()) {
+            val exact = chapters.indexOfFirst { it.url == "$target#$fragment" }
+            if (exact >= 0) return exact
+            if (!fallbackToFile) return null
+        }
+        return chapters.indexOfFirst { it.url.substringBeforeLast("#") == target }
+            .takeIf { it >= 0 }
+    }
+
+    /**
+     * 批量判定某个已排版章节里的链接目标是否真实存在。
+     *
+     * [sourceChapterIndex] 必须来自产出这些 LinkRange 的 layout，不能偷用当前章：相邻章
+     * 已预排版时，两个章节的相对 `notes.xhtml#x` 基准目录可能不同。纯章节跳转先用目录
+     * 表判定；剩余 fragment 共用一次 EPUB 打开提取文本；最后按目标文件存在做粗跳转兜底。
+     */
+    suspend fun resolveEpubLinkRanges(
+        sourceChapterIndex: Int,
+        links: List<com.morealm.epub.render.LinkRange>,
+    ): List<com.morealm.epub.render.LinkRange> = withContext(Dispatchers.IO) {
+        if (links.isEmpty()) return@withContext emptyList()
+        val book = _book.value ?: return@withContext emptyList()
+        if (book.format != BookFormat.EPUB) return@withContext emptyList()
+        val localPath = book.localPath ?: return@withContext emptyList()
+        val chapter = _chapters.value.getOrNull(sourceChapterIndex) ?: return@withContext emptyList()
+
+        val direct = HashSet<String>()
+        val textCandidates = LinkedHashSet<String>()
+        for (href in links.map { it.href }.distinct()) {
+            when {
+                href.startsWith("http://", ignoreCase = true) ||
+                    href.startsWith("https://", ignoreCase = true) -> direct.add(href)
+                resolveEpubLinkChapterIndex(
+                    href = href,
+                    sourceChapterIndex = sourceChapterIndex,
+                ) != null -> direct.add(href)
+                else -> textCandidates.add(href)
+            }
+        }
+
+        val textResolvable = runCatching {
+            EpubParser.findResolvableLinkHrefs(
+                context = context,
+                uri = Uri.parse(localPath),
+                baseChapterUrl = chapter.url,
+                hrefs = textCandidates,
+            )
+        }.onFailure {
+            AppLog.warn(
+                "Chapter",
+                "resolveEpubLinkRanges failed chapter=$sourceChapterIndex: ${it.message}",
+            )
+        }.getOrDefault(emptySet())
+
+        links.filter { link ->
+            link.href in direct || link.href in textResolvable ||
+                resolveEpubLinkChapterIndex(
+                    href = link.href,
+                    fallbackToFile = true,
+                    sourceChapterIndex = sourceChapterIndex,
+                ) != null
+        }
+    }
+
+    /**
+     * 相对 href 解析，行为对齐 epub-lib ChapterReader.resolveRelative（internal 不可见，
+     * 同款 URI resolve + 只解 %xx 不动 `+`）—— 保证章跳转与脚注提取算出同一目标路径。
+     */
+    private fun resolveRelativeHref(baseHref: String, src: String): String {
+        if (src.isEmpty()) return src
+        return try {
+            val normalized = java.net.URI(baseHref).resolve(src).normalize().toString()
+            java.net.URLDecoder.decode(normalized.replace("+", "%2B"), "UTF-8")
+        } catch (_: Exception) {
+            src
+        }
+    }
+
+    /**
      * EPUB 精排内容是带排版 marker 的 wire 串，任何全文 regex 都可能打碎协议
      * （2026-07-26：一条断行合并规则把行首 BlockStyle marker 并进行中，翻页层只剥行首
      * marker → marker 字面量画进正文）。含 marker 时整章跳过替换规则。

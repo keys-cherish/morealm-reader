@@ -82,14 +82,14 @@ data class ReaderStyle(
          * 用它做「升级后刷新内置 preset」守卫，让默认值变更对老用户立即生效（无需手动恢复出厂），
          * 同时只刷一次、不会每次启动重置用户对 preset 的临时调整。
          */
-        // v2：刷新早期 preset_paper 的 14sp/8dp/1.5 旧值到当前 17sp/16dp/1.4 基线。
-        const val PRESET_VERSION = 2
+        // v3：默认档字号 17→18；行距 1.4、字距 0 保持不变，EPUB 继续优先原书排版。
+        const val PRESET_VERSION = 3
 
         /**
          * 5 个内置排版预设。**仅排版差异**，颜色由主题决定。id 保留与历史版本一致避免
          * active_reader_style migration（preset_paper / preset_green / preset_blue /
          * preset_warm / preset_ink）；name 与字段值随之改成排版语义：
-         *  - **默认** (preset_paper)：通用基线，textSize=17 / lineHeight=1.4 / spacing=8
+         *  - **默认** (preset_paper)：通用基线，textSize=18 / lineHeight=1.4 / letterSpacing=0
          *  - **紧凑** (preset_green)：屏幕小或一次想看多内容，文字密集
          *  - **宽松** (preset_blue)：阅读舒适度优先，行距段距更大
          *  - **大字** (preset_warm)：长辈 / 小屏 / 视觉疲劳时用，字号 20
@@ -98,7 +98,7 @@ data class ReaderStyle(
         fun defaults(): List<ReaderStyle> = listOf(
             ReaderStyle(
                 id = "preset_paper", name = "默认",
-                textSize = 17, lineHeight = 1.4f, paragraphSpacing = 8,
+                textSize = 18, letterSpacing = 0f, lineHeight = 1.4f, paragraphSpacing = 8,
                 paddingLeft = 16, paddingRight = 16, paddingTop = 16, paddingBottom = 16,
                 isBuiltin = true, sortOrder = 0,
             ),

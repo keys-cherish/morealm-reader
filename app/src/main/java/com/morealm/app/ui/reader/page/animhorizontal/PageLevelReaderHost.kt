@@ -139,6 +139,8 @@ fun PageLevelReaderHost(
     titleMode: Int = 0,
     titleAlign: Int = 0,
     textFullJustify: Boolean = true,
+    /** 「尊重原书排版」：authored 行距/缩进（含显式 0）赢过用户设置，详 ScrollLayoutEngine 同名参数。 */
+    respectAuthoredStyle: Boolean = false,
     bgColorArgb: Int = Color.WHITE,
     /**
      * 用户选择的阅读区背景图 uri；空串 = 纯色背景。
@@ -209,6 +211,11 @@ fun PageLevelReaderHost(
      * 优先级在 tap-on-highlight 之前——脚注号被高亮覆盖时点击仍应弹脚注。
      */
     onLinkTap: (href: String, anchor: Offset) -> Unit = { _, _ -> },
+    /**
+     * 章 layout 就绪时上报其链接列表（chapterIndex → links），供上层异步判定目标
+     * 可解析性（虚线提示数据源 LinkTargetResolvability）。
+     */
+    onChapterLinksSeen: (Int, List<com.morealm.epub.render.LinkRange>) -> Unit = { _, _ -> },
     /**
      * 点击区域翻页动作（对齐旧 renderer.Reader 九宫格）：4 角动作由用户设置驱动，
      * `tapActionTopLeft/BottomLeft` 默认跟随「轻按页面左侧」、右两角跟随右侧；
@@ -308,7 +315,7 @@ fun PageLevelReaderHost(
     val engine = remember(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
         contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing,
-        paragraphIndent, titleMode, titleAlign, textFullJustify,
+        paragraphIndent, titleMode, titleAlign, textFullJustify, respectAuthoredStyle,
         // ruleColorEnabled / isNight / ruleColorPalette 进 key：开关、日夜切换、改调色板 →
         // engine 重建 → 重排版（颜色被 computeStyleSignature 排除，靠 engine 重建做缓存失效，
         // 对齐 MVP 策略 A）。
@@ -332,6 +339,7 @@ fun PageLevelReaderHost(
             titleMode = titleMode,
             titleAlign = titleAlign,
             textFullJustify = textFullJustify,
+            respectAuthoredStyle = respectAuthoredStyle,
             // 注入真实 dims 解析器 — 让 emitImage 拿到原图 aspect ratio 不走 4:3 fallback。
             // 修「某轻小说 01 cover 1000x1333 被算成 798x598 (4:3 压扁) 视觉只占视口 1/3」根因
             // (resolver 默认 NoOp → dims=null → fallback `visibleWidth*0.75=598`)。
@@ -420,6 +428,12 @@ fun PageLevelReaderHost(
             "JUMP-DONE token=$restoreToken cp=$initialChapterPosition prog=$initialProgress → page=$targetPageIdx (total=$total) [moveToPage curPgIdx ${curPgIdx} → ${core.pageFactory.pageIndex}]",
         )
         onProgressRestored()
+    }
+
+    // 链接虚线提示：cur/prev/next 章 layout 就绪即上报链接列表，上层异步判定可解析性
+    LaunchedEffect(core.state.currentChapter, core.state.prevChapter, core.state.nextChapter) {
+        listOfNotNull(core.state.currentChapter, core.state.prevChapter, core.state.nextChapter)
+            .forEach { onChapterLinksSeen(it.chapterIndex, it.links) }
     }
 
     // 百分比只能在当前排版参数下近似定位；续读的稳定真值必须是当前页首字符 cp。

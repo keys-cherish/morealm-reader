@@ -34,7 +34,9 @@ class ThemeViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
-    private val json = Json { ignoreUnknownKeys = true }
+    // encodeDefaults=true：format/version 判别符是默认值字段，encodeDefaults=false
+    // 会把它们从导出 JSON 吞掉，导致自家 bundle 导不回来（与排版预设同根，2026-07-28）。
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     /**
      * 主题导入提示流 —— ViewModel 向 UI 单向广播一次性 toast 消息。replay=0 保证只送给
@@ -359,8 +361,11 @@ class ThemeViewModel @Inject constructor(
                 val parsed = runCatching { json.parseToJsonElement(trimmed) }.getOrNull()
 
                 // Path 1: new MoRealm bundle with explicit format marker.
+                // 旧版导出（encodeDefaults=false 年代）format 被吞只剩 {"themes":[...]}——
+                // 含 themes 键也按 bundle 解，否则会掉进 Path 4 被解成全默认空主题。
                 if (parsed is JsonObject &&
-                    parsed["format"]?.jsonPrimitive?.contentOrNull == MoRealmThemeBundle.FORMAT
+                    (parsed["format"]?.jsonPrimitive?.contentOrNull == MoRealmThemeBundle.FORMAT ||
+                        (!parsed.containsKey("format") && parsed.containsKey("themes")))
                 ) {
                     val bundle = json.decodeFromString(
                         MoRealmThemeBundle.serializer(), trimmed

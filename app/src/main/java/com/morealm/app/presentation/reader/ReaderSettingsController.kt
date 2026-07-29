@@ -468,7 +468,10 @@ class ReaderSettingsController(
 
     // ── Style preset import / export（与主题 MoRealmThemeBundle 同款信封模式）──
 
-    private val styleJson = Json { ignoreUnknownKeys = true }
+    // encodeDefaults=true 是信封模式的命根：format/version 判别符是默认值字段，
+    // 默认 encodeDefaults=false 会把它们从导出 JSON 里整个吞掉 → 自己导的文件
+    // 自己不认（round-trip 必失败，2026-07-28 实证）。
+    private val styleJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     /** 一次性提示流（导入成功 / 失败、导出完成），UI 层弹 snackbar/toast。 */
     private val _styleTransferMessage = MutableSharedFlow<String>(extraBufferCapacity = 4)

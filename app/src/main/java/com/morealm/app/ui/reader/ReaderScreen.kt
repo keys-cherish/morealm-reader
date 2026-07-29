@@ -64,6 +64,8 @@ import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.presentation.reader.PageTurnMode
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderHost
+import com.morealm.app.ui.reader.renderer.scroll.LinkTargetResolvability
+import com.morealm.epub.render.LinkRange
 import com.morealm.app.ui.reader.renderer.ReaderPageDirection
 import com.morealm.app.ui.reader.page.animation.toPageAnimType
 import com.morealm.app.ui.reader.TtsOverlayPanel
@@ -310,28 +312,62 @@ fun ReaderScreen(
     val context = LocalContext.current
     val centerToast = rememberCenterToastState()
 
+    // 链接提示注册表的生命周期严格跟书绑定。异步任务回填时还会二次校验 bookKey，
+    // 因而快速退出/切书不会把旧书的章号区间写进新书。
+    val linkBookKey = book?.id
+    DisposableEffect(linkBookKey) {
+        LinkTargetResolvability.activateBook(linkBookKey)
+        onDispose { LinkTargetResolvability.deactivateBook(linkBookKey) }
+    }
+
+    fun handleChapterLinksSeen(
+        chapterIndex: Int,
+        links: List<LinkRange>,
+    ) {
+        val bookKey = linkBookKey ?: return
+        screenScope.launch {
+            val resolvable = viewModel.chapter.resolveEpubLinkRanges(chapterIndex, links)
+            LinkTargetResolvability.setChapter(bookKey, chapterIndex, resolvable)
+        }
+    }
+
     // 排版预设导入 / 导出结果的一次性反馈（成功 / 格式不对 / IO 失败），走既有居中浮层。
     LaunchedEffect(Unit) {
         viewModel.settings.styleTransferMessage.collect { msg -> centerToast.show(msg) }
     }
 
-    // ── 脚注气泡 ──
-    // tap 命中书内 `<a href>`（排版层 LinkRange 反查）后：http(s) 直接开外部浏览器；
-    // 书内 fragment 异步取目标纯文本 → 底部气泡展示。null = 无气泡。
+    // ── 脚注气泡 / 目录超链接 ──
+    // tap 命中书内 `<a href>`（排版层 LinkRange 反查）后分流：
+    //  http(s) → 外部浏览器；
+    //  命中章节/navPoint → 直接跳章（目录页超链接，章头语义走 loadChapter）；
+    //  书内 fragment → 异步取目标纯文本 → 底部气泡展示；
+    //  提取失败 → 退回整章跳转（锚在章内的粗定位），再不行 toast。
     var footnotePopupText by remember { mutableStateOf<String?>(null) }
     fun handleReaderLinkTap(href: String) {
-        if (href.startsWith("http://") || href.startsWith("https://")) {
+        if (href.startsWith("http://", ignoreCase = true) ||
+            href.startsWith("https://", ignoreCase = true)
+        ) {
             runCatching {
                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(href)))
             }.onFailure { centerToast.show("无法打开链接") }
+            return
+        }
+        // 无 fragment 的整章链接 / 精确 navPoint 链接 = 目录超链接 → 跳章
+        viewModel.chapter.resolveEpubLinkChapterIndex(href)?.let { idx ->
+            viewModel.loadChapter(idx)
             return
         }
         screenScope.launch {
             val text = viewModel.chapter.resolveEpubLinkText(href)
             if (text != null) {
                 footnotePopupText = text
+                return@launch
+            }
+            val fallbackIdx = viewModel.chapter.resolveEpubLinkChapterIndex(href, fallbackToFile = true)
+            if (fallbackIdx != null) {
+                viewModel.loadChapter(fallbackIdx)
             } else {
-                centerToast.show("未找到注释内容")
+                centerToast.show("未找到链接目标")
             }
         }
     }
@@ -750,6 +786,9 @@ fun ReaderScreen(
                 titleMode = effectiveReaderStyle?.titleMode ?: 0,
                 titleAlign = titleAlign,
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
+                // 恒开、无用户入口 —— 参照阅读器默认档同语义（原书 CSS 行距/缩进优先，
+                // 字号始终用户赢）；引擎侧下限 1 倍字高兜底烂书，无需逃生开关。
+                respectAuthoredStyle = true,
                 // 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer jumpToken/jumpChapterPosition 等价）：
                 // renderedChapter.restoreToken 由 ReaderChapterController.loadChapter / seekProgressInPlace
                 // 每次 nanoTime 换新值。initialProgress 用于「Slider 拖动 in-place seek」路径
@@ -811,6 +850,7 @@ fun ReaderScreen(
                     }
                 },
                 onLinkTap = { href, _ -> handleReaderLinkTap(href) },
+                onChapterLinksSeen = ::handleChapterLinksSeen,
                 onCopyText = { text -> viewModel.copyTextToClipboard(text); centerToast.show("已复制") },
                 onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
                 onTranslateText = { text -> openTranslate(text) },
@@ -934,6 +974,9 @@ fun ReaderScreen(
                 titleMode = effectiveReaderStyle?.titleMode ?: 0,
                 titleAlign = titleAlign,
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
+                // 恒开、无用户入口 —— 参照阅读器默认档同语义（原书 CSS 行距/缩进优先，
+                // 字号始终用户赢）；引擎侧下限 1 倍字高兜底烂书，无需逃生开关。
+                respectAuthoredStyle = true,
                 bgColorArgb = readerBg.toArgb(),
                 bgImageUri = readerBgImage,
                 restoreToken = renderedChapter.restoreToken,
@@ -1040,6 +1083,7 @@ fun ReaderScreen(
                     else viewModel.toggleControls()
                 },
                 onLinkTap = { href, _ -> handleReaderLinkTap(href) },
+                onChapterLinksSeen = ::handleChapterLinksSeen,
                 // 点击区域翻页动作（与设置「轻按页面左侧」联动）。此前只喂给旧 renderer.Reader，
                 // page-level 横翻 Host 漏接 → 设置不生效；四角值 ReaderScreen 早已 collect。
                 tapActionTopLeft = tapTL,

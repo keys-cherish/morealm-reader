@@ -388,6 +388,11 @@ internal fun drawScrollPageOnCanvas(
     }
 
     // ─── 层 2：文字 ───
+    // 链接可解析性：着色与虚线共用同一判定 —— 目标确认可解析才提示（着链接色 + 虚线），
+    // 死链完全不提示（与点击端「未找到链接目标」同一语义源）。判定异步完成前按普通文字画。
+    val resolvableLinkRanges = LinkTargetResolvability.resolvableRangesFor(page.chapterIndex)
+    fun cpIsResolvableLink(cp: Int): Boolean =
+        resolvableLinkRanges.any { cp >= it.startCp && cp < it.endCpExclusive }
     for (line in page.lines) {
         if (line.isImage) {
             val src = line.imageSrc ?: continue
@@ -502,7 +507,10 @@ internal fun drawScrollPageOnCanvas(
         val lineCells = line.cells
         val lineAtoms = line.atoms
         if (lineCells != null) {
-            drawByCells(nc, lineCells, line, paint, defaultColor, textColorByCp, readerBgArgb)
+            drawByCells(
+                nc, lineCells, line, paint, defaultColor, textColorByCp, readerBgArgb,
+                ::cpIsResolvableLink,
+            )
             if (blockRotationSave != null) nc.restoreToCount(blockRotationSave)
             if (paragraphColor != null) paint.color = defaultColor
             if (shadowApplied) paint.clearShadowLayer()
@@ -510,7 +518,7 @@ internal fun drawScrollPageOnCanvas(
             continue
         }
         if (lineAtoms != null) {
-            drawByAtoms(nc, lineAtoms, line, paint, baselineY, defaultColor, textColorByCp, readerBgArgb)
+            drawByAtoms(nc, lineAtoms, line, paint, baselineY, defaultColor, textColorByCp, readerBgArgb, ::cpIsResolvableLink)
             if (blockRotationSave != null) nc.restoreToCount(blockRotationSave)
             if (paragraphColor != null) paint.color = defaultColor
             if (shadowApplied) paint.clearShadowLayer()
@@ -542,9 +550,14 @@ internal fun drawScrollPageOnCanvas(
             }
             // 优先级：用户高亮 > 链接色（脚注号/跳转可辨识，日夜自适应）> CSS char-level 色
             val overrideColor = textColorByCp[col.chapterPosition]
-                ?: (if (col.isLink) linkForegroundForReaderBg(readerBgArgb) else null)
-                ?: col.colorArgb?.let {
-                    adaptAuthoredForegroundForReaderBg(it, readerBgArgb, line.blockStyle.backgroundColor)
+                ?: when {
+                    col.isLink && cpIsResolvableLink(col.chapterPosition) ->
+                        linkForegroundForReaderBg(readerBgArgb)
+                    // 死链按普通正文色画，不能让 EPUB authored `<a>` 蓝色泄漏成误导提示。
+                    col.isLink -> defaultColor
+                    else -> col.colorArgb?.let {
+                        adaptAuthoredForegroundForReaderBg(it, readerBgArgb, line.blockStyle.backgroundColor)
+                    }
                 }
             // 上下标：sup 上移 0.35×字号 / sub 下移 0.15×字号（宽度缩放已在排版期完成）
             val colBaselineY = when {
@@ -572,6 +585,62 @@ internal fun drawScrollPageOnCanvas(
     val underlineStroke = (contentPaint.textSize * 0.1f).coerceAtLeast(2.5f)
     val fm = contentPaint.fontMetrics
     val textHeight = -fm.ascent + fm.descent
+    // ── 书内链接虚线提示 ── 只画「目标确认可解析」的链接（死链不画不着色提示）；
+    // 注号图标（inline image link）不画 —— 虚线是文字链接的可点提示，图标本身已是提示。
+    val linkRanges = resolvableLinkRanges
+    if (linkRanges.isNotEmpty()) {
+        val linkStroke = (contentPaint.textSize * 0.045f).coerceAtLeast(1.5f)
+        val linkArgb = (linkForegroundForReaderBg(readerBgArgb) and 0x00FFFFFF) or (0xB3 shl 24)
+        val linkDashPaint = underlinePaintFor(linkArgb, Highlight.UNDERLINE_STYLE_DASHED, linkStroke)
+        for (range in linkRanges) {
+            for (line in page.lines) {
+                if (line.lastChapterPos < range.startCp || line.firstChapterPos >= range.endCpExclusive) continue
+                val cells = line.cells
+                if (cells != null) {
+                    // table row 的 lineBottom 是整行最高 cell 的底；逐 atom 用自身基线，
+                    // 否则短 cell / 多行 cell 的链接虚线会掉到整张表格行底。
+                    var atomStartCp = line.firstChapterPos
+                    for (cell in cells) {
+                        for (atom in cell.atoms) {
+                            val atomEndCp = atomStartCp + atom.cpCount
+                            if (atom is com.morealm.epub.render.TextRun && atom.isLink &&
+                                atom.text.isNotBlank() && atomStartCp < range.endCpExclusive &&
+                                atomEndCp > range.startCp
+                            ) {
+                                val left = cell.contentLeft + cell.paddingLeft + atom.cellLocalX
+                                val right = left + atom.width
+                                val baseline = line.lineTop + cell.contentTop + cell.paddingTop +
+                                    cell.contentOffsetY + atom.cellLocalY + atom.baseline
+                                val atomBottom = line.lineTop + cell.contentTop + cell.paddingTop +
+                                    cell.contentOffsetY + atom.cellLocalY + atom.height
+                                val y = (baseline + linkStroke * 1.5f)
+                                    .coerceAtMost(atomBottom - linkStroke)
+                                if (right > left) nc.drawLine(left, y, right, y, linkDashPaint)
+                            }
+                            atomStartCp = atomEndCp
+                        }
+                    }
+                    continue
+                }
+                var leftX: Float? = null
+                var rightX: Float? = null
+                for (col in line.columns) {
+                    if (col.chapterPosition < range.startCp || col.chapterPosition >= range.endCpExclusive) continue
+                    // 只统计文字列：图片占位列 / 对齐填充空白列不算进虚线范围
+                    if (col.inlineImageSrc != null || col.charData.isBlank()) continue
+                    if (leftX == null) leftX = col.start
+                    rightX = col.end
+                }
+                if (leftX != null && rightX != null && rightX > leftX) {
+                    // lineBottom 同时适用于普通行和 table cell 多行；用 textHeight 会把
+                    // cell 内第二行的虚线画回第一行基线附近。
+                    val y = (line.lineBottom - linkStroke * 1.25f)
+                        .coerceAtLeast(line.lineTop + linkStroke)
+                    nc.drawLine(leftX, y, rightX, y, linkDashPaint)
+                }
+            }
+        }
+    }
     val wavyAmplitude = (contentPaint.textSize * 0.12f).coerceAtLeast(4f)
     val wavyPeriod = (contentPaint.textSize * 0.6f).coerceAtLeast(12f)
     for (spec in underlineSpecs) {
@@ -633,6 +702,8 @@ private fun drawByAtoms(
     defaultColor: Int,
     textColorByCp: Map<Int, Int> = emptyMap(),
     readerBgArgb: Int,
+    /** 链接可解析性判定（cp → 是否着链接色）。死链不提示，语义同 columns 路径。 */
+    isCpResolvableLink: (Int) -> Boolean = { true },
 ) {
     // **bugfix 2026-05-22**：用 line.columns[0].start 作初始 x（emit 阶段算的对齐起点，
     // 含 CSS text-align center/right 居中偏移）。之前 var x = 0f 让 atoms 路径无视
@@ -655,11 +726,12 @@ private fun drawByAtoms(
                     scale != 1f -> line.lineTop + basePaint.textSize * 0.8f
                     else -> baselineY
                 }
-                // 链接色 > CSS char-level 色（脚注号可辨识；日夜自适应，不烘进排版数据）
-                val atomOverrideColor = if (atom.isLink) {
-                    linkForegroundForReaderBg(readerBgArgb)
-                } else {
-                    atom.colorArgb?.let {
+                // 链接色 > CSS char-level 色；死链强制回正文色，避免 authored 蓝色误导。
+                val atomOverrideColor = when {
+                    atom.isLink && isCpResolvableLink(atomStartCp) ->
+                        linkForegroundForReaderBg(readerBgArgb)
+                    atom.isLink -> defaultColor
+                    else -> atom.colorArgb?.let {
                         adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
                     }
                 }
@@ -754,6 +826,8 @@ private fun drawByCells(
     defaultColor: Int,
     textColorByCp: Map<Int, Int> = emptyMap(),
     readerBgArgb: Int,
+    /** 链接可解析性判定，确保 table-cells 路径与 columns/atoms 路径视觉语义一致。 */
+    isCpResolvableLink: (Int) -> Boolean = { true },
 ) {
     val baseSize = basePaint.textSize
     val fontScale = baseSize / 16f
@@ -801,9 +875,14 @@ private fun drawByCells(
                         } else false
                         if (hasOverride) {
                             var cx = textX
-                            val baseColor = atom.colorArgb?.let {
-                                adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
-                            } ?: defaultColor
+                            val baseColor = when {
+                                atom.isLink && isCpResolvableLink(atomStartCp) ->
+                                    linkForegroundForReaderBg(readerBgArgb)
+                                atom.isLink -> defaultColor
+                                else -> atom.colorArgb?.let {
+                                    adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
+                                } ?: defaultColor
+                            }
                             for (ci in atom.text.indices) {
                                 val cp = atomStartCp + ci
                                 basePaint.color = textColorByCp[cp] ?: baseColor
@@ -814,15 +893,20 @@ private fun drawByCells(
                             basePaint.color = defaultColor
                         } else {
                             val origColor = basePaint.color
-                            if (atom.colorArgb != null) {
-                                basePaint.color = adaptAuthoredForegroundForReaderBg(
-                                    atom.colorArgb!!,
-                                    readerBgArgb,
-                                    atom.inlineBgArgb,
+                            val atomColor = when {
+                                atom.isLink && isCpResolvableLink(atomStartCp) ->
+                                    linkForegroundForReaderBg(readerBgArgb)
+                                atom.isLink -> defaultColor
+                                atom.colorArgb != null -> adaptAuthoredForegroundForReaderBg(
+                                    atom.colorArgb!!, readerBgArgb, atom.inlineBgArgb,
                                 )
+                                else -> null
+                            }
+                            if (atomColor != null) {
+                                basePaint.color = atomColor
                             }
                             canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
-                            if (atom.colorArgb != null) basePaint.color = origColor
+                            if (atomColor != null) basePaint.color = origColor
                         }
                         if (rotationSave != null) canvas.restoreToCount(rotationSave)
                     }

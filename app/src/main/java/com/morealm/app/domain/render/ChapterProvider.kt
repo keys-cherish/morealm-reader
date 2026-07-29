@@ -2,6 +2,7 @@ package com.morealm.app.domain.render
 
 import android.graphics.BitmapFactory
 import android.graphics.Paint.FontMetrics
+import android.graphics.Rect
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
@@ -11,6 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.core.text.AppPattern
 import com.morealm.epub.compat.BlockStyle
 import com.morealm.epub.compat.StructuredChapterContent
@@ -811,11 +813,45 @@ class ChapterProvider(
         val lineEndOf: (Int) -> Int
         if (useZhLayout) {
             val (words, widths) = measureTextSplit(text, widthsArray)
-            val indentSize = if (isFirstLine) paragraphIndent.length else 0
-            val zh = ZhLayout(visibleWidth, words, widths, indentSize, cjkFullCharWidth(textPaint))
+            // indentSize 语义 = words 前 N 个字符是缩进空格（正文 text 自带「　　」前缀，
+            // addCharsToLineFirst 会剥掉重画）。标题 text 无前缀，谎报会让 ZhLayout 压缩
+            // 回退的搜索下界错位 —— 标题一律 0。
+            val indentSize = if (isFirstLine && !isTitle) paragraphIndent.length else 0
+            // 标题行走 Natural 直排，没有正文 justify 均摊那层「压回行宽」的兜底；末字
+            // 字形视觉边界超出 advance 时（大字号下常见），断行预算若只看 advance，字会
+            // 被 Canvas clip 裁掉右半。把正向溢出计入 ZhLayout 候选行末（与滚动引擎
+            // emitTitleParagraph 同款语义）。只测标题——字数少，逐字 getTextBounds 成本
+            // 可忽略；正文行由 justify 压回行宽，维持原状不测。
+            val titleOverhangs: List<Float> = if (isTitle) {
+                val bounds = Rect()
+                List(words.size) { i ->
+                    val w = words[i]
+                    if (w.isEmpty()) 0f else {
+                        textPaint.getTextBounds(w, 0, w.length, bounds)
+                        (bounds.right - widths[i]).coerceAtLeast(0f)
+                    }
+                }
+            } else {
+                emptyList()
+            }
+            val zh = ZhLayout(
+                visibleWidth, words, widths, indentSize, cjkFullCharWidth(textPaint),
+                rightOverhangs = titleOverhangs,
+            )
             lineCount = zh.lineCount
             lineStartOf = zh::getLineStart
             lineEndOf = zh::getLineEnd
+            if (isTitle) {
+                // 标题截字排查日志：行数 / 每行宽 vs 可用宽 / paint 字号。每章仅标题块
+                // 两三条，常驻成本可忽略；真机复现「末字截半」时以此定位断行预算。
+                val lineWidthsDump = (0 until lineCount).joinToString { zh.getLineWidth(it).toInt().toString() }
+                AppLog.info(
+                    "TitleLayout",
+                    "title='${text.take(24)}' lines=$lineCount lineW=[$lineWidthsDump] " +
+                        "visW=$visibleWidth textSize=${textPaint.textSize} " +
+                        "overhangMax=${titleOverhangs.maxOrNull() ?: 0f}",
+                )
+            }
         } else {
             val sl = StaticLayout(text, textPaint, visibleWidth, Layout.Alignment.ALIGN_NORMAL, 0f, 0f, true)
             lineCount = sl.lineCount

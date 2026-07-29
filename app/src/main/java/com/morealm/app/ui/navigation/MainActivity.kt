@@ -9,10 +9,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.morealm.app.presentation.theme.ThemeViewModel
@@ -64,14 +68,29 @@ class MainActivity : ComponentActivity() {
                 themeViewModel.applySystemDarkModeIfFollowing(systemIsDark)
             }
 
-            MoRealmTheme(theme = activeTheme) {
-                MoRealmNavHost(
-                    windowSizeClass = windowSizeClass,
-                    themeViewModel = themeViewModel,
-                    continueReadingRequest = continueReadingRequest.intValue,
-                    pendingOpenBookId = pendingOpenBookId.value,
-                    onPendingOpenConsumed = { pendingOpenBookId.value = null },
-                )
+            // ── 分辨率等比自适应 ──
+            // UI 全部按 ~392dp 屏宽设计；宽屏机（1.5K/2K，最小屏宽 430-480dp）在系统
+            // 密度下 dp 物理尺寸不变 → 元素相对屏幕显小。按最小屏宽放大 LocalDensity
+            // 让整体布局等比铺满（字号 sp 同步跟随）。只放大不缩小（窄屏机不动），
+            // 上限 1.35 防平板/分屏被吹爆——平板本就该多显示内容而非纯放大。
+            val configuration = LocalConfiguration.current
+            val systemDensity = LocalDensity.current
+            val uiScale = (configuration.smallestScreenWidthDp / 392f).coerceIn(1f, 1.35f)
+            val scaledDensity = Density(
+                density = systemDensity.density * uiScale,
+                fontScale = systemDensity.fontScale,
+            )
+
+            CompositionLocalProvider(LocalDensity provides scaledDensity) {
+                MoRealmTheme(theme = activeTheme) {
+                    MoRealmNavHost(
+                        windowSizeClass = windowSizeClass,
+                        themeViewModel = themeViewModel,
+                        continueReadingRequest = continueReadingRequest.intValue,
+                        pendingOpenBookId = pendingOpenBookId.value,
+                        onPendingOpenConsumed = { pendingOpenBookId.value = null },
+                    )
+                }
             }
         }
     }

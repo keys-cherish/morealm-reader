@@ -95,7 +95,9 @@ fun ReaderStyleExportData.toEntity(id: String, sortOrder: Int): ReaderStyle = Re
 
 /**
  * 解析导入文本 → 预设列表。识别顺序：
- *  1. JsonObject 且 `format == "morealm-readerstyle"` → 信封 bundle
+ *  1. JsonObject 且 `format == "morealm-readerstyle"` → 信封 bundle；
+ *     无 `format` 但含 `styles` 键也按 bundle 解（旧版导出在 encodeDefaults=false
+ *     下丢失了 format 判别符，只剩 `{"styles":[...]}`——必须能导回来）
  *  2. JsonArray（元素为裸 [ReaderStyleExportData]）→ 数组
  *  3. JsonObject 含 `name` 字段 → 单个裸对象
  * 均不命中 / 解析失败 → 空列表（调用方提示格式不支持）。
@@ -105,7 +107,8 @@ fun parseReaderStyleBundle(json: Json, text: String): List<ReaderStyleExportData
     return runCatching {
         when {
             parsed is JsonObject &&
-                parsed["format"]?.jsonPrimitive?.contentOrNull == MoRealmReaderStyleBundle.FORMAT ->
+                (parsed["format"]?.jsonPrimitive?.contentOrNull == MoRealmReaderStyleBundle.FORMAT ||
+                    (!parsed.containsKey("format") && parsed.containsKey("styles"))) ->
                 json.decodeFromString(MoRealmReaderStyleBundle.serializer(), text).styles
 
             parsed is JsonArray ->

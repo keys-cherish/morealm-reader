@@ -719,7 +719,10 @@ object EpubParser {
         val opfDir = book.opfPath.substringBeforeLast('/', "")
 
         if (toc.isEmpty()) {
-            book.spine.items.forEachIndexed { i, chapter ->
+            // spine linear="no" 是辅助文档（弹注页/答案页等），EPUB 规范要求不进
+            // 线性阅读流；有 toc 时列表主体来自 toc 天然不含它们，这条无 toc 回退
+            // 路径是唯一的全量混入口。
+            book.spine.items.filter { it.linear }.forEachIndexed { i, chapter ->
                 val title = chapter.title?.takeIf { it.isNotBlank() }
                     ?: tryExtractTitleViaCore(chapter)
                     ?: if (i == 0) "封面" else "第${i + 1}章"
@@ -756,7 +759,10 @@ object EpubParser {
         for (chapter in book.spine.items) {
             val mtype = book.opfPackage.byId[chapter.id]?.mediaType.orEmpty()
             if (!mtype.contains("htm")) continue
+            // break 判定必须先于 linear 过滤：首条 toc 指向的文档本身 linear="no"
+            // 时（病态但合法）仍要在此止步，否则整本书都被扫成「卷首」。
             if (chapter.href == firstHref) break
+            if (!chapter.linear) continue
             val title = chapter.title?.takeIf { it.isNotBlank() }
                 ?: tryExtractTitleViaCore(chapter) ?: "--卷首--"
             chapters.add(
@@ -909,6 +915,33 @@ object EpubParser {
             baseFileHref = baseChapterUrl.substringBeforeLast("#"),
             href = href,
         )
+    }
+
+    /**
+     * 批量判定章内链接能否提取到目标文本。
+     *
+     * 同一章的链接共用一次 [EpubCoreBridge.withCoreBook]，避免目录/脚注密集页为每个
+     * `href` 重复进入 EPUB 打开边界。返回值保留原始 href，调用方可直接过滤 LinkRange。
+     */
+    fun findResolvableLinkHrefs(
+        context: Context,
+        uri: Uri,
+        baseChapterUrl: String,
+        hrefs: Collection<String>,
+    ): Set<String> {
+        if (hrefs.isEmpty()) return emptySet()
+        return EpubCoreBridge.withCoreBook(context, uri) { book ->
+            hrefs.asSequence()
+                .distinct()
+                .filter { href ->
+                    FragmentTextExtractor.extract(
+                        book = book,
+                        baseFileHref = baseChapterUrl.substringBeforeLast("#"),
+                        href = href,
+                    ) != null
+                }
+                .toSet()
+        } ?: emptySet()
     }
 
     fun readChapterStructured(

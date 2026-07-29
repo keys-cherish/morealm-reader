@@ -147,6 +147,8 @@ fun ScrollCanvasReaderHost(
      * 默认 true 启用末行外的整段两端对齐 + 字符间隙均摊。
      */
     textFullJustify: Boolean = true,
+    /** 「尊重原书排版」：authored 行距/缩进（含显式 0）赢过用户设置，详 ScrollLayoutEngine 同名参数。 */
+    respectAuthoredStyle: Boolean = false,
     /** 阅读区背景图 uri；空串 = 纯色背景。来自 ReaderScreen 的 readerBgImage。 */
     bgImageUri: String = "",
     /** 阅读区纯色背景（android argb）—— 无背景图 / 背景图加载失败时使用。 */
@@ -218,6 +220,8 @@ fun ScrollCanvasReaderHost(
     onTapCenter: () -> Unit = {},
     /** 点击命中 `<a href>` 区间（脚注号/跳转）。语义同 PageLevelReaderHost.onLinkTap。 */
     onLinkTap: (href: String, anchor: Offset) -> Unit = { _, _ -> },
+    /** 章 layout 就绪时上报链接列表。语义同 PageLevelReaderHost.onChapterLinksSeen。 */
+    onChapterLinksSeen: (Int, List<com.morealm.epub.render.LinkRange>) -> Unit = { _, _ -> },
     // ── M4-revive 选区菜单 callbacks（直接复用 SelectionToolbar）──
     onCopyText: (String) -> Unit = {},
     onSpeakFromHere: (chapterPosition: Int) -> Unit = {},
@@ -326,7 +330,7 @@ fun ScrollCanvasReaderHost(
     val engine = remember(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
         contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing,
-        paragraphIndent, titleMode, titleAlign, textFullJustify,
+        paragraphIndent, titleMode, titleAlign, textFullJustify, respectAuthoredStyle,
         // ruleColorEnabled / isNight / ruleColorPalette 进 key：开关、日夜切换、改调色板 →
         // engine 重建 → 重排版（颜色被 computeStyleSignature 排除，靠 engine 重建做缓存失效）。
         ruleColorEnabled, isNight, ruleColorPalette, highlightWords,
@@ -349,6 +353,7 @@ fun ScrollCanvasReaderHost(
             titleMode = titleMode,
             titleAlign = titleAlign,
             textFullJustify = textFullJustify,
+            respectAuthoredStyle = respectAuthoredStyle,
             // 注入真实 dims 解析器 — 让 emitImage 拿到原图 aspect ratio 不走 4:3 fallback。
             // 修「cover/inline image 被压扁」根因 (resolver 默认 NoOp → dims=null → fallback)。
             imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
@@ -457,6 +462,12 @@ fun ScrollCanvasReaderHost(
                 " [consumed, won't re-trigger]",
         )
         onProgressRestored()
+    }
+
+    // 链接虚线提示：cur/prev/next 章 layout 就绪即上报链接列表，上层异步判定可解析性
+    LaunchedEffect(state.currentChapter, state.prevChapter, state.nextChapter) {
+        listOfNotNull(state.currentChapter, state.prevChapter, state.nextChapter)
+            .forEach { onChapterLinksSeen(it.chapterIndex, it.links) }
     }
 
     // 滚动恢复会把目标字符放在视口上方 1/3；保存时也取同一视觉锚点，二者互为逆运算。
