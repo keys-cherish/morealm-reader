@@ -49,6 +49,52 @@ internal fun drawScrollContainerBoxes(
     readerBgArgb: Int = Color.WHITE,
 ) {
     if (groupStyles.isEmpty() || lines.isEmpty()) return
+    // 嵌套 BOX：按祖先链深度从外向内逐层绘制，外层先落底、内层叠其上。
+    // 只看最内层 id 的话，外圈容器没有任何"专属"行，分不出 run，装饰会整个丢失
+    // （双线扉页只剩内圈那条线）。
+    val maxDepth = lines.maxOf { it.boxGroupPath.size }
+    if (maxDepth > 0) {
+        for (depth in 0 until maxDepth) {
+            drawContainerBoxLayer(
+                canvas = canvas,
+                lines = lines,
+                groupStyles = groupStyles,
+                groupIdAt = { line -> line.boxGroupPath.getOrNull(depth) },
+                pageTop = pageTop,
+                fallbackLeft = fallbackLeft,
+                fallbackRight = fallbackRight,
+                fontSizeScale = fontSizeScale,
+                readerBgArgb = readerBgArgb,
+            )
+        }
+        return
+    }
+    // boxGroupPath 为空的旧路径（未经 BOX marker 的排版产物）仍按单层 id 处理。
+    drawContainerBoxLayer(
+        canvas = canvas,
+        lines = lines,
+        groupStyles = groupStyles,
+        groupIdAt = { line -> line.boxGroupId },
+        pageTop = pageTop,
+        fallbackLeft = fallbackLeft,
+        fallbackRight = fallbackRight,
+        fontSizeScale = fontSizeScale,
+        readerBgArgb = readerBgArgb,
+    )
+}
+
+/** 画单一嵌套层：按 [groupIdAt] 取出的 id 把连续行分段，每段一个 box。 */
+private fun drawContainerBoxLayer(
+    canvas: Canvas,
+    lines: List<ScrollLine>,
+    groupStyles: Map<Int, BlockStyle>,
+    groupIdAt: (ScrollLine) -> Int?,
+    pageTop: Float,
+    fallbackLeft: Float,
+    fallbackRight: Float,
+    fontSizeScale: Float,
+    readerBgArgb: Int,
+) {
     var runStart: Int = -1
     var runGroupId: Int? = null
     fun flush(endIdxExclusive: Int) {
@@ -69,7 +115,7 @@ internal fun drawScrollContainerBoxes(
         )
     }
     for (i in lines.indices) {
-        val gid = lines[i].boxGroupId
+        val gid = groupIdAt(lines[i])
         if (gid != runGroupId) {
             flush(i)
             runStart = if (gid != null) i else -1

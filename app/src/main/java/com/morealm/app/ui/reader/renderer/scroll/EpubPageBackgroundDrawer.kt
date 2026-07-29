@@ -10,6 +10,7 @@ import android.graphics.RectF
 import android.graphics.Shader
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.ImageCache
+import com.morealm.epub.css.EpubBackgroundAttachment
 import com.morealm.epub.css.EpubBackgroundGeometry
 import com.morealm.epub.css.EpubBackgroundImage
 import com.morealm.epub.css.EpubBackgroundLayer
@@ -95,7 +96,20 @@ internal fun resolveEpubBackgroundRegionFrame(
     pageHeight: Float,
     continuousSectionCoordinates: Boolean,
     isSingleSectionPage: Boolean,
+    viewportHeight: Float = pageHeight,
+    hasFixedLayer: Boolean = false,
 ): EpubBackgroundRegionFrame {
+    // `background-attachment: fixed` —— 背景相对阅读视口固定，与 section 的内容高度和
+    // 滚动偏移无关。必须先于 continuous 分支判定：卷首整页插画那类「正文只有一个空格、
+    // 整页就是一张图」的章节内容高度趋近于零，按内容高度裁剪会把整张图裁没。
+    if (hasFixedLayer) {
+        return EpubBackgroundRegionFrame(
+            top = if (isSingleSectionPage) 0f else region.top,
+            bottom = if (isSingleSectionPage) pageHeight else region.bottom,
+            areaHeight = viewportHeight,
+            offsetY = 0f,
+        )
+    }
     if (continuousSectionCoordinates) {
         return EpubBackgroundRegionFrame(
             top = region.top,
@@ -131,6 +145,10 @@ private fun drawRegion(
         pageHeight = pageHeight,
         continuousSectionCoordinates = continuousSectionCoordinates,
         isSingleSectionPage = isSingleSectionPage,
+        viewportHeight = viewportHeight,
+        hasFixedLayer = region.background.layers.any {
+            it.attachment == EpubBackgroundAttachment.FIXED
+        },
     )
     val clipTop = frame.top
     val clipBottom = frame.bottom
