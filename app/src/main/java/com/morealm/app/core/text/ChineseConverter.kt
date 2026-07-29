@@ -11,17 +11,8 @@ import com.morealm.app.core.log.AppLog
 object ChineseConverter {
 
     fun convert(content: String, mode: Int): String {
-        // [DIAGNOSTIC 2026-05-10] 临时定位「繁简反复切换后仍是繁体」用，
-        // 复现完成后删除。tag = ChineseDebug 方便过滤。
-        val sample = content.take(20).replace("\n", "\\n")
-        if (mode == 0 || content.isEmpty()) {
-            AppLog.info(
-                "ChineseDebug",
-                "convert SKIP mode=$mode len=${content.length} sample='$sample'",
-            )
-            return content
-        }
-        val result = when (mode) {
+        if (mode == 0 || content.isEmpty()) return content
+        return when (mode) {
             1 -> try {
                 com.github.liuyueyi.quick.transfer.ChineseUtils.s2t(content)
             } catch (e: Exception) {
@@ -39,13 +30,5 @@ object ChineseConverter {
             }
             else -> content
         }
-        val resultSample = result.take(20).replace("\n", "\\n")
-        val changed = result !== content && result != content
-        AppLog.info(
-            "ChineseDebug",
-            "convert mode=$mode len=${content.length}→${result.length} changed=$changed " +
-                "in='$sample' out='$resultSample'",
-        )
-        return result
     }
 }

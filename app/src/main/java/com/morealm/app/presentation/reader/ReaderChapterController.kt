@@ -2,7 +2,9 @@ package com.morealm.app.presentation.reader
 
 import android.content.Context
 import android.net.Uri
+import com.morealm.app.core.text.ChineseConverter
 import com.morealm.app.core.text.sortedNaturalBy
+import com.morealm.epub.compat.StructuredChapterContent
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.BookSource
@@ -1589,6 +1591,31 @@ class ReaderChapterController(
         return result
     }
 
+    /**
+     * 在结构化树的 **span 级**应用替换规则与繁简转换。
+     *
+     * 相比旧的「flatten 成串再整串替换」有三处实质变化：
+     *
+     *  1. **结构永不丢失**。旧路径用 `converted == flattened` 判断结构是否还对得上，不等就
+     *     整棵树丢弃、降级回纯字符串排版，背景 / 边框 / 嵌套装饰随之全没。而只要用户开了
+     *     繁简转换，任何含中文的章节都必然不等 —— 精排对这批用户是恒定失效的。
+     *  2. **替换规则对 EPUB 精排内容重新生效**。span 文本不含 wire marker，不必再走
+     *     [skipReplaceForWireContent] 整章跳过，也就不会有 marker 被挤进正文渲染成字面量。
+     *  3. **匹配范围收窄到单个 span**，跨样式边界的词组匹配不到。旧路径同样匹配不到
+     *     （marker 横在中间），故不构成回退。
+     *
+     * 无规则且未开繁简时 [StructuredChapterContent.mapText] 原样返回入参，不产生拷贝。
+     */
+    private fun applyTextTransforms(structured: StructuredChapterContent): StructuredChapterContent {
+        val mode = chineseConvertMode()
+        val hasRules = cachedReplaceRules.isNotEmpty()
+        if (!hasRules && mode == 0) return structured
+        return structured.mapText { text ->
+            val replaced = if (hasRules) applyLoadedReplaceRulesSync(text) else text
+            if (mode == 0) replaced else ChineseConverter.convert(replaced, mode)
+        }
+    }
+
     // ── Error Content Helpers ──
 
     fun readerErrorContent(title: String, detail: String): String {
@@ -1742,7 +1769,7 @@ class ReaderChapterController(
 
         if (isWebBook(book) || book.format != BookFormat.EPUB) {
             val text = fetchAndPrepareChapter(index, epubContainingBlockWidthPx) ?: return null
-            return ScrollChapterContent(index, chapter.title, text)
+            return ScrollChapterContent(index, chapter.title, plainContent = text)
         }
 
         val localPath = book.localPath ?: return null
@@ -1755,33 +1782,26 @@ class ReaderChapterController(
                     containingBlockWidthPx = epubContainingBlockWidthPx,
                 )
             }
-            if (structured.isEmpty()) {
+            // 判据是「画出来是不是空的」而非「有没有文字」：卷首整页插画章正文常常只有
+            // 一个空格，内容全在 body 背景里。用 isEmpty() 会把这类章降级回字符串路径，
+            // 背景连同整棵结构树一起丢掉，绘制层根本不会被调用。
+            if (!structured.hasRenderableContent()) {
                 val fallback = fetchAndPrepareChapter(index, epubContainingBlockWidthPx) ?: return null
-                return ScrollChapterContent(index, chapter.title, fallback)
+                return ScrollChapterContent(index, chapter.title, plainContent = fallback)
             }
 
-            val flattened = structured.flattenToString()
-            val replaced = applyReplaceRules(flattened)
-            val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
-            val structureStillMatches = converted == flattened
-            if (!structureStillMatches) {
-                AppLog.warn(
-                    "Chapter",
-                    "EPUB structured layout fallback idx=$index: replace/conversion changed flattened content",
-                )
-            }
+            val transformed = applyTextTransforms(structured)
             ScrollChapterContent(
                 chapterIndex = index,
                 title = chapter.title,
-                content = converted,
-                structuredContent = structured.takeIf { structureStillMatches },
+                structuredContent = transformed,
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             AppLog.warn("Chapter", "fetchAndPrepareScrollChapter($index) failed: ${e.message}", e)
             val fallback = fetchAndPrepareChapter(index, epubContainingBlockWidthPx) ?: return null
-            ScrollChapterContent(index, chapter.title, fallback)
+            ScrollChapterContent(index, chapter.title, plainContent = fallback)
         }
     }
 

@@ -43,7 +43,20 @@ interface ScrollChapterRepository {
 data class ScrollChapterContent(
     val chapterIndex: Int,
     val title: String,
-    val content: String,
+    /**
+     * 字符串排版路径（TXT / Web / MOBI）的内容。EPUB 结构化路径传 null，
+     * 由 [structuredContent] 按需派生 —— 见 [content]。
+     */
+    val plainContent: String? = null,
     /** EPUB 原生结构；null 时保持 TXT/Web/MOBI 等字符串排版路径。 */
     val structuredContent: StructuredChapterContent? = null,
-)
+) {
+    /**
+     * 字符串排版层的输入。
+     *
+     * 结构化排版路径（`ScrollLayoutEngine.layoutStructuredChapter`）根本不读它，故按需
+     * flatten：此前每章无条件 flatten 一次，对走结构化的 EPUB 是纯浪费。更重要的是
+     * 二者不再是两个可能不一致的并行字段 —— 内容真值只有一个。
+     */
+    val content: String by lazy { plainContent ?: structuredContent?.flattenToString().orEmpty() }
+}

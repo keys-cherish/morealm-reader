@@ -226,7 +226,12 @@ fun rememberPageLevelCore(
         val deferred = coroScope.async(Dispatchers.IO) {
             try {
                 val content = loadChapterContent(idx) ?: return@async null
-                AppLog.info("PageLevelCore", "  loaded idx=$idx contentLen=${content.content.length}")
+                AppLog.info(
+                    "PageLevelCore",
+                    // 不读 content.content：那是 lazy flatten，走结构化排版时本不必产生。
+                    "  loaded idx=$idx blocks=${content.structuredContent?.blocks?.size ?: -1} " +
+                        "plainLen=${content.plainContent?.length ?: -1}",
+                )
                 withContext(Dispatchers.Default) {
                     content.structuredContent?.let { structured ->
                         val layout = engine.layoutStructuredChapter(
