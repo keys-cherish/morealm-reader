@@ -1,5 +1,6 @@
 package com.morealm.app.domain.render.pageanim
 
+import com.morealm.app.core.log.AppLog
 import com.morealm.epub.compat.ChapterBlock
 import com.morealm.epub.compat.InlineImageSpan
 import com.morealm.epub.compat.StructuredChapterContent
@@ -119,20 +120,39 @@ private fun StructuredContentSection.plateHeightOrNull(
     pageWidth: Int,
     resolveImageDimensions: (src: String, targetWidth: Int) -> Pair<Int, Int>?,
 ): Float? {
-    val layer = background.layers.singleOrNull() ?: return null
-    val image = layer.image as? EpubBackgroundImage.Url ?: return null
-    if (layer.size != EpubBackgroundSize.Cover ||
-        layer.repeat.x != EpubBackgroundRepeatMode.NO_REPEAT ||
-        layer.repeat.y != EpubBackgroundRepeatMode.NO_REPEAT
-    ) {
+    // [DIAGNOSTIC] 每个 return null 点记下原因，问题收敛后连同 PlateDiag 一起删除。
+    fun reject(reason: String): Float? {
+        AppLog.info("PlateDiag", "  section=$sectionIndex href='${href.substringAfterLast('/')}' reject: $reason")
         return null
     }
-    if (!content.blocksFor(this).containsOnlyChapterTitle(chapterTitle)) return null
 
-    val (intrinsicWidth, intrinsicHeight) = resolveImageDimensions(image.uri, pageWidth) ?: return null
-    if (intrinsicWidth <= 0 || intrinsicHeight <= 0) return null
+    val layer = background.layers.singleOrNull()
+        ?: return reject("layers=${background.layers.size} (need exactly 1)")
+    val image = layer.image as? EpubBackgroundImage.Url
+        ?: return reject("image is ${layer.image::class.simpleName}, not Url")
+    if (layer.size != EpubBackgroundSize.Cover) return reject("size=${layer.size} (need Cover)")
+    if (layer.repeat.x != EpubBackgroundRepeatMode.NO_REPEAT ||
+        layer.repeat.y != EpubBackgroundRepeatMode.NO_REPEAT
+    ) {
+        return reject("repeat=${layer.repeat.x}/${layer.repeat.y} (need NO_REPEAT)")
+    }
+    val blocks = content.blocksFor(this)
+    if (!blocks.containsOnlyChapterTitle(chapterTitle)) {
+        return reject("blocks not title-only: title='$chapterTitle' blocks=${blocks.map { it::class.simpleName }}")
+    }
+
+    val dims = resolveImageDimensions(image.uri, pageWidth)
+        ?: return reject("resolveImageDimensions returned null for '${image.uri}'")
+    val (intrinsicWidth, intrinsicHeight) = dims
+    if (intrinsicWidth <= 0 || intrinsicHeight <= 0) return reject("bad dims ${intrinsicWidth}x$intrinsicHeight")
     val height = pageWidth.toFloat() * intrinsicHeight / intrinsicWidth
-    return height.takeIf { it.isFinite() && it > 0f }
+    if (!height.isFinite() || height <= 0f) return reject("bad computed height=$height")
+    AppLog.info(
+        "PlateDiag",
+        "  section=$sectionIndex href='${href.substringAfterLast('/')}' ACCEPT " +
+            "img='${image.uri.substringAfterLast('/')}' ${intrinsicWidth}x$intrinsicHeight → h=${height.toInt()}",
+    )
+    return height
 }
 
 private fun List<ChapterBlock>.containsOnlyChapterTitle(chapterTitle: String): Boolean {

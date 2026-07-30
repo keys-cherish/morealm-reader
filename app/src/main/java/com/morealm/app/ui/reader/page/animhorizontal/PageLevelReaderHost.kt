@@ -51,7 +51,9 @@ import com.morealm.app.ui.reader.page.animation.PageAnimType
 import com.morealm.app.ui.reader.renderer.SelectionToolbar
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
 import com.morealm.app.ui.reader.renderer.rememberBottomCornerInsetDp
+import com.morealm.app.ui.reader.renderer.scroll.LINK_HIT_TOLERANCE_DP
 import com.morealm.app.ui.reader.renderer.scroll.PAGED_INFO_BAR_LINE_DP
+import com.morealm.app.ui.reader.renderer.scroll.linkNearPixel
 import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
 import com.morealm.app.ui.reader.renderer.scroll.calculatePageInfoVersion
@@ -705,13 +707,15 @@ fun PageLevelReaderHost(
         val layout = core.state.currentChapter
         var consumed = false
         if (layout != null && (chapterHighlightsRaw.isNotEmpty() || layout.links.isNotEmpty())) {
-            val hit = layout.findColumnByPixel(
-                offset.x - layout.paddingLeft,
-                offset.y + pageTopYInChapter(),
-            )
+            val hitX = offset.x - layout.paddingLeft
+            val hitY = offset.y + pageTopYInChapter()
+            val hit = layout.findColumnByPixel(hitX, hitY)
             val cp = hit?.column?.chapterPosition ?: hit?.line?.firstChapterPos
             if (cp != null) {
+                // 精确命中落空时按触摸容差重找：注号是缩小的上标，点不中就会
+                // fallthrough 成翻页。详见 linkNearPixel。
                 val link = layout.linkAt(cp)
+                    ?: layout.linkNearPixel(hitX, hitY, with(density) { LINK_HIT_TOLERANCE_DP.dp.toPx() })
                 if (link != null) {
                     onLinkTap(link.href, offset)
                     consumed = true

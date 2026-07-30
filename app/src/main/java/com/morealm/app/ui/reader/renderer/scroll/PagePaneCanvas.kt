@@ -393,6 +393,13 @@ internal fun drawScrollPageOnCanvas(
     val resolvableLinkRanges = LinkTargetResolvability.resolvableRangesFor(page.chapterIndex)
     fun cpIsResolvableLink(cp: Int): Boolean =
         resolvableLinkRanges.any { cp >= it.startCp && cp < it.endCpExclusive }
+    val linkStroke = (contentPaint.textSize * 0.045f).coerceAtLeast(1.5f)
+    // 链接虚线段 [left, right, y]，在层 2 逐字符收集、层 3 统一绘制。
+    //
+    // y 取的是**画这个字符时用的那条基线**（colBaselineY），而不是行底：注号是被
+    // baselineShift 抬高的上标，用 line.lineBottom 会把虚线留在正文基线上，看起来像
+    // 飘到了下一行。table cell 分支早就按 atom 自身基线画（见层 3），普通行同理。
+    val linkDashSegments = ArrayList<FloatArray>()
     for (line in page.lines) {
         if (line.isImage) {
             val src = line.imageSrc ?: continue
@@ -565,6 +572,11 @@ internal fun drawScrollPageOnCanvas(
                 col.baselineShift < 0 -> baselineY + paint.textSize * 0.15f
                 else -> baselineY
             }
+            // 可解析链接的虚线提示：记下这个字符**实际**的基线，层 3 据此画。
+            // 空白列不计入 —— 行尾对齐填充的空格会让虚线拖出一截。
+            if (col.isLink && col.charData.isNotBlank() && cpIsResolvableLink(col.chapterPosition)) {
+                linkDashSegments += floatArrayOf(col.start, col.end, colBaselineY + linkStroke * 1.5f)
+            }
             paint.withEpubTypeface(col.fontFamily) {
                 if (overrideColor != null) {
                     paint.color = overrideColor
@@ -589,56 +601,53 @@ internal fun drawScrollPageOnCanvas(
     // 注号图标（inline image link）不画 —— 虚线是文字链接的可点提示，图标本身已是提示。
     val linkRanges = resolvableLinkRanges
     if (linkRanges.isNotEmpty()) {
-        val linkStroke = (contentPaint.textSize * 0.045f).coerceAtLeast(1.5f)
         val linkArgb = (linkForegroundForReaderBg(readerBgArgb) and 0x00FFFFFF) or (0xB3 shl 24)
         val linkDashPaint = underlinePaintFor(linkArgb, Highlight.UNDERLINE_STYLE_DASHED, linkStroke)
         for (range in linkRanges) {
             for (line in page.lines) {
                 if (line.lastChapterPos < range.startCp || line.firstChapterPos >= range.endCpExclusive) continue
-                val cells = line.cells
-                if (cells != null) {
-                    // table row 的 lineBottom 是整行最高 cell 的底；逐 atom 用自身基线，
-                    // 否则短 cell / 多行 cell 的链接虚线会掉到整张表格行底。
-                    var atomStartCp = line.firstChapterPos
-                    for (cell in cells) {
-                        for (atom in cell.atoms) {
-                            val atomEndCp = atomStartCp + atom.cpCount
-                            if (atom is com.morealm.epub.render.TextRun && atom.isLink &&
-                                atom.text.isNotBlank() && atomStartCp < range.endCpExclusive &&
-                                atomEndCp > range.startCp
-                            ) {
-                                val left = cell.contentLeft + cell.paddingLeft + atom.cellLocalX
-                                val right = left + atom.width
-                                val baseline = line.lineTop + cell.contentTop + cell.paddingTop +
-                                    cell.contentOffsetY + atom.cellLocalY + atom.baseline
-                                val atomBottom = line.lineTop + cell.contentTop + cell.paddingTop +
-                                    cell.contentOffsetY + atom.cellLocalY + atom.height
-                                val y = (baseline + linkStroke * 1.5f)
-                                    .coerceAtMost(atomBottom - linkStroke)
-                                if (right > left) nc.drawLine(left, y, right, y, linkDashPaint)
-                            }
-                            atomStartCp = atomEndCp
+                val cells = line.cells ?: continue
+                // table row 的 lineBottom 是整行最高 cell 的底；逐 atom 用自身基线，
+                // 否则短 cell / 多行 cell 的链接虚线会掉到整张表格行底。
+                var atomStartCp = line.firstChapterPos
+                for (cell in cells) {
+                    for (atom in cell.atoms) {
+                        val atomEndCp = atomStartCp + atom.cpCount
+                        if (atom is com.morealm.epub.render.TextRun && atom.isLink &&
+                            atom.text.isNotBlank() && atomStartCp < range.endCpExclusive &&
+                            atomEndCp > range.startCp
+                        ) {
+                            val left = cell.contentLeft + cell.paddingLeft + atom.cellLocalX
+                            val right = left + atom.width
+                            val baseline = line.lineTop + cell.contentTop + cell.paddingTop +
+                                cell.contentOffsetY + atom.cellLocalY + atom.baseline
+                            val atomBottom = line.lineTop + cell.contentTop + cell.paddingTop +
+                                cell.contentOffsetY + atom.cellLocalY + atom.height
+                            val y = (baseline + linkStroke * 1.5f)
+                                .coerceAtMost(atomBottom - linkStroke)
+                            if (right > left) nc.drawLine(left, y, right, y, linkDashPaint)
                         }
+                        atomStartCp = atomEndCp
                     }
-                    continue
-                }
-                var leftX: Float? = null
-                var rightX: Float? = null
-                for (col in line.columns) {
-                    if (col.chapterPosition < range.startCp || col.chapterPosition >= range.endCpExclusive) continue
-                    // 只统计文字列：图片占位列 / 对齐填充空白列不算进虚线范围
-                    if (col.inlineImageSrc != null || col.charData.isBlank()) continue
-                    if (leftX == null) leftX = col.start
-                    rightX = col.end
-                }
-                if (leftX != null && rightX != null && rightX > leftX) {
-                    // lineBottom 同时适用于普通行和 table cell 多行；用 textHeight 会把
-                    // cell 内第二行的虚线画回第一行基线附近。
-                    val y = (line.lineBottom - linkStroke * 1.25f)
-                        .coerceAtLeast(line.lineTop + linkStroke)
-                    nc.drawLine(leftX, y, rightX, y, linkDashPaint)
                 }
             }
+        }
+        // 普通行：层 2 已按每个字符**实际**的基线收集好线段。这里把横向相接的
+        // 相邻段并成一条再画 —— 逐字符各画一次会让 DashPathEffect 的相位在每个
+        // 字边界重置，虚线呈现出不均匀的断点。
+        var i = 0
+        while (i < linkDashSegments.size) {
+            val seg = linkDashSegments[i]
+            var right = seg[1]
+            var j = i + 1
+            while (j < linkDashSegments.size) {
+                val next = linkDashSegments[j]
+                if (next[2] != seg[2] || next[0] > right + 0.5f) break
+                right = maxOf(right, next[1])
+                j++
+            }
+            if (right > seg[0]) nc.drawLine(seg[0], seg[2], right, seg[2], linkDashPaint)
+            i = j
         }
     }
     val wavyAmplitude = (contentPaint.textSize * 0.12f).coerceAtLeast(4f)

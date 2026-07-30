@@ -824,11 +824,17 @@ fun ScrollCanvasReaderHost(
                     val pageIdx = pageFactory.pageIndex.coerceAtMost(currentLayout.pages.lastIndex)
                     for (i in 0 until pageIdx) pageStartY += currentLayout.pages[i].height
                     val yInChapter = pageStartY + state.pageOffset + offset.y
-                    val hit = currentLayout.findColumnByPixel(offset.x - currentLayout.paddingLeft, yInChapter)
+                    val xInChapter = offset.x - currentLayout.paddingLeft
+                    val hit = currentLayout.findColumnByPixel(xInChapter, yInChapter)
                         ?: return@ScrollCanvasRenderer false
                     val cp = hit.column?.chapterPosition ?: hit.line.firstChapterPos
-                    // 链接（脚注号/跳转）优先于高亮——脚注号被高亮盖住时点击仍应弹脚注
+                    // 链接（脚注号/跳转）优先于高亮——脚注号被高亮盖住时点击仍应弹脚注。
+                    // 精确命中落空时按触摸容差重找（注号是缩小的上标，详见 linkNearPixel）。
                     val link = currentLayout.linkAt(cp)
+                        ?: currentLayout.linkNearPixel(
+                            xInChapter, yInChapter,
+                            with(density) { LINK_HIT_TOLERANCE_DP.dp.toPx() },
+                        )
                     if (link != null) {
                         onLinkTap(link.href, offset)
                         return@ScrollCanvasRenderer true
