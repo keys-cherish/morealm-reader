@@ -1900,6 +1900,7 @@ private fun ManageShelfGroupsDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateShelfGroupDialog(
     hiddenSmartTabs: Set<String>,
@@ -1929,7 +1930,12 @@ private fun CreateShelfGroupDialog(
                 if (hiddenSmartTabs.isNotEmpty()) {
                     Text("已隐藏的智能分组", style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // FlowRow 而非 Row：三个智能分组全隐藏时，chip 横向排不下，Row 不换行会把
+                    // 末尾 chip 压到极窄宽度，标签文字被迫竖排成一列单字。
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         hiddenSmartTabs.forEach { key ->
                             val label = when (key) {
                                 "reading" -> "在读"
