@@ -60,6 +60,7 @@ internal fun drawScrollContainerBoxes(
                 lines = lines,
                 groupStyles = groupStyles,
                 groupIdAt = { line -> line.boxGroupPath.getOrNull(depth) },
+                depth = depth,
                 pageTop = pageTop,
                 fallbackLeft = fallbackLeft,
                 fallbackRight = fallbackRight,
@@ -75,6 +76,7 @@ internal fun drawScrollContainerBoxes(
         lines = lines,
         groupStyles = groupStyles,
         groupIdAt = { line -> line.boxGroupId },
+        depth = 0,
         pageTop = pageTop,
         fallbackLeft = fallbackLeft,
         fallbackRight = fallbackRight,
@@ -89,6 +91,7 @@ private fun drawContainerBoxLayer(
     lines: List<ScrollLine>,
     groupStyles: Map<Int, BlockStyle>,
     groupIdAt: (ScrollLine) -> Int?,
+    depth: Int,
     pageTop: Float,
     fallbackLeft: Float,
     fallbackRight: Float,
@@ -107,6 +110,9 @@ private fun drawContainerBoxLayer(
             fromIdx = runStart,
             toIdxInclusive = endIdxExclusive - 1,
             style = style,
+            innerInset = innerInsetOf(
+                lines, runStart, endIdxExclusive - 1, depth, groupStyles, fontSizeScale,
+            ),
             pageTop = pageTop,
             fallbackLeft = fallbackLeft,
             fallbackRight = fallbackRight,
@@ -123,6 +129,62 @@ private fun drawContainerBoxLayer(
         }
     }
     flush(lines.size)
+}
+
+/** 一个盒相对其内容的四向额外外扩量。 */
+private data class BoxInset(
+    val left: Float = 0f,
+    val top: Float = 0f,
+    val right: Float = 0f,
+    val bottom: Float = 0f,
+)
+
+/**
+ * 本层盒**内部所有更深层盒**占掉的 padding + border 总量。
+ *
+ * 每层盒的矩形原本各自从「同一批行的内容包围盒」出发、各减各的 padding —— 于是 padding 大的
+ * 内层反而算出比外层更大的框。扉页的双线金框就栽在这里：外圈 `padding:3px` + `border:4px`，
+ * 内圈 `padding:0.9em`(≈14px) + `border:2px`，内圈框比外圈还大 30px，2px 细线被顶到 4px 粗线
+ * 上方，看到的就是「上细下粗」。
+ *
+ * CSS 里外层的 content 区本就包含内层的 border-box，所以外层尺寸必须把内层的盒模型算进去。
+ * 同一层可能有多个并列的内层盒（一个容器裹多个装饰块），取该层最大值即可保证包住。
+ */
+private fun innerInsetOf(
+    lines: List<ScrollLine>,
+    fromIdx: Int,
+    toIdxInclusive: Int,
+    depth: Int,
+    groupStyles: Map<Int, BlockStyle>,
+    fontSizeScale: Float,
+): BoxInset {
+    val maxDepth = lines.maxOf { it.boxGroupPath.size }
+    if (depth + 1 >= maxDepth) return BoxInset()
+    var left = 0f
+    var top = 0f
+    var right = 0f
+    var bottom = 0f
+    for (d in (depth + 1) until maxDepth) {
+        var dl = 0f
+        var dt = 0f
+        var dr = 0f
+        var db = 0f
+        val seen = HashSet<Int>()
+        for (i in fromIdx..toIdxInclusive) {
+            val gid = lines[i].boxGroupPath.getOrNull(d) ?: continue
+            if (!seen.add(gid)) continue
+            val s = groupStyles[gid] ?: continue
+            dl = maxOf(dl, (s.paddingLeftPx + s.effectiveBorderLeftPx) * fontSizeScale)
+            dt = maxOf(dt, (s.paddingTopPx + s.effectiveBorderTopPx) * fontSizeScale)
+            dr = maxOf(dr, (s.paddingRightPx + s.effectiveBorderRightPx) * fontSizeScale)
+            db = maxOf(db, (s.paddingBottomPx + s.effectiveBorderBottomPx) * fontSizeScale)
+        }
+        left += dl
+        top += dt
+        right += dr
+        bottom += db
+    }
+    return BoxInset(left, top, right, bottom)
 }
 
 /**
@@ -258,6 +320,7 @@ private fun drawSingleContainerBox(
     fromIdx: Int,
     toIdxInclusive: Int,
     style: BlockStyle,
+    innerInset: BoxInset,
     pageTop: Float,
     fallbackLeft: Float,
     fallbackRight: Float,
@@ -307,9 +370,11 @@ private fun drawSingleContainerBox(
     val requiredWidth = if (minContentLeft == Float.MAX_VALUE) {
         0f
     } else {
-        maxContentRight - minContentLeft + padLeft + padRight + borderWidthScaled
+        maxContentRight - minContentLeft + padLeft + padRight + borderWidthScaled +
+            innerInset.left + innerInset.right
     }
-    val requiredHeight = naturalBottom - naturalTop + padTop + padBottom + borderWidthScaled
+    val requiredHeight = naturalBottom - naturalTop + padTop + padBottom + borderWidthScaled +
+        innerInset.top + innerInset.bottom
     val authoredWidth = authoredRight - authoredLeft
     val authoredHeight = heightScaled?.plus(padTop + padBottom + borderWidthScaled) ?: requiredHeight
     val keepsEqualAxes = widthScaled != null && heightScaled != null &&
