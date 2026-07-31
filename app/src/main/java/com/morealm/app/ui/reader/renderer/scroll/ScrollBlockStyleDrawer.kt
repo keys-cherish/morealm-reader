@@ -557,9 +557,18 @@ internal fun drawBoxDecorations(
         }
     }
 
+    // 2.5 border-image 九宫格花框 —— CSS 里 border-image 绘制成功即取代普通 border
+    // （样书那种 `border: 60px solid transparent` + `border-image: url(...)` 的写法，
+    // 透明边框只是用来划出边框带厚度的）
+    val borderImageDrawn = drawBorderImage(
+        canvas, renderStyle, rectLeft, rectTop, rectRight, rectBottom, fontSizeScale, paint,
+    )
+
     // 3. border —— 4 边 color/width/style 全等 → uniform path（保 DOUBLE 路径 + drawRoundRect 优化）；
     // 任一边不等 / 部分边 null → sided path
-    if (hasSidedBorder(renderStyle) && !allSidesIdentical(renderStyle)) {
+    if (borderImageDrawn) {
+        // 花框已经画完，不再叠普通边框
+    } else if (hasSidedBorder(renderStyle) && !allSidesIdentical(renderStyle)) {
         drawSidedBorder(
             canvas, renderStyle, rectLeft, rectTop, rectRight, rectBottom,
             cornerRadii, uniformR, fontSizeScale, dashPhasePx, paint,
@@ -570,6 +579,81 @@ internal fun drawBoxDecorations(
             uniformR, cornerRadii, fontSizeScale, dashPhasePx, paint,
         )
     }
+}
+
+/**
+ * **border-image 九宫格花框**。
+ *
+ * 源图按 `border-image-slice` 切成九块：四角原样贴到目标框四角，四条边拉伸/平铺填满边框带，
+ * 中间块不画（CSS 的 `fill` 关键字才画，暂不支持）。边框带厚度取 `border-width`
+ * ——CSS `border-image-width` 默认就等于它。
+ *
+ * slice 的单位是**源图像素**，所以这里必须拿未缩放的原图（`ImageCache.get(src, 0)`）；
+ * 传目标宽度会让 bitmap 被降采样，slice 坐标随之失真。
+ *
+ * @return true 表示花框已画出，调用方应跳过普通 border 绘制。
+ */
+private fun drawBorderImage(
+    canvas: Canvas,
+    style: BlockStyle,
+    rectLeft: Float,
+    rectTop: Float,
+    rectRight: Float,
+    rectBottom: Float,
+    fontSizeScale: Float,
+    paint: Paint,
+): Boolean {
+    val src = style.borderImageSrc?.takeIf { it.isNotEmpty() } ?: return false
+    val bmp = ImageCache.get(src, 0) ?: return false
+    if (bmp.isRecycled || bmp.width <= 0 || bmp.height <= 0) return false
+
+    val iw = bmp.width.toFloat()
+    val ih = bmp.height.toFloat()
+    // clamp 到半幅：相邻 slice 重叠会让九宫格退化成乱拉伸
+    val sT = style.borderImageSliceTop.coerceIn(0f, ih / 2f)
+    val sB = style.borderImageSliceBottom.coerceIn(0f, ih / 2f)
+    val sL = style.borderImageSliceLeft.coerceIn(0f, iw / 2f)
+    val sR = style.borderImageSliceRight.coerceIn(0f, iw / 2f)
+    if (sT <= 0f && sB <= 0f && sL <= 0f && sR <= 0f) return false
+
+    val bT = style.effectiveBorderTopPx * fontSizeScale
+    val bR = style.effectiveBorderRightPx * fontSizeScale
+    val bB = style.effectiveBorderBottomPx * fontSizeScale
+    val bL = style.effectiveBorderLeftPx * fontSizeScale
+    if (bT <= 0f && bR <= 0f && bB <= 0f && bL <= 0f) return false
+    // 边框带比目标框还厚 → 无处安放，放弃（宁可不画也不要糊成一团）
+    if (bL + bR >= rectRight - rectLeft || bT + bB >= rectBottom - rectTop) return false
+
+    val prevFilter = paint.isFilterBitmap
+    paint.isFilterBitmap = true
+
+    fun blit(sx0: Float, sy0: Float, sx1: Float, sy1: Float, dx0: Float, dy0: Float, dx1: Float, dy1: Float) {
+        if (sx1 <= sx0 || sy1 <= sy0 || dx1 <= dx0 || dy1 <= dy0) return
+        val s = Rect(sx0.toInt(), sy0.toInt(), sx1.toInt(), sy1.toInt())
+        val d = RectF(dx0, dy0, dx1, dy1)
+        canvas.drawBitmap(bmp, s, d, paint)
+    }
+
+    val l = rectLeft
+    val t = rectTop
+    val r = rectRight
+    val b = rectBottom
+
+    // 四角：原样贴，不拉伸变形
+    blit(0f, 0f, sL, sT, l, t, l + bL, t + bT)
+    blit(iw - sR, 0f, iw, sT, r - bR, t, r, t + bT)
+    blit(0f, ih - sB, sL, ih, l, b - bB, l + bL, b)
+    blit(iw - sR, ih - sB, iw, ih, r - bR, b - bB, r, b)
+
+    // 四边：STRETCH 直接拉伸；REPEAT / ROUND / SPACE 暂同样按拉伸处理
+    // （平铺要走 BitmapShader，等有真书用到再补——先让花框显示出来）
+    blit(sL, 0f, iw - sR, sT, l + bL, t, r - bR, t + bT)
+    blit(sL, ih - sB, iw - sR, ih, l + bL, b - bB, r - bR, b)
+    blit(0f, sT, sL, ih - sB, l, t + bT, l + bL, b - bB)
+    blit(iw - sR, sT, iw, ih - sB, r - bR, t + bT, r, b - bB)
+
+    paint.isFilterBitmap = prevFilter
+    return true
 }
 
 /**
