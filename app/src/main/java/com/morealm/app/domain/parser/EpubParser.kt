@@ -263,23 +263,54 @@ object EpubParser {
      * 3. manifest 任一 image 资源兜底
      */
     private fun extractCoverViaCore(context: Context, uri: Uri, book: com.morealm.epub.EpubBook): String? {
-        val coverHref = book.metadata.coverHref ?: findFallbackCoverHrefViaCore(book) ?: return null
+        // 封面提取有三个静默失败点（href 求不出 / 资源取不到 / 解码写盘失败），真机上只表现为
+        // 「书架没封面」。每个点各打一条日志，定位不用猜。
+        // `adb logcat -s MoRealm | grep EpubParser/Cover`
+        val metaHref = book.metadata.coverHref
+        val coverHref = metaHref ?: findFallbackCoverHrefViaCore(book)
+        if (coverHref == null) {
+            AppLog.warn(
+                "EpubParser/Cover",
+                "no href: metadata.coverHref=null 且 fallback 未命中；" +
+                    "manifest=${book.opfPackage.manifest.size} spine=${book.spine.size} " +
+                    "opfPath=${book.opfPath}",
+            )
+            return null
+        }
         val cacheDir = File(context.cacheDir, "epub_covers/${uri.hashCode()}")
         val file = File(cacheDir, "cover.jpg")
         // 不做 file.exists 短路复用：封面提取逻辑会迭代（如 svg 封面识别 / 路径规范化修复），
         // 重新导入时应按当前逻辑重新提取覆盖，否则旧错图缓存（如误抓的封底 back.jpg）永不更新
-        // —— 用户重新导入想刷新封面却拿到旧缓存。extractAllForImport 仅导入时调（低频），
+        // —— 用户重新导入想拿新封面却拿到旧缓存。extractAllForImport 仅导入时调（低频），
         // 重新解码写入成本可接受。
         return try {
             cacheDir.mkdirs()
-            val bytes = book.resource(coverHref) ?: return null
-            decodeAndWriteScaledCover(bytes, file)
+            val bytes = book.resource(coverHref)
+            if (bytes == null) {
+                // href 求出来了但资源取不到 —— 通常是路径规范化没对上（OPF 相对路径 / 大小写 /
+                // URL 转义）。把 manifest 里的近似项列出来，一眼看出应该是哪条。
+                val near = book.opfPackage.manifest
+                    .filter { it.href.substringAfterLast('/').contains("cover", ignoreCase = true) }
+                    .take(5).joinToString { "${it.id}→${it.href}" }
+                AppLog.warn(
+                    "EpubParser/Cover",
+                    "resource null: href='$coverHref' (fromMeta=${metaHref != null}) " +
+                        "opfPath=${book.opfPath} manifest近似项=[$near]",
+                )
+                return null
+            }
+            val result = decodeAndWriteScaledCover(bytes, file)
+            AppLog.info(
+                "EpubParser/Cover",
+                "ok=${result != null} href='$coverHref' bytes=${bytes.size} out=$result",
+            )
+            result
         } catch (oom: OutOfMemoryError) {
-            AppLog.warn("EpubParser", "Cover OOM via core: ${oom.message}")
+            AppLog.warn("EpubParser/Cover", "OOM href='$coverHref': ${oom.message}")
             System.gc()
             null
         } catch (e: Exception) {
-            AppLog.warn("EpubParser", "Cover via core failed: ${e.message}")
+            AppLog.warn("EpubParser/Cover", "failed href='$coverHref': ${e.message}")
             null
         }
     }

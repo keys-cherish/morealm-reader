@@ -85,6 +85,37 @@ internal fun adaptAuthoredColorForReaderBg(
 private fun withAuthoredAlpha(rgbArgb: Int, authoredArgb: Int): Int =
     (((authoredArgb ushr 24) and 0xFF) shl 24) or (rgbArgb and 0x00FFFFFF)
 
+/**
+ * 作者页面背景（`body { background: ... }`）铺满整页之后的**默认前景色**。
+ *
+ * [adaptAuthoredColorForReaderBg] 处理的是「作者给了字色」的情形；作者没给字色时落笔用的是
+ * 阅读器主题前景色，而主题前景是配主题背景的 —— 作者把整页涂白之后，夜间主题那支浅灰白笔
+ * 就整段消失了（用户实测：内容介绍页作者没写 `color`，整页字看不见）。
+ *
+ * 判据：[themeArgb] 与 [surfaceArgb] 对比度够就原样保留（尊重用户主题，绝大多数页不受影响）；
+ * 不够才在深 / 浅两个中性色里选对比度高的那个 —— 与 [adaptAuthoredColorForReaderBg] 的
+ * FOREGROUND-on-surface 分支同一组常量，同一页里作者色与默认色不会一深一浅地打架。
+ *
+ * [surfaceArgb] 必须不透明：半透明底会与主题背景混合，[ColorUtils.calculateContrast] 不接受。
+ */
+internal fun foregroundOnAuthoredSurface(surfaceArgb: Int, themeArgb: Int): Int {
+    val opaqueTheme = themeArgb or (0xFF shl 24)
+    if (ColorUtils.calculateContrast(opaqueTheme, surfaceArgb) >= MIN_READABLE_CONTRAST) return themeArgb
+    val dark = 0xFF292A27.toInt()
+    val light = 0xFFC8C7C0.toInt()
+    val pick = if (ColorUtils.calculateContrast(dark, surfaceArgb) >=
+        ColorUtils.calculateContrast(light, surfaceArgb)
+    ) {
+        dark
+    } else {
+        light
+    }
+    return withAuthoredAlpha(pick, themeArgb)
+}
+
+/** WCAG AA 正文线是 4.5:1，对作者配色偏严（会把大量能看清的组合判掉）；取大字号 AA 线 3:1。 */
+private const val MIN_READABLE_CONTRAST = 3.0
+
 internal fun adaptDecorationBgForReaderBg(epubBgArgb: Int, readerBgArgb: Int): Int =
     adaptAuthoredColorForReaderBg(epubBgArgb, readerBgArgb, AuthoredColorRole.BACKGROUND)
 

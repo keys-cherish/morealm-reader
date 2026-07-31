@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -25,7 +24,9 @@ import com.morealm.app.domain.entity.Highlight
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
 import com.morealm.app.ui.reader.renderer.adaptAuthoredForegroundForReaderBg
+import com.morealm.app.ui.reader.renderer.foregroundOnAuthoredSurface
 import com.morealm.app.ui.reader.renderer.linkForegroundForReaderBg
+import com.morealm.epub.compat.BlockStyle
 import com.morealm.epub.render.ScrollPage
 
 /**
@@ -90,26 +91,6 @@ fun PagePaneCanvas(
     pageInfoBar: PageInfoBarSpec? = null,
     modifier: Modifier = Modifier,
 ) {
-    // 字体颜色诊断（EPUB CharColor / 段落 textColor / atom.colorArgb / col.colorArgb）
-    // —— 每 page 切换打 1 行 INFO，列前 3 行关键字段。便于对比 SCROLL vs page-level
-    // 横向模式渲染时颜色是否一致。开销可忽略：page 切换才 fire。
-    LaunchedEffect(page.chapterIndex, page.pageIndex, page.lines.size) {
-        if (page.lines.isEmpty()) return@LaunchedEffect
-        val sample = page.lines.take(3).mapIndexed { i, line ->
-            val paragraphColor = line.blockStyle.textColor?.let { "0x${it.toUInt().toString(16)}" } ?: "null"
-            val col0Color = line.columns.firstOrNull()?.colorArgb?.let { "0x${it.toUInt().toString(16)}" } ?: "null"
-            val atom0Color = (line.atoms?.firstOrNull() as? com.morealm.epub.render.TextRun)
-                ?.colorArgb?.let { "0x${it.toUInt().toString(16)}" } ?: "null"
-            val text15 = line.text.take(15).replace("\n", "\\n")
-            "  L$i: paraC=$paragraphColor atoms=${line.atoms != null} cells=${line.cells != null}" +
-                " col0C=$col0Color atom0C=$atom0Color text='$text15'"
-        }.joinToString("\n")
-        com.morealm.app.core.log.AppLog.info(
-            "PagePane/ColorDiag",
-            "ch=${page.chapterIndex} pg=${page.pageIndex} lines=${page.lines.size} paint.color=0x${contentPaint.color.toUInt().toString(16)}\n$sample",
-        )
-    }
-
     val drawPage: DrawScope.() -> Unit = {
         drawIntoCanvas { canvas ->
             drawScrollPageOnCanvas(
@@ -237,6 +218,85 @@ private fun BoxScope.PageInfoBars(spec: PageInfoBarSpec) {
 }
 
 /**
+ * 排版诊断去重集 —— 同一 page（同章同页同字号同色）只打一行，避免每帧刷屏。
+ * 保留最近 64 条即可覆盖 prev/cur/next/nextPlus 四窗轮转 + 前后翻若干页。
+ */
+private val pageDiagLoggedKeys = LinkedHashSet<String>()
+
+/**
+ * **排版诊断** —— 覆盖字色链、作者页面背景、行几何（标题间距 / 图片宽度基准 / 浮动环绕）、
+ * box 装饰（边框 / 背景图）。真机排查：`adb logcat | grep PagePane/Diag`。
+ *
+ * 挂在 [drawScrollPageOnCanvas] 而不是 [PagePaneCanvas] 上：仿真翻页走
+ * [com.morealm.app.ui.reader.page.ScrollPagePageBitmapProvider] 的离屏 Bitmap 路径，
+ * 根本不组合 PagePaneCanvas —— 诊断若挂在 Composable 里，那条路径一行都打不出来。
+ * 五种翻页模式共用本绘制函数，挂这里才是全覆盖的唯一位置。
+ */
+private fun logPageLayoutDiag(
+    page: ScrollPage,
+    chapterViewWidth: Int,
+    chapterPaddingLeft: Int,
+    viewHeightF: Float,
+    contentPaint: TextPaint,
+    readerBgArgb: Int,
+) {
+    if (page.lines.isEmpty()) return
+    val key = "${page.chapterIndex}/${page.pageIndex}/${page.lines.size}/" +
+        "${contentPaint.color}/${contentPaint.textSize}/$readerBgArgb"
+    synchronized(pageDiagLoggedKeys) {
+        if (!pageDiagLoggedKeys.add(key)) return
+        while (pageDiagLoggedKeys.size > 64) {
+            pageDiagLoggedKeys.remove(pageDiagLoggedKeys.first())
+        }
+    }
+    fun hex(v: Int?): String = v?.let { "0x${it.toUInt().toString(16)}" } ?: "null"
+    val bg = page.background
+    val bgDesc = "color=${hex(bg.colorArgb)} layers=${bg.layers.size}" +
+        bg.layers.firstOrNull()?.let { " L0=${it.image}" }.orEmpty()
+    var prevBottom: Float? = null
+    val sample = page.lines.take(14).mapIndexed { i, line ->
+        val s = line.blockStyle
+        val kind = when {
+            line.isImage -> "IMG"
+            line.cells != null -> "CELLS"
+            line.isHorizontalRule -> "HR"
+            line.isTitle || line.isChapterNum -> "TITLE"
+            else -> "TEXT"
+        }
+        // gap = 与上一行的垂直间隙。标题被 `<br/>` 拆开、或段间距失控时这里直接读得出来。
+        val gap = prevBottom?.let { "%.1f".format(line.lineTop - it) } ?: "-"
+        prevBottom = line.lineBottom
+        val geo = "top=%.1f bot=%.1f gap=%s".format(line.lineTop, line.lineBottom, gap)
+        val x = if (line.columns.isEmpty()) {
+            "img=[%.1f,%.1f]".format(line.imageLeftPx, line.imageRightPx)
+        } else {
+            "x=[%.1f,%.1f]".format(line.columns.first().start, line.columns.last().end)
+        }
+        // 排版意图字段：margin / 定宽 / 浮动 / 标题续行 / 边框 / 背景
+        val box = buildList {
+            if (s.marginTopPx != 0f) add("mt=${s.marginTopPx}")
+            if (s.marginBottomPx != 0f) add("mb=${s.marginBottomPx}")
+            s.widthPx?.let { add("w=$it${if (s.widthIsPercent) "%" else ""}") }
+            if (s.floatSide != BlockStyle.FloatSide.NONE) add("flt=${s.floatSide}")
+            if (s.joinsNextBlock) add("jn")
+            if (s.borderWidthPx != 0f) add("bw=${s.borderWidthPx}/${hex(s.borderColor)}")
+            s.backgroundImageSrc?.let { add("bgImg=${it.substringAfterLast('/')}") }
+            s.backgroundColor?.let { add("bg=${hex(it)}") }
+        }.joinToString(",").ifEmpty { "-" }
+        "  L$i $kind $geo $x fc=${hex(s.textColor)} " +
+            "col0=${hex(line.columns.firstOrNull()?.colorArgb)} [$box] " +
+            "'${line.text.take(12).replace("\n", "\\n")}'"
+    }.joinToString("\n")
+    com.morealm.app.core.log.AppLog.info(
+        "PagePane/Diag",
+        "ch=${page.chapterIndex} pg=${page.pageIndex} lines=${page.lines.size} " +
+            "view=${chapterViewWidth}x${viewHeightF.toInt()} padL=$chapterPaddingLeft " +
+            "readerBg=${hex(readerBgArgb)} paint=${hex(contentPaint.color)} " +
+            "textSize=${contentPaint.textSize}\n  pageBg: $bgDesc\n$sample",
+    )
+}
+
+/**
  * 纯函数版 page 绘制 —— 把 [PagePaneCanvas] 内 `drawIntoCanvas { ... }` 块抽出，方便
  * 离屏 [Bitmap] 渲染共用（仿真翻页 BitmapProvider 用这条路径生成位图）。
  *
@@ -268,9 +328,26 @@ internal fun drawScrollPageOnCanvas(
     bookmarkArgb: Int = 0xFFD32F2F.toInt(),
     readerBgArgb: Int = 0xFFFFFFFF.toInt(),
 ) {
+    logPageLayoutDiag(
+        page = page,
+        chapterViewWidth = chapterViewWidth,
+        chapterPaddingLeft = chapterPaddingLeft,
+        viewHeightF = viewHeightF,
+        contentPaint = contentPaint,
+        readerBgArgb = readerBgArgb,
+    )
     val contentAscent = -contentPaint.fontMetrics.ascent
     val titleAscent = -titlePaint.fontMetrics.ascent
     val chapterNumAscent = -chapterNumPaint.fontMetrics.ascent
+
+    // **落笔处的实际底色**。作者页面背景（`body { background: #fff url(...) }`）由
+    // drawEpubPageBackground 原样铺满整页 —— 铺完之后，字和框压在**作者的底色**上，
+    // 阅读器主题背景已经不在画面里了。夜间自适应若还拿主题背景当判据，就会在作者的
+    // 白纸上写浅灰白字（用户实测：内容介绍页整页字看不见）、把作者的边框也一并调亮。
+    //
+    // 只认不透明颜色层：半透明底会与主题背景混合、图层无法采样，判据都不成立。
+    val authoredPageSurfaceArgb = page.background.colorArgb?.takeIf { (it ushr 24) == 0xFF }
+    val decorBgArgb = authoredPageSurfaceArgb ?: readerBgArgb
 
     val bgSpecs = highlightSpecs.filter { it.kind == Highlight.KIND_BACKGROUND }
     val textColorSpecs = highlightSpecs.filter { it.kind == Highlight.KIND_TEXT_COLOR }
@@ -330,7 +407,7 @@ internal fun drawScrollPageOnCanvas(
         nc, page.lines, page.boxGroupStyles, pageTop = 0f,
         fallbackLeft = 0f, fallbackRight = visibleWidthF,
         fontSizeScale = bsScale,
-        readerBgArgb = readerBgArgb,
+        readerBgArgb = decorBgArgb,
     )
     drawScrollParagraphBlockStyles(
         canvas = nc,
@@ -339,7 +416,7 @@ internal fun drawScrollPageOnCanvas(
         fallbackLeft = 0f,
         fallbackRight = visibleWidthF,
         fontSizeScale = bsScale,
-        readerBgArgb = readerBgArgb,
+        readerBgArgb = decorBgArgb,
     )
 
     // ─── 层 1：背景高亮 rect ───
@@ -400,6 +477,18 @@ internal fun drawScrollPageOnCanvas(
     // baselineShift 抬高的上标，用 line.lineBottom 会把虚线留在正文基线上，看起来像
     // 飘到了下一行。table cell 分支早就按 atom 自身基线画（见层 3），普通行同理。
     val linkDashSegments = ArrayList<FloatArray>()
+    // 作者把整页涂成自己的底色之后，主题前景笔（夜间=浅灰白）会整段消失在白纸上。
+    // 三支笔一次性换成「在该底色上可读」的颜色，画完本页原样还回去 —— 它们是跨 page
+    // 复用的共享对象，绝不能留残留色。对比度够时 foregroundOnAuthoredSurface 原样返回，
+    // 无作者底色的页（绝大多数）走 null 分支，一个字节都不动。
+    val themePaintColors = authoredPageSurfaceArgb?.let { surface ->
+        val paints = listOf(contentPaint, titlePaint, chapterNumPaint)
+        // 先全部读出再统一写入：三支笔在某些配置下可能是同一个对象，边读边写会把
+        // 上一支已改过的颜色当成原色存下来，还原时静默写错。
+        val saved = paints.map { it.color }
+        paints.forEachIndexed { i, p -> p.color = foregroundOnAuthoredSurface(surface, saved[i]) }
+        saved
+    }
     for (line in page.lines) {
         if (line.isImage) {
             val src = line.imageSrc ?: continue
@@ -412,8 +501,17 @@ internal fun drawScrollPageOnCanvas(
                 baseX = -chapterPaddingLeft.toFloat()
                 cacheTargetW = chapterViewWidth.coerceAtLeast(1)
             } else {
-                slotW = visibleWidthF
-                baseX = 0f
+                // box 内的图按 box 内容区取 slot（定宽容器 `width:300px` 里的 `<img width="85%">`
+                // 该量容器的 85%，且容器不居中时图要跟着容器走）；引擎未给区间则退化为整屏。
+                val boxLeft = line.imageLeftPx
+                val boxRight = line.imageRightPx
+                if (boxRight > boxLeft) {
+                    slotW = boxRight - boxLeft
+                    baseX = boxLeft
+                } else {
+                    slotW = visibleWidthF
+                    baseX = 0f
+                }
                 cacheTargetW = slotW.toInt().coerceAtLeast(1)
             }
             // FULLSCREEN/FIT_WINDOW 图片属于独立页面展示语义，不应被标题段的 lineTop 或
@@ -497,7 +595,7 @@ internal fun drawScrollPageOnCanvas(
 
         val baselineY = line.lineTop + effectiveAscent
         val paragraphColor = line.blockStyle.textColor?.let {
-            adaptAuthoredForegroundForReaderBg(it, readerBgArgb, line.blockStyle.backgroundColor)
+            adaptAuthoredForegroundForReaderBg(it, decorBgArgb, line.blockStyle.backgroundColor)
         }
         if (paragraphColor != null) paint.color = paragraphColor
         val ts = line.blockStyle.textShadow
@@ -506,7 +604,7 @@ internal fun drawScrollPageOnCanvas(
                 ts.blurRadius,
                 ts.offsetX,
                 ts.offsetY,
-                adaptAuthoredForegroundForReaderBg(ts.color, readerBgArgb),
+                adaptAuthoredForegroundForReaderBg(ts.color, decorBgArgb),
             )
         }
         val shadowApplied = ts != null && ts.blurRadius >= 1f
@@ -515,7 +613,7 @@ internal fun drawScrollPageOnCanvas(
         val lineAtoms = line.atoms
         if (lineCells != null) {
             drawByCells(
-                nc, lineCells, line, paint, defaultColor, textColorByCp, readerBgArgb,
+                nc, lineCells, line, paint, defaultColor, textColorByCp, decorBgArgb,
                 ::cpIsResolvableLink,
             )
             if (blockRotationSave != null) nc.restoreToCount(blockRotationSave)
@@ -525,7 +623,7 @@ internal fun drawScrollPageOnCanvas(
             continue
         }
         if (lineAtoms != null) {
-            drawByAtoms(nc, lineAtoms, line, paint, baselineY, defaultColor, textColorByCp, readerBgArgb, ::cpIsResolvableLink)
+            drawByAtoms(nc, lineAtoms, line, paint, baselineY, defaultColor, textColorByCp, decorBgArgb, ::cpIsResolvableLink)
             if (blockRotationSave != null) nc.restoreToCount(blockRotationSave)
             if (paragraphColor != null) paint.color = defaultColor
             if (shadowApplied) paint.clearShadowLayer()
@@ -559,11 +657,11 @@ internal fun drawScrollPageOnCanvas(
             val overrideColor = textColorByCp[col.chapterPosition]
                 ?: when {
                     col.isLink && cpIsResolvableLink(col.chapterPosition) ->
-                        linkForegroundForReaderBg(readerBgArgb)
+                        linkForegroundForReaderBg(decorBgArgb)
                     // 死链按普通正文色画，不能让 EPUB authored `<a>` 蓝色泄漏成误导提示。
                     col.isLink -> defaultColor
                     else -> col.colorArgb?.let {
-                        adaptAuthoredForegroundForReaderBg(it, readerBgArgb, line.blockStyle.backgroundColor)
+                        adaptAuthoredForegroundForReaderBg(it, decorBgArgb, line.blockStyle.backgroundColor)
                     }
                 }
             // 上下标：sup 上移 0.35×字号 / sub 下移 0.15×字号（宽度缩放已在排版期完成）
@@ -601,7 +699,7 @@ internal fun drawScrollPageOnCanvas(
     // 注号图标（inline image link）不画 —— 虚线是文字链接的可点提示，图标本身已是提示。
     val linkRanges = resolvableLinkRanges
     if (linkRanges.isNotEmpty()) {
-        val linkArgb = (linkForegroundForReaderBg(readerBgArgb) and 0x00FFFFFF) or (0xB3 shl 24)
+        val linkArgb = (linkForegroundForReaderBg(decorBgArgb) and 0x00FFFFFF) or (0xB3 shl 24)
         val linkDashPaint = underlinePaintFor(linkArgb, Highlight.UNDERLINE_STYLE_DASHED, linkStroke)
         for (range in linkRanges) {
             for (line in page.lines) {
@@ -685,6 +783,11 @@ internal fun drawScrollPageOnCanvas(
         }
     }
 
+    themePaintColors?.let { saved ->
+        contentPaint.color = saved[0]
+        titlePaint.color = saved[1]
+        chapterNumPaint.color = saved[2]
+    }
     nc.restore()
 }
 

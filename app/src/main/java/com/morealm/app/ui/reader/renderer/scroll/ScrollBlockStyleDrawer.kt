@@ -275,7 +275,8 @@ private fun drawSingleContainerBox(
     val padBottom = style.paddingBottomPx * fontSizeScale
     // **2026-05-30 widthPx 定宽 box bg 矩形**（几何公式提取到 epub-layout [BoxGeometry]，与
     // ScrollLayoutEngine contentInset 共用同核心 → bg 框两边与文字内缩严格一致）。padding 已 ×
-    // fontSizeScale 传入。declWidthPx>0 在 fallback 区间居中窄框；否则满宽减 padding。
+    // fontSizeScale 传入。declWidthPx>0 在 fallback 区间按 align 摆放；否则满宽减 padding。
+    // align / isPercent 必须与排版层 BOX_START 传的一致，否则框和字会错位。
     val (authoredLeft, authoredRight) = BoxGeometry.bgRectX(
         declWidthPx = style.widthPx,
         fontScale = fontSizeScale,
@@ -284,6 +285,12 @@ private fun drawSingleContainerBox(
         fallbackLeft = fallbackLeft,
         fallbackRight = fallbackRight,
         halfBorder = halfBorder,
+        declWidthIsPercent = style.widthIsPercent,
+        align = when (style.floatSide) {
+            BlockStyle.FloatSide.LEFT -> BoxGeometry.BoxAlign.START
+            BlockStyle.FloatSide.RIGHT -> BoxGeometry.BoxAlign.END
+            BlockStyle.FloatSide.NONE -> BoxGeometry.BoxAlign.CENTER
+        },
     )
     val naturalTop = pageTop + firstLine.lineTop
     val naturalBottom = pageTop + lastLine.lineBottom

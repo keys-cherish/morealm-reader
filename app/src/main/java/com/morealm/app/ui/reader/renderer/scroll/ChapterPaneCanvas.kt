@@ -217,7 +217,14 @@ fun ChapterPaneCanvas(
                         // V2 image line：columns 空，imageSrc 非空，lineHeight = imgHeight
                         // 算法：等比缩放到 slot 内（slot = visibleWidth × imgHeight），居中。
                         val src = line.imageSrc ?: continue
-                        val slotW = (chapter.viewWidth - chapter.paddingLeft * 2).toFloat()
+                        // box 内的图按 box 内容区取 slot（同 PagePaneCanvas）；引擎未给区间
+                        // （box 外 / fullpage）退化为整个可见宽。
+                        val fullSlotW = (chapter.viewWidth - chapter.paddingLeft * 2).toFloat()
+                        val boxLeft = line.imageLeftPx
+                        val boxRight = line.imageRightPx
+                        val inBox = boxRight > boxLeft
+                        val slotW = if (inBox) boxRight - boxLeft else fullSlotW
+                        val baseX = if (inBox) boxLeft else 0f
                         val slotH = line.lineBottom - line.lineTop
                         val bitmap = com.morealm.app.domain.render.ImageCache.get(
                             src, slotW.toInt().coerceAtLeast(1),
@@ -227,7 +234,7 @@ fun ChapterPaneCanvas(
                         val scale = minOf(slotW / bmpW, slotH / bmpH)
                         val drawW = bmpW * scale
                         val drawH = bmpH * scale
-                        val offsetX = (slotW - drawW) / 2f
+                        val offsetX = baseX + (slotW - drawW) / 2f
                         val offsetY = pageTop + line.lineTop + (slotH - drawH) / 2f
                         nc.drawBitmap(
                             bitmap,
