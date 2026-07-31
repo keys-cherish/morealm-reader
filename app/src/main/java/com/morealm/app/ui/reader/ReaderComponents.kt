@@ -458,10 +458,17 @@ fun ReaderControlBar(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // 灰色在通用约定里表示「不可用」。此前两端无条件 alpha=0.45 且无条件可点，
+                    // 用户看到的是「两个禁用按钮却还能按」。改成按真实可用性着色：能翻则正常色，
+                    // 到头了才灰下去并停掉点击。
+                    val hasPrevChapter = currentChapter > 0
+                    val hasNextChapter = currentChapter < totalChapters - 1
                     Text("上一章",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-                        modifier = Modifier.clickable(onClick = onPrevChapter)
+                        color = MaterialTheme.colorScheme.onSurface
+                            .copy(alpha = if (hasPrevChapter) 0.85f else 0.38f),
+                        modifier = Modifier
+                            .clickable(enabled = hasPrevChapter, onClick = onPrevChapter)
                             .padding(vertical = 4.dp, horizontal = 2.dp),
                     )
                     val barColor = MaterialTheme.colorScheme.primary
@@ -536,8 +543,10 @@ fun ReaderControlBar(
                     )
                     Text("下一章",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-                        modifier = Modifier.clickable(onClick = onNextChapter)
+                        color = MaterialTheme.colorScheme.onSurface
+                            .copy(alpha = if (hasNextChapter) 0.85f else 0.38f),
+                        modifier = Modifier
+                            .clickable(enabled = hasNextChapter, onClick = onNextChapter)
                             .padding(vertical = 4.dp, horizontal = 2.dp),
                     )
                 }
