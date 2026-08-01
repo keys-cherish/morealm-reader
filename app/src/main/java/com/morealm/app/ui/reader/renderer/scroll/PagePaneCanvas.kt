@@ -398,7 +398,21 @@ internal fun drawScrollPageOnCanvas(
     // 字号 0.15（6~8px）落在右页边距留白内、不超屏；远小于残影所在的 x≈viewWidth 极端越界，
     // 故 COVER prev 左缘残影防护仍生效（prev 的该区仍在屏幕外）。
     val glyphOverhangPad = contentPaint.textSize * 0.15f
-    nc.clipRect(0f, 0f, visibleWidthF + glyphOverhangPad, viewHeightF)
+    // **出血图放宽到物理页边**：`duokan-bleed` 声明的章头图由排版层给出越过内容区的
+    // imageLeftPx/imageRightPx（负值 / 超过 visibleWidth）。内容区 clip 会把越界那部分裁掉，
+    // 图看起来仍缩在页边距内 —— 出血就白做了。含此类图的页把 clip 放宽到物理页边界：
+    // 上界仍是屏幕本身，COVER 翻页 prev 页 x≈viewWidth 的越界残影仍在界外，防护不失效。
+    val hasBleedingImage = page.lines.any {
+        it.isImage && !it.isFullPageImage && (it.imageLeftPx < 0f || it.imageRightPx > visibleWidthF)
+    }
+    if (hasBleedingImage) {
+        nc.clipRect(
+            -chapterPaddingLeft.toFloat(), 0f,
+            (chapterViewWidth - chapterPaddingLeft).toFloat(), viewHeightF,
+        )
+    } else {
+        nc.clipRect(0f, 0f, visibleWidthF + glyphOverhangPad, viewHeightF)
+    }
 
     // ─── 层 0：P3-5b Phase 3 块装饰（圆角背景 / 边框） ───
     val bsScale = contentPaint.textSize / 16f
