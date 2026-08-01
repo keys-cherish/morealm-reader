@@ -38,6 +38,8 @@ import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
+import com.morealm.app.domain.render.layout.pagedProgressToPageIndex
+import com.morealm.app.domain.render.layout.resolveRestoreTarget
 import com.morealm.app.domain.render.layout.visibleChapterPosition
 import com.morealm.epub.render.ScrollImageDimensionsResolver
 import com.morealm.epub.render.ScrollLayoutEngine
@@ -65,17 +67,13 @@ import com.morealm.app.ui.reader.renderer.scroll.headerHasContent
 import com.morealm.app.ui.reader.renderer.scroll.handleCancelSelection
 import com.morealm.app.ui.reader.renderer.scroll.handleLongPress
 import androidx.compose.ui.geometry.Offset
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.sample
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.snapshotFlow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.roundToInt
 
 /**
  * Transition 暴露给 Host 的「按当前动画 commit 翻页」句柄。
@@ -109,7 +107,6 @@ class PageTurnAnimController {
  * 选区 / TTS / InfoBar / 进度上报 / restoreToken JUMP P3 接入 ReaderScreen 时
  * 再依次补全（按"独立 Host 自管"原则）。
  */
-@OptIn(FlowPreview::class)
 @Composable
 fun PageLevelReaderHost(
     currentChapterIndex: Int,
@@ -161,10 +158,8 @@ fun PageLevelReaderHost(
     onProgressRestored: () -> Unit = {},
     /** InfoBar 顶/底状态栏配置；null = 不画状态栏（纯净内容模式）。 */
     infoBar: ScrollCanvasInfoBarConfig? = null,
-    /** 进度上报 live 回调（每章 0-100 整数）—— sample 150ms，UI 跟随用。 */
+    /** 进度上报回调（每章 0-100 整数）—— 与 cp 锚点同帧发出（详见锚点上报 flow 内注释）。 */
     onChapterProgressLive: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
-    /** 进度上报 persist 回调 —— debounce 800ms，停止翻页后才上报；caller 在此写 DB。 */
-    onChapterProgressPersist: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
     /** 当前页字符锚点变化；用于持久化与排版无关的精确续读位置。 */
     onVisibleChapterPositionChanged: (chapterIndex: Int, chapterPosition: Int) -> Unit = { _, _ -> },
     // ── 选区 / 长按 / 高亮（P4.4 接入）──
@@ -419,31 +414,27 @@ fun PageLevelReaderHost(
         }
 
         val total = layout.pages.size.coerceAtLeast(1)
-        var jumpTrace = ""
-        val targetPageIdx: Int = if (initialChapterPosition > 0) {
-            val hit = layout.findColumnAt(initialChapterPosition)
-            val resolved = hit?.page?.pageIndex?.coerceIn(0, total - 1) ?: 0
-            // 诊断：把落点前后两页各自的锚点 cp 一并打出。存下的 cp 若恰好等于 resolved+1 页的
-            // 锚点，说明保存端存早了一页；若它落在 resolved 页自己的锚点区间内，说明存的就是这
-            // 一页、偏差在别处。这两种成因只能靠这行区分 —— 光看落点页号是分不开的。
-            jumpTrace = " branch=cp hit=${if (hit == null) "MISS(→0)" else "page=$resolved"}" +
-                " 邻页锚点=[" +
-                (resolved - 1..resolved + 1).filter { it in 0 until total }
-                    .joinToString(", ") { "p$it=${visibleChapterPosition(layout, it, 0f)}" } +
-                "]"
-            resolved
-        } else {
-            jumpTrace = " branch=prog"
-            // 本路径的 progress 由 (pageIdx + 1) / total 得出（见本文件 progress 上报），
-            // 逆运算必须减 1 —— 直接 p/100*total 等于 pageIdx + 1，恒偏后一页。
-            //
-            // 平时看不出来是因为有文字的页 cp > 0，走上面的 cp 分支绕开了这里。
-            // 但 2026-08-01 实测日志（三次冷启动，cp=11/36/4）显示恢复**全部**走的是 cp
-            // 分支，所以这条修正尚未被任何真机现象验证过 —— 它只是让逆运算与上报公式配对，
-            // 不是「续读回到上一页」的成因。别把它当已验证的结论引用。
-            (((initialProgress.toFloat() / 100f) * total).roundToInt() - 1)
-                .coerceIn(0, total - 1)
-        }
+        // 分级降级恢复（RestoreTargetResolver）：L1 cp 锚点 → L2 progress 兜底 → L3 章首。
+        // 此前 cp 未命中直接 `?: 0` 回章首，存着的 progress 从没被用过；cp==0（整页插图
+        // 章首的合法值）被当「没存过」。降级链两个都治。
+        val resolved = resolveRestoreTarget(
+            chapterPosition = initialChapterPosition,
+            progressPercent = initialProgress,
+            resolveByAnchor = { cp ->
+                layout.findColumnAt(cp)?.page?.pageIndex?.coerceIn(0, total - 1)
+            },
+            resolveByProgress = { p -> pagedProgressToPageIndex(p, total) },
+            chapterStart = { 0 },
+        )
+        val targetPageIdx = resolved.target
+        // 诊断：把落点前后两页各自的锚点 cp 一并打出。存下的 cp 若恰好等于落点+1 页的
+        // 锚点，说明保存端存早了一页；若它落在落点页自己的锚点区间内，说明存的就是这
+        // 一页、偏差在别处。这两种成因只能靠这行区分 —— 光看落点页号是分不开的。
+        val jumpTrace = " source=${resolved.source}" +
+            " 邻页锚点=[" +
+            (targetPageIdx - 1..targetPageIdx + 1).filter { it in 0 until total }
+                .joinToString(", ") { "p$it=${visibleChapterPosition(layout, it, 0f)}" } +
+            "]"
         core.pageFactory.moveToPage(targetPageIdx)
         lastConsumedRestoreToken = restoreToken
         com.morealm.app.core.log.AppLog.info(
@@ -503,43 +494,28 @@ fun PageLevelReaderHost(
                     )
                     return@collect
                 }
+                // ── progress 与 cp 帧同源 ──
+                // page-level 横向语义：progress = (pageIdx + 1) / pageCount * 100。
+                // 此前 progress 走两个独立 effect（sample150 live + debounce800 persist），
+                // 与 cp 链取的不是同一帧：ON_PAUSE 保存时 _visiblePage(cp) 是即时值而
+                // _scrollProgress 还差着 debounce，同一条 DB 记录里两个坐标可以相差一页。
+                // 且那两个 effect 仍是「layout 由 effect 启动时捕获」的旧写法 —— 换章窗口
+                // 会拿新章页号配旧章 layout（cp 链修过的同一处缺陷）。并进本 flow 后三个值
+                // 同帧读出，天然一致；live/persist 两个回调在上层本就接同一个
+                // updateScrollProgress，写库频控由 ReaderProgressController debounce(300)
+                // 统一负责，host 不再自设节流。
+                val progress = ((frame.pageIndex + 1).toFloat() / frame.pageCount.coerceAtLeast(1) * 100f)
+                    .toInt().coerceIn(0, 100)
+                onChapterProgressLive(frame.layoutChapter, progress)
                 val cp = frame.chapterPosition ?: return@collect
                 // 诊断：整条链路唯一缺的一环 —— 存下的 cp 究竟采自第几页。
                 // 与恢复端 JUMP-DONE 的落点直接对照，即可判定偏差发生在保存端还是恢复端。
                 AppLog.debug(
                     "ReadAnchor",
-                    "存锚点 ch=${frame.layoutChapter} page=${frame.pageIndex}/${frame.pageCount} cp=$cp",
+                    "存锚点 ch=${frame.layoutChapter} page=${frame.pageIndex}/${frame.pageCount} cp=$cp prog=$progress",
                 )
                 onVisibleChapterPositionChanged(frame.layoutChapter, cp)
             }
-    }
-
-    // ── 进度上报 live (sample 150ms) + persist (debounce 800ms) ──
-    // page-level 横向语义：progress = (curPage idx + 1) / pageCount * 100。
-    // 与 SCROLL 的 chapter-Y / scrollableRange 算法不同（横向无连续滚动概念）。
-    LaunchedEffect(core.state.currentChapter) {
-        val layout = core.state.currentChapter ?: return@LaunchedEffect
-        snapshotFlow { core.pageFactory.pageIndex }
-            .sample(150L)
-            .map { pageIdx ->
-                val total = layout.pages.size.coerceAtLeast(1)
-                val progress = ((pageIdx + 1).toFloat() / total * 100f).toInt().coerceIn(0, 100)
-                layout.chapterIndex to progress
-            }
-            .distinctUntilChanged()
-            .collect { (chIdx, prog) -> onChapterProgressLive(chIdx, prog) }
-    }
-    LaunchedEffect(core.state.currentChapter) {
-        val layout = core.state.currentChapter ?: return@LaunchedEffect
-        snapshotFlow { core.pageFactory.pageIndex }
-            .debounce(800L)
-            .map { pageIdx ->
-                val total = layout.pages.size.coerceAtLeast(1)
-                val progress = ((pageIdx + 1).toFloat() / total * 100f).toInt().coerceIn(0, 100)
-                layout.chapterIndex to progress
-            }
-            .distinctUntilChanged()
-            .collect { (chIdx, prog) -> onChapterProgressPersist(chIdx, prog) }
     }
 
     // ── TTS 段自动跟随（P4.5）——找到目标段所在 page → moveToPage（横向 page-level

@@ -983,8 +983,9 @@ fun ReaderScreen(
                 initialChapterPosition = renderedChapter.initialChapterPosition,
                 initialProgress = renderedChapter.initialProgress,
                 onProgressRestored = { viewModel.clearNavigateDirection() },
+                // progress 与 cp 锚点在 Host 内同帧发出（详 PageLevelReaderHost 锚点 flow 注释）；
+                // 持久化频控由 ReaderProgressController 的 snapshot debounce 统一负责。
                 onChapterProgressLive = { _, prog -> viewModel.updateScrollProgress(prog) },
-                onChapterProgressPersist = { _, prog -> viewModel.updateScrollProgress(prog) },
                 onVisibleChapterPositionChanged = viewModel::onVisibleChapterPositionChanged,
                 // P4.4 选区 / 高亮 / 长按（与 V2 SCROLL Host 同款 callback 配置）
                 chapterHighlightsRaw = viewModel.highlights.collectAsStateWithLifecycle().value,

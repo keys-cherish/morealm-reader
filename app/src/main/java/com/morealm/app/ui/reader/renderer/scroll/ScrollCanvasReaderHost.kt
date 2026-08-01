@@ -39,6 +39,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.ImageCache
+import com.morealm.app.domain.render.layout.resolveRestoreTarget
 import com.morealm.app.domain.render.layout.visibleChapterPosition
 import com.morealm.epub.render.ScrollImageDimensionsResolver
 import com.morealm.epub.render.ScrollLayoutEngine
@@ -422,19 +423,30 @@ fun ScrollCanvasReaderHost(
         val viewportH = viewHeight.coerceAtLeast(1)
         // Phase 6 page-level：定位到 (targetPageIdx, pageOffsetInPage)，调 factory.moveToPage
         // + 设 state.pageOffset。两种分支共用相同的"算出目标 chapter-relative Y → 反算 page 索引"算法。
-        val targetChapterY: Float = if (initialChapterPosition > 0) {
-            // 分支 1：cp 字符级 —— 找 cp 所在 page + 行；视口上 1/3 显示
-            val hit = layout.findColumnAt(initialChapterPosition) ?: return@LaunchedEffect
-            var y = 0f
-            for (i in 0 until hit.page.pageIndex) y += layout.pages[i].height
-            y += hit.line.lineTop
-            (y - viewportH / 3f).coerceAtLeast(0f)
-        } else {
-            // 分支 2：章内 progress 百分比 —— 按 totalHeight 反算到 chapter-relative Y
-            // 与 page-level 进度上报算法对偶
-            val scrollableRange = (layout.totalHeight - viewportH).coerceAtLeast(1f)
-            (scrollableRange * initialProgress / 100f).coerceIn(0f, scrollableRange)
-        }
+        //
+        // 分级降级（RestoreTargetResolver）：此前 cp 未命中 findColumnAt 直接
+        // return —— 连 restoreToken 都不消费，progress 兜底永远落不到，effect 还会
+        // 随 layout 变化反复重试同一个注定失配的 cp。现在 L1 失配落 L2 百分比。
+        val scrollableRange = (layout.totalHeight - viewportH).coerceAtLeast(1f)
+        val resolvedRestore = resolveRestoreTarget(
+            chapterPosition = initialChapterPosition,
+            progressPercent = initialProgress,
+            resolveByAnchor = { cp ->
+                layout.findColumnAt(cp)?.let { hit ->
+                    // cp 字符级 —— 找 cp 所在 page + 行；视口上 1/3 显示
+                    var y = 0f
+                    for (i in 0 until hit.page.pageIndex) y += layout.pages[i].height
+                    y += hit.line.lineTop
+                    (y - viewportH / 3f).coerceAtLeast(0f)
+                }
+            },
+            // 章内 progress 百分比 —— 按 totalHeight 反算 chapter-relative Y，
+            // 与滚动模式的进度上报算法对偶
+            resolveByProgress = { p -> (scrollableRange * p / 100f).coerceIn(0f, scrollableRange) },
+            // 上方守门保证 cp/prog 至少一个 > 0，L3 实际不可达；给 0f 保持完备
+            chapterStart = { 0f },
+        )
+        val targetChapterY: Float = resolvedRestore.target
         // 把 chapter-relative Y 反算成 (targetPageIdx, pageOffsetInPage)
         var accY = 0f
         var targetPageIdx = 0
@@ -458,6 +470,7 @@ fun ScrollCanvasReaderHost(
         AppLog.info(
             "ScrollCanvasV2",
             "JUMP restoreToken=$restoreToken cp=$initialChapterPosition prog=$initialProgress" +
+                " source=${resolvedRestore.source}" +
                 " → page=$targetPageIdx pageOffset=$pageOffsetInPage (chapterY=$targetChapterY viewportH=$viewportH)" +
                 " [consumed, won't re-trigger]",
         )
