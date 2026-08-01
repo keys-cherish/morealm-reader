@@ -340,6 +340,45 @@ fun AppLogScreen(onBack: () -> Unit) {
                 )
             }
 
+            // 「详细日志写入文件」开关：仅在「运行日志」tab 显示。
+            //
+            // 文件 sink 默认 minLevel = WARN（见 AppLog.init），DEBUG/INFO 只进内存
+            // ring buffer。内存日志随进程消亡，所以「杀掉 app 后重开才复现」这类问题
+            // 追不到——重进后能看到的只有恢复侧日志，看不到上次退出前写了什么。
+            // 打开后 fileSink 降到 DEBUG 并持久化（AppLog 自带 SharedPreferences），
+            // 重启仍生效。
+            //
+            // 注：AppPreferences.RECORD_LOG 是另一套 DataStore key，当前无人消费，
+            // 不要把这个开关接到那边去——AppLog.init 读的是它自己那份 prefs。
+            if (selectedTab == 0) {
+                var recordLog by remember { mutableStateOf(AppLog.isRecordLogEnabled()) }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        .padding(start = 12.dp, end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "详细日志写入文件",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (recordLog) "DEBUG" else "仅 WARN 以上",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Switch(
+                        checked = recordLog,
+                        onCheckedChange = {
+                            recordLog = it
+                            AppLog.setRecordLog(it)
+                        },
+                    )
+                }
+            }
+
             // Tag 过滤 chip 行：仅在「运行日志」tab 显示。空列表时整行隐藏。
             // FilterChip + LazyRow 横向滚动；选中的 chip 会再调一次 onClick
             // 取消选中（toggle 语义），便于一键回到「全部」。
