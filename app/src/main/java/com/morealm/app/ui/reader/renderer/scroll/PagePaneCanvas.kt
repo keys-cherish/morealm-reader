@@ -135,6 +135,51 @@ fun PagePaneCanvas(
 internal const val PAGED_INFO_BAR_LINE_DP = 20
 
 /**
+ * 画 `<hr/>` 分隔线，消费 hr 段声明的线色 / 线型 / 线宽。
+ *
+ * `hr.line { border-style: dotted; border-color: #CCC; border-top: 0.5px }` 这类
+ * 分隔线声明此前整个被丢（builder 恒发 EMPTY 样式），只能画默认半透明实线 —— 参照
+ * 显示的是细密灰点线。现在 builder 带上了 hr 自己的 blockStyle：
+ *  - 线色：声明色直用（灰系日夜均可读，同参照），无声明退回正文色降 alpha
+ *  - 线宽：声明的 border-top 宽 × 字号倍率，下限 1.5px；无声明按字号缩放
+ *  - 线型：DOTTED / DASHED 按段绘制，SOLID / DOUBLE 整条（DOUBLE 双线交给
+ *    后续需要的书再做，先不为不存在的样书加复杂度）
+ */
+internal fun drawHorizontalRuleLine(
+    nc: android.graphics.Canvas,
+    line: com.morealm.epub.render.ScrollLine,
+    cy: Float,
+    contentPaint: TextPaint,
+    bgFillPaint: android.graphics.Paint,
+) {
+    val bs = line.blockStyle
+    val fontScale = contentPaint.textSize / 16f
+    val declaredW = bs.effectiveBorderTopPx
+    val th = (if (declaredW > 0f) declaredW * fontScale else contentPaint.textSize / 16f)
+        .coerceAtLeast(1.5f)
+    bgFillPaint.color = bs.borderColor
+        ?: ((contentPaint.color and 0x00FFFFFF) or (0x66 shl 24))
+    val top = cy - th / 2f
+    val bottom = cy + th / 2f
+    when (bs.borderStyle) {
+        com.morealm.epub.compat.BlockStyle.BorderStyle.DOTTED,
+        com.morealm.epub.compat.BlockStyle.BorderStyle.DASHED,
+        -> {
+            val dotted = bs.borderStyle == com.morealm.epub.compat.BlockStyle.BorderStyle.DOTTED
+            // dotted 近似方点、dashed 长段；间距给足让「点」在细线宽下也可辨
+            val seg = if (dotted) th * 1.6f else th * 5f
+            val gap = if (dotted) th * 2.2f else th * 2.6f
+            var x = line.hrLeftPx
+            while (x < line.hrRightPx) {
+                nc.drawRect(x, top, minOf(x + seg, line.hrRightPx), bottom, bgFillPaint)
+                x += seg + gap
+            }
+        }
+        else -> nc.drawRect(line.hrLeftPx, top, line.hrRightPx, bottom, bgFillPaint)
+    }
+}
+
+/**
  * 水平翻页时画进**每页**的页眉页脚数据（per-page）。由 PageLevelReaderHost 为每个可见 page
  * （prev/cur/next/nextPlus）按其所属章 layout 现算 [chapterTitle] / [scrollPercent]，配合全局
  * [batteryLevel] / [currentTime] 组装。垂直滚动模式不用（传 null，PagePaneCanvas 走裸 Canvas）。
@@ -580,9 +625,7 @@ internal fun drawScrollPageOnCanvas(
             // ── <hr/> 横线 ── 同 ChapterPaneCanvas：line 垂直中线画贴 box 内容宽的水平线。
             // canvas 已 translate paddingLeft，hrLeftPx/hrRightPx 直接用；复用 bgFillPaint（FILL）。
             val cy = line.lineTop + (line.lineBottom - line.lineTop) / 2f
-            val th = (contentPaint.textSize / 16f).coerceAtLeast(1.5f)
-            bgFillPaint.color = (contentPaint.color and 0x00FFFFFF) or (0x66 shl 24)
-            nc.drawRect(line.hrLeftPx, cy - th / 2f, line.hrRightPx, cy + th / 2f, bgFillPaint)
+            drawHorizontalRuleLine(nc, line, cy, contentPaint, bgFillPaint)
             continue
         }
         val paint: TextPaint
