@@ -121,9 +121,12 @@ fun PagePaneCanvas(
         Canvas(modifier, onDraw = drawPage)
     } else {
         // 水平翻页：正文 + 页眉页脚同在一个页容器内 → 随页 placeRelative 一起翻动；无渐变羽化
+        // 整屏封面页不画页眉页脚：封面按 cover 铺满物理页，页眉页脚叠上去既遮画面
+        // 也没有信息量（章名=「封面」、进度=1 页章的 100%），对齐成熟阅读器的纯封面页。
+        val isCoverPage = page.lines.any { it.isFullPageImage }
         Box(modifier) {
             Canvas(Modifier.fillMaxSize(), onDraw = drawPage)
-            PageInfoBars(pageInfoBar)
+            if (!isCoverPage) PageInfoBars(pageInfoBar)
         }
     }
 }
@@ -402,8 +405,12 @@ internal fun drawScrollPageOnCanvas(
     // imageLeftPx/imageRightPx（负值 / 超过 visibleWidth）。内容区 clip 会把越界那部分裁掉，
     // 图看起来仍缩在页边距内 —— 出血就白做了。含此类图的页把 clip 放宽到物理页边界：
     // 上界仍是屏幕本身，COVER 翻页 prev 页 x≈viewWidth 的越界残影仍在界外，防护不失效。
+    //
+    // 整屏封面页（isFullPageImage）同样放宽：它的绘制区就是整个物理页
+    // （baseX=-paddingLeft，cover 裁切超出部分正靠这个 clip 完成）；此前被排除在放宽外，
+    // 内容区 clip 把封面左右各裁掉一条 padding 宽。
     val hasBleedingImage = page.lines.any {
-        it.isImage && !it.isFullPageImage && (it.imageLeftPx < 0f || it.imageRightPx > visibleWidthF)
+        it.isImage && (it.isFullPageImage || it.imageLeftPx < 0f || it.imageRightPx > visibleWidthF)
     }
     if (hasBleedingImage) {
         nc.clipRect(
@@ -513,7 +520,19 @@ internal fun drawScrollPageOnCanvas(
             if (isFullPage) {
                 slotW = chapterViewWidth.toFloat()
                 baseX = -chapterPaddingLeft.toFloat()
-                cacheTargetW = chapterViewWidth.coerceAtLeast(1)
+                // cover 铺满整屏时以短边为准放大，需要的位图宽可能超过屏宽
+                // （竖屏放 3:4 封面：宽 = viewHeight × 原图宽高比）。按原图 dims 预算，
+                // 拿不到 dims 退回屏宽（等价旧行为，只是 cover 放大后略糊）。
+                cacheTargetW = com.morealm.app.domain.render.ImageCache.getBounds(src)
+                    ?.let { (w, h) ->
+                        if (w > 0 && h > 0) {
+                            maxOf(
+                                chapterViewWidth,
+                                (viewHeightF * w / h).toInt() + 1,
+                            )
+                        } else null
+                    }
+                    ?.coerceAtLeast(1) ?: chapterViewWidth.coerceAtLeast(1)
             } else {
                 // box 内的图按 box 内容区取 slot（定宽容器 `width:300px` 里的 `<img width="85%">`
                 // 该量容器的 85%，且容器不居中时图要跟着容器走）；引擎未给区间则退化为整屏。
@@ -529,7 +548,10 @@ internal fun drawScrollPageOnCanvas(
                 cacheTargetW = slotW.toInt().coerceAtLeast(1)
             }
             // FULLSCREEN/FIT_WINDOW 图片属于独立页面展示语义，不应被标题段的 lineTop 或
-            // content 行高挤到页面中间；在整页 viewport 内按 preserve-aspect-ratio 居中。
+            // content 行高挤到页面中间。整屏封面按**cover**铺满物理页（对齐成熟阅读器的
+            // 全覆盖封面）：短边贴满、长边居中裁切 —— svg 封面（1000x1333）在 9:16 屏上
+            // 若按 fit 只能铺满宽度，上下各留一条黑边，观感是"半屏图"而不是封面页。
+            // 超出部分由上方放宽到物理页边的 clip 裁掉。普通插图行保持 fit（不裁内容）。
             val slotTop = if (isFullPage) 0f else line.lineTop
             val slotH = if (isFullPage) viewHeightF else line.lineBottom - line.lineTop
             val bitmap = com.morealm.app.domain.render.ImageCache.get(
@@ -537,7 +559,11 @@ internal fun drawScrollPageOnCanvas(
             ) ?: continue
             val bmpW = bitmap.width.toFloat()
             val bmpH = bitmap.height.toFloat()
-            val scale = minOf(slotW / bmpW, slotH / bmpH)
+            val scale = if (isFullPage) {
+                maxOf(slotW / bmpW, slotH / bmpH)
+            } else {
+                minOf(slotW / bmpW, slotH / bmpH)
+            }
             val drawW = bmpW * scale
             val drawH = bmpH * scale
             val offsetX = baseX + (slotW - drawW) / 2f
