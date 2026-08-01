@@ -472,21 +472,48 @@ fun ScrollCanvasReaderHost(
 
     // 滚动恢复会把目标字符放在视口上方 1/3；保存时也取同一视觉锚点，二者互为逆运算。
     // 若只保存页首再按 1/3 恢复，每次重开都会稳定地向前漂几行。
-    LaunchedEffect(state.currentChapter, viewHeight) {
-        val layout = state.currentChapter ?: return@LaunchedEffect
-        snapshotFlow { pageFactory.pageIndex to state.pageOffset }
-            .map { (pageIndex, pageOffset) ->
-                visibleChapterPosition(
-                    layout = layout,
-                    pageIndex = pageIndex,
-                    pageOffset = pageOffset,
-                    viewportAnchorY = viewHeight.coerceAtLeast(0) / 3f,
-                )?.let { layout.chapterIndex to it }
+    //
+    // layout 与 pageIndex/pageOffset 必须同一快照读全 —— 与 PageLevelReaderHost 同一处
+    // 缺陷：换章时 pageFactory 先切到新章坐标，effect 却要等 currentChapter 变化才重启，
+    // 中间几帧拿新章坐标去旧章 layout 查行，cp 张冠李戴地存进 DB。
+    // viewHeight 是普通参数不是 State，snapshotFlow 订阅不到，仍留作 effect key；
+    // state/pageFactory 一并入 key，理由同 PageLevelReaderHost（不把「实例终身稳定」
+    // 藏成隐式假设）。
+    LaunchedEffect(state, pageFactory, viewHeight) {
+        snapshotFlow {
+            val layout = state.currentChapter
+            val pageIndex = pageFactory.pageIndex
+            val pageOffset = state.pageOffset
+            val liveChapterIndex = state.currentChapterIndex
+            if (layout == null) {
+                null
+            } else {
+                // (layout 归属章, 当前真值章, 视觉锚点处的 cp)
+                Triple(
+                    layout.chapterIndex,
+                    liveChapterIndex,
+                    visibleChapterPosition(
+                        layout = layout,
+                        pageIndex = pageIndex,
+                        pageOffset = pageOffset,
+                        viewportAnchorY = viewHeight.coerceAtLeast(0) / 3f,
+                    ),
+                )
             }
+        }
             .distinctUntilChanged()
-            .collect { anchor ->
-                anchor?.let { (chapterIndex, chapterPosition) ->
-                    onVisibleChapterPositionChanged(chapterIndex, chapterPosition)
+            .collect { frame ->
+                if (frame == null) return@collect
+                val (layoutChapter, liveChapter, chapterPosition) = frame
+                if (layoutChapter != liveChapter) {
+                    AppLog.debug(
+                        "ReadAnchor",
+                        "丢弃换章过渡帧 layoutCh=$layoutChapter liveCh=$liveChapter cp=$chapterPosition",
+                    )
+                    return@collect
+                }
+                if (chapterPosition != null) {
+                    onVisibleChapterPositionChanged(layoutChapter, chapterPosition)
                 }
             }
     }

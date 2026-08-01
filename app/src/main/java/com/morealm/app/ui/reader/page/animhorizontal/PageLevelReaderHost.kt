@@ -34,6 +34,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
@@ -74,6 +75,7 @@ import androidx.compose.runtime.snapshotFlow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Transition 暴露给 Host 的「按当前动画 commit 翻页」句柄。
@@ -417,17 +419,36 @@ fun PageLevelReaderHost(
         }
 
         val total = layout.pages.size.coerceAtLeast(1)
+        var jumpTrace = ""
         val targetPageIdx: Int = if (initialChapterPosition > 0) {
             val hit = layout.findColumnAt(initialChapterPosition)
-            hit?.page?.pageIndex?.coerceIn(0, total - 1) ?: 0
+            val resolved = hit?.page?.pageIndex?.coerceIn(0, total - 1) ?: 0
+            // 诊断：把落点前后两页各自的锚点 cp 一并打出。存下的 cp 若恰好等于 resolved+1 页的
+            // 锚点，说明保存端存早了一页；若它落在 resolved 页自己的锚点区间内，说明存的就是这
+            // 一页、偏差在别处。这两种成因只能靠这行区分 —— 光看落点页号是分不开的。
+            jumpTrace = " branch=cp hit=${if (hit == null) "MISS(→0)" else "page=$resolved"}" +
+                " 邻页锚点=[" +
+                (resolved - 1..resolved + 1).filter { it in 0 until total }
+                    .joinToString(", ") { "p$it=${visibleChapterPosition(layout, it, 0f)}" } +
+                "]"
+            resolved
         } else {
-            ((initialProgress.toFloat() / 100f) * total).toInt().coerceIn(0, total - 1)
+            jumpTrace = " branch=prog"
+            // 本路径的 progress 由 (pageIdx + 1) / total 得出（见本文件 progress 上报），
+            // 逆运算必须减 1 —— 直接 p/100*total 等于 pageIdx + 1，恒偏后一页。
+            //
+            // 平时看不出来是因为有文字的页 cp > 0，走上面的 cp 分支绕开了这里。
+            // 但 2026-08-01 实测日志（三次冷启动，cp=11/36/4）显示恢复**全部**走的是 cp
+            // 分支，所以这条修正尚未被任何真机现象验证过 —— 它只是让逆运算与上报公式配对，
+            // 不是「续读回到上一页」的成因。别把它当已验证的结论引用。
+            (((initialProgress.toFloat() / 100f) * total).roundToInt() - 1)
+                .coerceIn(0, total - 1)
         }
         core.pageFactory.moveToPage(targetPageIdx)
         lastConsumedRestoreToken = restoreToken
         com.morealm.app.core.log.AppLog.info(
             "PageLevelReaderHost",
-            "JUMP-DONE token=$restoreToken cp=$initialChapterPosition prog=$initialProgress → page=$targetPageIdx (total=$total) [moveToPage curPgIdx ${curPgIdx} → ${core.pageFactory.pageIndex}]",
+            "JUMP-DONE token=$restoreToken cp=$initialChapterPosition prog=$initialProgress → page=$targetPageIdx (total=$total) [moveToPage curPgIdx ${curPgIdx} → ${core.pageFactory.pageIndex}]$jumpTrace",
         )
         onProgressRestored()
     }
@@ -441,21 +462,55 @@ fun PageLevelReaderHost(
     // 百分比只能在当前排版参数下近似定位；续读的稳定真值必须是当前页首字符 cp。
     // 此 effect 声明在恢复 effect 之后，layout 就绪时会先完成 JUMP，再上报目标页锚点，
     // 避免首帧 page=0 把刚读出的持久化位置反向覆盖。
-    LaunchedEffect(core.state.currentChapter) {
-        val layout = core.state.currentChapter ?: return@LaunchedEffect
-        snapshotFlow { core.pageFactory.pageIndex }
-            .map { pageIndex ->
-                visibleChapterPosition(
-                    layout = layout,
+    //
+    // layout 与 pageIndex 必须在同一个快照里读全。此前 layout 由 effect 启动时捕获、
+    // pageIndex 走独立 snapshotFlow：换章时 pageFactory 先切到新章的页号，而 effect 要等
+    // currentChapter 变化才重启，中间那几帧会拿新章页号去旧章 layout 查行 —— 算出的 cp
+    // 属于旧章，却被当作新章的位置写进 DB。实测 3 页的章停在末页，存下的 cp 指向第 2 页，
+    // 重开就回不到原处。窗口开不开得成取决于协程取消与 pageIndex 更新的先后，所以表现
+    // 为「时好时坏」。
+    //
+    // snapshotFlow 的返回值不放 layout：它按 equals 去重，而 ScrollChapterLayout 带着
+    // 整章 pages，比较代价高。只带出三个 Int 即可。
+    // key 用 core 而非 Unit：core 目前由无 key 的 remember 支撑、终身稳定，写 Unit 也能跑，
+    // 但那把「它稳定」藏成了隐式假设 —— 将来 core 的 remember 加了 key，effect 会静默地
+    // 继续读旧实例。绑到实例上，稳定时行为不变，不稳定时自动跟上。
+    LaunchedEffect(core) {
+        snapshotFlow {
+            val layout = core.state.currentChapter
+            val pageIndex = core.pageFactory.pageIndex
+            val liveChapterIndex = core.state.currentChapterIndex
+            if (layout == null) {
+                null
+            } else {
+                AnchorFrame(
+                    layoutChapter = layout.chapterIndex,
+                    liveChapter = liveChapterIndex,
                     pageIndex = pageIndex,
-                    pageOffset = 0f,
-                )?.let { layout.chapterIndex to it }
+                    pageCount = layout.pages.size,
+                    chapterPosition = visibleChapterPosition(layout = layout, pageIndex = pageIndex, pageOffset = 0f),
+                )
             }
+        }
             .distinctUntilChanged()
-            .collect { anchor ->
-                anchor?.let { (chapterIndex, chapterPosition) ->
-                    onVisibleChapterPositionChanged(chapterIndex, chapterPosition)
+            .collect { frame ->
+                if (frame == null) return@collect
+                if (frame.layoutChapter != frame.liveChapter) {
+                    // 换章过渡帧。cp 一并打出来便于核对它确实属于旧章。
+                    AppLog.debug(
+                        "ReadAnchor",
+                        "丢弃换章过渡帧 layoutCh=${frame.layoutChapter} liveCh=${frame.liveChapter} cp=${frame.chapterPosition}",
+                    )
+                    return@collect
                 }
+                val cp = frame.chapterPosition ?: return@collect
+                // 诊断：整条链路唯一缺的一环 —— 存下的 cp 究竟采自第几页。
+                // 与恢复端 JUMP-DONE 的落点直接对照，即可判定偏差发生在保存端还是恢复端。
+                AppLog.debug(
+                    "ReadAnchor",
+                    "存锚点 ch=${frame.layoutChapter} page=${frame.pageIndex}/${frame.pageCount} cp=$cp",
+                )
+                onVisibleChapterPositionChanged(frame.layoutChapter, cp)
             }
     }
 
@@ -1173,3 +1228,17 @@ fun PageLevelReaderHost(
         }
     }
 }
+
+/**
+ * 锚点上报的一帧快照。
+ *
+ * 只装 Int：snapshotFlow 靠 equals 去重，而 ScrollChapterLayout 挂着整章 pages，
+ * 放进去每帧都要深比一次。[chapterPosition] 为 null 表示该页取不到可定位文本。
+ */
+private data class AnchorFrame(
+    val layoutChapter: Int,
+    val liveChapter: Int,
+    val pageIndex: Int,
+    val pageCount: Int,
+    val chapterPosition: Int?,
+)
