@@ -18,7 +18,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -64,6 +70,12 @@ class ImportEngine @Inject constructor(
 
     companion object {
         private const val TAG = "ImportEngine"
+
+        /** extras JSON key：Phase 2 补修已成功跑完过一轮（值 = 时间戳 ms）。语义见 [repairMissingEnrichment]。 */
+        private const val EXTRAS_ENRICH_REPAIRED = "enrichRepairedAt"
+
+        /** 补修一个进程只跑一轮（@Singleton 下实例字段也可，companion 更直白）。 */
+        private val repairRanThisProcess = AtomicBoolean(false)
 
         /** Phase 1 chunk 大小。与 [BookRepository.bulkInsert] 默认 batchSize 一致。 */
         private const val PHASE1_CHUNK_SIZE = 50
@@ -360,6 +372,88 @@ class ImportEngine @Inject constructor(
             else -> null
         }
     }
+
+    // ── Phase 2 自愈修复 ──
+
+    /**
+     * 补跑从未落地的 Phase 2 enrichment（封面/简介/分类）。
+     *
+     * Phase 2 跑在调用方 scope（单本导入 = viewModelScope）里且无重试：大部头 EPUB 的
+     * enrichment 要数秒，期间进程死亡 / scope 取消，书就永远停在 placeholder 状态 ——
+     * 文件名标题 + 无封面。此函数在启动时补一轮，把导入流程从"一次性"变成最终一致。
+     *
+     * 候选（两类，处理策略不同）：
+     * 1. `coverUrl == null` 且 extras 无 [EXTRAS_ENRICH_REPAIRED] 标记 —— enrichment 从未
+     *    成功跑完过。补跑一轮后**无论有没有提出封面都写标记**：本身无封面的书没有标记会
+     *    每次启动被重新解析一遍（大 EPUB 数秒），标记就是防这个的。
+     * 2. `coverUrl` 指向本地文件但文件已不存在 —— 封面写在 cacheDir/epub_covers，系统清
+     *    缓存即失。重提取会写回同一路径，自然自愈，无需标记。
+     *
+     * 只回填展示性空缺（封面 / 空简介 / 空分类），**不碰 title/author/isComic**：导入至今
+     * 用户可能已手动改名，enrichment 的元数据覆盖语义在事后补跑时会变成静默覆盖用户编辑。
+     *
+     * 提取抛异常（文件被移走、SAF 授权失效等）不写标记 —— 文件回来后下次启动还能修。
+     */
+    suspend fun repairMissingEnrichment(): Int {
+        if (!repairRanThisProcess.compareAndSet(false, true)) return 0
+        val enrichable = setOf(BookFormat.EPUB, BookFormat.PDF, BookFormat.MOBI, BookFormat.AZW3)
+        val candidates = bookRepo.getAllBooksSync().filter { book ->
+            val path = book.localPath
+            book.format in enrichable && !path.isNullOrBlank() && (
+                (book.coverUrl == null && !extrasHasKey(book.extras, EXTRAS_ENRICH_REPAIRED)) ||
+                    (book.coverUrl?.startsWith("/") == true && !File(book.coverUrl).exists())
+                )
+        }
+        if (candidates.isEmpty()) return 0
+        AppLog.info(TAG, "enrich repair: ${candidates.size} 本待补 → ${candidates.joinToString { it.title.take(12) }}")
+        var repaired = 0
+        for (book in candidates) {
+            val uri = Uri.parse(book.localPath)
+            val cover: String?
+            var description = book.description
+            var kind = book.kind
+            try {
+                when (book.format) {
+                    BookFormat.EPUB -> {
+                        val bundle = EpubParser.extractAllForImport(context, uri)
+                        cover = bundle.coverPath
+                        description = description.ifBlankThen(bundle.metadata.description)
+                        kind = kind.ifBlankThen(bundle.metadata.subject)
+                    }
+                    BookFormat.PDF -> cover = PdfParser.extractCover(context, uri)
+                    else -> cover = MobiParser.extractCover(context, uri)
+                }
+            } catch (e: Exception) {
+                AppLog.warn(TAG, "enrich repair failed（不写标记，下次再试）: ${book.title.take(20)}: ${e.message}")
+                continue
+            }
+            val updated = book.copy(
+                coverUrl = cover ?: book.coverUrl,
+                description = description,
+                kind = kind,
+                extras = extrasWithKey(book.extras, EXTRAS_ENRICH_REPAIRED, System.currentTimeMillis()),
+            )
+            bookRepo.update(updated)
+            repaired++
+            AppLog.info(TAG, "enrich repair ok: ${book.title.take(20)} cover=${cover != null}")
+        }
+        return repaired
+    }
+
+    private fun String?.ifBlankThen(fallback: String): String? =
+        if (isNullOrBlank() && fallback.isNotBlank()) fallback else this
+
+    private fun extrasHasKey(extras: String, key: String): Boolean =
+        parseExtras(extras)?.containsKey(key) == true
+
+    private fun extrasWithKey(extras: String, key: String, value: Long): String {
+        val base = parseExtras(extras) ?: JsonObject(emptyMap())
+        return JsonObject(base + (key to JsonPrimitive(value))).toString()
+    }
+
+    /** extras 损坏（手工改库等）按 null 处理，写回时重建为合法 JSON。 */
+    private fun parseExtras(extras: String): JsonObject? =
+        runCatching { Json.parseToJsonElement(extras).jsonObject }.getOrNull()
 
     /** chunk 内本次成功 save+pending 的 book 元组。Phase 2 enrich 用。 */
     private data class PendingBook(

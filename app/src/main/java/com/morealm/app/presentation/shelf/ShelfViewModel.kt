@@ -62,6 +62,7 @@ class ShelfViewModel @Inject constructor(
     private val sourceRepo: SourceRepository,
     private val coverStorage: com.morealm.app.domain.cover.CoverStorage,
     private val readStatsRepo: com.morealm.app.domain.repository.ReadStatsRepository,
+    private val importEngine: com.morealm.app.domain.sync.ImportEngine,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
@@ -108,6 +109,18 @@ class ShelfViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             try { databaseSeeder.seedIfNeeded() } catch (e: Exception) {
                 AppLog.warn("Shelf", "Tag seeder failed: ${e.message}")
+            }
+        }
+        // ── Phase 2 enrichment 自愈补跑 ──
+        //
+        // 大部头 EPUB 导入时的封面/元数据补全跑在导入方 scope 里且无重试，进程死亡 /
+        // scope 取消会让书永远停在「文件名标题 + 无封面」。启动后补一轮把它修回来。
+        // 延迟几秒：候选存在时每本要完整开一次 EPUB（数秒），别跟书架首帧抢 IO；
+        // 进程级 once 门在 repairMissingEnrichment 内部，VM 重建不会重复跑。
+        viewModelScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(3_000)
+            try { importEngine.repairMissingEnrichment() } catch (e: Exception) {
+                AppLog.warn("Shelf", "Enrich repair failed: ${e.message}")
             }
         }
         // ── ImportStateBus → FolderImportState 单向回填 ──
