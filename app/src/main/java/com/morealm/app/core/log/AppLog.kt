@@ -1083,6 +1083,10 @@ object AppLog {
             val p = context.packageManager.getPackageInfo(context.packageName, 0)
             appendLine("App: ${p.versionName} (${p.longVersionCode})")
             appendLine("Package: ${context.packageName}")
+            // debug 包 versionName 全相同，日志无法自证「跑的是哪次构建」——曾致连续两轮
+            // 拿旧包验新修复。装机时间是包身份的唯一免费锚点。
+            val instFmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+            appendLine("Installed: ${instFmt.format(java.util.Date(p.lastUpdateTime))}")
         } catch (_: Exception) {}
         appendLine("Heap: ${Runtime.getRuntime().maxMemory() / 1024 / 1024}MB")
         appendLine("Cores: ${Runtime.getRuntime().availableProcessors()}")
