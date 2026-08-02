@@ -166,12 +166,16 @@ internal fun drawHorizontalRuleLine(
         com.morealm.epub.compat.BlockStyle.BorderStyle.DASHED,
         -> {
             val dotted = bs.borderStyle == com.morealm.epub.compat.BlockStyle.BorderStyle.DOTTED
-            // dotted 近似方点、dashed 长段；间距给足让「点」在细线宽下也可辨
-            val seg = if (dotted) th * 1.6f else th * 5f
-            val gap = if (dotted) th * 2.2f else th * 2.6f
+            // 段/点尺寸设最小可视下限：`border-top: 0.5px` 这类细线声明算出的段宽只有
+            // ~2px，亚像素矩形落在像素栅格上被抗锯齿融合成忽实忽虚的 moiré（实测
+            // 「实线和虚线夹杂」）。点径 ≥3px、间距 ≥4px 后点点清晰可辨（对齐参照观感）。
+            // dotted 画近方点（高=点径），dashed 保持线高。
+            val seg = if (dotted) maxOf(th * 1.6f, 3f) else maxOf(th * 5f, 9f)
+            val gap = if (dotted) maxOf(th * 2.2f, 4f) else maxOf(th * 2.6f, 5f)
+            val half = if (dotted) seg / 2f else th / 2f
             var x = line.hrLeftPx
             while (x < line.hrRightPx) {
-                nc.drawRect(x, top, minOf(x + seg, line.hrRightPx), bottom, bgFillPaint)
+                nc.drawRect(x, cy - half, minOf(x + seg, line.hrRightPx), cy + half, bgFillPaint)
                 x += seg + gap
             }
         }
