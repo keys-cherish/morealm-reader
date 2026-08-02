@@ -269,8 +269,8 @@ private fun drawScrollBlockStyleRun(
     }
     val hasContentBounds = minContentLeft != Float.MAX_VALUE
     val ibCell = if (widthScaled != null) firstLine.cells?.firstOrNull() else null
-    val rectLeft: Float
-    val rectRight: Float
+    var rectLeft: Float
+    var rectRight: Float
     when {
         ibCell != null && widthScaled != null -> {
             rectLeft = ibCell.contentLeft - padLeft - halfBorder
@@ -286,6 +286,14 @@ private fun drawScrollBlockStyleRun(
             rectLeft = fallbackLeft - halfBorder
             rectRight = fallbackRight + halfBorder
         }
+    }
+    // 声明宽按用户字号放大后会超出包含块：章头黑框 `width:20em` → 20 × 16 × 3.375 = 1080，
+    // 而内容区只有 984。CSS 允许盒溢出包含块，但装饰框溢出的是**画布** —— 右竖线连同两个
+    // 右圆角被整个裁掉，只剩上下两条横线穿到屏幕边缘，观感就是「右边没有收口」。收到内容区
+    // 右界让收口重新画出来。只对声明了 width 的装饰盒生效，auto width 段（上面的 else
+    // 分支本来就按 fallback 取值）行为不变。
+    if (widthScaled != null && rectRight > fallbackRight && fallbackRight > rectLeft) {
+        rectRight = fallbackRight
     }
 
     val naturalTop = pageTop + firstLine.lineTop
@@ -308,6 +316,22 @@ private fun drawScrollBlockStyleRun(
         rectBottom = effectiveBottom + padBottom + halfBorder
     }
     if (rectLeft >= rectRight || rectTop >= rectBottom) return
+    // [DIAGNOSTIC] 装饰段绘制实参：wire 明确带着 w=/br=/四边 border，但章头黑框实测只画出
+    // 上下两条横线（无竖线无圆角），几何只能由 widthPx==null 的 fallback 分支产生。
+    // 判据就是这一行：widthPx / 四边 / radius 到底传到绘制端没有。仅装饰段 fire。
+    if (style.widthPx != null || style.borderWidthPx > 0f || style.borderTopWidthPx > 0f) {
+        com.morealm.app.core.log.AppLog.info(
+            "BoxDraw",
+            "run w=${style.widthPx} h=${style.heightPx} scale=$fontSizeScale " +
+                "rect=($rectLeft,$rectTop)-($rectRight,$rectBottom) " +
+                "bw=${style.borderWidthPx} br=${style.borderRadiusPx} bc=${style.borderColor} " +
+                "T=${style.borderTopWidthPx}/${style.borderTopColor} " +
+                "R=${style.borderRightWidthPx}/${style.borderRightColor} " +
+                "B=${style.borderBottomWidthPx}/${style.borderBottomColor} " +
+                "L=${style.borderLeftWidthPx}/${style.borderLeftColor} " +
+                "fbL=$fallbackLeft fbR=$fallbackRight",
+        )
+    }
     drawBoxDecorations(
         canvas = canvas,
         style = style,
