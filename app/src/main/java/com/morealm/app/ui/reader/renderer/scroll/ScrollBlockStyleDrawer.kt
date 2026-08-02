@@ -206,6 +206,12 @@ internal fun drawScrollParagraphBlockStyles(
         if (endExclusive <= runStart) return
         val style = lines[runStart].blockStyle
         if (style === BlockStyle.EMPTY) return
+        // 段落在 box 内时，装饰 fallback 用**所在盒的内容区**而不是整个 visibleWidth：
+        // 无 width 声明的 bg 段（如金色标题条）的 authored 宽由 fallback 决定，全宽
+        // fallback 会让块级背景条恒画满屏 —— CSS 语义是「填满包含块内容区」。排版期
+        // 把盒内容区挂在 line 上（ScrollLine.boxContentLeftPx KDoc），right ≤ left = 无 box。
+        val anchor = lines[runStart]
+        val inBox = anchor.boxContentRightPx > anchor.boxContentLeftPx
         drawScrollBlockStyleRun(
             canvas = canvas,
             lines = lines,
@@ -213,8 +219,8 @@ internal fun drawScrollParagraphBlockStyles(
             toIdxInclusive = endExclusive - 1,
             style = style,
             pageTop = pageTop,
-            fallbackLeft = fallbackLeft,
-            fallbackRight = fallbackRight,
+            fallbackLeft = if (inBox) anchor.boxContentLeftPx else fallbackLeft,
+            fallbackRight = if (inBox) anchor.boxContentRightPx else fallbackRight,
             fontSizeScale = fontSizeScale,
             readerBgArgb = readerBgArgb,
         )
