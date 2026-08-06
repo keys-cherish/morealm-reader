@@ -70,7 +70,13 @@ class ReaderSession(
     fun commit(transactionId: Long): Boolean {
         if (transactionId != latestTransactionId) return false
         val target = pendingTarget ?: return false
-        val committed = windowStore.commitAdjacent(target.unitId)
+        val committed = if (target.unitId == window.current) {
+            true
+        } else if (target.unitId == window.previous || target.unitId == window.next) {
+            windowStore.commitAdjacent(target.unitId)
+        } else {
+            false
+        }
         if (committed) pendingTarget = null
         return committed
     }
