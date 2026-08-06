@@ -32,6 +32,20 @@ class ReaderWindowStore(
         entries[currentId] = entry
     }
 
+    fun replaceCurrent(unitId: ReadingUnitId, entry: WindowEntry.Ready) {
+        require(entry.artifact.key.unitId == unitId) {
+            "Current artifact does not match replacement unit"
+        }
+        currentId = unitId
+        currentEntry = entry
+        entries[unitId] = entry
+        previousId = null
+        previousEntry = WindowEntry.Empty
+        nextId = null
+        nextEntry = WindowEntry.Empty
+        retainWindowEntries()
+    }
+
     fun setNeighbors(previous: ReadingUnitId?, next: ReadingUnitId?) {
         previousId = previous
         nextId = next

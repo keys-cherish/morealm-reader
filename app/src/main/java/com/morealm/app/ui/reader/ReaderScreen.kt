@@ -941,6 +941,7 @@ fun ReaderScreen(
                 requestedAnimType
             }
             com.morealm.app.ui.reader.page.animhorizontal.PageLevelReaderHost(
+                bookId = bookId,
                 currentChapterIndex = currentIndex,
                 chapterCount = chapters.size,
                 contentVersion = renderedChapter.contentVersion,

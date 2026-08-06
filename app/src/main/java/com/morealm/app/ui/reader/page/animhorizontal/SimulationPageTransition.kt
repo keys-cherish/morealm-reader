@@ -4,13 +4,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.viewinterop.AndroidView
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.render.layout.ScrollPageFactory
+import com.morealm.app.domain.reader.runtime.NavigationSource
 import com.morealm.app.ui.reader.page.ScrollPagePageBitmapProvider
 import com.morealm.app.ui.reader.renderer.SimulationReadView
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
@@ -68,27 +71,30 @@ fun SimulationPageTransition(
     isSelectionActive: () -> Boolean = { false },
     onDismissPopup: (() -> Unit)? = null,
     turnCtrl: PageTurnAnimController? = null,
-    commitPageTurn: (isNext: Boolean) -> Boolean,
+    commitPageTurn: (isNext: Boolean, source: NavigationSource) -> Boolean,
     simulationViewRef: MutableState<SimulationReadView?>? = null,
     modifier: Modifier = Modifier,
 ) {
     @Suppress("UNUSED_VARIABLE")
     val _state = state // 当前未直接读，预留：未来如需 chapter-level info bar / TTS hint 接入
     val viewHolder = remember { mutableStateOf<SimulationReadView?>(null) }
+    var pendingNavigationSource by remember { mutableStateOf(NavigationSource.GESTURE) }
 
     // turnCtrl 注册：Host zone tap + pageTurnCommand 桥（音量键 / TTS / 顶栏按钮）共用
     // 一个 turnCtrl 路径；SIMULATION 这里把 animateToPrev/Next 接到 view.keyTurnPage。
     // view.keyTurnPage 内部走 Scroller + invalidate，无阻塞，suspend lambda 即返。
     DisposableEffect(turnCtrl) {
         if (turnCtrl != null) {
-            turnCtrl.animateToNext = {
+            turnCtrl.animateToNext = { source ->
                 viewHolder.value?.let { v ->
+                    pendingNavigationSource = source
                     AppLog.debug("SimPageTransition", "animateToNext -> view.keyTurnPage(true)")
                     v.keyTurnPage(isNext = true)
                 }
             }
-            turnCtrl.animateToPrev = {
+            turnCtrl.animateToPrev = { source ->
                 viewHolder.value?.let { v ->
+                    pendingNavigationSource = source
                     AppLog.debug("SimPageTransition", "animateToPrev -> view.keyTurnPage(false)")
                     v.keyTurnPage(isNext = false)
                 }
@@ -154,7 +160,8 @@ fun SimulationPageTransition(
                     "onPageTurnCompleted isNext=$isNext curPgIdx=${pageFactory.pageIndex} " +
                         "hasNext=${pageFactory.hasNext()} hasPrev=${pageFactory.hasPrev()}",
                 )
-                commitPageTurn(isNext)
+                commitPageTurn(isNext, pendingNavigationSource)
+                pendingNavigationSource = NavigationSource.GESTURE
             }
 
             // ── Host 共享交互透传 ──

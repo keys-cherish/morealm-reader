@@ -36,6 +36,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
+import com.morealm.app.domain.reader.runtime.NavigationDirection
+import com.morealm.app.domain.reader.runtime.NavigationPreparation
+import com.morealm.app.domain.reader.runtime.NavigationSource
+import com.morealm.app.domain.reader.runtime.ReaderIntent
+import com.morealm.app.domain.reader.runtime.ReaderRuntimeAdapter
+import com.morealm.app.domain.reader.runtime.ReaderRuntimeWindowSync
+import com.morealm.app.domain.reader.runtime.ReaderSession
+import com.morealm.app.domain.reader.runtime.ReaderWindowStore
+import com.morealm.app.domain.reader.runtime.WindowEntry
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
 import com.morealm.app.domain.render.layout.pagedProgressToPageIndex
@@ -86,8 +95,8 @@ import java.util.Locale
  * NONE Transition 不注册 controller，Host 自动 fallback 到 moveToPrev/Next 瞬切（NONE 语义本身就无动画）。
  */
 class PageTurnAnimController {
-    var animateToNext: (suspend () -> Unit)? = null
-    var animateToPrev: (suspend () -> Unit)? = null
+    var animateToNext: (suspend (NavigationSource) -> Unit)? = null
+    var animateToPrev: (suspend (NavigationSource) -> Unit)? = null
 }
 
 /**
@@ -109,6 +118,7 @@ class PageTurnAnimController {
  */
 @Composable
 fun PageLevelReaderHost(
+    bookId: String,
     currentChapterIndex: Int,
     chapterCount: Int,
     /** 正文发布版本；变化时同章旧分页必须失效，不能只消费 restoreToken 做位置跳转。 */
@@ -374,6 +384,47 @@ fun PageLevelReaderHost(
         horizontalPaged = true, // 横向翻页：reflow 恢复整页对齐（pageOffset=0），不卡半页
     )
 
+    val runtimeStore = remember(bookId) {
+        ReaderWindowStore(ReaderRuntimeAdapter.unitIdForChapter(currentChapterIndex))
+    }
+    val runtimeWindowSync = remember(bookId, contentVersion, runtimeStore) {
+        ReaderRuntimeWindowSync(bookId, contentVersion, runtimeStore)
+    }
+    val runtimeSession = remember(runtimeStore) {
+        ReaderSession(
+            windowStore = runtimeStore,
+            firstAnchorFor = { unitId ->
+                com.morealm.app.domain.reader.runtime.ContentAnchor(unitId, 0)
+            },
+            lastAnchorFor = { unitId ->
+                val entry = runtimeStore.snapshot.let { window ->
+                    when (unitId) {
+                        window.previous -> window.previousEntry
+                        window.current -> window.currentEntry
+                        window.next -> window.nextEntry
+                        else -> WindowEntry.Empty
+                    }
+                }
+                val lastOffset = (entry as? WindowEntry.Ready)
+                    ?.artifact?.anchorIndex?.characterOffsets?.lastOrNull() ?: 0
+                com.morealm.app.domain.reader.runtime.ContentAnchor(unitId, lastOffset)
+            },
+        )
+    }
+    LaunchedEffect(
+        runtimeWindowSync,
+        core.state.currentChapter,
+        core.state.prevChapter,
+        core.state.nextChapter,
+    ) {
+        val current = core.state.currentChapter ?: return@LaunchedEffect
+        runtimeWindowSync.publish(
+            current = current,
+            previous = core.state.prevChapter,
+            next = core.state.nextChapter,
+        )
+    }
+
     // ── 跳书签 / 续读 / 搜索定位 / Slider 拖动 in-place seek ──
     // 两阶段契约：caller 保证 restoreToken != 0L 时 currentChapter 已是目标章。
     // 横向 page-level JUMP 算法（与 SCROLL chapter-Y 算法不同）：
@@ -628,8 +679,29 @@ fun PageLevelReaderHost(
     // commit 翻页（pageFactory.moveToNext + reset offset），再 launch 新动画。视觉等价 Legado
     // abortAnim()+fillPage：连点 N 次翻 N 页不丢。
     val turnCtrl = remember { PageTurnAnimController() }
-    val commitPageTurn: (Boolean) -> Boolean = { isNext ->
-        if (isNext) core.pageFactory.moveToNext() else core.pageFactory.moveToPrev()
+    val commitPageTurn: (Boolean, NavigationSource) -> Boolean = { isNext, source ->
+        val current = core.state.currentChapter
+        val crossesChapter = current != null && if (isNext) {
+            core.pageFactory.pageIndex >= current.pages.lastIndex
+        } else {
+            core.pageFactory.pageIndex == 0
+        }
+        if (!crossesChapter) {
+            if (isNext) core.pageFactory.moveToNext() else core.pageFactory.moveToPrev()
+        } else {
+            val preparation = runtimeSession.prepare(
+                ReaderIntent.Move(
+                    source = source,
+                    direction = if (isNext) NavigationDirection.NEXT else NavigationDirection.PREVIOUS,
+                )
+            )
+            if (preparation is NavigationPreparation.Ready) {
+                val moved = if (isNext) core.pageFactory.moveToNext() else core.pageFactory.moveToPrev()
+                moved && runtimeSession.commit(preparation.plan.transaction.id)
+            } else {
+                false
+            }
+        }
     }
     val tapScope = rememberCoroutineScope()
     var currentAnimJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -663,11 +735,11 @@ fun PageLevelReaderHost(
             val prev = currentAnimJob
             currentAnimJob = tapScope.launch {
                 prev?.cancelAndJoin()
-                animate()
+                animate(NavigationSource.BUTTON)
             }
         } else {
             // NONE 模式 turnCtrl 未注入 → 瞬切 (与 zone tap fallback 同款)
-            if (isNext) core.pageFactory.moveToNext() else core.pageFactory.moveToPrev()
+            commitPageTurn(isNext, NavigationSource.BUTTON)
         }
     }
 
@@ -859,9 +931,9 @@ fun PageLevelReaderHost(
                                     val prev = currentAnimJob
                                     currentAnimJob = tapScope.launch {
                                         prev?.cancelAndJoin()
-                                        animate()
+                                        animate(NavigationSource.GESTURE)
                                     }
-                                } else core.pageFactory.moveToPrev()
+                                } else commitPageTurn(false, NavigationSource.GESTURE)
                             }
                             "next" -> {
                                 if (!core.pageFactory.hasNext()) {
@@ -876,9 +948,9 @@ fun PageLevelReaderHost(
                                     val prev = currentAnimJob
                                     currentAnimJob = tapScope.launch {
                                         prev?.cancelAndJoin()
-                                        animate()
+                                        animate(NavigationSource.GESTURE)
                                     }
-                                } else core.pageFactory.moveToNext()
+                                } else commitPageTurn(true, NavigationSource.GESTURE)
                             }
                             // "menu" 及无对应入口的动作（tts/bookmark/none —— 本 Host 没有这些
                             // callback）一律退化为呼出/隐藏菜单，避免点击无反馈。

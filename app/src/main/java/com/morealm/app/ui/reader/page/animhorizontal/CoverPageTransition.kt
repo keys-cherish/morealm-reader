@@ -25,6 +25,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
 import com.morealm.app.domain.render.layout.ScrollHighlightDrawSpec
 import com.morealm.app.domain.render.layout.ScrollPageFactory
+import com.morealm.app.domain.reader.runtime.NavigationSource
 import com.morealm.app.ui.reader.renderer.scroll.PageInfoBarSpec
 import com.morealm.app.ui.reader.renderer.scroll.PagePaneCanvas
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
@@ -73,7 +74,7 @@ fun CoverPageTransition(
     prevPageBookmarkCps: List<Int> = emptyList(),
     /** Host 注入：zone tap → 走本 Renderer 的 animateAndCommit 覆盖动画；null = Host fallback 瞬切 */
     turnCtrl: PageTurnAnimController? = null,
-    commitPageTurn: (isNext: Boolean) -> Boolean,
+    commitPageTurn: (isNext: Boolean, source: NavigationSource) -> Boolean,
     /** Host 注入：按 page 现算页内页眉页脚（随页翻）；默认 { null } = 不画。 */
     pageInfoBarProvider: (ScrollPage) -> PageInfoBarSpec? = { null },
     modifier: Modifier = Modifier,
@@ -83,7 +84,7 @@ fun CoverPageTransition(
     var flingJob by remember { mutableStateOf<Job?>(null) }
     var viewportWidthPx by remember { mutableIntStateOf(0) }
 
-    suspend fun animateAndCommit(targetEdge: Float, viewportW: Float) {
+    suspend fun animateAndCommit(targetEdge: Float, viewportW: Float, source: NavigationSource) {
         if (viewportW <= 0f) return
         val startOffset = state.pageOffset
         if (startOffset == targetEdge) return
@@ -101,10 +102,10 @@ fun CoverPageTransition(
             // finally 内只有 sync 操作（state 写 + moveToNext sync 调用），不需 NonCancellable。
             state.pageOffset = targetEdge
             when {
-                targetEdge > 0 && commitPageTurn(true) -> {
+                targetEdge > 0 && commitPageTurn(true, source) -> {
                     state.pageOffset = 0f
                 }
-                targetEdge < 0 && commitPageTurn(false) -> {
+                targetEdge < 0 && commitPageTurn(false, source) -> {
                     state.pageOffset = 0f
                 }
                 else -> state.pageOffset = 0f
@@ -114,19 +115,19 @@ fun CoverPageTransition(
 
     // Host zone tap 注入：走本 Transition 的 animateAndCommit 让 zone tap 也有覆盖动画。
     DisposableEffect(turnCtrl) {
-        turnCtrl?.animateToNext = {
+        turnCtrl?.animateToNext = { source ->
             // 守门补在 animate 执行点（cancelAndJoin 之后）：快速连续双击时 zone tap 拦截读的是旧
             // pageIndex（章内放行），cancelAndJoin 让前一次 commit 后 pageIndex 已到章末、nextChapter
             // 可能尚未预加载完（=null）→ 不补守门就 animate 滑入 EMPTY_PAGE（深背景）黑色一闪。
             if (pageFactory.hasNext()) {
                 val viewportW = viewportWidthPx.toFloat()
-                if (viewportW > 0f) animateAndCommit(viewportW, viewportW)
+                if (viewportW > 0f) animateAndCommit(viewportW, viewportW, source)
             }
         }
-        turnCtrl?.animateToPrev = {
+        turnCtrl?.animateToPrev = { source ->
             if (pageFactory.hasPrev()) {
                 val viewportW = viewportWidthPx.toFloat()
-                if (viewportW > 0f) animateAndCommit(-viewportW, viewportW)
+                if (viewportW > 0f) animateAndCommit(-viewportW, viewportW, source)
             }
         }
         onDispose {
@@ -189,7 +190,7 @@ fun CoverPageTransition(
                                     }
                                     else -> 0f
                                 }
-                                animateAndCommit(targetOffset, viewportW)
+                                animateAndCommit(targetOffset, viewportW, NavigationSource.GESTURE)
                             } catch (_: CancellationException) {
                                 // animate 被新 drag 打断
                             }
