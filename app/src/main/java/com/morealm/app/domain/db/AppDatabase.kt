@@ -104,6 +104,8 @@ import com.morealm.app.domain.entity.*
         // v37→v38: 加表 shelf_groups + shelf_group_books（书架 tab 自定义分组，
         // 多对多成员制）。纯新增表，Room 自动 CREATE TABLE。
         AutoMigration(from = 37, to = 38),
+        // v38->v39: replace_rules adds nullable chapterIndex for chapter-scoped replacements.
+        AutoMigration(from = 38, to = 39),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -136,6 +138,6 @@ abstract class AppDatabase : RoomDatabase() {
          * 注解直接引用，外部模块（[com.morealm.app.di.APP_DB_SCHEMA_VERSION]）也
          * 通过 const val 编译期同步。
          */
-        const val SCHEMA_VERSION = 38
+        const val SCHEMA_VERSION = 39
     }
 }

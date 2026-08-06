@@ -28,6 +28,8 @@ data class ReplaceRule(
      * 在 [ReplaceRuleScreen] 里加 OutlinedTextField 即可。
      */
     val excludeScope: String? = null,
+    /** Optional chapter scope; null keeps the rule global within its existing scope. */
+    val chapterIndex: Int? = null,
     val enabled: Boolean = true,
     val sortOrder: Int = 0,
     val timeoutMs: Int = 3000,    // regex timeout in ms
