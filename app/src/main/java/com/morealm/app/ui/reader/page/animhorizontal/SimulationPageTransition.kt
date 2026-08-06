@@ -68,6 +68,7 @@ fun SimulationPageTransition(
     isSelectionActive: () -> Boolean = { false },
     onDismissPopup: (() -> Unit)? = null,
     turnCtrl: PageTurnAnimController? = null,
+    commitPageTurn: (isNext: Boolean) -> Boolean,
     simulationViewRef: MutableState<SimulationReadView?>? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -153,7 +154,7 @@ fun SimulationPageTransition(
                     "onPageTurnCompleted isNext=$isNext curPgIdx=${pageFactory.pageIndex} " +
                         "hasNext=${pageFactory.hasNext()} hasPrev=${pageFactory.hasPrev()}",
                 )
-                if (isNext) pageFactory.moveToNext() else pageFactory.moveToPrev()
+                commitPageTurn(isNext)
             }
 
             // ── Host 共享交互透传 ──

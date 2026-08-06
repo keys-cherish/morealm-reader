@@ -12,7 +12,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -74,15 +73,14 @@ fun CoverPageTransition(
     prevPageBookmarkCps: List<Int> = emptyList(),
     /** Host 注入：zone tap → 走本 Renderer 的 animateAndCommit 覆盖动画；null = Host fallback 瞬切 */
     turnCtrl: PageTurnAnimController? = null,
+    commitPageTurn: (isNext: Boolean) -> Boolean,
     /** Host 注入：按 page 现算页内页眉页脚（随页翻）；默认 { null } = 不画。 */
     pageInfoBarProvider: (ScrollPage) -> PageInfoBarSpec? = { null },
     modifier: Modifier = Modifier,
-    onChapterShift: (delta: Int) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val velocityTracker = remember { VelocityTracker() }
     var flingJob by remember { mutableStateOf<Job?>(null) }
-    val onChapterShiftUpdated by rememberUpdatedState(onChapterShift)
     var viewportWidthPx by remember { mutableIntStateOf(0) }
 
     suspend fun animateAndCommit(targetEdge: Float, viewportW: Float) {
@@ -102,19 +100,12 @@ fun CoverPageTransition(
             // 并 commit 翻页。等价 Legado abortAnim()+fillPage：前一次 tap 的翻页不丢失。
             // finally 内只有 sync 操作（state 写 + moveToNext sync 调用），不需 NonCancellable。
             state.pageOffset = targetEdge
-            val beforeChIdx = state.currentChapterIndex
             when {
-                targetEdge > 0 && pageFactory.moveToNext() -> {
+                targetEdge > 0 && commitPageTurn(true) -> {
                     state.pageOffset = 0f
-                    if (state.currentChapterIndex != beforeChIdx) {
-                        onChapterShiftUpdated(state.currentChapterIndex - beforeChIdx)
-                    }
                 }
-                targetEdge < 0 && pageFactory.moveToPrev() -> {
+                targetEdge < 0 && commitPageTurn(false) -> {
                     state.pageOffset = 0f
-                    if (state.currentChapterIndex != beforeChIdx) {
-                        onChapterShiftUpdated(state.currentChapterIndex - beforeChIdx)
-                    }
                 }
                 else -> state.pageOffset = 0f
             }

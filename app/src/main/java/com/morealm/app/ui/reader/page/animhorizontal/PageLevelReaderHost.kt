@@ -628,6 +628,9 @@ fun PageLevelReaderHost(
     // commit 翻页（pageFactory.moveToNext + reset offset），再 launch 新动画。视觉等价 Legado
     // abortAnim()+fillPage：连点 N 次翻 N 页不丢。
     val turnCtrl = remember { PageTurnAnimController() }
+    val commitPageTurn: (Boolean) -> Boolean = { isNext ->
+        if (isNext) core.pageFactory.moveToNext() else core.pageFactory.moveToPrev()
+    }
     val tapScope = rememberCoroutineScope()
     var currentAnimJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
@@ -1045,7 +1048,8 @@ fun PageLevelReaderHost(
                         nextPageBookmarkCps = nextPageBookmarkCps,
                         nextPlusPageBookmarkCps = nextPlusPageBookmarkCps,
                         prevPageBookmarkCps = prevPageBookmarkCps,
-                        turnCtrl = turnCtrl,
+                         turnCtrl = turnCtrl,
+                         commitPageTurn = commitPageTurn,
                         pageInfoBarProvider = pageInfoBarProvider,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -1091,7 +1095,8 @@ fun PageLevelReaderHost(
                             if (selection.isActive) selection = handleCancelSelection()
                             if (highlightActionTarget != null) highlightActionTarget = null
                         },
-                        turnCtrl = turnCtrl,
+                         turnCtrl = turnCtrl,
+                         commitPageTurn = commitPageTurn,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -1115,7 +1120,8 @@ fun PageLevelReaderHost(
                         curPageBookmarkCps = curPageBookmarkCps,
                         nextPageBookmarkCps = nextPageBookmarkCps,
                         prevPageBookmarkCps = prevPageBookmarkCps,
-                        turnCtrl = turnCtrl,
+                         turnCtrl = turnCtrl,
+                         commitPageTurn = commitPageTurn,
                         pageInfoBarProvider = pageInfoBarProvider,
                         modifier = Modifier.fillMaxSize(),
                     )
