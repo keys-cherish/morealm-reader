@@ -51,4 +51,20 @@ class ReaderWindowStoreTest {
         assertEquals(first, store.snapshot.previous)
         assertTrue(store.snapshot.currentEntry is WindowEntry.Ready)
     }
+
+    @Test
+    fun `moving the neighbor preserves the ready entry by unit id`() {
+        val first = ReadingUnitId("1")
+        val second = ReadingUnitId("2")
+        val third = ReadingUnitId("3")
+        val store = ReaderWindowStore(first)
+        store.setNeighbors(previous = null, next = second)
+        val requestId = (store.ensure(second) as EnsureResult.Started).requestId
+        store.complete(second, requestId, artifact(second))
+
+        store.setNeighbors(previous = second, next = third)
+
+        assertTrue(store.snapshot.previousEntry is WindowEntry.Ready)
+        assertEquals(second, (store.snapshot.previousEntry as WindowEntry.Ready).artifact.key.unitId)
+    }
 }

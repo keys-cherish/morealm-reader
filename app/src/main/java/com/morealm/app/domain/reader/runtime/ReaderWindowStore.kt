@@ -8,6 +8,7 @@ class ReaderWindowStore(
     private var previousEntry: WindowEntry = WindowEntry.Empty
     private var currentEntry: WindowEntry = WindowEntry.Empty
     private var nextEntry: WindowEntry = WindowEntry.Empty
+    private val entries = LinkedHashMap<ReadingUnitId, WindowEntry>()
     private var nextRequestId = 1L
 
     var currentId: ReadingUnitId = initialCurrent
@@ -28,13 +29,15 @@ class ReaderWindowStore(
             "Current artifact does not match current unit"
         }
         currentEntry = entry
+        entries[currentId] = entry
     }
 
     fun setNeighbors(previous: ReadingUnitId?, next: ReadingUnitId?) {
         previousId = previous
         nextId = next
-        previousEntry = if (previous == null) WindowEntry.Empty else entryFor(previousId)
-        nextEntry = if (next == null) WindowEntry.Empty else entryFor(nextId)
+        previousEntry = entryFor(previous)
+        nextEntry = entryFor(next)
+        retainWindowEntries()
     }
 
     fun ensure(unitId: ReadingUnitId): EnsureResult {
@@ -93,7 +96,7 @@ class ReaderWindowStore(
 
     private fun entryFor(unitId: ReadingUnitId?): WindowEntry {
         if (unitId == null) return WindowEntry.Empty
-        return when (unitId) {
+        return entries[unitId] ?: when (unitId) {
             previousId -> previousEntry
             currentId -> currentEntry
             nextId -> nextEntry
@@ -102,12 +105,18 @@ class ReaderWindowStore(
     }
 
     private fun updateEntry(unitId: ReadingUnitId, entry: WindowEntry) {
+        entries[unitId] = entry
         when (unitId) {
             previousId -> previousEntry = entry
             currentId -> currentEntry = entry
             nextId -> nextEntry = entry
             else -> error("Unit is outside the current window")
         }
+    }
+
+    private fun retainWindowEntries() {
+        val retained = setOfNotNull(previousId, currentId, nextId)
+        entries.keys.retainAll(retained)
     }
 }
 
