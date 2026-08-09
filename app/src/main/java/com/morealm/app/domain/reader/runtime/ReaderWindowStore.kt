@@ -32,13 +32,9 @@ class ReaderWindowStore(
         entries[currentId] = entry
     }
 
-    fun replaceCurrent(unitId: ReadingUnitId, entry: WindowEntry.Ready) {
-        require(entry.artifact.key.unitId == unitId) {
-            "Current artifact does not match replacement unit"
-        }
+    fun moveTo(unitId: ReadingUnitId) {
         currentId = unitId
-        currentEntry = entry
-        entries[unitId] = entry
+        currentEntry = entries[unitId] ?: WindowEntry.Empty
         previousId = null
         previousEntry = WindowEntry.Empty
         nextId = null
@@ -55,17 +51,25 @@ class ReaderWindowStore(
     }
 
     fun ensure(unitId: ReadingUnitId): EnsureResult {
-        val entry = entryFor(unitId)
-        return when (entry) {
+        return when (val entry = entryFor(unitId)) {
             is WindowEntry.Ready -> EnsureResult.Ready(entry.artifact)
             is WindowEntry.Loading -> EnsureResult.Loading(entry.requestId)
-            is WindowEntry.Failed -> EnsureResult.Failed(entry.requestId, entry.errorMessage)
-            WindowEntry.Empty -> {
+            // 失败不缓存：再次 ensure 即重试（旧加载链路失败后由下次 effect 重启重试，语义对齐）
+            is WindowEntry.Failed,
+            WindowEntry.Empty,
+            -> {
                 val requestId = nextRequestId++
                 updateEntry(unitId, WindowEntry.Loading(requestId))
                 EnsureResult.Started(requestId)
             }
         }
+    }
+
+    fun invalidateAll() {
+        entries.clear()
+        previousEntry = WindowEntry.Empty
+        currentEntry = WindowEntry.Empty
+        nextEntry = WindowEntry.Empty
     }
 
     fun complete(
@@ -138,5 +142,4 @@ sealed interface EnsureResult {
     data class Started(val requestId: Long) : EnsureResult
     data class Loading(val requestId: Long) : EnsureResult
     data class Ready(val artifact: LayoutArtifact) : EnsureResult
-    data class Failed(val requestId: Long, val message: String) : EnsureResult
 }

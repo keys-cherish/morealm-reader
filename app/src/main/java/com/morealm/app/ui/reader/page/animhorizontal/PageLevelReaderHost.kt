@@ -40,11 +40,6 @@ import com.morealm.app.domain.reader.runtime.NavigationDirection
 import com.morealm.app.domain.reader.runtime.NavigationPreparation
 import com.morealm.app.domain.reader.runtime.NavigationSource
 import com.morealm.app.domain.reader.runtime.ReaderIntent
-import com.morealm.app.domain.reader.runtime.ReaderRuntimeAdapter
-import com.morealm.app.domain.reader.runtime.ReaderRuntimeWindowSync
-import com.morealm.app.domain.reader.runtime.ReaderSession
-import com.morealm.app.domain.reader.runtime.ReaderWindowStore
-import com.morealm.app.domain.reader.runtime.WindowEntry
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
 import com.morealm.app.domain.render.layout.pagedProgressToPageIndex
@@ -381,6 +376,7 @@ fun PageLevelReaderHost(
     }
 
     val core = rememberPageLevelCore(
+        bookId = bookId,
         currentChapterIndex = currentChapterIndex,
         chapterCount = chapterCount,
         contentVersion = contentVersion,
@@ -390,47 +386,7 @@ fun PageLevelReaderHost(
         engine = engine,
         horizontalPaged = true, // 横向翻页：reflow 恢复整页对齐（pageOffset=0），不卡半页
     )
-
-    val runtimeStore = remember(bookId) {
-        ReaderWindowStore(ReaderRuntimeAdapter.unitIdForChapter(currentChapterIndex))
-    }
-    val runtimeWindowSync = remember(bookId, contentVersion, runtimeStore) {
-        ReaderRuntimeWindowSync(bookId, contentVersion, runtimeStore)
-    }
-    val runtimeSession = remember(runtimeStore) {
-        ReaderSession(
-            windowStore = runtimeStore,
-            firstAnchorFor = { unitId ->
-                com.morealm.app.domain.reader.runtime.ContentAnchor(unitId, 0)
-            },
-            lastAnchorFor = { unitId ->
-                val entry = runtimeStore.snapshot.let { window ->
-                    when (unitId) {
-                        window.previous -> window.previousEntry
-                        window.current -> window.currentEntry
-                        window.next -> window.nextEntry
-                        else -> WindowEntry.Empty
-                    }
-                }
-                val lastOffset = (entry as? WindowEntry.Ready)
-                    ?.artifact?.anchorIndex?.characterOffsets?.lastOrNull() ?: 0
-                com.morealm.app.domain.reader.runtime.ContentAnchor(unitId, lastOffset)
-            },
-        )
-    }
-    LaunchedEffect(
-        runtimeWindowSync,
-        core.state.currentChapter,
-        core.state.prevChapter,
-        core.state.nextChapter,
-    ) {
-        val current = core.state.currentChapter ?: return@LaunchedEffect
-        runtimeWindowSync.publish(
-            current = current,
-            previous = core.state.prevChapter,
-            next = core.state.nextChapter,
-        )
-    }
+    val runtimeSession = core.session
 
     // ── 跳书签 / 续读 / 搜索定位 / Slider 拖动 in-place seek ──
     // 两阶段契约：caller 保证 restoreToken != 0L 时 currentChapter 已是目标章。

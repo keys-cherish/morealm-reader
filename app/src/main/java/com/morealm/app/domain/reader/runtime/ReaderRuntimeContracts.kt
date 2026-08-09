@@ -1,5 +1,6 @@
 package com.morealm.app.domain.reader.runtime
 
+import com.morealm.epub.render.ScrollChapterLayout
 import com.morealm.epub.render.ScrollPage
 
 @JvmInline
@@ -58,6 +59,11 @@ data class LayoutArtifact(
     val title: String,
     val pages: List<ScrollPage>,
     val anchorIndex: AnchorIndex,
+    /**
+     * 生产路径必带的源排版（投影层消费 ScrollChapterLayout 而非 pages 列表）。
+     * 纯 JVM 单测可不构造，故 nullable。
+     */
+    val sourceLayout: ScrollChapterLayout? = null,
 ) {
     init {
         require(title.isNotBlank()) { "Layout title must not be blank" }

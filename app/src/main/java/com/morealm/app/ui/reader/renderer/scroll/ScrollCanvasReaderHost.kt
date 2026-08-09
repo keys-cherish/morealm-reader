@@ -83,6 +83,7 @@ import java.util.Locale
 @OptIn(FlowPreview::class)
 @Composable
 fun ScrollCanvasReaderHost(
+    bookId: String,
     currentChapterIndex: Int,
     chapterCount: Int,
     /** 正文发布版本；TXT 原位替换后用于强制丢弃旧 layout。 */
@@ -384,6 +385,7 @@ fun ScrollCanvasReaderHost(
     // [com.morealm.app.domain.render.pageanim.rememberPageLevelCore] 文档。
     // SCROLL Host 仅保留垂直特有逻辑（JUMP / TTS / 进度 / 选区 Overlay / InfoBar）。
     val core = com.morealm.app.domain.render.pageanim.rememberPageLevelCore(
+        bookId = bookId,
         currentChapterIndex = currentChapterIndex,
         chapterCount = chapterCount,
         contentVersion = contentVersion,

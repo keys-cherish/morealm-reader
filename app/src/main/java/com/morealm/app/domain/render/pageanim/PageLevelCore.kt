@@ -2,6 +2,7 @@ package com.morealm.app.domain.render.pageanim
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -10,6 +11,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import com.morealm.app.core.log.AppLog
+import com.morealm.app.domain.reader.runtime.ArtifactLoader
+import com.morealm.app.domain.reader.runtime.ContentAnchor
+import com.morealm.app.domain.reader.runtime.EnsureResult
+import com.morealm.app.domain.reader.runtime.ReaderRuntimeAdapter
+import com.morealm.app.domain.reader.runtime.ReaderSession
+import com.morealm.app.domain.reader.runtime.ReaderWindowStore
+import com.morealm.app.domain.reader.runtime.WindowEntry
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.epub.render.ScrollChapterLayout
 import com.morealm.epub.render.ScrollLayoutEngine
@@ -18,16 +26,12 @@ import com.morealm.app.domain.render.layout.ScrollPageFactory
 import com.morealm.app.domain.render.layout.visibleChapterPosition
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderState
 import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.async
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 
 /**
@@ -41,48 +45,144 @@ import kotlin.math.roundToInt
  * 可热切换。**共享**：state (ReadBook 单例) + pageFactory + 章节加载 + 长按选区 +
  * 手势接收。**独立**：各 Delegate 只 own 动画绘制 + drag 偏移 + fling settle。
  *
- * MoRealm 原 V2 `ScrollCanvasReaderHost` 把上述共享逻辑混在 SCROLL 专用代码里
- * (~1000 行)。COVER/SLIDE/NONE 接入时会被迫共用 SCROLL Host 的全部 setup
- * (选区/TTS/进度/InfoBar)，造成耦合 (2026-05-19 案例验证：曾把 COVER dispatch
- * 塞进 ScrollCanvasReaderHost 文件，名实脱节)。
+ * ## 真源结构（Phase 1 runtime 真源化后）
  *
- * 本 helper 仅抽出**严格 page-level 共享**部分：
+ * 章节窗口/加载/去重的真源在 `domain/reader/runtime/`：
+ * - [ReaderWindowStore]：三窗口条目 + `Loading(requestId)` 幂等门控（并发去重靠它，
+ *   不再有 inflight ConcurrentHashMap 防御层）。
+ * - [ArtifactLoader]：fetch → 排版 → 背景专页展开 的唯一加载路径。
+ * - [WindowLoadCoordinator]：把 ensure/complete/fail 编排成协程加载，并把结果投影进
+ *   [ScrollCanvasReaderState]（投影层，Compose 订阅面）。
+ * - [ReaderSession]：导航事务（Host 的跨章 commit 走 prepare/commit）。
  *
- * | 抽到 helper             | 留各 Host                                |
- * | ---                     | ---                                      |
- * | state + factory 创建    | engine + paint 派生（各 Host 自管）       |
- * | chapterCount 同步       | JUMP / restoreProgress（语义各模式不同） |
+ * | 抽到 core                 | 留各 Host                                |
+ * | ---                      | ---                                      |
+ * | store/session/加载编排    | engine + paint 派生（各 Host 自管）       |
+ * | chapterCount 同步         | JUMP / restoreProgress（语义各模式不同） |
  * | restoreToken → setExternal | TTS 段跟随 / 进度上报                |
- * | snapshotFlow 通知 VM    | 选区 Overlay / InfoBar / Renderer 调用   |
- * | styleSignature 失效     |                                          |
- * | curChapter 加载         |                                          |
- * | prevNext debounce 预加载 |                                          |
- *
- * 各 Host (ScrollCanvasReaderHost 垂直 / PageLevelReaderHost 横向覆盖/平移) 通过
- * [rememberPageLevelCore] 拿到 state + factory，剩余自管。
- *
- * ## 不抽到 helper 的理由
- *
- * - **JUMP**：SCROLL 算法 = chapter-Y → pageIdx + pageOffsetInPage（垂直语义）；
- *   COVER/SLIDE = page-by-page 直接 moveToPage，pageOffset 含义不同（X 方向）。
- *   各自算法不同，强行抽出会需要 callback 参数化，反而复杂。
- * - **TTS 跟随**：SCROLL 用 chapter-Y 滚到目标段；COVER/SLIDE 用 moveToPage 跳。
- * - **进度上报**：算法依赖 page 累加 Y vs page 数比例，各自不同。
- * - **选区 / InfoBar / Renderer**：完全各模式独立。
+ * | snapshotFlow 通知 VM      | 选区 Overlay / InfoBar / Renderer 调用   |
+ * | styleSignature/版本失效   |                                          |
+ * | cur 加载 + prev/next 预载 |                                          |
  *
  * @see com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderHost SCROLL 调用方
  */
 class PageLevelCoreHandle internal constructor(
     val state: ScrollCanvasReaderState,
     val pageFactory: ScrollPageFactory,
+    val windowStore: ReaderWindowStore,
+    val session: ReaderSession,
 )
 
 /**
- * 创建 page-level 共享 core + 启动其 effect。返回 handle 含 state + factory。
+ * 窗口加载协调器 —— 把 [ReaderWindowStore] 的 ensure/complete/fail 编排为实际的协程
+ * 加载，并把完成结果投影进 [ScrollCanvasReaderState]。
+ *
+ * 并发去重 = store 的 `Loading(requestId)`（仅 Started 才起 Job）。[activeLoads] 只做
+ * 失效时取消用的记账，不做 join。仅主线程访问（scope 是主线程 rememberCoroutineScope，
+ * loader 内部自切 IO/Default）。
+ */
+internal class WindowLoadCoordinator(
+    private val store: ReaderWindowStore,
+    private val state: ScrollCanvasReaderState,
+    private val scope: CoroutineScope,
+    private val bookId: String,
+) {
+    /** 每次重组由 SideEffect 刷新：engine 重建 → 新 loader 实例（换代判定靠引用比较）。 */
+    var loader: ArtifactLoader? = null
+    var contentVersion: Long = 0L
+
+    /** cur 章排版就绪回调（reflow 锚点恢复 / 跨章 reset 在这里做，由 composable 注入）。 */
+    var onCurrentReady: (ScrollChapterLayout) -> Unit = {}
+
+    private val activeLoads = mutableMapOf<Long, Job>()
+
+    fun alignCurrent(chapterIndex: Int) {
+        val unit = ReaderRuntimeAdapter.unitIdForChapter(chapterIndex)
+        if (store.currentId != unit) store.moveTo(unit)
+    }
+
+    fun requestLoad(chapterIndex: Int) {
+        if (chapterIndex < 0) return
+        val loader = this.loader ?: return
+        val unit = ReaderRuntimeAdapter.unitIdForChapter(chapterIndex)
+        // 窗口外的单元不加载（窗口移动后过期的重派请求在此自然消失）
+        val window = store.snapshot
+        if (unit != window.previous && unit != window.current && unit != window.next) return
+        when (val result = store.ensure(unit)) {
+            is EnsureResult.Started -> launchLoad(chapterIndex, result.requestId, loader)
+            // Loading 但无对应 Job：请求由 session.prepare 等旁路 start、无人加载 → 收养
+            is EnsureResult.Loading ->
+                if (activeLoads[result.requestId] == null) launchLoad(chapterIndex, result.requestId, loader)
+            is EnsureResult.Ready -> result.artifact.sourceLayout?.let { deliver(chapterIndex, it) }
+        }
+    }
+
+    /** cur 就绪后调用：对齐邻窗 + 预载缺失的 prev/next。 */
+    fun ensureNeighbors(chapterIndex: Int) {
+        if (chapterIndex != state.currentChapterIndex) return
+        val prevIdx = (chapterIndex - 1).takeIf { it >= 0 }
+        val nextIdx = (chapterIndex + 1).takeIf { it < state.chapterCount }
+        store.setNeighbors(
+            previous = prevIdx?.let(ReaderRuntimeAdapter::unitIdForChapter),
+            next = nextIdx?.let(ReaderRuntimeAdapter::unitIdForChapter),
+        )
+        if (prevIdx != null && state.prevChapter?.chapterIndex != prevIdx) requestLoad(prevIdx)
+        if (nextIdx != null && state.nextChapter?.chapterIndex != nextIdx) requestLoad(nextIdx)
+    }
+
+    /** engine / contentVersion 换代：取消在飞加载 + 清空 store 条目（投影由调用方清）。 */
+    fun invalidateAll() {
+        activeLoads.values.forEach { it.cancel() }
+        activeLoads.clear()
+        store.invalidateAll()
+    }
+
+    private fun launchLoad(chapterIndex: Int, requestId: Long, loader: ArtifactLoader) {
+        val unit = ReaderRuntimeAdapter.unitIdForChapter(chapterIndex)
+        val version = contentVersion
+        activeLoads[requestId] = scope.launch {
+            val layout = loader.load(chapterIndex)
+            activeLoads.remove(requestId)
+            if (loader !== this@WindowLoadCoordinator.loader) {
+                // engine 已换代：本结果按旧参数排版，作废并用新 loader 重派
+                // （requestLoad 对 Failed 条目会重启新请求；窗口已移走则直接 no-op）。
+                store.fail(unit, requestId, "engine superseded")
+                requestLoad(chapterIndex)
+                return@launch
+            }
+            if (layout == null) {
+                store.fail(unit, requestId, "chapter $chapterIndex load failed")
+                if (chapterIndex == state.currentChapterIndex) {
+                    AppLog.warn("PageLevelCore", "cur NULL idx=$chapterIndex")
+                }
+            } else {
+                val artifact = ReaderRuntimeAdapter.artifactFrom(bookId, layout, version)
+                if (store.complete(unit, requestId, artifact)) deliver(chapterIndex, layout)
+            }
+        }
+    }
+
+    private fun deliver(chapterIndex: Int, layout: ScrollChapterLayout) {
+        val curIdx = state.currentChapterIndex
+        when (chapterIndex) {
+            curIdx -> {
+                if (state.currentChapter?.chapterIndex != chapterIndex) onCurrentReady(layout)
+                ensureNeighbors(curIdx)
+            }
+            curIdx - 1 -> state.prevChapter = layout
+            curIdx + 1 -> state.nextChapter = layout
+            // 其余：窗口已移走的过期结果 —— store.complete 已被 requestId 门控拒绝，不会到这
+        }
+    }
+}
+
+/**
+ * 创建 page-level 共享 core + 启动其 effect。返回 handle 含 state + factory + runtime。
  *
  * 调用方负责自己的 engine 实例（含 paint / padding / 排版参数），通过 [engine] 透传给
- * helper 内 章节加载 + styleSignature 失效 effect 使用。
+ * core 内 章节加载 + styleSignature 失效 effect 使用。
  *
+ * @param bookId runtime LayoutKey 用的书 id
  * @param currentChapterIndex 外部 prop：用户当前章 idx（来自 ViewModel）
  * @param chapterCount 全书章节总数
  * @param restoreToken 外部跳章 token（loadChapter / seekProgressInPlace 换新值，0 = 无跳转）
@@ -94,6 +194,7 @@ class PageLevelCoreHandle internal constructor(
 @OptIn(FlowPreview::class)
 @Composable
 fun rememberPageLevelCore(
+    bookId: String,
     currentChapterIndex: Int,
     chapterCount: Int,
     /**
@@ -130,6 +231,89 @@ fun rememberPageLevelCore(
                 if (delta == +1) state.swapToNext() else state.swapToPrev()
             },
         )
+    }
+
+    val windowStore = remember(bookId) {
+        ReaderWindowStore(ReaderRuntimeAdapter.unitIdForChapter(currentChapterIndex))
+    }
+    val session = remember(windowStore) {
+        ReaderSession(
+            windowStore = windowStore,
+            firstAnchorFor = { unitId -> ContentAnchor(unitId, 0) },
+            lastAnchorFor = { unitId ->
+                val window = windowStore.snapshot
+                val entry = when (unitId) {
+                    window.previous -> window.previousEntry
+                    window.current -> window.currentEntry
+                    window.next -> window.nextEntry
+                    else -> WindowEntry.Empty
+                }
+                val lastOffset = (entry as? WindowEntry.Ready)
+                    ?.artifact?.anchorIndex?.characterOffsets?.lastOrNull() ?: 0
+                ContentAnchor(unitId, lastOffset)
+            },
+        )
+    }
+    val coroScope = rememberCoroutineScope()
+    val coordinator = remember(windowStore, state) {
+        WindowLoadCoordinator(windowStore, state, coroScope, bookId)
+    }
+    val loadChapterContentLatest by rememberUpdatedState(loadChapterContent)
+    val loader = remember(engine) {
+        ArtifactLoader({ idx -> loadChapterContentLatest(idx) }, engine)
+    }
+
+    // cur 章排版就绪：写投影 + reflow 锚点恢复 / 跨章 reset。
+    fun applyCurrentLayout(layout: ScrollChapterLayout) {
+        state.currentChapter = layout
+        // 跨章 load 完毕：reset pageFactory.pageIndex + state.pageOffset 到章首 0。
+        // V2 swap 路径 (ScrollPageFactory.moveToNext/Prev) 自身已 reset pageIndex；
+        // 本路径专门处理 loadChapter / setExternalChapterIndex 跨章后 factory
+        // 没人 reset 的 case —— 旧 pageIndex 若越界新 layout（如章 8 pageIndex=38
+        // 切到只有 1 page 的章 0）→ curPage = EMPTY_PAGE → curPageH = 0 →
+        // applyPageScrollDelta consume + 不动 = 卡死无法滑动 (P0 fix 2026-05-24).
+        // Slider 拖动 in-place seek 的 restoreToken JUMP 路径会在 Host 层下一帧
+        // 覆盖 pageIndex / pageOffset 到目标 progress（cp>0 或 prog>0 时），无副作用。
+        val oldPageIdx = pageFactory.pageIndex
+        val anchorCp = reflowAnchorCp
+        if (anchorCp >= 0) {
+            // 同章重排：按重排前记下的 cp 在新 layout 定位，保持阅读位置不跳章首。
+            val hit = layout.findColumnAt(anchorCp)
+            if (hit != null) {
+                // 先记落点再 moveToPage：下方 snapshotFlow 据 settle 区分 reflow 自身翻页与
+                // 用户翻页，settle 必须在触发 pageIndex 变化前就位，否则被误判为用户翻页清锚点。
+                reflowSettlePageIdx = hit.page.pageIndex
+                pageFactory.moveToPage(hit.page.pageIndex)
+                // 横向翻页整页瞬切、pageOffset 恒 0：定位到含锚点的整页即可。若设成行内
+                // lineTop，页面会纵向偏移半页（用户报「改字体/边距后卡半页、跳页」根因）。
+                // 垂直滚动才需要把页内滚到锚点行的 Y。
+                state.pageOffset = if (horizontalPaged) 0f else hit.line.lineTop
+                // 不重置 reflowAnchorCp：连续切字体冻结锚点，避免逐次漂移（见记录处注释）。
+                AppLog.info("PageLevelCore", "  reflow restore cp=$anchorCp → page=${hit.page.pageIndex} off=${state.pageOffset} horizontalPaged=$horizontalPaged")
+            } else {
+                // cp 在新 layout 命中失败（cp 越界 / 边缘）→ 用章内页比例兜底，定位到
+                // 对应比例的页，不再粗暴回章首（边缘漂移到章首根因）。保持 anchorCp
+                // 不清，连续切字体仍稳定。
+                val lastPage = (layout.pages.size - 1).coerceAtLeast(0)
+                val targetPage = (reflowAnchorFraction.coerceIn(0f, 1f) * lastPage)
+                    .roundToInt().coerceIn(0, lastPage)
+                reflowSettlePageIdx = targetPage
+                pageFactory.moveToPage(targetPage)
+                state.pageOffset = 0f
+                AppLog.info("PageLevelCore", "  reflow fraction-fallback cp=$anchorCp miss -> frac=$reflowAnchorFraction page=$targetPage")
+            }
+        } else if (oldPageIdx != 0 || state.pageOffset != 0f) {
+            pageFactory.moveToPage(0)
+            state.pageOffset = 0f
+            AppLog.info("PageLevelCore", "  cross-ch reset pageIndex $oldPageIdx → 0, pageOffset → 0")
+        }
+        AppLog.info("PageLevelCore", "  cur READY pages=${layout.pages.size} totalH=${layout.totalHeight}")
+    }
+
+    SideEffect {
+        coordinator.loader = loader
+        coordinator.contentVersion = contentVersion
+        coordinator.onCurrentReady = ::applyCurrentLayout
     }
 
     // chapterCount 同步（独立 effect，不参与 setExternal 决策）
@@ -171,10 +355,12 @@ fun rememberPageLevelCore(
             }
     }
 
-    // engine 引用变化（字号 / 字体 / padding 变）→ 已有 layout 失效，清掉触发重排
+    // engine 引用变化（字号 / 字体 / padding 变）→ 已有 layout 失效，清掉触发重排。
+    // store 失效与投影清理同门控：仅当存在「非空且 sig 失配」的槽位才 invalidateAll ——
+    // 调色板类 engine 重建（颜色不进 signature）两边都不清，行为等价旧链路。
     LaunchedEffect(engine) {
         val sig = engine.computeStyleSignature()
-        // 同章重排恢复：清 currentChapter 前先记下当前视口顶 cp。下方 loadCur effect 重排完
+        // 同章重排恢复：清 currentChapter 前先记下当前视口顶 cp。加载完成回调重排完
         // （chapterIndex 不变）按此 cp 定位，避免 cross-ch reset 把视野拉回章首（改字号跳章首根因）。
         val cur = state.currentChapter
         // 仅在「无锚点」时记录：连续快速切字体时锚点冻结在用户原始视口 cp，避免每次 reflow
@@ -191,102 +377,16 @@ fun rememberPageLevelCore(
                 pageFactory.pageIndex.toFloat() / cur.pages.size
             } else 0f
         }
+        val anyStale = listOf(state.currentChapter, state.prevChapter, state.nextChapter)
+            .any { it != null && it.styleSignature != sig }
+        if (anyStale) coordinator.invalidateAll()
         if (state.currentChapter?.styleSignature != sig) state.currentChapter = null
         if (state.prevChapter?.styleSignature != sig) state.prevChapter = null
         if (state.nextChapter?.styleSignature != sig) state.nextChapter = null
     }
 
-    // **Commit X idempotent guard** —— loadAndLayout 并发去重：同 chapter idx 多 caller
-    // 同时请求时，第一个跑 + 其余 join 已 inflight 的 Deferred。修复 chapter idx 重复
-    // layoutChapter 3 次阻塞 worker → next chapter 排队 → SHIFT-NEXT-FAIL 卡死。
-    //
-    // 防御性修复（不查 root cause）；真正根因是 LaunchedEffect / Compose recomposition
-    // 触发 cur/prev/next 重复加载请求。TODO(A5)：A5 measure/layout 重构时把
-    // recomposition root cause 一并修（LaunchedEffect key 设计 / derivedStateOf / coroutine
-    // cancellation 任一），跟 next 预加载真根因 + ScrollLine.alignment 重构同窗口。
-    val inflightLayout = remember { ConcurrentHashMap<Int, Deferred<ScrollChapterLayout?>>() }
-    val coroScope = rememberCoroutineScope()
-
-    // 章节加载 helper
-    suspend fun loadAndLayout(idx: Int): ScrollChapterLayout? {
-        inflightLayout[idx]?.let { existing ->
-            AppLog.info("PageLevelCore", "[IDEMPOTENT] chapter=$idx join existing inflight Deferred")
-            return try {
-                existing.await()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Throwable) {
-                null
-            }
-        }
-        // **关键 bugfix**：deferred 用 coroScope（Composable lifecycle）独立于 caller 的 launch
-        // —— caller 协程 cancel（LaunchedEffect 重启）时 deferred 仍跑，不应该 remove inflight。
-        // 改用 invokeOnCompletion 在 deferred 真完成时 remove；caller cancel 不动 map。
-        // 这样新 caller 来时仍能看见正在跑的 deferred + join 它（拿已跑结果或等结果）。
-        val deferred = coroScope.async(Dispatchers.IO) {
-            try {
-                val content = loadChapterContent(idx) ?: return@async null
-                AppLog.info(
-                    "PageLevelCore",
-                    // 不读 content.content：那是 lazy flatten，走结构化排版时本不必产生。
-                    "  loaded idx=$idx blocks=${content.structuredContent?.blocks?.size ?: -1} " +
-                        "plainLen=${content.plainContent?.length ?: -1}",
-                )
-                withContext(Dispatchers.Default) {
-                    content.structuredContent?.let { structured ->
-                        val layout = engine.layoutStructuredChapter(
-                            content.chapterIndex,
-                            content.title,
-                            structured,
-                            // EPUB 的标题属于 XHTML 正文。目录标题只用于导航和页眉，不能
-                            // 再生成一个视觉标题，否则含 h1 的页面会出现重复标题。
-                            omitChapterTitleBlock = true,
-                        )
-                        // 背景专页属于 EPUB 内容语义，不属于某一种翻页动画。所有模式都
-                        // 走同一展开逻辑，避免滚动能显示、平移/覆盖/仿真只剩空白页。
-                        expandBackgroundOnlyScrollPage(
-                            layout = layout,
-                            content = structured,
-                            chapterTitle = content.title,
-                            pageWidth = engine.viewWidth,
-                            resolveImageDimensions = engine.imageDimensionsResolver::resolve,
-                        )
-                    } ?: engine.layoutChapter(content.chapterIndex, content.title, content.content)
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                AppLog.warn("PageLevelCore", "loadAndLayout FAILED idx=$idx: ${e.message}", e)
-                null
-            }
-        }
-        inflightLayout[idx] = deferred
-        deferred.invokeOnCompletion {
-            // race-safe remove：deferred 完成/失败/被取消都 remove（仅当 map 中仍是同一 deferred）
-            inflightLayout.remove(idx, deferred)
-        }
-        return try {
-            deferred.await()
-        } catch (e: CancellationException) {
-            // caller cancelled but deferred (coroScope-bound) may still complete and serve future joiners
-            throw e
-        }
-    }
-
-    // curChapter 即时加载（首次进 reader / 外部跳章后必须立即有内容可显示）+
-    // **待办 2 根因修**：cur layout ready 瞬间立即并行 launch prev/next preload，
-    // 替代旧的 LaunchedEffect debounce(300L) 预加载链路。
-    //
-    // 旧链路问题：cur idx 变化 → debounce 300ms → load prev/next，某 EPUB SCROLL 短章
-    // (totalHeight=868 < view=1848) user 滚一下就到 cur 末，next 还没 ready 就 SHIFT-NEXT-FAIL
-    // 卡 buffer（实测 11:23 / 11:57 / 12:10 日志现场）。
-    //
-    // 新链路：cur layout ready 瞬间立即触发 prev/next，节省 300ms debounce + cur layout
-    // 跟 prev/next 加载在时间上重叠（cur ready 时 user 通常还在看第一屏）。
-    //
-    // 并行 launch：prev/next 加载相互独立，无依赖关系 → 并行启动比 sequential 快一倍。
-    // LaunchedEffect 在 state.currentChapterIndex 或 engine 变化时自动 cancel 旧的子
-    // launch（user fling 跨多章时不堆积，新章节立即重 trigger）。
+    // 加载编排：cur 缺失即 ensure（Started 才真加载，Loading 表示已在飞 —— 完成回调负责
+    // 投影与预载）；cur 已就绪则直接对齐邻窗 + 预载 prev/next。
     LaunchedEffect(state.currentChapterIndex, currentChapterIndex, engine, contentVersion) {
         val curIdx = state.currentChapterIndex
         // 同章 TXT 写回时 external chapter index 不变，旧逻辑不会走 setExternalChapterIndex，
@@ -314,75 +414,19 @@ fun rememberPageLevelCore(
             state.currentChapter = null
             state.nextChapter = null
             appliedContentVersion = contentVersion
+            coordinator.invalidateAll()
             AppLog.info("PageLevelCore", "content version changed -> invalidate layouts idx=$curIdx")
         }
+        coordinator.alignCurrent(curIdx)
         if (state.currentChapter?.chapterIndex != curIdx) {
             AppLog.info("PageLevelCore", "HOST loadCur idx=$curIdx")
-            val layout = loadAndLayout(curIdx)
-            if (layout != null) {
-                state.currentChapter = layout
-                // 跨章 load 完毕：reset pageFactory.pageIndex + state.pageOffset 到章首 0。
-                // V2 swap 路径 (ScrollPageFactory.moveToNext/Prev) 自身已 reset pageIndex；
-                // 本路径专门处理 loadChapter / setExternalChapterIndex 跨章后 factory
-                // 没人 reset 的 case —— 旧 pageIndex 若越界新 layout（如章 8 pageIndex=38
-                // 切到只有 1 page 的章 0）→ curPage = EMPTY_PAGE → curPageH = 0 →
-                // applyPageScrollDelta consume + 不动 = 卡死无法滑动 (P0 fix 2026-05-24).
-                // Slider 拖动 in-place seek 的 restoreToken JUMP 路径会在 Host 层下一帧
-                // 覆盖 pageIndex / pageOffset 到目标 progress（cp>0 或 prog>0 时），无副作用。
-                val oldPageIdx = pageFactory.pageIndex
-                val anchorCp = reflowAnchorCp
-                if (anchorCp >= 0) {
-                    // 同章重排：按重排前记下的 cp 在新 layout 定位，保持阅读位置不跳章首。
-                    val hit = layout.findColumnAt(anchorCp)
-                    if (hit != null) {
-                        // 先记落点再 moveToPage：下方 snapshotFlow 据 settle 区分 reflow 自身翻页与
-                        // 用户翻页，settle 必须在触发 pageIndex 变化前就位，否则被误判为用户翻页清锚点。
-                        reflowSettlePageIdx = hit.page.pageIndex
-                        pageFactory.moveToPage(hit.page.pageIndex)
-                        // 横向翻页整页瞬切、pageOffset 恒 0：定位到含锚点的整页即可。若设成行内
-                        // lineTop，页面会纵向偏移半页（用户报「改字体/边距后卡半页、跳页」根因）。
-                        // 垂直滚动才需要把页内滚到锚点行的 Y。
-                        state.pageOffset = if (horizontalPaged) 0f else hit.line.lineTop
-                        // 不重置 reflowAnchorCp：连续切字体冻结锚点，避免逐次漂移（见记录处注释）。
-                        AppLog.info("PageLevelCore", "  reflow restore cp=$anchorCp → page=${hit.page.pageIndex} off=${state.pageOffset} horizontalPaged=$horizontalPaged")
-                    } else {
-                        // cp 在新 layout 命中失败（cp 越界 / 边缘）→ 用章内页比例兜底，定位到
-                        // 对应比例的页，不再粗暴回章首（边缘漂移到章首根因）。保持 anchorCp
-                        // 不清，连续切字体仍稳定。
-                        val lastPage = (layout.pages.size - 1).coerceAtLeast(0)
-                        val targetPage = (reflowAnchorFraction.coerceIn(0f, 1f) * lastPage)
-                            .roundToInt().coerceIn(0, lastPage)
-                        reflowSettlePageIdx = targetPage
-                        pageFactory.moveToPage(targetPage)
-                        state.pageOffset = 0f
-                        AppLog.info("PageLevelCore", "  reflow fraction-fallback cp=$anchorCp miss -> frac=$reflowAnchorFraction page=$targetPage")
-                    }
-                } else if (oldPageIdx != 0 || state.pageOffset != 0f) {
-                    pageFactory.moveToPage(0)
-                    state.pageOffset = 0f
-                    AppLog.info("PageLevelCore", "  cross-ch reset pageIndex $oldPageIdx → 0, pageOffset → 0")
-                }
-                AppLog.info("PageLevelCore", "  cur READY pages=${layout.pages.size} totalH=${layout.totalHeight}")
-            } else {
-                state.currentChapter = null
-                AppLog.warn("PageLevelCore", "cur NULL idx=$curIdx")
-            }
-        }
-        // cur layout 已经 ready（无论是本 effect 刚加载完，还是之前已 cache），立即
-        // 触发 prev/next 预加载。冗余 check `chapterIndex != curIdx + 1` 避免重复加载。
-        launch {
-            if (curIdx > 0 && state.prevChapter?.chapterIndex != curIdx - 1) {
-                val prev = loadAndLayout(curIdx - 1)
-                if (state.currentChapterIndex == curIdx) state.prevChapter = prev
-            }
-        }
-        launch {
-            if (curIdx < state.chapterCount - 1 && state.nextChapter?.chapterIndex != curIdx + 1) {
-                val next = loadAndLayout(curIdx + 1)
-                if (state.currentChapterIndex == curIdx) state.nextChapter = next
-            }
+            coordinator.requestLoad(curIdx)
+        } else {
+            coordinator.ensureNeighbors(curIdx)
         }
     }
 
-    return remember(state, pageFactory) { PageLevelCoreHandle(state, pageFactory) }
+    return remember(state, pageFactory, windowStore, session) {
+        PageLevelCoreHandle(state, pageFactory, windowStore, session)
+    }
 }

@@ -59,10 +59,6 @@ class ReaderSession(
                 )
 
                 is EnsureResult.Ready -> error("Window store returned an inconsistent ready state")
-                is EnsureResult.Failed -> NavigationPreparation.Failed(
-                    transaction = transaction.copy(targetEntryRequestId = result.requestId),
-                    message = result.message,
-                )
             }
         }
     }

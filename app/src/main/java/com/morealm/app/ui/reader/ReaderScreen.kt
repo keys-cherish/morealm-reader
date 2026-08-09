@@ -759,6 +759,7 @@ fun ReaderScreen(
             val paddingBottomPx = with(density) { marginBottomVal.dp.toPx().toInt() }
             val fontSizePx = with(density) { readerFontSize.sp.toPx().toInt() }
             ScrollCanvasReaderHost(
+                bookId = bookId,
                 currentChapterIndex = currentIndex,
                 chapterCount = chapters.size,
                 contentVersion = renderedChapter.contentVersion,

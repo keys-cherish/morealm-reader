@@ -42,6 +42,7 @@ object ReaderRuntimeAdapter {
                     .sorted()
                     .toList(),
             ),
+            sourceLayout = layout,
         )
     }
 }
