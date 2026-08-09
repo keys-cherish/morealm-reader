@@ -159,7 +159,7 @@ private val MIGRATION_14_15 = object : Migration(14, 15) {
 }
 
 /**
- * v15 → v16: Legado-parity background toc refresh tracking.
+ * v15 → v16: 参照实现对齐 background toc refresh tracking.
  *
  * - lastCheckCount  — number of new chapters discovered on the most recent toc
  *                     refresh; drives the shelf "N 新" badge. Default 0.
@@ -397,7 +397,7 @@ private val MIGRATION_22_23 = object : Migration(22, 23) {
 }
 
 /**
- * v23 → v24：Bookmark 增加 chapterPos（章内字符偏移），对齐 Legado。
+ * v23 → v24：Bookmark 增加 chapterPos（章内字符偏移），对齐参照实现。
  *
  * 老书签 chapterPos 默认 0（章节首字符），跳转时退化为"跳到章节首页"——和迁移前
  * 行为一致，无回归；新书签会保存精确章内位置，jumpToBookmark 时调
@@ -425,9 +425,9 @@ private val MIGRATION_24_25 = object : Migration(24, 25) {
 }
 
 /**
- * v25 → v26: HttpTts 自定义朗读源补齐 Legado 字段。
+ * v25 → v26: HttpTts 自定义朗读源补齐参照实现字段。
  *
- *  - loginUrl       — 鉴权登录入口（与 Legado HttpTTS.loginUrl 对齐）
+ *  - loginUrl       — 鉴权登录入口（与参照实现 HttpTTS.loginUrl 对齐）
  *  - loginUi        — LoginUi JSON（保存即可，登录面板渲染留作后续）
  *  - loginCheckJs   — 响应预检脚本，参考成熟开源阅读器的 HTTP 朗读鉴权预检实现：
  *                     evalJS 包一层 response 做鉴权校验；失败时可走 errResponse 重试
@@ -634,14 +634,14 @@ private val MIGRATION_28_29 = object : Migration(28, 29) {
 }
 
 /**
- * v29 → v30: replace_rules.excludeScope —— 反向作用域，对齐 Legado
+ * v29 → v30: replace_rules.excludeScope —— 反向作用域，对齐参照实现
  * `ReplaceRule.excludeScope`，让一键搬家来的"这本书别套这条规则"配置真正生效。
  *
  * 设计要点：
  * - **TEXT，nullable，无 default** —— 旧 row 升级后是 NULL，DAO 查询里
  *   `excludeScope IS NULL OR excludeScope = ''` 等价"不排除任何书"，行为完全
  *   不变（解释见 [ReplaceRule.excludeScope] 的 doc）。
- * - 选 nullable 而非 `NOT NULL DEFAULT ''`：与 Legado entity 字段对齐
+ * - 选 nullable 而非 `NOT NULL DEFAULT ''`：与参照实现 entity 字段对齐
  *   (`var excludeScope: String? = null`)，搬家时直接透传，避免 null/"" 双源歧义。
  * - 不给该列加索引：scope 类查询走全表扫描即可（replace_rules 行数极少，通常 < 200）。
  */
@@ -681,14 +681,14 @@ private val MIGRATION_31_32 = object : Migration(31, 32) {
 
 /**
  * v28 → v29 jsScript 字段曾在工作区临时存在，配套整文件 JS 书源（lifecycle 模型）的导入支持。
- * 后续放弃该方向（与 Legado 规则模型不兼容、维护负担过大），从未 commit / push 到 main。
+ * 后续放弃该方向（与参照实现规则模型不兼容、维护负担过大），从未 commit / push 到 main。
  *
  * **重要修正**：曾经在此处用 `fallbackToDestructiveMigrationFrom(29)` 给开发期残留的
  * v29 DB 开 destructive 口子。但 Android Auto Backup 会跨 applicationId 还原
  * 老 DB（debug 包新装也可能拿到 v29），命中后 onDestructiveMigration 静默清空表，
  * 加上旧实现里 callback 调 restoreFromBackup 形成「清空-恢复-再清空」死循环。
  *
- * 现在的策略（参考 Legado）：
+ * 现在的策略（参考参照实现）：
  *   - **不开 fallback**。遇到 v29 这种异常版本，Room 直接 throw，app 启动崩溃，
  *     **DB 文件原封不动**——用户能从 db_backup/ 或 WebDav 手动恢复，绝不静默丢数据。
  *   - 真要手动恢复用 `db_backup/` 里的备份，或者重装能识别 v29 的旧版本 build。
@@ -780,7 +780,7 @@ object AppModule {
     fun provideDatabase(
         @ApplicationContext context: Context,
     ): AppDatabase {
-        // ── 启动主线程零 I/O（对齐 legado）──
+        // ── 启动主线程零 I/O（对齐参照实现）──
         //
         // 历史教训：早期版本在这里无条件 / 或在版本号变化分支里跑 .db 文件 copy（连同
         // WAL/SHM）+ snapshot.json 副本。但 provideDatabase 是 Hilt @Singleton 在
@@ -827,7 +827,7 @@ object AppModule {
             // 历史 bug：曾给开发期残留的 v29 DB 开口子，但配合 onDestructiveMigration
             // 里硬调文件 swap 触发了「清空-恢复-再清空」70 次循环，用户数据被实际清空。
             //
-            // 现策略（对齐 legado）：宁可启动崩溃也绝不静默清数据。版本不匹配时 Room
+            // 现策略（对齐参照实现）：宁可启动崩溃也绝不静默清数据。版本不匹配时 Room
             // 自己 throw IllegalStateException，DB 文件原样保留 —— 用户从 RecoveryActivity
             // 里选历史 daily snapshot 或 WebDav zip 恢复；onDestructiveMigration
             // 只记录、不自动 restore，避免重演死循环。

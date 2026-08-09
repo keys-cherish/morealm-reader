@@ -3,7 +3,7 @@ package com.morealm.app.ui.reader.renderer
 import com.morealm.app.domain.render.TextChapter
 
 /**
- * Compose/MVVM counterpart of Legado's page.api.DataSource.
+ * Compose/MVVM counterpart of 参照实现 page.api.DataSource.
  *
  * ViewModel still owns book/chapter loading, while the renderer reads all paging
  * inputs through this interface so PageFactory is the single page-state entry.

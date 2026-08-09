@@ -164,6 +164,13 @@ fun ReaderScreen(
     val showSettings by viewModel.isSettingsPanelVisible.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
+    // ── 选区「替换」──
+    // replaceSupported：当前章内容是否非 wire 串（EPUB 精排内容上替换规则会被整章
+    // 拦掉，见 ReaderChapterController.skipReplaceForWireContent）。false 时三个渲染
+    // host 都收到 onReplaceText = null，按钮直接不渲染。
+    // replaceDialogText：非空即弹「替换」对话框，值就是选区文字。
+    val replaceSupported by viewModel.replaceSupported.collectAsStateWithLifecycle()
+    var replaceDialogText by remember { mutableStateOf<String?>(null) }
     // ── 排版方向偏好 ──
     // 唯一被 ReaderScreen 关心的用法：在下方挑选 CanvasRenderer (横排)
     // 还是 VerticalReaderView (竖排) 渲染。绝不传给 CanvasRenderer——
@@ -200,6 +207,7 @@ fun ReaderScreen(
     val selectionMenuConfig by viewModel.settings.selectionMenuConfig.collectAsStateWithLifecycle()
     val screenTimeout by viewModel.settings.screenTimeout.collectAsStateWithLifecycle()
     val showChapterNameSetting by viewModel.settings.isChapterNameVisible.collectAsStateWithLifecycle()
+    val customTxtChapterRegex by viewModel.settings.customTxtChapterRegex.collectAsStateWithLifecycle()
     val showTimeBatterySetting by viewModel.settings.isTimeBatteryVisible.collectAsStateWithLifecycle()
     val tapLeftAction by viewModel.settings.tapLeftAction.collectAsStateWithLifecycle()
     val paragraphSpacing by viewModel.settings.paragraphSpacing.collectAsStateWithLifecycle()
@@ -288,6 +296,8 @@ fun ReaderScreen(
     var showChapterList by remember { mutableStateOf(false) }
     var showBookmarks by remember { mutableStateOf(false) }
     var showFullSearch by remember { mutableStateOf(false) }
+    var readerMenuOpen by remember { mutableStateOf(false) }
+    var seekUndoTarget by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     // Texture from theme (e.g., "texture:paper")
     val bgTexture = moColors.backgroundImageUri?.takeIf { it.startsWith("texture:") }
     val readerBrightness by viewModel.readerBrightness.collectAsStateWithLifecycle()
@@ -438,6 +448,7 @@ fun ReaderScreen(
         )
         when {
             toolbarEditing -> toolBarViewModel.exitEditMode()
+            readerMenuOpen -> readerMenuOpen = false
             showFullSearch -> showFullSearch = false
             showBookmarks -> showBookmarks = false
             showChapterList -> showChapterList = false
@@ -535,7 +546,7 @@ fun ReaderScreen(
 
                 // 阅读菜单/设置面板/TTS 面板等显示时，把音量键还给系统（让用户能调音量）。
                 // 媒体/方向键不让系统抢，因为蓝牙翻页器即便菜单弹出也希望继续翻。
-                val anyMenuOpen = showControls || showSettings || showTtsPanel ||
+                val anyMenuOpen = readerMenuOpen || showControls || showSettings || showTtsPanel ||
                     showChapterList || showBookmarks || showFullSearch
                 if (anyMenuOpen && isVolumeKey) return@onKeyEvent false
 
@@ -624,7 +635,7 @@ fun ReaderScreen(
     ) {
         // 阅读器进入 / 任一菜单关闭后重新拿焦点，确保物理键盘 / 音量键 / 蓝牙翻页器
         // 一直能进 onKeyEvent。搜索 / 书签等弹层会带 EditText 抢焦点，关闭时不会自动还。
-        val anyMenuOpenForFocus = showControls || showSettings || showTtsPanel ||
+        val anyMenuOpenForFocus = readerMenuOpen || showControls || showSettings || showTtsPanel ||
             showChapterList || showBookmarks || showFullSearch
         LaunchedEffect(anyMenuOpenForFocus) {
             if (!anyMenuOpenForFocus) {
@@ -856,6 +867,9 @@ fun ReaderScreen(
                 onTranslateText = { text -> openTranslate(text) },
                 onLookupWord = { text -> openWebSearch(text) },
                 // 分享留 M6.x 单独接入 share dialog；当前 no-op
+                // 「替换」仅在当前章内容支持替换（非 EPUB 精排 wire 串）时给出；
+                // 不支持时传 null，按钮直接不渲染，避免点了没反应。
+                onReplaceText = if (replaceSupported) { text -> replaceDialogText = text } else null,
                 onAddHighlight = { start, end, content, argb ->
                     viewModel.highlight.add(
                         chapterIndex = currentIndex,
@@ -1004,6 +1018,9 @@ fun ReaderScreen(
                         context.startActivity(android.content.Intent.createChooser(intent, "分享"))
                     }
                 },
+                // 「替换」仅在当前章内容支持替换（非 EPUB 精排 wire 串）时给出；
+                // 不支持时传 null，按钮直接不渲染，避免点了没反应。
+                onReplaceText = if (replaceSupported) { text -> replaceDialogText = text } else null,
                 onAddHighlight = { start, end, content, argb ->
                     viewModel.highlight.add(
                         chapterIndex = currentIndex,
@@ -1080,6 +1097,7 @@ fun ReaderScreen(
                 onChapterIndexChange = { newIdx ->
                     viewModel.chapter.setCurrentChapterIndexFromScroll(newIdx)
                 },
+                gesturesEnabled = !showControls && !readerMenuOpen,
                 onTapCenter = {
                     if (toolbarEditing) toolBarViewModel.exitEditMode()
                     else viewModel.toggleControls()
@@ -1159,14 +1177,17 @@ fun ReaderScreen(
                 onPageTurnCommandConsumed = { pageTurnCommand = null },
                 autoPageSeconds = autoPageInterval,
                 readAloudChapterPosition = ttsChapterPosition,
-                onScrollNearBottom = { if (!showControls) viewModel.onScrollNearBottom() },
-                onScrollReachedBottom = { if (!showControls) viewModel.onScrollReachedBottom() },
+                onScrollNearBottom = { if (!showControls && !readerMenuOpen) viewModel.onScrollNearBottom() },
+                onScrollReachedBottom = { if (!showControls && !readerMenuOpen) viewModel.onScrollReachedBottom() },
                 onCopyText = { text -> viewModel.copyTextToClipboard(text); centerToast.show("已复制") },
                 onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
                 onTranslateText = { text -> openTranslate(text) },
                 onLookupWord = { text -> openWebSearch(text) },
                 onImageClick = { src -> viewModel.onImageClick(src) },
                 chapterHighlights = viewModel.highlights.collectAsStateWithLifecycle().value,
+                // 「替换」仅在当前章内容支持替换（非 EPUB 精排 wire 串）时给出；
+                // 不支持时传 null，按钮直接不渲染，避免点了没反应。
+                onReplaceText = if (replaceSupported) { text -> replaceDialogText = text } else null,
                 onAddHighlight = { start, end, content, argb ->
                     viewModel.highlight.add(
                         chapterIndex = renderedChapter.index,
@@ -1254,7 +1275,7 @@ fun ReaderScreen(
                 titleAlign = titleAlign,
                 showChapterName = showChapterNameSetting,
                 showTimeBattery = showTimeBatterySetting,
-                controlsVisible = showControls,
+                controlsVisible = showControls || readerMenuOpen,
                 headerLeft = hdrLeft,
                 headerCenter = hdrCenter,
                 headerRight = hdrRight,
@@ -1300,6 +1321,23 @@ fun ReaderScreen(
             )
         }
 
+        // 控制栏打开时由这一层接管正文区域交互：阻止底层滚动/翻页，同时保留
+        // “再次点击正文关闭菜单”的自然操作。它绘制在 reader 之上、顶/底控制栏
+        // 之前，因此不会挡住后面绘制的菜单按钮和进度条。
+        if (showControls) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember {
+                            androidx.compose.foundation.interaction.MutableInteractionSource()
+                        },
+                        onClick = viewModel::hideControls,
+                    ),
+            )
+        }
+
         // Top bar overlay (back button + chapter info)
         AnimatedVisibility(
             visible = showControls,
@@ -1322,6 +1360,14 @@ fun ReaderScreen(
                     showBookmarks = true
                 },
                 onEffectiveReplaces = { viewModel.showEffectiveReplacesDialog() },
+                onSearch = {
+                    viewModel.hideControls()
+                    showFullSearch = true
+                },
+                onReplace = {
+                    replaceDialogText = ""
+                },
+                onMenuVisibilityChanged = { readerMenuOpen = it },
                 onSettings = {
                     viewModel.hideControls()
                     viewModel.toggleSettingsPanel()
@@ -1401,6 +1447,9 @@ fun ReaderScreen(
                 // 实时跟随阅读区像素位置而非永远停在章首。
                 onSeekFullBook = { idx, withinPct ->
                     viewModel.seekProgressInPlace(idx, withinPct)
+                },
+                onSeekCommitted = { fromChapter, fromProgress ->
+                    seekUndoTarget = fromChapter to fromProgress
                 },
                 // #3 拖动预览：取目标章节标题（包含 TXT 自动分章 displayTitle 逻辑）
                 getChapterTitle = { idx ->
@@ -1508,7 +1557,7 @@ fun ReaderScreen(
         }
 
         // Scrim overlay for panels (tap to dismiss)
-        if (showSettings || showTtsPanel || showChapterList || showBookmarks || showFullSearch) {
+        if (readerMenuOpen || showSettings || showTtsPanel || showChapterList || showBookmarks || showFullSearch) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1518,6 +1567,7 @@ fun ReaderScreen(
                         interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                     ) {
                         when {
+                            readerMenuOpen -> readerMenuOpen = false
                             showFullSearch -> showFullSearch = false
                             showSettings -> viewModel.hideSettingsPanel()
                             showTtsPanel -> viewModel.hideTtsPanel()
@@ -1598,12 +1648,49 @@ fun ReaderScreen(
                 onTextSelectableChange = viewModel.settings::setTextSelectable,
                 chineseConvertMode = viewModel.settings.chineseConvertMode.collectAsStateWithLifecycle().value,
                 onChineseConvertModeChange = viewModel::setChineseConvertMode,
+                customTxtChapterRegex = customTxtChapterRegex,
+                showTxtChapterRegex = book?.format == com.morealm.app.domain.entity.BookFormat.TXT &&
+                    !book?.localPath.isNullOrBlank(),
+                onCustomTxtChapterRegexSave = viewModel::setCustomTxtChapterRegex,
                 footerRight = ftrRight,
                 onFooterRightChange = { viewModel.settings.setHeaderFooter("footerRight", it) },
                 // #1 还原默认排版参数
                 onResetStyle = { viewModel.settings.resetAllToFactoryDefaults() },
                 onDismiss = viewModel::hideSettingsPanel,
             )
+        }
+
+        seekUndoTarget?.let { (chapterIndex, progressPercent) ->
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 150.dp),
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.inverseSurface,
+                contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 16.dp, end = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("已跳转", style = MaterialTheme.typography.labelMedium)
+                    TextButton(
+                        onClick = {
+                            viewModel.seekProgressInPlace(chapterIndex, progressPercent)
+                            seekUndoTarget = null
+                        },
+                    ) {
+                        Text("撤销")
+                    }
+                }
+            }
+        }
+
+        LaunchedEffect(seekUndoTarget) {
+            if (seekUndoTarget != null) {
+                kotlinx.coroutines.delay(3_000L)
+                seekUndoTarget = null
+            }
         }
 
         // TTS overlay panel — collect TTS state only when panel is visible
@@ -1769,6 +1856,18 @@ fun ReaderScreen(
                 accentColor = MaterialTheme.colorScheme.primary,
                 onConfirm = { viewModel.openNextLinkedBook() },
                 onDismiss = { viewModel.dismissNextBookPrompt() },
+            )
+        }
+
+        // ── 选区「替换」对话框 ──
+        replaceDialogText?.let { selected ->
+            com.morealm.app.ui.reader.ReplaceTextDialog(
+                initialPattern = selected,
+                onDismiss = { replaceDialogText = null },
+                onConfirm = { pattern, replacement, chapterOnly ->
+                    viewModel.addQuickReplace(pattern, replacement, chapterOnly)
+                    replaceDialogText = null
+                },
             )
         }
 

@@ -397,7 +397,7 @@ private fun LabeledTextField(
 }
 
 /**
- * JSON 粘贴导入对话框。识别 Legado 的三种格式：单对象 / 数组 / `{"body":[...]}`。
+ * JSON 粘贴导入对话框。识别参照实现的三种格式：单对象 / 数组 / `{"body":[...]}`。
  * 解析失败/字段缺失由 [HttpTtsManageViewModel.importFromJson] 通过 toast 反馈。
  */
 @Composable

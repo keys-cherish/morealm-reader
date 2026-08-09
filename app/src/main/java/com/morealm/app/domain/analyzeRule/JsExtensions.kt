@@ -47,7 +47,7 @@ object JsExtensions {
         val coroutineContext: CoroutineContext,
         val ruleData: RuleDataInterface?,
         /**
-         * 当前 JS 调用所归属的 AnalyzeRule 实例。Legado 那边 JsExtensions 是 interface，
+         * 当前 JS 调用所归属的 AnalyzeRule 实例。参照实现那边 JsExtensions 是 interface，
          * AnalyzeRule 直接 implements，所以书源 JS 写 `java.setContent(...)` / `java.getElements(...)`
          * 时拿到的就是当前规则实例。我们这边 JsExtensions 是 `object`，没法被继承，
          * 改用 ThreadLocal 把当前 AnalyzeRule 透传进来，由本类的 setContent/getElements
@@ -107,7 +107,7 @@ object JsExtensions {
 
     // ── AnalyzeRule 转发桥 ─────────────────────────────────────────────────────
     //
-    // Legado 那边 AnalyzeRule 直接 implements JsExtensions，书源 JS 写
+    // 参照实现那边 AnalyzeRule 直接 implements JsExtensions，书源 JS 写
     // `java.setContent(...)` / `java.getElements(...)` 拿到的就是当前规则实例。
     // 我们 JsExtensions 是 object 没法被继承，所以书源 JS 调到这两个方法时
     // 落到这里的占位实现。日志 `log_2026-05-04` 大量
@@ -119,7 +119,7 @@ object JsExtensions {
     // 整段规则中断。
 
     /**
-     * 把 [content] 注入当前规则上下文，对齐 Legado [AnalyzeRule.setContent]。
+     * 把 [content] 注入当前规则上下文，对齐参照实现 [AnalyzeRule.setContent]。
      *
      * @return 当前 [AnalyzeRule]（链式调用）；当前调用栈没有 AnalyzeRule 时返回 null。
      */
@@ -137,11 +137,11 @@ object JsExtensions {
         return rule.setContent(content, baseUrl)
     }
 
-    /** 给当前规则换 baseUrl，对齐 Legado [AnalyzeRule.setBaseUrl]。 */
+    /** 给当前规则换 baseUrl，对齐参照实现 [AnalyzeRule.setBaseUrl]。 */
     fun setBaseUrl(baseUrl: String?): AnalyzeRule? = currentAnalyzeRule()?.setBaseUrl(baseUrl)
 
     /**
-     * 用规则取列表，对齐 Legado [AnalyzeRule.getElements]。
+     * 用规则取列表，对齐参照实现 [AnalyzeRule.getElements]。
      * @return 解析结果列表；当前调用栈没有 AnalyzeRule 时返回空列表。
      */
     fun getElements(ruleStr: String): List<Any> {
@@ -159,10 +159,10 @@ object JsExtensions {
         }
     }
 
-    /** 单元素版本，对齐 Legado [AnalyzeRule.getElement]，未实现时直接返回列表第一个。 */
+    /** 单元素版本，对齐参照实现 [AnalyzeRule.getElement]，未实现时直接返回列表第一个。 */
     fun getElement(ruleStr: String): Any? = getElements(ruleStr).firstOrNull()
 
-    // 注：Legado 那边 AnalyzeRule 还提供 `getString` / `getStringList` 作为规则解析桥，
+    // 注：参照实现那边 AnalyzeRule 还提供 `getString` / `getStringList` 作为规则解析桥，
     // 但本类的 [getString]（HTTP fetch，行 134/224）和 [JsExtensions.connect] 衍生
     // 出来的同名方法占用了相同 JVM 签名，重定义会触发 platform declaration clash。
     // 当前书源 JS 主要报 `setContent` / `getElements` 找不到，先把这两个补齐让规则
@@ -204,7 +204,7 @@ object JsExtensions {
 
     fun ajax(url: Any, callTimeout: Long?): String? = ajax(url)
 
-    /** Legado-compatible: fetch URL and return body string (used by many book sources) */
+    /** 参照实现-compatible: fetch URL and return body string (used by many book sources) */
     fun getString(url: String): String? = ajax(url)
 
     fun getString(url: String, headers: Any?): String? = connect(url, headers).body
@@ -432,7 +432,7 @@ object JsExtensions {
         return createSymmetricCrypto(transformation, key.toByteArray(), iv?.toByteArray())
     }
 
-    // ── Legado 兼容 AES 便捷接口 ──
+    // ── 参照实现兼容 AES 便捷接口 ──
     //
     // 参考成熟开源阅读器实现的 JS 加解密便捷接口（已 @Deprecated 但仍被大量书源 JS 调用）。
     // 形如「{{书源 JS}}」里写 `java.aesBase64DecodeToString(data, key, "AES/CBC/PKCS5Padding", iv)`
@@ -440,7 +440,7 @@ object JsExtensions {
     // 全部转调本类已有的 [createSymmetricCrypto] / [SymmetricCryptoHelper]，零运行时新依赖。
     //
     // 解码失败（key 错 / 数据非合法 base64 / cipher 抛 BadPaddingException 等）一律
-    // 返回 null —— 与 Legado 行为一致，让书源 JS 可以 try/catch 回退。绝不抛到 caller。
+    // 返回 null —— 与参照实现行为一致，让书源 JS 可以 try/catch 回退。绝不抛到 caller。
 
     /**
      * 已经 base64 编码的 AES 密文 → 解密为字符串。
@@ -485,8 +485,8 @@ object JsExtensions {
 
     /**
      * AES 加密原文 → 原始密文字符串（用 platform default charset 解码 ByteArray）。
-     * 注意：该接口在 Legado 命名上虽叫 `aesEncodeToString` 但语义和 `decryptStr` 一致（Legado
-     * 这边有历史遗留——回调实际还是 decryptStr）。我们沿用 Legado 行为以保证 JS 规则兼容。
+     * 注意：该接口在参照实现命名上虽叫 `aesEncodeToString` 但语义和 `decryptStr` 一致（参照实现
+     * 这边有历史遗留——回调实际还是 decryptStr）。我们沿用参照实现行为以保证 JS 规则兼容。
      */
     fun aesEncodeToString(
         data: String, key: String, transformation: String, iv: String,
@@ -688,7 +688,7 @@ object JsExtensions {
             "JsExtensions",
             "startBrowser requested by source '${getSource()?.bookSourceName ?: ""}': $title $url",
         )
-        // MoRealm 当前没有 Legado 那种交互式 WebView Activity (SourceVerificationDialog)；
+        // MoRealm 当前没有参照实现那种交互式 WebView Activity (SourceVerificationDialog)；
         // 退而用后台 WebView 跑一次页面，让 cookie 通过 onPageFinished 写回 CookieStore
         // —— 能覆盖「自动跑 JS 写 cookie」类的源；图形验证码 / 扫码登录暂不支持，
         // 后续做交互式 WebView 时改造此方法。
@@ -724,7 +724,7 @@ object JsExtensions {
             "startBrowserAwait fallback (no UI) for '${getSource()?.bookSourceName ?: ""}': $title $url",
         )
         // 关键变更：旧实现 html 为空时走 connect(url).body 直 GET，**cookie 不会写回**——
-        // 这就是大量 Legado 书源迁过来"以为登录成功实际没登录"的根因。改走 BackstageWebView
+        // 这就是大量参照实现书源迁过来"以为登录成功实际没登录"的根因。改走 BackstageWebView
         // 让 onPageFinished 把 cookie 持久化到 CookieStore，下一次请求就能自动带上。
         // 仍然没有用户交互能力（弹不出可见 WebView），所以图形验证码 / 滑块 / 扫码类源
         // 还是会失败——这部分等交互式 WebView Activity 落地再补。

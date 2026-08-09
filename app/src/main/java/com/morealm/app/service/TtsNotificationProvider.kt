@@ -15,18 +15,18 @@ import com.morealm.app.core.log.AppLog
 
 /**
  * Custom notification provider for the TTS service — ported visual semantics from
- * Legado's [`BaseReadAloudService.createNotification`]:
+ * 参照实现 [`BaseReadAloudService.createNotification`]:
  *
- *  - **Title** uses Legado's tri-state template:
+ *  - **Title** uses 参照实现 tri-state template:
  *      - playing: `朗读: <book>`
  *      - paused: `朗读暂停: <book>`
  *      - timer running: `朗读定时 N 分钟: <book>`
  *  - **Subtitle** = chapter title (no decorative quotes; falls back to "正在加载…")
  *  - **SubText** = "朗读" (channel hint shown in the small badge)
- *  - **Small icon** = volume_up (matches Legado `ic_volume_up`)
+ *  - **Small icon** = volume_up (matches 参照实现 `ic_volume_up`)
  *  - **Large icon** = book cover bitmap when available
  *  - **Actions** = prev / play-pause / next / stop / +10-minute timer (5 buttons,
- *    same order and semantics as Legado)
+ *    same order and semantics as 参照实现)
  *  - **Compact view** shows actions [0..2] = prev / play-pause / next
  *  - **Tap target** opens the launcher activity ([`Class.forName`-resolved] to avoid
  *    a hard import cycle into UI code)
@@ -84,7 +84,7 @@ class TtsNotificationProvider(private val service: TtsService) : MediaNotificati
         sleepMinutes: Int,
         compatToken: android.support.v4.media.session.MediaSessionCompat.Token?,
     ): android.app.Notification {
-        // Legado-style title template
+        // 参照实现-style title template
         val statePrefix = when {
             !isPlaying -> "朗读暂停"
             sleepMinutes > 0 -> "朗读定时 $sleepMinutes 分钟"
@@ -167,7 +167,7 @@ class TtsNotificationProvider(private val service: TtsService) : MediaNotificati
 
     /**
      * PendingIntent that brings the user back to the launcher activity when the user
-     * taps the notification body (matches Legado's `activityPendingIntent<ReadBookActivity>`).
+     * taps the notification body (matches 参照实现 `activityPendingIntent<ReadBookActivity>`).
      *
      * We resolve the launcher class by querying [PackageManager] so this provider doesn't
      * need a compile-time dependency on the UI module.

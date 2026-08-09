@@ -102,7 +102,7 @@ class PageTurnAnimController {
 /**
  * page-level 翻页阅读器宿主 —— 服务 COVER / SLIDE / NONE 三种横向翻页动画。
  *
- * 设计参考 Legado `ReadView` (FrameLayout 单实例) + `PageDelegate` (各动画独立) 模型：
+ * 设计参考参照实现 `ReadView` (FrameLayout 单实例) + `PageDelegate` (各动画独立) 模型：
  *
  * - **共享** (本 Host)：page-level state/factory (走 [rememberPageLevelCore]) + engine
  *   + paint 派生 + 长按选区 + 手势接收 + InfoBar + 进度上报 + TTS 跟随
@@ -183,6 +183,11 @@ fun PageLevelReaderHost(
     onLookupWord: (String) -> Unit = {},
     onShareQuote: (String) -> Unit = {},
     onAddHighlight: ((startCp: Int, endCp: Int, content: String, colorArgb: Int) -> Unit)? = null,
+    /**
+     * 选区菜单「替换」—— 参数为选中文字。null 时该按钮不渲染（EPUB 精排 wire 内容上
+     * 替换规则会被整章拦掉，给了也是静默无效）。
+     */
+    onReplaceText: ((String) -> Unit)? = null,
     onEraseHighlight: ((startCp: Int, endCp: Int) -> Unit)? = null,
     onAddTextColor: ((startCp: Int, endCp: Int, content: String, colorArgb: Int) -> Unit)? = null,
     onAddUnderline: ((startCp: Int, endCp: Int, content: String, colorArgb: Int, style: Int) -> Unit)? = null,
@@ -213,6 +218,8 @@ fun PageLevelReaderHost(
     pageTurnCommand: com.morealm.app.ui.reader.renderer.ReaderPageDirection? = null,
     onPageTurnCommandConsumed: () -> Unit = {},
     onChapterIndexChange: (Int) -> Unit = {},
+    /** 阅读菜单显示时关闭正文区域的点击、拖动和仿真翻页。 */
+    gesturesEnabled: Boolean = true,
     onTapCenter: () -> Unit = {},
     /**
      * 点击命中 `<a href>` 区间（脚注号/跳转链接）。href 为书内原始相对路径 + 可选
@@ -673,10 +680,10 @@ fun PageLevelReaderHost(
             .map { it.chapterPos }
     }
 
-    // ── zone tap → 各 Transition 自身动画 commit（Legado PageDelegate 模型）──
+    // ── zone tap → 各 Transition 自身动画 commit（参照实现 PageDelegate 模型）──
     // SLIDE/COVER Transition 通过 turnCtrl 注入 animateAndCommit lambda；NONE 不注册 → fallback 瞬切。
     // currentAnimJob 串行化连点：新 tap 启动前 cancelAndJoin 前一个 → 前一次 finally 立即
-    // commit 翻页（pageFactory.moveToNext + reset offset），再 launch 新动画。视觉等价 Legado
+    // commit 翻页（pageFactory.moveToNext + reset offset），再 launch 新动画。视觉等价参照实现
     // abortAnim()+fillPage：连点 N 次翻 N 页不丢。
     val turnCtrl = remember { PageTurnAnimController() }
     val commitPageTurn: (Boolean, NavigationSource) -> Boolean = { isNext, source ->
@@ -744,7 +751,7 @@ fun PageLevelReaderHost(
     }
 
     // ── 选区 / 长按 / tap-on-highlight 状态（P4.4 接入）──
-    // 共享在 Host 层（Legado ReadView 模型）：长按检测 + 选区状态 + 高亮 action 弹窗
+    // 共享在 Host 层（参照实现 ReadView 模型）：长按检测 + 选区状态 + 高亮 action 弹窗
     // 都在 Host，所有 Transition (NONE/SLIDE/COVER) 共享。Transition 不再自己接 pointerInput。
     var selection by remember { mutableStateOf(ScrollSelectionState.Empty) }
     var highlightActionTarget by remember(core.state.currentChapterIndex) {
@@ -860,7 +867,7 @@ fun PageLevelReaderHost(
     // 用 modifier.then(if...) 在 SIMULATION 时跳过 detectTapGestures，避免 Compose 多余
     // pointerInput 注册（虽然事件到不了它，但 modifier 链路本身不浪费再好）。
     val hostTapModifier =
-        if (animType != PageAnimType.SIMULATION) {
+        if (gesturesEnabled && animType != PageAnimType.SIMULATION) {
             Modifier.pointerInput(
                 animType, selection.isActive, highlightActionTarget != null, chapterHighlightsRaw,
                 // tap 配置必须进 key：否则 detectTapGestures 闭包在 pointerInput 启动时
@@ -1120,8 +1127,9 @@ fun PageLevelReaderHost(
                         nextPageBookmarkCps = nextPageBookmarkCps,
                         nextPlusPageBookmarkCps = nextPlusPageBookmarkCps,
                         prevPageBookmarkCps = prevPageBookmarkCps,
-                         turnCtrl = turnCtrl,
-                         commitPageTurn = commitPageTurn,
+                        turnCtrl = turnCtrl,
+                        gesturesEnabled = gesturesEnabled,
+                        commitPageTurn = commitPageTurn,
                         pageInfoBarProvider = pageInfoBarProvider,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -1154,6 +1162,7 @@ fun PageLevelReaderHost(
                         bitmapProvider = bitmapProvider,
                         backgroundColor = bgColorArgb,
                         bgMeanColor = bgColorArgb,
+                        gesturesEnabled = gesturesEnabled,
                         onTapCenter = onTapCenter,
                         tapActionTopLeft = tapActionTopLeft,
                         tapActionTopRight = tapActionTopRight,
@@ -1192,8 +1201,9 @@ fun PageLevelReaderHost(
                         curPageBookmarkCps = curPageBookmarkCps,
                         nextPageBookmarkCps = nextPageBookmarkCps,
                         prevPageBookmarkCps = prevPageBookmarkCps,
-                         turnCtrl = turnCtrl,
-                         commitPageTurn = commitPageTurn,
+                        turnCtrl = turnCtrl,
+                        gesturesEnabled = gesturesEnabled,
+                        commitPageTurn = commitPageTurn,
                         pageInfoBarProvider = pageInfoBarProvider,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -1255,6 +1265,9 @@ fun PageLevelReaderHost(
                         },
                         onUnderline = onAddUnderline?.let { cb ->
                             { argb, style -> cb(cpRange.first, cpRange.last, selText, argb, style); selection = ScrollSelectionState.Empty }
+                        },
+                        onReplace = onReplaceText?.let { cb ->
+                            { cb(selText); selection = ScrollSelectionState.Empty }
                         },
                         onDismiss = { selection = ScrollSelectionState.Empty },
                         config = selectionMenuConfig,

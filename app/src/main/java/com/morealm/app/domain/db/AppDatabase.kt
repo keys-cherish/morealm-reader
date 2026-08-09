@@ -8,7 +8,7 @@ import com.morealm.app.domain.entity.*
 /**
  * AppDatabase
  *
- * ## Schema 升级路线（参考 Legado 风格，强制走 AutoMigration）
+ * ## Schema 升级路线（参考参照实现风格，强制走 AutoMigration）
  *
  * **从 v28 起，新版本必须用 AutoMigration**——Room 编译时会对比相邻版本的
  * schema JSON（位于 `app/schemas/`），自动生成 ALTER SQL。比手写 Migration
@@ -104,7 +104,9 @@ import com.morealm.app.domain.entity.*
         // v37→v38: 加表 shelf_groups + shelf_group_books（书架 tab 自定义分组，
         // 多对多成员制）。纯新增表，Room 自动 CREATE TABLE。
         AutoMigration(from = 37, to = 38),
-        // v38->v39: replace_rules adds nullable chapterIndex for chapter-scoped replacements.
+        // v38→v39: replace_rules 加 chapterIndex 列（NULL = 全书生效，非 NULL = 只对该章
+        // 生效）。选区菜单的「替换」允许把作用域限到当前章，而旧 schema 只有「全局 /
+        // 按书」两档。纯加列且默认 NULL，老规则行为完全不变。
         AutoMigration(from = 38, to = 39),
     ],
 )

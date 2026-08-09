@@ -48,7 +48,7 @@ object SharedJsScope {
     private fun buildScope(js: String): Scriptable {
         val scope = RhinoScriptEngine.getRuntimeScope(ScriptBindings())
         RhinoScriptEngine.eval(js, scope)
-        // 阻止隐式全局变量创建（函数内漏 var 直接报错），与 Legado 保持一致
+        // 阻止隐式全局变量创建（函数内漏 var 直接报错），与参照实现保持一致
         (scope as? ScriptableObject)?.preventExtensions()
         return scope
     }

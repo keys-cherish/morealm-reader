@@ -148,9 +148,9 @@ data class BookSource(
     /**
      * 执行登录脚本，传入用户填写的表单数据。
      *
-     * 注入的 bindings 与 Legado SourceLoginDialog.login 对齐：
+     * 注入的 bindings 与参照实现 SourceLoginDialog.login 对齐：
      *  - `result` = [loginData] 表单值
-     *  - `book` / `chapter` = null（MoRealm 登录入口当前不携带书上下文，与 Legado
+     *  - `book` / `chapter` = null（MoRealm 登录入口当前不携带书上下文，与参照实现
      *    "从书源管理页直接登录"路径一致；如需带书上下文走 SourceLoginActivity 那条路再补）
      *  - `isLongClick` = false
      *
@@ -158,7 +158,7 @@ data class BookSource(
      * 由 ViewModel 在创建时持有 lambda 把 JS 反向通道映射到 SharedFlow。
      *
      * [preludeJs] 会拼到脚本最前面。典型用途：`SourceLoginScriptApi.LEGACY_JAVA_COMPAT_PRELUDE`
-     * 让 Legado 原生 `java.upLoginData` 类写法零改动跑通。空串时按老逻辑处理。
+     * 让参照实现原生 `java.upLoginData` 类写法零改动跑通。空串时按老逻辑处理。
      */
     fun login(
         loginData: Map<String, String> = emptyMap(),
@@ -218,7 +218,7 @@ data class BookSource(
     /**
      * 获取用户登录信息（明文 JSON 字符串）。
      * 兼容旧数据：若缓存值不带 AES 魔数，按明文返回；新数据自动解密。
-     * 与 Legado [BaseSource.getLoginInfo] 行为对齐（解密失败兜底）。
+     * 与参照实现 [BaseSource.getLoginInfo] 行为对齐（解密失败兜底）。
      */
     fun getLoginInfo(): String? {
         val raw = CacheManager.get("userInfo_${getKey()}") ?: return null
@@ -233,7 +233,7 @@ data class BookSource(
                 jsonParser.decodeFromString<Map<String, String>>(info)
             } catch (_: Exception) { null }
         }
-        // 缓存未命中 → 用 loginUi 默认值兜底初始化（移植 Legado BaseSource:187-215）。
+        // 缓存未命中 → 用 loginUi 默认值兜底初始化（移植参照实现 BaseSource:187-215）。
         // 仅在 loginUi 是普通 JSON（非 @js: / <js> 前缀）时直接生效；JS 前缀场景由
         // SourceLoginViewModel.parseLoginUi 在打开对话框时统一处理，避免在 entity 层
         // 拉起脚本引擎（线程 / 错误处理都更适合放 ViewModel）。
@@ -253,7 +253,7 @@ data class BookSource(
                 initial[name] = default
             }
             if (initial.isEmpty()) return null
-            // 把默认值持久化到缓存，下次直接命中（与 Legado 行为一致）
+            // 把默认值持久化到缓存，下次直接命中（与参照实现行为一致）
             putLoginInfo(jsonParser.encodeToString(
                 kotlinx.serialization.builtins.MapSerializer(
                     String.serializer(),
@@ -345,7 +345,7 @@ data class BookSource(
             bindings["cache"] = CacheManager
             extraBindings?.invoke(bindings)
             // jsLib 里声明的变量（host / 辅助函数等）通过 prototype 链暴露给后续 eval。
-            // 对齐 Legado BaseSource.evalJS：有 sharedScope 就跳过 getRuntimeScope，
+            // 对齐参照实现 BaseSource.evalJS：有 sharedScope 就跳过 getRuntimeScope，
             // 直接把 bindings.prototype 挂成 sharedScope；否则走原 topLevel 路径。
             val sharedScope = SharedJsScope.getScope(jsLib)
             val scope = if (sharedScope != null) {

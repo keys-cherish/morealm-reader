@@ -31,12 +31,12 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 
 /**
- * page-level 阅读器各 Host 共享 core —— Legado ReadView + TextPageFactory 模型在
+ * page-level 阅读器各 Host 共享 core —— 参照实现 ReadView + TextPageFactory 模型在
  * MoRealm V2 Compose 下的等价实现。
  *
  * ## 设计动机
  *
- * Legado ReadView 是单一 FrameLayout 实例，6 种 PageDelegate (CoverPageDelegate /
+ * 参照实现 ReadView 是单一 FrameLayout 实例，6 种 PageDelegate (CoverPageDelegate /
  * SlidePageDelegate / SimulationPageDelegate / ScrollPageDelegate / NoAnimPageDelegate)
  * 可热切换。**共享**：state (ReadBook 单例) + pageFactory + 章节加载 + 长按选区 +
  * 手势接收。**独立**：各 Delegate 只 own 动画绘制 + drag 偏移 + fling settle。

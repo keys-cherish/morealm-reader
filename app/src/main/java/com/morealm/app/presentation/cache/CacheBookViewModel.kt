@@ -265,7 +265,7 @@ class CacheBookViewModel @Inject constructor(
      * Stage B/C: EPUB 导出。复用 [exportTxt] 的 pendingExportBookId/Start/End 三件套，
      * 但走单独的 SAF MIME 类型 (`application/epub+zip`)，所以 UI 那边要 launcher
      * 二选一。封面字节由调用方提供；目前 UI 还没接图片下载，先传 null（无封面），
-     * 与 Legado 在缓存目录里没有封面时的行为一致。
+     * 与参照实现在缓存目录里没有封面时的行为一致。
      */
     fun exportEpub(book: Book, uri: Uri, startIndex: Int = 0, endIndex: Int = -1, coverBytes: ByteArray? = null) {
         viewModelScope.launch(Dispatchers.IO) {

@@ -12,7 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * 章节状态单一真值 holder，仿照 Legado 的 ReadBook 模型。
+ * 章节状态单一真值 holder，仿照参照实现的 ReadBook 模型。
  *
  * 设计目标：消除滚动模式跨章「commit → loadChapter(async) → StateFlow → 多
  * LaunchedEffect」三跳异步链路造成的章末闪现/留白/进度振荡。
@@ -30,7 +30,7 @@ import kotlinx.coroutines.launch
  * 下一帧重组 Compose 看到的就是新章节，**不存在异步窗口**。被腾出去的 next
  * 指针由 [chapterLoader] 在后台协程异步重填，但同步链路在此之前已完成。
  *
- * 对应 Legado [`ContentTextView.scroll`] 中
+ * 对应参照实现 [`ContentTextView.scroll`] 中
  * ```
  * pageFactory.moveToNext(true) → ReadBook.moveToNextChapter(...) →
  * curTextChapter = nextTextChapter（同步赋值）
@@ -44,7 +44,7 @@ import kotlinx.coroutines.launch
  * ### 3. Compose 状态而非 StateFlow
  * 用 [mutableStateOf] 而不是 [kotlinx.coroutines.flow.MutableStateFlow]，因为：
  *   - 同步赋值后下一帧重组立即可见（StateFlow + collectAsState 引入 Channel 帧延迟）
- *   - Legado 的 ReadBook 是同步 var，对齐这个语义
+ *   - 参照实现的 ReadBook 是同步 var，对齐这个语义
  *   - 字段 read 在 Compose 重组里自动建立依赖
  *
  * ### 4. 生命周期
@@ -62,7 +62,7 @@ import kotlinx.coroutines.launch
  * ## 与现有死代码 `_curTextChapter` 的关系
  *
  * [ReaderChapterController] 第 100-108 行已声明 `_prevTextChapter / _curTextChapter
- * / _nextTextChapter` 三个 MutableStateFlow，但从未被赋值（注释标 "Legado-style"
+ * / _nextTextChapter` 三个 MutableStateFlow，但从未被赋值（注释标 "参照实现-style"
  * 但接了一半）。Phase 2 接入完成后那段死代码会被删除。
  */
 class ReadBookHolder(
@@ -102,7 +102,7 @@ class ReadBookHolder(
     /**
      * 章节内当前页索引（0-based）。
      * - 跨章 NEXT 后置为 0（新章节首页）
-     * - 跨章 PREV 后置为 (新章节 pageSize - 1)（新章节末页，跟 Legado 一致）
+     * - 跨章 PREV 后置为 (新章节 pageSize - 1)（新章节末页，跟参照实现一致）
      * - 用户翻页 / 滚动期间由调用方直接赋值
      *
      * 公开 setter（不走 helper 函数）：避免与 Compose mutableIntStateOf 自动生成的
@@ -155,7 +155,7 @@ class ReadBookHolder(
     /**
      * 同步指针腾挪 PREV 路径：cur 沉到 next，prev 升为 cur。
      *
-     * curPageIndex 落新章节末页（与 Legado moveToPrev 一致）。注意此时新
+     * curPageIndex 落新章节末页（与参照实现 moveToPrev 一致）。注意此时新
      * curTextChapter.pageSize 可能还在异步排版中（layoutChapterAsync 流式增页），
      * 调用方读 curPageIndex 后应做一次越界 clamp（因为 pageSize 可能未到位）。
      */

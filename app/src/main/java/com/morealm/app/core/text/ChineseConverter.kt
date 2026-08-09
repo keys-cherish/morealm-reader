@@ -4,7 +4,7 @@ import com.morealm.app.core.log.AppLog
 
 /**
  * Chinese simplified ↔ traditional converter.
- * Uses quick-transfer-core library (same as Legado).
+ * Uses quick-transfer-core library (same as the reference implementation).
  *
  * Modes: 0 = off, 1 = simplified→traditional, 2 = traditional→simplified
  */

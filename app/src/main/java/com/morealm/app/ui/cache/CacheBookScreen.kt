@@ -106,7 +106,7 @@ fun CacheBookScreen(
 
     // Stage C：EPUB 多卷文件夹 launcher。对话框里用户选了 EPUB + 分卷大小 > 0 时
     // 触发 —— 用户选一次目录，ViewModel 在该目录下批量建多个 .epub 卷文件。比起
-    // 让用户手点 N 次 CreateDocument，这是 Legado 早期就用的体验。
+    // 让用户手点 N 次 CreateDocument，这是参照实现早期就用的体验。
     //
     // 取了 takePersistableUriPermission 让回调期间 ContentResolver 不丢权限；这条
     // 权限不长期持有（用完即弃，不污染用户的"应用持久授权列表"），所以没在退出

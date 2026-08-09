@@ -35,7 +35,7 @@ import kotlinx.coroutines.launch
 /**
  * 平移翻页（SLIDE）独立 Transition —— V2 page-level 横向 Transition。
  *
- * 按 Legado PageDelegate 模型：Transition 只 own **drag + animation 翻页**，
+ * 按参照实现 PageDelegate 模型：Transition 只 own **drag + animation 翻页**，
  * tap/长按/选区由 [PageLevelReaderHost] 共享层处理（Transition 不接 pointerInput tap）。
  *
  * - 手势：detectHorizontalDragGestures + settle-to-edge fling（无 animateDecay 卡半空 bug）
@@ -71,6 +71,7 @@ fun SlidePageTransition(
     /** Host 注入：zone tap → 走 animateAndCommit 平移动画；null = Host fallback 瞬切 */
     turnCtrl: PageTurnAnimController? = null,
     commitPageTurn: (isNext: Boolean, source: NavigationSource) -> Boolean,
+    gesturesEnabled: Boolean = true,
     /** Host 注入：按 page 现算页内页眉页脚（随页翻）；默认 { null } = 不画。 */
     pageInfoBarProvider: (ScrollPage) -> PageInfoBarSpec? = { null },
     modifier: Modifier = Modifier,
@@ -94,7 +95,7 @@ fun SlidePageTransition(
             ) { value, _ -> state.pageOffset = value }
         } finally {
             // 无论正常完成还是被 cancel（新 tap 打断），都立即把 pageOffset 推到 targetEdge
-            // 并 commit 翻页。等价 Legado abortAnim()+fillPage：前一次 tap 的翻页不丢失。
+            // 并 commit 翻页。等价参照实现 abortAnim()+fillPage：前一次 tap 的翻页不丢失。
             // finally 内只有 sync 操作（state 写 + moveToNext sync 调用），不需 NonCancellable。
             state.pageOffset = targetEdge
             when {
@@ -137,7 +138,7 @@ fun SlidePageTransition(
     Layout(
         modifier = modifier
             .onSizeChanged { viewportWidthPx = it.width }
-            .pointerInput(Unit) {
+            .then(if (gesturesEnabled) Modifier.pointerInput(Unit) {
                 detectHorizontalDragGestures(
                     onDragStart = {
                         com.morealm.app.core.log.AppLog.info("SlideTransition", "DIAG onDragStart viewportW=$viewportWidthPx pageOffset=${state.pageOffset}")
@@ -197,7 +198,7 @@ fun SlidePageTransition(
                     },
                     onDragCancel = { velocityTracker.resetTracking() },
                 )
-            },
+            } else Modifier),
         content = {
             val curPage = pageFactory.curPage
             val nextPage = pageFactory.nextPage

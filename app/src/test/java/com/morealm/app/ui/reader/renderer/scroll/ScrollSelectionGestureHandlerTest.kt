@@ -37,6 +37,37 @@ class ScrollSelectionGestureHandlerTest {
         )
     }
 
+    /** 按给定文本逐字建 column 的行（每字 30px 宽），用于分词边界断言。 */
+    private fun mockLineOf(text: String, firstCp: Int = 0, lineTop: Float = 60f): ScrollLine {
+        val columns = text.mapIndexed { i, ch ->
+            ScrollColumn(
+                charData = ch.toString(),
+                start = i * 30f,
+                end = (i + 1) * 30f,
+                chapterPosition = firstCp + i,
+            )
+        }
+        return ScrollLine(
+            columns = columns,
+            lineTop = lineTop,
+            lineBottom = lineTop + 60f,
+            paragraphNum = 1,
+            isTitle = false,
+            text = text,
+            firstChapterPos = firstCp,
+            lastChapterPos = firstCp + text.length - 1,
+        )
+    }
+
+    private fun layoutOf(text: String, chapterIndex: Int = 5): ScrollChapterLayout {
+        val page = ScrollPage(0, listOf(mockLineOf(text)), 200f, chapterIndex)
+        return ScrollChapterLayout(
+            chapterIndex = chapterIndex,
+            title = "T", pages = listOf(page), totalHeight = 200f,
+            viewWidth = 1080, styleSignature = "mock", totalCharCount = text.length + 1,
+        )
+    }
+
     private fun mockLayout(chapterIndex: Int = 5): ScrollChapterLayout {
         val line = mockLine(firstCp = 0, columnCount = 10, lineTop = 60f)
         val page = ScrollPage(0, listOf(line), 200f, chapterIndex)
@@ -50,14 +81,27 @@ class ScrollSelectionGestureHandlerTest {
     // ── handleLongPress ─────────────────────────────────────
 
     @Test
-    fun `长按命中字符 返单字符选区 startCp 等于 endCp 等于命中 cp`() {
-        val layout = mockLayout(chapterIndex = 5)
-        // column[3] x in [90, 120]，y in [60, 120]
-        val sel = handleLongPress(layout, chapterIndex = 5, x = 100f, yInChapter = 80f)
+    fun `长按命中字符 选区扩到整词边界`() {
+        // "hi you"：点在 'y'(idx 3) 上应整词选中 "you"(3..5)。
+        // 旧行为是只选中单个 'y' —— 用户长按一个词只高亮一个字，必须再拖游标才凑齐。
+        val layout = layoutOf("hi you")
+        val sel = handleLongPress(layout, chapterIndex = 5, x = 3 * 30f + 15f, yInChapter = 80f)
         assertTrue(sel.isActive)
         assertEquals(3, sel.startCp)
-        assertEquals(3, sel.endCp)
+        assertEquals(5, sel.endCp)
         assertEquals(5, sel.chapterIndex)
+        assertFalse(sel.isSingleChar)
+    }
+
+    @Test
+    fun `长按命中空白 不扩词 退回单字符`() {
+        // idx 2 是空格。BreakIterator 会把连续空白单独切成一段，扩过去等于选中
+        // 一片看不见的东西，所以这种情况明确退回单字符。
+        val layout = layoutOf("hi you")
+        val sel = handleLongPress(layout, chapterIndex = 5, x = 2 * 30f + 15f, yInChapter = 80f)
+        assertTrue(sel.isActive)
+        assertEquals(2, sel.startCp)
+        assertEquals(2, sel.endCp)
         assertTrue(sel.isSingleChar)
     }
 

@@ -13,7 +13,7 @@ import java.io.FileOutputStream
 
 /**
  * PDF parser using Android's PdfRenderer.
- * Caches the PdfRenderer instance (like Legado's PdfFile singleton pattern)
+ * Caches the PdfRenderer instance (like 参照实现 PdfFile singleton pattern)
  * to avoid re-opening the file descriptor on every page render.
  */
 object PdfParser {

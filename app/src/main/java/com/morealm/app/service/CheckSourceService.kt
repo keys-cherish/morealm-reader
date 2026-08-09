@@ -287,7 +287,7 @@ class CheckSourceService : Service() {
         checkJob?.cancel()
         serviceScope.cancel()
         // 清状态：下次 UI 拿到的就是 Idle，避免显示"已完成"残留
-        // —— 但保留 _results 让 UI 能继续展示本轮结果到用户主动刷新（与 Legado 一致）
+        // —— 但保留 _results 让 UI 能继续展示本轮结果到用户主动刷新（与参照实现一致）
         if (_state.value !is State.Done) {
             _state.value = State.Idle
         }

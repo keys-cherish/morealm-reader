@@ -11,9 +11,9 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 /**
- * 手写 EPUB3 zip 输出器（参考 Legado 的目录结构与 HTML/CSS 模板，但不依赖 epublib）。
+ * 手写 EPUB3 zip 输出器（参考参照实现的目录结构与 HTML/CSS 模板，但不依赖 epublib）。
  *
- * 输出布局（与 Legado 一致，便于用户在两个 app 之间互通）：
+ * 输出布局（与参照实现一致，便于用户在两个 app 之间互通）：
  *
  * ```
  * mimetype                  ← 必须第一条目，STORED（不压缩），CRC=2007599984（"application/epub+zip"）
@@ -33,11 +33,11 @@ import java.util.zip.ZipOutputStream
  *     cover.jpg             ← 仅当有 [coverBytes] 时生成
  * ```
  *
- * **未实现**（相对 Legado 的简化）：
- *  - 章节正文图片内联（Legado 的 fixPic 把 `<img>` 抓为 Images/<md5>.<ext>）；
+ * **未实现**（相对参照实现的简化）：
+ *  - 章节正文图片内联（参照实现的 fixPic 把 `<img>` 抓为 Images/<md5>.<ext>）；
  *    本实现把 `<img>` 标签原样保留，外部 URL 在阅读器看不到图但不影响文字。
- *  - 多卷分册（Legado 的 CustomExporter.size）；交给 Stage C。
- *  - 卷标作为父级 TOC（Legado 走 `addSection(parent, ...)`）；本实现把所有
+ *  - 多卷分册（参照实现的 CustomExporter.size）；交给 Stage C。
+ *  - 卷标作为父级 TOC（参照实现走 `addSection(parent, ...)`）；本实现把所有
  *    章节平铺到一级 TOC，足够大多数网文使用。
  *
  * 性能：单本 1000 章 ≈ 5MB EPUB；流式写出（章节内容串行 read → write），峰值
@@ -178,7 +178,7 @@ class EpubExporter(
      *  - HTML/XML 特殊字符转义（&、<、>），保留 `<img>` 这种用户已有的 HTML（如果是
      *    干净的标签，本函数不做语法校验 — 责任在 ContentProcessor 上游）
      *
-     * Legado 用 `contentProcessor.getContent(...).toString()` 已经是分行文本；MoRealm
+     * 参照实现用 `contentProcessor.getContent(...).toString()` 已经是分行文本；MoRealm
      * 这里直接读 cache 里的字符串（同样分行），所以行内策略对齐。
      */
     private fun textToXhtml(raw: String): String {

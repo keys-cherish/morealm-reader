@@ -330,7 +330,7 @@ class ReaderTtsController(
     }
 
     /**
-     * Increment sleep timer by 10 minutes (Legado-style cycle).
+     * Increment sleep timer by 10 minutes (参照实现-style cycle).
      * 0 → 10, 10..170 → +10 (cap 180), 180 → 0.
      */
     fun addTtsSleepTimer() {

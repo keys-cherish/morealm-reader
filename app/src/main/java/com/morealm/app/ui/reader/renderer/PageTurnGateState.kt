@@ -1,7 +1,7 @@
 package com.morealm.app.ui.reader.renderer
 
 /**
- * Compose/MVVM counterpart of Legado's PageDelegate base state.
+ * Compose/MVVM counterpart of 参照实现 PageDelegate base state.
  *
  * It owns only direction/running/cancel/moved flags. Rendering remains in
  * Compose animation implementations, but all page-turn entries must pass this

@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 图片 LRU 缓存，避免每次绘制都重新解码。
- * 参考 Legado ImageProvider 的动态缓存策略：
+ * 参考参照实现 ImageProvider 的动态缓存策略：
  * - 最小 50MB，最大 256MB
  * - 在 [50MB, maxMemory/4] 范围内动态选择
  *

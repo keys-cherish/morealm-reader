@@ -18,16 +18,16 @@ import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
- * Legado 一键搬家页的 ViewModel —— 封装"选 zip → 解析 → 预览 → 导入"四步流程。
+ * 参照实现一键搬家页的 ViewModel —— 封装"选 zip → 解析 → 预览 → 导入"四步流程。
  *
  * 故意**不**复用 [ProfileViewModel] 的备份/恢复管线：
  *  - 加密、分类勾选、SAF 多 mime、状态总线（BackupStatusBus）等都是 MoRealm 自家备份特有的，
- *    Legado 流程要简单得多（不加密、固定全量、入口独立），叠加进去会让 ProfileViewModel
+ *    参照实现流程要简单得多（不加密、固定全量、入口独立），叠加进去会让 ProfileViewModel
  *    更臃肿
- *  - 错误隔离：Legado 解析失败不应该污染 MoRealm 自家备份页的状态
+ *  - 错误隔离：参照实现解析失败不应该污染 MoRealm 自家备份页的状态
  *
  * 状态机：
- *  - **idle**（pendingUri = null, preview = null）：等用户点「选择 Legado 备份」
+ *  - **idle**（pendingUri = null, preview = null）：等用户点「选择参照实现备份」
  *  - **previewing**（loading = true）：解 zip 中
  *  - **previewed**（preview 非 null）：显示统计，等用户点「开始导入」
  *  - **importing**（importing = true）：写库中
@@ -73,7 +73,7 @@ class LegadoImportViewModel @Inject constructor(
 
     /**
      * 冲突策略 —— UI 用 Switch 切。默认 SKIP：保守不动用户已有数据。
-     * 改成 OVERWRITE 等价于"我就要 Legado 这边全套"，慎用。
+     * 改成 OVERWRITE 等价于"我就要参照实现这边全套"，慎用。
      */
     private val _conflictStrategy = MutableStateFlow(LegadoImporter.ConflictStrategy.SKIP)
     val conflictStrategy: StateFlow<LegadoImporter.ConflictStrategy> = _conflictStrategy.asStateFlow()
@@ -87,7 +87,7 @@ class LegadoImportViewModel @Inject constructor(
 
     /**
      * 用户在 SAF 选完 zip 后调。读字节 + 立刻解析预览。
-     * 失败（不是有效 zip / 不是 Legado 备份）会写到 errorMessage，UI 弹错卡片。
+     * 失败（不是有效 zip / 不是参照实现备份）会写到 errorMessage，UI 弹错卡片。
      */
     fun onZipPicked(uri: Uri) {
         _pendingUri.value = uri

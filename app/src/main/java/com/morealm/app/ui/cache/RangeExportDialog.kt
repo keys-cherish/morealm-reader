@@ -40,7 +40,7 @@ enum class ExportFormat { TXT, EPUB }
  *     点击节奏：第一次点 = 起始；第二次点 = 终止；再点则重置。下方两个数字
  *     输入也可手动输入（1-based，对用户友好）。同时提供：
  *     - **格式**（TXT / EPUB）单选
- *     - **EPUB 分卷大小**（仅 EPUB 模式可见；0 = 单文件）— 参考 Legado
+ *     - **EPUB 分卷大小**（仅 EPUB 模式可见；0 = 单文件）— 参考参照实现
  *       CustomExporter.size 把超长本切分；当前实现切分由调用方分多次写入
  *       多个文件，对话框这里只回传 size 让上层负责拆分。
  *
@@ -252,7 +252,7 @@ private fun RangePickerStep(
             )
         }
 
-        // EPUB 分卷大小（参考 Legado CustomExporter.size）
+        // EPUB 分卷大小（参考参照实现 CustomExporter.size）
         if (format == ExportFormat.EPUB) {
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(

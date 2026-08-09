@@ -21,7 +21,7 @@ import java.time.format.DateTimeFormatter
  * Scheme rewrites at construction:
  *  - `davs://` → `https://`
  *  - `dav://`  → `http://`
- * matching Legado / generic WebDAV client conventions so users can paste a
+ * matching 参照实现 / generic WebDAV client conventions so users can paste a
  * URL exported from another reader without manual editing.
  *
  * Error mapping centralised via [describeError]:
@@ -155,7 +155,7 @@ class WebDavClient(
     }
 
     /**
-     * Legado-style auth probe — does a Depth-0 PROPFIND on the root path the
+     * 参照实现-style auth probe — does a Depth-0 PROPFIND on the root path the
      * client was constructed with and reports a clean result. Used by
      * `WebDavInit.upConfig` to decide if a saved credential is still valid
      * before kicking off backup / restore (so the user gets "认证失败" on the

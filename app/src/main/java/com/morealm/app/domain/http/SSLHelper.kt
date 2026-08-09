@@ -12,7 +12,7 @@ import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
 /**
- * SSLHelper — Legado parity.
+ * SSLHelper — 参照实现对齐.
  *
  * Many small / self-hosted Chinese book-source sites ship self-signed or expired SSL
  * certificates that fail Android's default chain validation:
@@ -20,7 +20,7 @@ import javax.net.ssl.X509TrustManager
  *   - "Trust anchor for certification path not found"
  *
  * Rather than dropping those sources, we install a trust manager that accepts any
- * certificate. This matches Legado's default behavior and is what users expect from
+ * certificate. This matches 参照实现 default behavior and is what users expect from
  * a generic content reader: book sources are user-installed, sandboxed by the
  * source's domain, and don't carry credentials beyond per-domain cookies.
  *
@@ -28,7 +28,7 @@ import javax.net.ssl.X509TrustManager
  * this because:
  *   1. Book sources are public read-only HTML / JSON
  *   2. Sensitive data (login cookies) is per-domain — MITM affects only that source
- *   3. The alternative is dropping ~30% of the source ecosystem (parity with Legado)
+ *   3. The alternative is dropping ~30% of the source ecosystem (parity with 参照实现)
  */
 object SSLHelper {
 

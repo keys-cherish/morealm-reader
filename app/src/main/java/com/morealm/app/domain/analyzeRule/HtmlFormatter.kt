@@ -4,7 +4,7 @@ import java.net.URL
 import java.util.regex.Pattern
 
 /**
- * HTML 净化与格式化（Legado parity）。
+ * HTML 净化与格式化（参照实现对齐）。
  *
  * 用于把书源解析得到的正文 / 简介 HTML 片段转成阅读器可显示的纯文本：
  * - `<p>/<br>/<div>/<hr>/<h\d>/<article>/<dd>/<dl>` → `\n`

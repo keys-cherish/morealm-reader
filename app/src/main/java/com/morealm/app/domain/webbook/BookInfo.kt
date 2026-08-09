@@ -91,7 +91,7 @@ object BookInfo {
                     trimmed.startsWith("<md>") ||
                     trimmed.startsWith("<useweb>")
                 ) {
-                    // Legado parity: 这三种前缀让阅读器以 HTML/Markdown/web 渲染原样
+                    // 参照实现对齐: 这三种前缀让阅读器以 HTML/Markdown/web 渲染原样
                     // 显示，所以不能在这里被 HtmlFormatter 删标签。
                     trimmed
                 } else {

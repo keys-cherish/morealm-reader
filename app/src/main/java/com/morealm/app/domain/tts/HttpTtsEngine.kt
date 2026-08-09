@@ -27,13 +27,13 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * HTTP TTS 引擎 — 把段落文本交给用户配置的 HTTP 朗读源（Legado httpTTS 兼容），
+ * HTTP TTS 引擎 — 把段落文本交给用户配置的 HTTP 朗读源（参照实现 httpTTS 兼容），
  * 拉回音频字节、缓存到本地文件、用 ExoPlayer 播放。
  *
  * 与参考实现的对应关系：
  * - URL 模板 / header / loginCheckJs：通过 [AnalyzeUrl] 渲染（替换 `{{speakText}}`/
  *   `{{speakSpeed}}`/`{{encode}}`、合并 header、执行 `<js>...</js>`）。
- * - 音频缓存：`context.cacheDir/httpTTS/<md5>.mp3`，命名与 Legado
+ * - 音频缓存：`context.cacheDir/httpTTS/<md5>.mp3`，命名与参照实现
  *   `md5SpeakFileName` 对齐 (`md5(chapterTitle)_md5(url-|-speed-|-text)`)，
  *   下次重听同一章同一段直接读文件不发请求。
  * - 播放：ExoPlayer 单实例 + playlist。speak() 单段同步等播完；speakChapter()
@@ -253,7 +253,7 @@ class HttpTtsEngine(
     // ── Internal: download + play ────────────────────────────────────────────
 
     /**
-     * 下载或命中文件缓存。命名沿用 Legado [HttpReadAloudService.md5SpeakFileName]
+     * 下载或命中文件缓存。命名沿用参照实现 [HttpReadAloudService.md5SpeakFileName]
      * 风格：`md5_16(chapterTitle)_md5_16(url-|-speed-|-text)`。
      *
      * 缓存命中时直接返回 [File]，不发请求。否则走 [AnalyzeUrl] 渲染请求 → OkHttp →
@@ -267,7 +267,7 @@ class HttpTtsEngine(
         val cfg = config
         if (cfg.url.isBlank()) throw IOException("HttpTts URL 为空")
 
-        // 与 Legado 同款 speed 整数化（rate = (speed-1)*10），避免浮点漂移导致缓存 miss
+        // 与参照实现同款 speed 整数化（rate = (speed-1)*10），避免浮点漂移导致缓存 miss
         val rateInt = ((speed - 1f) * 10).toInt()
         val cacheKey = JsExtensions.md5Encode16(chapterTitleHint) + "_" +
             JsExtensions.md5Encode16("${cfg.url}-|-$rateInt-|-$text")

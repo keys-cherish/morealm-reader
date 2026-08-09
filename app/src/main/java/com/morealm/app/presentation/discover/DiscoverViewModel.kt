@@ -291,7 +291,7 @@ class DiscoverViewModel @Inject constructor(
     )
 
     /**
-     * Legado 书源的 exploreUrl 是“分类配置”，不保证是可直接请求的 URL：
+     * 参照实现书源的 exploreUrl 是“分类配置”，不保证是可直接请求的 URL：
      * 它可能是 JSON 数组、`标题::URL` 多行文本，或返回前两者的 @js/<js> 脚本。
      */
     private suspend fun resolveExploreUrls(source: BookSource): List<String> {

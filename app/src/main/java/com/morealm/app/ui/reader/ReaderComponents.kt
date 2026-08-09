@@ -86,6 +86,11 @@ fun ReaderTopBar(
      * 不再占顶栏主行图标位。保留 callback 以兼容现有调用方。
      */
     onEffectiveReplaces: () -> Unit = {},
+    /** 顶栏更多菜单中的全文搜索入口。 */
+    onSearch: () -> Unit = {},
+    /** 顶栏更多菜单中的快速替换/净化入口。 */
+    onReplace: () -> Unit = {},
+    onMenuVisibilityChanged: (Boolean) -> Unit = {},
     /** 顶栏「阅读设置」— 打开底部设置面板，方便用户从右上角快速进入。 */
     onSettings: () -> Unit = {},
 ) {
@@ -167,7 +172,10 @@ fun ReaderTopBar(
             }
             Box {
                 IconButton(
-                    onClick = { showMenu = true },
+                    onClick = {
+                        showMenu = true
+                        onMenuVisibilityChanged(true)
+                    },
                     modifier = Modifier.semantics {
                         contentDescription = "更多操作"
                         role = Role.Button
@@ -177,17 +185,30 @@ fun ReaderTopBar(
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(20.dp))
                 }
-                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                DropdownMenu(expanded = showMenu, onDismissRequest = {
+                    showMenu = false
+                    onMenuVisibilityChanged(false)
+                }) {
+                    DropdownMenuItem(
+                        text = { Text("搜索") },
+                        leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                        onClick = { showMenu = false; onMenuVisibilityChanged(false); onSearch() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("替换/净化") },
+                        leadingIcon = { Icon(Icons.Default.FindReplace, null) },
+                        onClick = { showMenu = false; onMenuVisibilityChanged(false); onReplace() },
+                    )
                     // #5：低频「当前生效规则」收纳到溢出菜单
                     DropdownMenuItem(
                         text = { Text("当前生效规则") },
                         leadingIcon = { Icon(Icons.Default.FilterAlt, null) },
-                        onClick = { showMenu = false; onEffectiveReplaces() },
+                        onClick = { showMenu = false; onMenuVisibilityChanged(false); onEffectiveReplaces() },
                     )
                     DropdownMenuItem(
                         text = { Text("导出为 TXT") },
                         leadingIcon = { Icon(Icons.Default.FileDownload, null) },
-                        onClick = { showMenu = false; onExport() },
+                        onClick = { showMenu = false; onMenuVisibilityChanged(false); onExport() },
                     )
                 }
             }
@@ -241,6 +262,8 @@ fun ReaderControlBar(
      * 拖动（静读天下 / Moon+ Reader 风格），单条 Slider 同时承载章 + 章内位置。
      */
     onSeekFullBook: (chapterIdx: Int, withinChapterPercent: Int) -> Unit = { _, _ -> },
+    /** 松手后的最终跳转回调，参数是拖动开始时的章和章内进度，用于撤销。 */
+    onSeekCommitted: (fromChapter: Int, fromProgress: Int) -> Unit = { _, _ -> },
     /**
      * 拖动时拿目标章节标题用于预览气泡。lambda 接收章节下标返回标题文本，
      * 让 ControlBar 不必直接持有 List<BookChapter>。
@@ -272,6 +295,8 @@ fun ReaderControlBar(
     // → thumb 视觉位置（手指实际所在）跟 sliderValue 完全分裂（用户报「拖到 43% 但显示
     // 2%」根因：thumb 在 43%、sliderValue 已被清成 baseProgress=旧章 6/300=2%）。
     var sliderDragging by remember { mutableStateOf(false) }
+    var dragStartChapter by remember { mutableIntStateOf(currentChapter) }
+    var dragStartProgress by remember { mutableIntStateOf(scrollProgress) }
     // 双重保险：直接持引用的可变 float，绕开 Snapshot 系统的批量提交。
     // 用户报「松手大概率不是最后一次进度」——如果是 onValueChangeFinished 先于
     // 最后一次 onValueChange 落到 Snapshot store 的极端情况（Compose 1.6+ Slider
@@ -465,8 +490,8 @@ fun ReaderControlBar(
                     val hasNextChapter = currentChapter < totalChapters - 1
                     Text("上一章",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                            .copy(alpha = if (hasPrevChapter) 0.85f else 0.38f),
+                        color = if (hasPrevChapter) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                         modifier = Modifier
                             .clickable(enabled = hasPrevChapter, onClick = onPrevChapter)
                             .padding(vertical = 4.dp, horizontal = 2.dp),
@@ -478,11 +503,16 @@ fun ReaderControlBar(
                     Slider(
                         value = sliderValue,
                         onValueChange = {
+                            if (!sliderDragging) {
+                                dragStartChapter = currentChapter
+                                dragStartProgress = scrollProgress
+                            }
                             seekValue = it
                             latestSliderValueRef[0] = it
                             sliderDragging = true
                         },
                         onValueChangeFinished = {
+                            onSeekCommitted(dragStartChapter, dragStartProgress)
                             sliderDragging = false
                             // 优先用 latestSliderValueRef[0]（无 Snapshot batch 的最新值），
                             // 兜底到 seekValue。两者绝大多数情况一致，但极端时序下
@@ -543,8 +573,8 @@ fun ReaderControlBar(
                     )
                     Text("下一章",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                            .copy(alpha = if (hasNextChapter) 0.85f else 0.38f),
+                        color = if (hasNextChapter) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                         modifier = Modifier
                             .clickable(enabled = hasNextChapter, onClick = onNextChapter)
                             .padding(vertical = 4.dp, horizontal = 2.dp),
@@ -922,10 +952,13 @@ fun ReaderSettingsPanel(
     onTextSelectableChange: (Boolean) -> Unit = {},
     chineseConvertMode: Int = 0,
     onChineseConvertModeChange: (Int) -> Unit = {},
+    customTxtChapterRegex: String = "",
+    onCustomTxtChapterRegexSave: (String) -> Unit = {},
+    showTxtChapterRegex: Boolean = false,
     footerRight: String = "page_progress",
     onFooterRightChange: (String) -> Unit = {},
     /**
-     * #1：「恢复出厂」一键回退所有阅读相关设置。
+     * #1：「恢复默认」一键回退所有阅读相关设置。
      * 触发 [com.morealm.app.presentation.reader.ReaderSettingsController.resetAllToFactoryDefaults]，
      * 范围包含排版、配色、自定义 CSS / 背景图、繁简、动画、屏幕方向、tap zone 等。
      */
@@ -976,7 +1009,7 @@ fun ReaderSettingsPanel(
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        "恢复出厂",
+                         "恢复默认",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -984,6 +1017,37 @@ fun ReaderSettingsPanel(
             }
 
             Spacer(Modifier.height(4.dp))
+
+            if (showTxtChapterRegex) {
+                var txtRegex by remember(customTxtChapterRegex) {
+                    mutableStateOf(customTxtChapterRegex)
+                }
+                Text(
+                    "目录正则（本书）",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = txtRegex,
+                    onValueChange = { txtRegex = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("留空使用默认分章规则") },
+                    supportingText = { Text("保存后会立即重新生成本书目录") },
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(
+                        onClick = { onCustomTxtChapterRegexSave(txtRegex) },
+                        enabled = txtRegex != customTxtChapterRegex,
+                    ) {
+                        Text("保存目录规则")
+                    }
+                }
+            }
 
             // ── Reader Style Presets ──
             if (readerStyles.isNotEmpty()) {

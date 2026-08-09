@@ -30,7 +30,7 @@ import javax.inject.Singleton
  *  - [downloadAll]    called once per app start; lists every progress
  *                     JSON, fetches each, and applies the merge rule
  *                     "remote wins iff strictly newer cursor AND newer
- *                     timestamp than local" — symmetrical to Legado.
+ *                     timestamp than local" — symmetrical to 参照实现.
  *
  * All work runs on the caller's dispatcher; both methods swallow their
  * own exceptions and log so a transient network blip doesn't propagate

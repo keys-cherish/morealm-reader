@@ -33,7 +33,7 @@ private const val SQRT2 = 1.414f
 private const val BEZIER_EPSILON = 0.1f
 
 /**
- * 仿真翻页绘制引擎 — 参考 Legado SimulationPageDelegate。
+ * 仿真翻页绘制引擎 — 参考参照实现 SimulationPageDelegate。
  * 纯 Android Canvas 绘制，不依赖 View 系统，可在 Compose drawIntoCanvas 中使用。
  *
  * 使用方式：
@@ -206,7 +206,7 @@ class SimulationPageDrawer {
         drawCurrentBackArea(canvas, curBitmap)
     }
 
-    // ── 以下为 Legado SimulationPageDelegate 的绘制逻辑，原样移植 ──
+    // ── 以下为参照实现 SimulationPageDelegate 的绘制逻辑，原样移植 ──
 
     private fun drawCurrentBackArea(canvas: Canvas, bitmap: Bitmap?) {
         bitmap ?: return

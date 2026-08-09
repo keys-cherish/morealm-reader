@@ -25,7 +25,7 @@ class SearchKeywordRepository @Inject constructor(
     /** 单条历史最大字符数：超过这个长度的"搜索词"几乎一定是用户误粘贴或日志泄漏，不入库。 */
     private val maxWordLen = 200
 
-    /** 历史总条数上限。Legado 里没有硬上限，但 200 条已经远超普通用户需要。 */
+    /** 历史总条数上限。参照实现里没有硬上限，但 200 条已经远超普通用户需要。 */
     private val maxHistorySize = 200
 
     /** 默认下拉显示数。UI 端可以再 take(n) 截短，这里给 50 让长按时也能看到老一点的。 */

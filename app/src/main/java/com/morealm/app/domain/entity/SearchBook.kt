@@ -26,7 +26,7 @@ data class SearchBook(
     var originOrder: Int = 0,
     /**
      * 搜索阶段直接拿到的详情页 HTML（仅当搜索 URL 重定向到详情页或 bookUrlPattern 命中时填充）。
-     * Legado-parity: BookInfo.analyzeBookInfo 看到非空时复用，避免重新请求详情页一次。
+     * 参照实现对齐: BookInfo.analyzeBookInfo 看到非空时复用，避免重新请求详情页一次。
      * 没存 DB —— 仅在搜索→详情→章节单次链路里跨阶段复用，过期后自然丢弃。
      */
     @kotlinx.serialization.Transient

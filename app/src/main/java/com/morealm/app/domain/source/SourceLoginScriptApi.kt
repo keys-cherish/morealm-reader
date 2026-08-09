@@ -12,16 +12,16 @@ import kotlinx.coroutines.runBlocking
  * 登录脚本副绑定 API。注入到登录 JS scope 的 key = `loginExt`，配合通用扩展 `java`
  * (= JsExtensions) 一起暴露给登录脚本调用。
  *
- * 兼容 Legado 原生书源脚本
+ * 兼容参照实现原生书源脚本
  * -----------------------
- * Legado 的 SourceLoginJsExtensions 把登录扩展直接挂在 `java` 上，脚本里写
+ * 参照实现的 SourceLoginJsExtensions 把登录扩展直接挂在 `java` 上，脚本里写
  * `java.upLoginData(...)`。MoRealm 的 [com.morealm.app.domain.analyzeRule.JsExtensions]
  * 是 Kotlin `object`（运行时不可继承 / 不可动态加方法），所以没法复刻这一点。
  * 折中方案：
  *  - `loginExt` 是本类实例，登录专属方法都在这里
  *  - [LEGACY_JAVA_COMPAT_PRELUDE] 是一段 prelude JS，在登录脚本执行前跑一遍，通过 JS
  *    原型链把 `loginExt` 的方法合并到 `java` 上（不改原始 `java` / JsExtensions）。
- *    效果：Legado 脚本 `java.upLoginData(...)` 零改动跑通；同时 `java.ajax(...)` 之类
+ *    效果：参照实现脚本 `java.upLoginData(...)` 零改动跑通；同时 `java.ajax(...)` 之类
  *    的通用扩展继续走原型链 fallback 到 JsExtensions。
  *
  * 桥接路径
@@ -60,7 +60,7 @@ class SourceLoginScriptApi(
 
     /**
      * 强制 UI 重建。`deltaUp = true` 表示增量重建（仅替换变化的 row），false 表示全量重建。
-     * MoRealm 当前 SourceLoginDialog 不区分两者，统一全量；保留参数以兼容 Legado 脚本签名。
+     * MoRealm 当前 SourceLoginDialog 不区分两者，统一全量；保留参数以兼容参照实现脚本签名。
      */
     @JvmOverloads
     fun reLoginView(deltaUp: Boolean = false) = onReUiView(deltaUp)
@@ -83,7 +83,7 @@ class SourceLoginScriptApi(
     /**
      * 启交互式浏览器让用户完成登录 / 验证，返回最终页面 HTML 给脚本继续处理。
      *
-     * 对齐 Legado `SourceLoginJsExtensions.showBrowser`：弹 WebView 让用户在真实 UI 里扫码、
+     * 对齐参照实现 `SourceLoginJsExtensions.showBrowser`：弹 WebView 让用户在真实 UI 里扫码、
      * 输验证码、滑滑块，关闭时把最新 HTML 回传。MoRealm 走独立 Activity 实现，见
      * [com.morealm.app.ui.source.ShowBrowserActivity]。
      *
@@ -95,7 +95,7 @@ class SourceLoginScriptApi(
      *  - Activity 启动失败（权限缺失等）→ 捕获异常返回 null，不抛到脚本
      *
      * @param preloadJs 页面 onPageFinished 后追加执行的 JS
-     * @param config Legado 兼容参数（未使用，保留签名）
+     * @param config 参照实现兼容参数（未使用，保留签名）
      */
     @JvmOverloads
     fun showBrowser(
@@ -159,7 +159,7 @@ class SourceLoginScriptApi(
 
     companion object {
         /**
-         * 兼容 Legado 原生脚本：`java.upLoginData(...)` / `java.reLoginView(...)` /
+         * 兼容参照实现原生脚本：`java.upLoginData(...)` / `java.reLoginView(...)` /
          * `java.showBrowser(...)` 等登录专属调用。
          *
          * 在登录相关 JS 执行前拼到脚本最前面，用 JS 代理把 `java` 当作主对象，命中时
@@ -170,7 +170,7 @@ class SourceLoginScriptApi(
          * 作用域的 var 覆盖 Rhino scope 同名变量，不影响外层 binding。
          *
          * 覆盖的方法清单与 [SourceLoginScriptApi] 一一对应，增加新方法时务必补列，否则
-         * Legado 脚本调不到。
+         * 参照实现脚本调不到。
          */
         const val LEGACY_JAVA_COMPAT_PRELUDE: String =
             "(function(){" +

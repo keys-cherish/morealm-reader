@@ -4,11 +4,11 @@ import com.morealm.app.domain.render.TextChapter
 import com.morealm.app.domain.render.TextPage
 
 /**
- * Compose/MVVM counterpart of Legado TextPageFactory.
+ * Compose/MVVM counterpart of 参照实现 TextPageFactory.
  *
  * The public [pages] list intentionally contains only the committed current
  * chapter. Previous/next chapter pages are preview surfaces for delegates, not
- * real display pages. This mirrors Legado's ReadView model and keeps preview
+ * real display pages. This mirrors 参照实现 ReadView model and keeps preview
  * pages from mutating saved progress or scroll state.
  */
 internal class ReaderPageFactory(

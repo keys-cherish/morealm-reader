@@ -506,7 +506,7 @@ interface ThemeDao {
  * - entity [com.morealm.app.domain.entity.ReadRecord]
  * - UI 入口（P3）：「我的 → 阅读记录」页面按 date 降序分组
  * - 写入（P2）：ReaderViewModel.onCleared / lifecycle ON_PAUSE upsert
- * - Legado 导入（P4）：LegadoImporter 备份 zip readRecord 表 → bookName fuzzy match
+ * - 参照实现导入（P4）：LegadoImporter 备份 zip readRecord 表 → bookName fuzzy match
  *
  * 与 [ReadStatsDao] 关系：ReadStats 是天级汇总（不分书），本 DAO 是天 × 书 二维。两者并存
  * 互不冲突：ReadStats 给顶栏"今日阅读 X 小时"，本 DAO 给阅读记录页面。
@@ -536,7 +536,7 @@ interface ReadRecordDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun save(record: ReadRecord)
 
-    /** Legado 批量导入 */
+    /** 参照实现批量导入 */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveAll(records: List<ReadRecord>)
 
@@ -674,12 +674,12 @@ interface ReplaceRuleDao {
     suspend fun getAllSync(): List<ReplaceRule>
 
     /**
-     * 与 Legado `findEnabledByContentScope` 同语义：
+     * 与参照实现 `findEnabledByContentScope` 同语义：
      *
      * 1. **scope 包含匹配** —— `LIKE '%name%'` / `LIKE '%origin%'` / NULL / 空串均放行。
-     *    Legado scope 字段允许换行 `\n` 分隔多书名 / 多源 URL（如 `示例书\nhttp://x.com`），
+     *    参照实现 scope 字段允许换行 `\n` 分隔多书名 / 多源 URL（如 `示例书\nhttp://x.com`），
      *    必须用 LIKE 才能命中；早先 `=` 精确匹配会让一键搬家来的多 scope 规则全部漏掉。
-     * 2. **excludeScope 反向排除** —— Legado 用同一字段做"排除清单"，被排除的书 / 源
+     * 2. **excludeScope 反向排除** —— 参照实现用同一字段做"排除清单"，被排除的书 / 源
      *    不应用规则。NULL / 空串视为"不排除任何书"。
      * 3. **scopeContent = 1** —— 内联到 SQL 而非 Kotlin filter，让该方法直接产出
      *    "可应用于正文的有效规则"，调用方无需再次 filter。
@@ -696,7 +696,7 @@ interface ReplaceRuleDao {
     fun findEnabledByContentScope(name: String, origin: String): List<ReplaceRule>
 
     /**
-     * 与 Legado `findEnabledByTitleScope` 同语义。SQL 与 [findEnabledByContentScope]
+     * 与参照实现 `findEnabledByTitleScope` 同语义。SQL 与 [findEnabledByContentScope]
      * 几乎一致，差异在 `scopeTitle = 1`（仅取被勾选"作用于标题"的规则）。
      *
      * 拆成两个方法而不是 union，是因为 ContentProcessor 对 title 和 content 走不同

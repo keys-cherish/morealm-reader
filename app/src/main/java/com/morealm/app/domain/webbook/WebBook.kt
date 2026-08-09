@@ -38,13 +38,13 @@ object WebBook {
             ruleData = ruleData,
             coroutineContext = coroutineContext
         )
-        // Legado-parity: when network call throws, give loginCheckJs a chance to
+        // 参照实现对齐: when network call throws, give loginCheckJs a chance to
         // handle the failure — sources commonly use loginCheckJs to detect 401/403
         // sessions and trigger a re-login dance. Without this fallback, any transient
         // 5xx kills the search instead of letting JS rewrite the response.
         val res = fetchWithLoginCheck(analyzeUrl, bookSource)
         checkRedirect(bookSource, res)
-        // Legado-parity: detect HTTP redirect on the search request. Many sources
+        // 参照实现对齐: detect HTTP redirect on the search request. Many sources
         // single-result-redirect to the detail page; we must propagate this flag so
         // BookList can reuse the body and set bookUrl to the final URL (not search URL).
         val redirected = res.raw?.priorResponse?.isRedirect == true
@@ -91,7 +91,7 @@ object WebBook {
     /**
      * 获取书籍详情
      *
-     * Legado-parity: when [searchBook.infoHtml] is non-empty (set by BookList during
+     * 参照实现对齐: when [searchBook.infoHtml] is non-empty (set by BookList during
      * search-redirect or bookUrlPattern match), reuse that body and skip the network
      * request entirely. This avoids:
      *   - one redundant network round-trip per book opened
@@ -218,7 +218,7 @@ object WebBook {
     }
 
     /**
-     * Fetch with loginCheckJs error-recovery (Legado parity).
+     * Fetch with loginCheckJs error-recovery (参照实现对齐).
      *
      * Wraps [analyzeUrl.getStrResponseAwait] so that if the network call throws AND
      * the source has a loginCheckJs, the JS gets a chance to inspect the synthetic
@@ -279,7 +279,7 @@ object WebBook {
      * 不抛异常，避免把"CF 被拦"放大成搜索路径整体崩溃。
      *
      * 历史背景：飘天网（piaotia.com）等 CF 保护站点，OkHttp 任何 UA 都拿 403；
-     * Legado 用户能用是因为已通过浏览器拿过 cf_clearance。MoRealm 自动 fallback
+     * 参照实现用户能用是因为已通过浏览器拿过 cf_clearance。MoRealm 自动 fallback
      * 让用户首次就能搜出书。
      */
     private suspend fun bypassCloudflareIfBlocked(

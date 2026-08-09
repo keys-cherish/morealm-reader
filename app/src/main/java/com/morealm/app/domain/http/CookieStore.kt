@@ -8,7 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 
 /**
- * Cookie 存储 — Legado parity.
+ * Cookie 存储 — 参照实现对齐.
  *
  * 双层存储：
  * - 持久化层：DB（Cookie 表，按 sub-domain key）

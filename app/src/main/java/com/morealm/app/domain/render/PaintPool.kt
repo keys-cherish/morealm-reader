@@ -6,7 +6,7 @@ import java.util.LinkedList
 
 /**
  * Object pool for Paint / TextPaint to avoid per-frame allocation.
- * Ported from Legado's PaintPool + BaseSafeObjectPool pattern.
+ * Ported from the reference implementation PaintPool + BaseSafeObjectPool pattern.
  *
  * Usage:
  *   val paint = PaintPool.obtainPaint()

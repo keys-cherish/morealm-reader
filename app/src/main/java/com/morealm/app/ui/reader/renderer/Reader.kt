@@ -127,7 +127,7 @@ fun Reader(
     /**
      * 每次 loadChapter 生成唯一 token（nanoTime）。restoreProgress LaunchedEffect
      * 以此为唯一 key：token 变 = 新恢复命令，不变 = 不恢复。
-     * 对齐 Legado 精神：恢复是命令，不是状态订阅。
+     * 对齐参照实现精神：恢复是命令，不是状态订阅。
      */
     restoreToken: Long = 0L,
     onProgressRestored: () -> Unit = {},
@@ -152,7 +152,7 @@ fun Reader(
     onSearchSelectionConsumed: () -> Unit = {},
     bookTitle: String = "",
     bookAuthor: String = "",
-    // 9-zone tap actions (ported from Legado ReadView.click)
+    // 9-zone tap actions (Ported from the reference implementation ReadView.click)
     // Values: "prev", "next", "menu", "prev_chapter", "next_chapter", "tts", "bookmark", "none"
     tapActionTopLeft: String = "prev",
     tapActionTopRight: String = "next",
@@ -184,6 +184,11 @@ fun Reader(
      * 章节字符 offset 由 ReaderSelectionToolbar 自己根据 selectionState 计算。
      */
     onAddHighlight: (start: Int, end: Int, content: String, colorArgb: Int) -> Unit = { _, _, _, _ -> },
+    /**
+     * 选区菜单「替换」——参数为选中文字。null 时该按钮不渲染（EPUB 精排 wire 内容
+     * 上替换规则会被整章拦掉，给了也是静默无效）。
+     */
+    onReplaceText: ((String) -> Unit)? = null,
     /** 用户在「已存高亮」点击后选择删除。 */
     onDeleteHighlight: (id: String) -> Unit = {},
     /** 用户分享一条高亮内容（生成卡片图）。 */
@@ -263,8 +268,8 @@ fun Reader(
      * 跨章 commit 后 syncCur 同步到位（~1 帧 collectAsState latency），跳过 ReflowEngine
      * 异步 layoutChapter 50ms，让 factory.currentChapter 跨章瞬间直接是新章 → 零错位帧。
      *
-     * Legado 对标：ReadBook.curTextChapter 是普通 Kotlin var，main thread 同步赋值 + View
-     * 同步重绘（PageDelegate.upContent → invalidate）→ Legado 跨章零延迟。MoRealm Compose
+     * 参照实现对标：ReadBook.curTextChapter 是普通 Kotlin var，main thread 同步赋值 + View
+     * 同步重绘（PageDelegate.upContent → invalidate）→ 参照实现跨章零延迟。MoRealm Compose
      * 架构不能完全消除 Compose 重组延迟，但 syncCur 让 cur 跟 syncPrev/Next 同一 fast path。
      */
     syncCurTextChapter: com.morealm.app.domain.render.TextChapter? = null,
@@ -324,7 +329,7 @@ fun Reader(
     val screenWidthPx = with(density) { config.screenWidthDp.dp.toPx().toInt() }
     val screenHeightPx = with(density) { config.screenHeightDp.dp.toPx().toInt() }
 
-    // Display cutout insets (ported from Legado PageView.upPaddingDisplayCutouts)
+    // Display cutout insets (Ported from the reference implementation PageView.upPaddingDisplayCutouts)
     val cutoutPadding = WindowInsets.displayCutout.asPaddingValues()
     val cutoutLeft = with(density) { cutoutPadding.calculateLeftPadding(layoutDirection).toPx().toInt() }
     val cutoutRight = with(density) { cutoutPadding.calculateRightPadding(layoutDirection).toPx().toInt() }
@@ -385,7 +390,7 @@ fun Reader(
     val effectivePadBottom = maxOf(padBotPx, cutoutBottom, navBarBottomPx) + bottomInfoBarPx
     val fontSizePx = with(density) { fontSize.sp.toPx() }
 
-    // ── Battery level + charging (ported from Legado ReadBookActivity battery receiver) ──
+    // ── Battery level + charging (Ported from the reference implementation ReadBookActivity battery receiver) ──
     val batteryStatus by rememberBatteryStatus(context)
     val batteryLevel = batteryStatus.level
     val batteryCharging = batteryStatus.charging
@@ -1868,9 +1873,10 @@ fun Reader(
         // SimulationParams.chapter*Spans，SimulationPager 渲染 bitmap 时按页过滤后画。
         highlightSpans = highlightSpans,
         textColorSpans = textColorSpans,
-        underlineSpans = underlineSpans,
-        onProgress = onProgress,
-        onTapCenter = onTapCenter,
+         underlineSpans = underlineSpans,
+         onProgress = onProgress,
+         controlsVisible = controlsVisible,
+         onTapCenter = onTapCenter,
         onImageClick = onImageClick,
         setHighlightActionTarget = { highlightActionTarget = it },
         setHighlightActionOffset = { highlightActionOffset = it },
@@ -1884,7 +1890,7 @@ fun Reader(
             .fillMaxSize()
             .background(backgroundColor)
             .then(
-                if (pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
+                if (!controlsVisible && pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
                     // pointerInput 的 key 必须包含 chapterIndex/coordinator：coord 是
                     // remember(chapterIndex, pageAnimType) 的结果，跨章时 coord 实例变，
                     // 但若 pointerInput key 不含这两者，detectTapGestures 的 suspend loop
@@ -1966,7 +1972,7 @@ fun Reader(
                 } else Modifier
             )
             .then(
-                if (pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
+                if (!controlsVisible && pageAnimType != PageAnimType.SCROLL && pageAnimType != PageAnimType.SIMULATION) {
                     // 同上一个 pointerInput：key 加 coordinator，跨章时 lambda 重建，
                     // 闭包里的 coordinator 引用才会更新到新 coord。
                     Modifier.pointerInput(selectionState.isActive, coordinator) {
@@ -1994,12 +2000,12 @@ fun Reader(
                                         }
                                     }
                                 }
-                                // Reset delegate state on tap — matches Legado's onDown()
+                                // Reset delegate state on tap — matches 参照实现 onDown()
                                 // which always runs before any page-turn request. Without
                                 // this, a stuck isRunning from a prior animation blocks
                                 // all future tap-based page turns.
                                 coordinator.pageDelegateState.onDown()
-                                // 9-zone tap (ported from Legado ReadView.onSingleTapUp + setRect9x)
+                                // 9-zone tap (Ported from the reference implementation ReadView.onSingleTapUp + setRect9x)
                                 val w = size.width; val h = size.height
                                 val tapColumn = when {
                                     offset.x < w * 0.33f -> 0  // left
@@ -2041,7 +2047,7 @@ fun Reader(
                                     onTapCenter()
                                     return@detectTapGestures
                                 }
-                                // Execute page-zone actions before image hit testing. Legado's
+                                // Execute page-zone actions before image hit testing. 参照实现
                                 // PageDelegate treats a moved/page-turn gesture separately from
                                 // ContentTextView.click(), so cover images must not swallow left/right
                                 // page turns or fast horizontal swipes.
@@ -2082,7 +2088,7 @@ fun Reader(
                             },
                             onLongPress = { offset ->
                                 val page = coordinator.getPageAt(pagerState.currentPage)
-                                // If long-press on image, show image viewer (ported from Legado)
+                                // If long-press on image, show image viewer (Ported from the reference implementation)
                                 val col = hitTestColumn(page, offset.x, offset.y)
                                 if (col is ImageColumn) {
                                     onImageClick(col.src)
@@ -2090,7 +2096,7 @@ fun Reader(
                                 }
                                 val pos = hitTestPage(page, offset.x, offset.y)
                                 if (pos != null) {
-                                    // Word-level selection (ported from Legado ReadView.onLongPress)
+                                    // Word-level selection (Ported from the reference implementation ReadView.onLongPress)
                                     val wordRange = findWordRange(page, pos)
                                     selectedTextPage = page
                                     selectionState.setSelection(wordRange.first, wordRange.second)
@@ -2476,6 +2482,7 @@ fun Reader(
             }
         }
         ReaderSelectionToolbar(
+            onReplaceText = onReplaceText,
             selectionState = selectionState,
             toolbarOffset = toolbarOffset,
             page = selectedTextPage ?: coordinator.getPageAt(currentDisplayForSelection),
@@ -2548,11 +2555,11 @@ fun Reader(
 
 // ══════════════════════════════════════════════════════════════
 // ReaderInfoBar — configurable header/footer with 6 slots
-// Ported from Legado PageView + ReadTipConfig + BatteryView
+// Ported from the reference implementation PageView + ReadTipConfig + BatteryView
 // ══════════════════════════════════════════════════════════════
 
 /**
- * Slot content types (matching Legado ReadTipConfig):
+ * Slot content types (matching 参照实现 ReadTipConfig):
  * "none", "chapter", "time", "battery", "battery_pct", "page",
  * "progress", "page_progress", "book_name", "time_battery", "battery_time", "time_battery_pct"
  */
@@ -2845,7 +2852,7 @@ internal fun InfoSlotContent(
 }
 
 /**
- * Battery icon drawn with Compose Canvas (ported from Legado BatteryView).
+ * Battery icon drawn with Compose Canvas (Ported from the reference implementation BatteryView).
  * Draws a small battery outline with fill level.
  *
  * 充电态 ([charging]==true) 时在电池本体上叠加一道小闪电（实心填充），
@@ -3287,6 +3294,10 @@ private fun ReaderSelectionToolbar(
     onAddTextColor: ((start: Int, end: Int, content: String, colorArgb: Int) -> Unit)? = null,
     /** 用户选择下划线 → 加 kind=2 Highlight，带 underlineStyle 决定线型。 */
     onAddUnderline: ((start: Int, end: Int, content: String, colorArgb: Int, style: Int) -> Unit)? = null,
+    /**
+     * 选区菜单「替换」——参数为选中文字。null 时该按钮不渲染。
+     */
+    onReplaceText: ((String) -> Unit)? = null,
     /** 用户自定义按钮配置。透传给底层 [SelectionToolbar]。 */
     menuConfig: com.morealm.app.domain.entity.SelectionMenuConfig =
         com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
@@ -3410,6 +3421,14 @@ private fun ReaderSelectionToolbar(
                 if (sEnd > sStart && text.isNotBlank()) {
                     cb(sStart, sEnd, text, argb, style)
                 }
+                selectionState.clear()
+            }
+        },
+        // 替换：只把选中文字交给上层（弹独立对话框），这里不落库、不算 cp 区间。
+        onReplace = onReplaceText?.let { cb ->
+            {
+                val text = selectedText()
+                if (text.isNotBlank()) cb(text)
                 selectionState.clear()
             }
         },

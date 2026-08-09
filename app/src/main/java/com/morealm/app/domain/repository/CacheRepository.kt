@@ -241,7 +241,7 @@ class CacheRepository @Inject constructor(
         }
 
     /**
-     * Stage B: 导出已缓存章节为 EPUB3。复用 [EpubExporter] 手写 zip，输出与 Legado
+     * Stage B: 导出已缓存章节为 EPUB3。复用 [EpubExporter] 手写 zip，输出与参照实现
      * 兼容的目录结构（mimetype + META-INF/container.xml + OEBPS/{content.opf, nav.xhtml,
      * toc.ncx, Text/, Styles/, Images/}）。
      *

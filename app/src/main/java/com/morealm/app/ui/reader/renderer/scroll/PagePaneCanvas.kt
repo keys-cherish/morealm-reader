@@ -85,7 +85,7 @@ fun PagePaneCanvas(
     bookmarkArgb: Int = 0xFFD32F2F.toInt(),
     readerBgArgb: Int = 0xFFFFFFFF.toInt(),
     /**
-     * 水平翻页（NONE/SLIDE/COVER）时画进**本页**的页眉页脚，随页一起翻动（对齐 Legado）；
+     * 水平翻页（NONE/SLIDE/COVER）时画进**本页**的页眉页脚，随页一起翻动（对齐参照实现）；
      * null = 不画（垂直滚动模式走原裸 Canvas 路径，零行为变化）。
      */
     pageInfoBar: PageInfoBarSpec? = null,

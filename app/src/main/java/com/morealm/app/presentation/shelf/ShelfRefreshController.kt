@@ -98,7 +98,7 @@ class ShelfRefreshController @Inject constructor(
             _progress.value = _progress.value.copy(second = _progress.value.second + toEnqueue.size)
             _isRefreshing.value = true
 
-            // Bound the parallelism — Legado defaults to AppConfig.threadCount (4-8).
+            // Bound the parallelism — 参照实现 defaults to AppConfig.threadCount (4-8).
             val pool = parallelism.coerceIn(1, 8)
             val chunks = toEnqueue.chunked(pool)
             for (chunk in chunks) {

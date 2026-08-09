@@ -96,9 +96,10 @@ internal fun rememberSimulationParams(
      * 当前章节的下划线 spans（kind=2）渲染数据。透传到 SimulationParams 让
      * SimulationPager 渲染 bitmap 时画下划线。
      */
-    underlineSpans: List<com.morealm.app.ui.reader.renderer.HighlightSpan>,
-    onProgress: (Int) -> Unit,
-    onTapCenter: () -> Unit,
+     underlineSpans: List<com.morealm.app.ui.reader.renderer.HighlightSpan>,
+     onProgress: (Int) -> Unit,
+     controlsVisible: Boolean,
+     onTapCenter: () -> Unit,
     onImageClick: (String) -> Unit,
     /** 设新 highlight action target（旧 var 等价：`highlightActionTarget = ...`） */
     setHighlightActionTarget: (Highlight?) -> Unit,
@@ -165,8 +166,9 @@ internal fun rememberSimulationParams(
                         (renderPageCount - 1).coerceAtLeast(0),
                     )
                 },
-                canTurn = { displayIndex, direction ->
-                    when (direction) {
+                 canTurn = { displayIndex, direction ->
+                     if (controlsVisible) return@SimulationParams false
+                     when (direction) {
                         ReaderPageDirection.PREV -> pageFactory.hasPrev(displayIndex)
                         ReaderPageDirection.NEXT -> pageFactory.hasNext(displayIndex)
                         ReaderPageDirection.NONE -> false
@@ -186,7 +188,7 @@ internal fun rememberSimulationParams(
                 onFillPage = { displayIndex, direction ->
                     coordinator.commitPageTurn(displayIndex, direction) { setReaderPageIndex(it) }
                 },
-                onTapCenter = onTapCenter,
+                 onTapCenter = if (controlsVisible) ({}) else onTapCenter,
                 onSingleTap = if (chapterHighlights.isEmpty()) null else { offset ->
                     val page = coordinator.getPageAt(coordinator.lastSettledDisplayPage)
                     val pos = chapterPositionAt(page, offset.x, offset.y)

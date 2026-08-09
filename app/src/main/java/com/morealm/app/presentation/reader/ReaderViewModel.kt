@@ -82,7 +82,7 @@ data class RenderedReaderChapter(
      * 里，用户翻页后 Compose 重组（前后台 / renderPageCount 变化）时 key 没变
      * 但 progressRestored 被别的 LaunchedEffect 清掉 → 幽灵恢复。
      *
-     * 对齐 Legado 精神：恢复是命令（token 变 = 一次新命令），不是状态订阅。
+     * 对齐参照实现精神：恢复是命令（token 变 = 一次新命令），不是状态订阅。
      */
     val restoreToken: Long = 0L,
 )
@@ -200,8 +200,8 @@ class ReaderViewModel @Inject constructor(
         // 同状态被反复写 + scroll% 反弹被多次落地（详见 ReaderProgressController.start KDoc）。
         progress.start()
 
-        // Legado-parity：进入阅读器即清除"N 新"徽章。
-        // Legado 是在 ReadBook.saveRead() 每次保存进度时清，我们这里在 init 一次性清掉，
+        // 参照实现对齐：进入阅读器即清除"N 新"徽章。
+        // 参照实现是在 ReadBook.saveRead() 每次保存进度时清，我们这里在 init 一次性清掉，
         // 因为：1) 即使用户不滑动，他也已经"看到"这本书；2) 避免依赖 saveProgress 的调用频率；
         // 3) 失败容错（DB 异常不影响阅读功能）。新加的 web 书 lastCheckCount 默认 0，所以 IO 也只是
         // 一次主键 UPDATE 命中行为零的查询，开销可忽略。
@@ -304,7 +304,48 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    /** 关闭繁简转换 — 等价于 Legado 占位条目的 ✕ 操作。
+    /**
+     * 当前章内容是否支持替换（非 EPUB 精排 wire 串）。选区菜单据此决定是否给「替换」按钮。
+     */
+    val replaceSupported: StateFlow<Boolean> = chapter.replaceSupported
+
+    /**
+     * 选区菜单「替换」→ 落一条限定本书（可再限定本章）的字面量替换规则并立刻重渲染。
+     *
+     * 刻意用 **isRegex = false**：入口是"用户选中的一段正文"，里面的 `.` `(` `?`
+     * 全是普通字符，按正则解释必然误伤。要写正则的用户走替换规则管理页。
+     *
+     * [replacement] 传空串即"删除该词"，与对话框底部提示一致，不需要额外分支。
+     */
+    fun addQuickReplace(pattern: String, replacement: String, chapterOnly: Boolean) {
+        if (pattern.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val rule = com.morealm.app.domain.entity.ReplaceRule(
+                id = java.util.UUID.randomUUID().toString(),
+                // 名字只用来在替换规则管理页里认人，取原文前若干字够了
+                name = pattern.take(20),
+                pattern = pattern,
+                replacement = replacement,
+                isRegex = false,
+                // scope 是 DAO 过滤书籍作用域的那一列（getRulesForBook: scope = '' OR scope = :bookId），
+                // bookId 列是另一套历史字段，两者都填保持一致。
+                scope = bookId,
+                bookId = bookId,
+                chapterIndex = if (chapterOnly) chapter.currentChapterIndex.value else null,
+                scopeContent = true,
+                scopeTitle = false,
+            )
+            replaceRuleRepo.insert(rule)
+            AppLog.info(
+                "ReplaceRule",
+                "quick replace added pattern='${pattern.take(12)}' -> '${replacement.take(12)}' " +
+                    "book=$bookId chapterOnly=$chapterOnly chapterIndex=${rule.chapterIndex}",
+            )
+            refreshAfterReplaceRulesChanged()
+        }
+    }
+
+    /** 关闭繁简转换 — 等价于参照实现占位条目的 ✕ 操作。
      *
      *  ⚠ 走 [setChineseConvertMode](0) 而不是直接 prefs.setChineseConvertMode(0)。
      *  历史 bug：之前直接写 prefs，cache 不清、chapter 不 reload，dialog 关闭时
@@ -318,7 +359,7 @@ class ReaderViewModel @Inject constructor(
 
     /**
      * 用户在 EffectiveReplacesDialog 内做了任何修改（禁用 / 编辑 / 改繁简） → dismiss 时调一次，
-     * 重拉规则缓存并请求重渲染当前章。Legado 等价 viewModel.replaceRuleChanged()。
+     * 重拉规则缓存并请求重渲染当前章。参照实现等价 viewModel.replaceRuleChanged()。
      *
      * 与 [setChineseConvertMode] 共享 [chineseConvertMutex]：dialog 内可能刚刚连点了
      * 几次 onSetChineseConvertMode（每次走 mutex + reload），dismiss 立即触发的这次
@@ -407,7 +448,7 @@ class ReaderViewModel @Inject constructor(
      * the current chapter ([TtsEventBus.Event.ChapterFinished]) or the user pressed
      * prev/next on the notification while playing. When `chapterContent` next emits a
      * non-blank value, the ViewModel forwards it to the host via `Command.LoadAndPlay`
-     * so playback continues seamlessly across the boundary (Legado-equivalent behavior).
+     * so playback continues seamlessly across the boundary (参照实现-equivalent behavior).
      */
     private var pendingTtsResumeOnNewChapter: Boolean = false
 
@@ -583,7 +624,7 @@ class ReaderViewModel @Inject constructor(
     fun nextChapter() = navigation.nextChapter()
 
     /**
-     * 跨章 PREV（仿 Legado ReadBook.moveToPrevChapter）。
+     * 跨章 PREV（仿参照实现 ReadBook.moveToPrevChapter）。
      * @param toLast true（默认）= 跳上一章末页（手势）；false = 跳章头（按钮）。
      */
     fun prevChapter(toLast: Boolean = true) = navigation.prevChapter(toLast)
@@ -607,7 +648,7 @@ class ReaderViewModel @Inject constructor(
     }
 
     /**
-     * 同 [commitChapterShiftNext] 但走 PREV 路径（仿 Legado ReadBook.moveToPrevChapter）。
+     * 同 [commitChapterShiftNext] 但走 PREV 路径（仿参照实现 ReadBook.moveToPrevChapter）。
      * @param toLast true（默认）= 跳上一章末页（手势）；false = 跳章头（按钮）。
      */
     fun commitChapterShiftPrev(toLast: Boolean = true): Boolean {
@@ -730,6 +771,18 @@ class ReaderViewModel @Inject constructor(
     fun hideTtsPanel() { _isTtsPanelVisible.value = false }
     fun toggleSettingsPanel() { _isSettingsPanelVisible.value = !_isSettingsPanelVisible.value }
     fun hideSettingsPanel() { _isSettingsPanelVisible.value = false }
+    /** 在阅读器内保存本地 TXT 的目录正则，并立即重建当前书的章节目录。 */
+    fun setCustomTxtChapterRegex(regex: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val old = prefs.customTxtChapterRegex.first()
+            if (old == regex) return@launch
+            prefs.setCustomTxtChapterRegex(regex)
+            bookRepo.invalidateTxtChapterFingerprints()
+            val current = chapter.currentChapterIndex.value
+            runCatching { chapter.reparseLocalTxtAfterEdit(current) }
+                .onFailure { AppLog.error("Reader", "Failed to reparse TXT after regex change", it) }
+        }
+    }
     fun setAutoPageInterval(seconds: Int) { _autoPageInterval.value = seconds }
     fun stopAutoPage() { _autoPageInterval.value = 0 }
     fun onTextSelected(text: String) { _selectedText.value = text }
@@ -840,7 +893,7 @@ class ReaderViewModel @Inject constructor(
                     is TtsEventBus.Event.ChapterFinished -> {
                         // Host finished the current chapter — let the UI advance and the
                         // chapterContent observer below will hand the new chapter back to
-                        // the host (Legado-equivalent seamless continuation).
+                        // the host (参照实现-equivalent seamless continuation).
                         pendingTtsResumeOnNewChapter = true
                         _readAloudPageTurn.tryEmit(1)
                     }

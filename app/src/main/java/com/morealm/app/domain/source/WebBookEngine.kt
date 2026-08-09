@@ -7,7 +7,7 @@ import kotlinx.serialization.json.Json
 
 /**
  * Online book fetching engine.
- * Uses RuleEngine to parse content from book sources following Legado rule syntax.
+ * Uses RuleEngine to parse content from book sources following 参照实现 rule syntax.
  *
  * Pipeline: search → bookInfo → toc → content
  */

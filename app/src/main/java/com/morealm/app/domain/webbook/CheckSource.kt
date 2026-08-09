@@ -14,7 +14,7 @@ import kotlin.coroutines.coroutineContext
 /**
  * 书源校验 — 批量检测书源是否可用
  *
- * 校验流程（同Legado CheckSource逻辑）：
+ * 校验流程（同参照实现 CheckSource逻辑）：
  * 1. 用固定关键词搜索，检查是否返回结果
  * 2. 取第一个结果获取详情页
  * 3. 获取目录列表

@@ -21,27 +21,27 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 
 /**
- * Legado 备份 zip 一键导入器。
+ * 参照实现备份 zip 一键导入器。
  *
- * Legado 备份格式（参考其备份导出实现）：
+ * 参照实现备份格式（参考其备份导出实现）：
  *  - zip 平铺结构（无嵌套目录），21 个固定文件名
  *  - 每个 .json 是 GSON 序列化的 `List<Entity>`
  *  - 配置走两个 .xml（`config.xml` / `videoConfig.xml`，本导入器只处理 config.xml 的白名单键）
- *  - 背景图片**不在 zip 内**（Legado 单独走 WebDav `upBgs` 上传），所以主题恢复时
+ *  - 背景图片**不在 zip 内**（参照实现单独走 WebDav `upBgs` 上传），所以主题恢复时
  *    bgImage 字段必失效 — 我们清空该引用，UI 退回纯色
  *
  * 当前覆盖的迁移项（够日常搬家用）：
  *  1. **bookshelf.json** → `Book` —— 书架（durChapter / lastCheck / canUpdate 全部带过来）
- *  2. **bookSource.json** → `BookSource` —— MoRealm 的 BookSource 字段已与 Legado 对齐，
- *     直接 deserialize（`ignoreUnknownKeys=true` 容忍 Legado 多出的 jsLib 等字段）
- *  3. **bookmark.json** → `Bookmark` —— Legado 按 `time` 当主键，bookId 缺失 → 用
+ *  2. **bookSource.json** → `BookSource` —— MoRealm 的 BookSource 字段已与参照实现对齐，
+ *     直接 deserialize（`ignoreUnknownKeys=true` 容忍参照实现多出的 jsLib 等字段）
+ *  3. **bookmark.json** → `Bookmark` —— 参照实现按 `time` 当主键，bookId 缺失 → 用
  *     bookName+author 反查本机 books 拿到 bookId；查不到的书签按 strategy 决定丢弃
  *  4. **bookGroup.json** → `BookGroup` —— groupId(Long) → id(String) 转换
  *  5. **replaceRule.json** → `ReplaceRule`
  *  6. **httpTTS.json** → `HttpTts`
  *  7. **(派生) ReadProgress** —— 从 bookshelf.json 的 durChapterIndex/durChapterPos 提取
  *  8. **searchHistory.json** → `SearchKeyword` —— 1:1 映射（word/usage/lastUseTime
- *     字段名一致）；冲突按 [ConflictStrategy] 处理（OVERWRITE 用 Legado 那条覆盖
+ *     字段名一致）；冲突按 [ConflictStrategy] 处理（OVERWRITE 用参照实现那条覆盖
  *     usage/time，SKIP 留本机原值不动）
  *
  * 暂未覆盖（[ImportResult.skippedSections] 会列出来，下一轮做）：
@@ -51,7 +51,7 @@ import java.util.zip.ZipInputStream
  *  - config.xml（SharedPreferences 白名单映射，下一轮做）
  *
  * **冲突策略** 通过 [ConflictStrategy] 控制：
- *  - [ConflictStrategy.OVERWRITE]：照搬 Legado 行为，主键命中时覆盖（Room REPLACE）
+ *  - [ConflictStrategy.OVERWRITE]：照搬参照实现行为，主键命中时覆盖（Room REPLACE）
  *  - [ConflictStrategy.SKIP]：仅追加新项，跳过本机已有主键的 row（默认）
  *
  * 错误隔离：每个 section 独立 runCatching，单段解析失败仅记 warn，不影响其它段。
@@ -65,10 +65,10 @@ object LegadoImporter {
         ignoreUnknownKeys = true
         isLenient = true
         coerceInputValues = true
-        // Legado.Book.lastReadOffset 等字段 GSON 写出时可能含 NaN/Infinity（不会，
+        // 参照实现.Book.lastReadOffset 等字段 GSON 写出时可能含 NaN/Infinity（不会，
         // 但 BackupManager 同款 import 路径有这个 flag，对齐下保险）
         allowSpecialFloatingPointValues = true
-        // Legado 多了 MoRealm 没有的字段（比如 jsLib / readConfig 等），全部静默丢弃
+        // 参照实现多了 MoRealm 没有的字段（比如 jsLib / readConfig 等），全部静默丢弃
         explicitNulls = false
     }
 
@@ -90,7 +90,7 @@ object LegadoImporter {
 
     /** 主键冲突策略。 */
     enum class ConflictStrategy {
-        /** 主键命中时覆盖（Legado 默认行为）。 */
+        /** 主键命中时覆盖（参照实现默认行为）。 */
         OVERWRITE,
         /** 仅追加；本机已有的主键全部跳过（保守默认，不动用户当前数据）。 */
         SKIP,
@@ -106,7 +106,7 @@ object LegadoImporter {
         val includeBookGroups: Boolean = true,
         val includeReplaceRules: Boolean = true,
         val includeHttpTts: Boolean = true,
-        /** Legado searchHistory.json → SearchKeyword 表。 */
+        /** 参照实现 searchHistory.json → SearchKeyword 表。 */
         val includeSearchHistory: Boolean = true,
         /** 从 Book.durChapterIndex/durChapterPos 派生 ReadProgress（不需要单独读 readRecord.json）。 */
         val includeReadProgress: Boolean = true,
@@ -121,7 +121,7 @@ object LegadoImporter {
         val bookCount: Int,
         val bookSourceCount: Int,
         val bookmarkCount: Int,
-        /** 实际会导入的分组数 = zip 里非空分组数（已剔除 0 本书引用 + Legado 内置虚拟分组）。 */
+        /** 实际会导入的分组数 = zip 里非空分组数（已剔除 0 本书引用 + 参照实现内置虚拟分组）。 */
         val bookGroupCount: Int,
         val replaceRuleCount: Int,
         val httpTtsCount: Int,
@@ -135,7 +135,7 @@ object LegadoImporter {
         val skippedFiles: List<String>,
         val warnings: List<String>,
         /**
-         * Legado 备份带过来的"空分组"个数。
+         * 参照实现备份带过来的"空分组"个数。
          * 包括：① 内置虚拟分组（IdAll/IdLocal/IdNetNone/... 这些负数 groupId）
          *       ② 用户建了但 0 本书引用的自定义分组
          * 这些不会真的导入，只用来在 UI 透明展示「跳过 N 个空分组」。
@@ -303,7 +303,7 @@ object LegadoImporter {
         var groupsSkipped = 0
         var groupsEmptyFiltered = 0
         if (opts.includeBookGroups && parsed.bookGroups.isNotEmpty()) {
-            // 在写库前先剔除"空分组"（Legado 内置虚拟分组 + 用户建了但 0 本书的）。
+            // 在写库前先剔除"空分组"（参照实现内置虚拟分组 + 用户建了但 0 本书的）。
             // Progress.total 用过滤后的数量，让用户看到的进度跟实际写库一致。
             val effectiveGroups = filterNonEmptyBookGroups(parsed.books, parsed.bookGroups)
             groupsEmptyFiltered = parsed.bookGroups.size - effectiveGroups.size
@@ -411,7 +411,7 @@ object LegadoImporter {
                     )
                 }
 
-                // ReadProgress 从同一批 Book 派生（Legado 把进度内嵌在 Book 里）
+                // ReadProgress 从同一批 Book 派生（参照实现把进度内嵌在 Book 里）
                 if (opts.includeReadProgress) {
                     onProgress(Progress("阅读进度", 0, parsed.books.size))
                     parsed.books.forEachIndexed { idx, dto ->
@@ -462,7 +462,7 @@ object LegadoImporter {
         if (opts.includeBookmarks && parsed.bookmarks.isNotEmpty()) {
             onProgress(Progress("书签", 0, parsed.bookmarks.size))
             runCatching {
-                // 反查：bookName+author → bookId（书架里 title 字段对应 Legado.name）
+                // 反查：bookName+author → bookId（书架里 title 字段对应参照实现.name）
                 val books = db.bookDao().getAllBooksSync()
                 val keyToId = books.associateBy(
                     keySelector = { "${it.title}\u0000${it.author}" },
@@ -479,7 +479,7 @@ object LegadoImporter {
                             bookId = bookId,
                             chapterIndex = dto.chapterIndex,
                             chapterTitle = dto.chapterName,
-                            // Legado 把摘录 (bookText) 和笔记 (content) 分开存；MoRealm Bookmark
+                            // 参照实现把摘录 (bookText) 和笔记 (content) 分开存；MoRealm Bookmark
                             // 只有一个 content 字段。优先取 bookText（用户划的原文片段），笔记
                             // 拼在后面用 " — " 分隔，最大限度保留信息
                             content = listOfNotNull(
@@ -562,9 +562,9 @@ object LegadoImporter {
 
         // SearchKeyword ──
         // 走 dao.upsert（OnConflictStrategy.REPLACE）。SKIP 模式靠预先反查 word 集合，
-        // OVERWRITE 模式让 REPLACE 自然覆盖（usage / lastUseTime 都用 Legado 那条）。
+        // OVERWRITE 模式让 REPLACE 自然覆盖（usage / lastUseTime 都用参照实现那条）。
         // 这里不复用 SearchKeywordRepository.record —— 那个会做 trim / 计数累加 / 历史裁剪，
-        // 都不是搬家想要的语义（搬家应当忠实还原 Legado 的 usage 数和时间戳）。
+        // 都不是搬家想要的语义（搬家应当忠实还原参照实现的 usage 数和时间戳）。
         var historyInserted = 0
         var historySkipped = 0
         if (opts.includeSearchHistory && parsed.searchHistory.isNotEmpty()) {
@@ -575,7 +575,7 @@ object LegadoImporter {
                 parsed.searchHistory.forEachIndexed { idx, dto ->
                     val word = dto.word.trim()
                     if (word.isEmpty()) {
-                        // 异常空 word（Legado 早期版本零星数据）— 静默丢弃，不算 skip 也不算 insert
+                        // 异常空 word（参照实现早期版本零星数据）— 静默丢弃，不算 skip 也不算 insert
                         if ((idx + 1) % 20 == 0 || idx == parsed.searchHistory.lastIndex) {
                             onProgress(Progress("搜索历史", idx + 1, parsed.searchHistory.size))
                         }
@@ -699,7 +699,7 @@ object LegadoImporter {
                         "shareRule.json",
                         "config.xml", "videoConfig.xml" -> skipped += name
                         else -> {
-                            // 未知文件 — 直接 skip 但 log 一下，方便发现 Legado 加新字段
+                            // 未知文件 — 直接 skip 但 log 一下，方便发现参照实现加新字段
                             AppLog.debug(TAG, "Unknown entry in Legado zip: $name (${bytes.size} bytes)")
                             skipped += name
                         }
@@ -718,8 +718,8 @@ object LegadoImporter {
                     "replaceRules=${p.replaceRules.size} httpTts=${p.httpTts.size} " +
                     "searchHistory=${p.searchHistory.size} skipped=${p.skippedFiles.size}",
             )
-            // bookshelf.json 期望存在；如果 entries 里没看到说明 zip 不是 Legado 完整备份
-            // （可能是 Legado 选项导出只勾了部分内容、或第三方工具产出的非标准 zip）。
+            // bookshelf.json 期望存在；如果 entries 里没看到说明 zip 不是参照实现完整备份
+            // （可能是参照实现选项导出只勾了部分内容、或第三方工具产出的非标准 zip）。
             val hadBookshelf = seenEntries.any { it.first == "bookshelf.json" }
             if (!hadBookshelf) {
                 AppLog.warn(
@@ -750,20 +750,20 @@ object LegadoImporter {
         }
 
     // ────────────────────────────────────────────────────────────────────────
-    // Internal: mappers (LegadoXxxDto → MoRealm Entity)
+    // Internal: mappers (参照实现XxxDto → MoRealm Entity)
     // ────────────────────────────────────────────────────────────────────────
 
     /**
-     * Legado.Book → MoRealm.Book。
+     * 参照实现.Book → MoRealm.Book。
      *
-     * - `bookUrl` → `id` —— Legado 用 url 当主键，MoRealm.id 是 String，直接复用
+     * - `bookUrl` → `id` —— 参照实现用 url 当主键，MoRealm.id 是 String，直接复用
      * - `name` → `title`
      * - `intro / customIntro` → `description`（自定义优先）
      * - `durChapterIndex / Pos` → `lastReadChapter / lastReadPosition`
      * - `totalChapterNum` → `totalChapters`
      * - `order` → `sortOrder`
      * - `group` (Long) → `folderId` (String)，0 = 未分组（保持 null）
-     * - `type` → `format`（Legado.BookType 数字位掩码 → BookFormat 枚举）
+     * - `type` → `format`（参照实现.BookType 数字位掩码 → BookFormat 枚举）
      * - `lastCheckCount / lastCheckTime / canUpdate` → 同名字段（v16 已对齐）
      */
     internal fun mapBook(dto: LegadoBookDto): Book {
@@ -814,7 +814,7 @@ object LegadoImporter {
     }
 
     /**
-     * Legado type 字段是位掩码（text=0, audio=1, image=2, web=4, local=8, epub=16, ...）。
+     * 参照实现 type 字段是位掩码（text=0, audio=1, image=2, web=4, local=8, epub=16, ...）。
      * MoRealm.BookFormat 是枚举。映射到最贴近的 entry，未知 → UNKNOWN。
      *
      * 参考其书籍类型常量定义：
@@ -834,21 +834,21 @@ object LegadoImporter {
         }
     }
 
-    /** Legado 书源里 origin == "loc_book" 标记本地书。 */
+    /** 参照实现书源里 origin == "loc_book" 标记本地书。 */
     private const val LEGADO_LOCAL_TAG = "loc_book"
 
     /**
      * 从 [groups] 里挑出"实际有书引用的"分组。
      *
-     * Legado 把 BookGroup 设计成位掩码：用户分组的 `groupId` 都是 2 的幂次正数（默认 0b1=1，
+     * 参照实现把 BookGroup 设计成位掩码：用户分组的 `groupId` 都是 2 的幂次正数（默认 0b1=1，
      * 后续 0b10=2, 0b100=4...），Book.group 是这些 groupId 的 OR 组合（`book.group or groupId`
      * 表示加入分组）。所以一本书 group=5 同时属于 groupId=1 和 groupId=4。
      *
-     * Legado 的"全部 / 本地 / 网络未分组 / 本地未分组 / 音频 / 视频 / 更新失败"等内置分组用
+     * 参照实现的"全部 / 本地 / 网络未分组 / 本地未分组 / 音频 / 视频 / 更新失败"等内置分组用
      * 负数 groupId (-1/-2/-3/-4/-5/-6/-11) — 这些**永远不会**被 Book.group 引用（书的位掩码
      * 都是非负 OR 组合），所以"按位反查"自动会把它们筛掉，无需特殊处理。
      *
-     * 用户搬家场景下 Legado 备份会忠实带上所有空分组（包括内置虚拟的）；MoRealm 不希望
+     * 用户搬家场景下参照实现备份会忠实带上所有空分组（包括内置虚拟的）；MoRealm 不希望
      * 给用户塞他没用过的"音频/视频/更新失败"等空分组（见 issue 截图）。
      *
      * @return 过滤后的分组列表（保持 [groups] 里的原顺序）。书架为空时返回空 list（这种
@@ -861,7 +861,7 @@ object LegadoImporter {
         if (groups.isEmpty()) return emptyList()
         if (books.isEmpty()) return emptyList()
         return groups.filter { g ->
-            // groupId <= 0 是 Legado 内置虚拟分组，直接判定为不导入。
+            // groupId <= 0 是参照实现内置虚拟分组，直接判定为不导入。
             // 即使理论上某本书 group=-1 也只是"未分组"语义，不构成对该 BookGroup 的引用。
             if (g.groupId <= 0L) return@filter false
             // 用户自定义分组：检查 Book.group 位掩码是否包含 g.groupId。
@@ -873,14 +873,14 @@ object LegadoImporter {
     }
 
     /**
-     * Legado.BookGroup → MoRealm.BookGroup。
+     * 参照实现.BookGroup → MoRealm.BookGroup。
      *
      * - `groupId` (Long) → `id` (String)，直接 toString
      * - `groupName` → `name`
      * - `order` → `sortOrder`
      * - `show` → `pinned`（语义不完全相同，但 show=false 等价于"不在书架显示"，
      *   MoRealm 没有等价开关；映射到 pinned 至少保留 ordering 提示）
-     * - `cover` 在 MoRealm 是 customCoverUrl，但 Legado.cover 是 url 不是文件，
+     * - `cover` 在 MoRealm 是 customCoverUrl，但参照实现.cover 是 url 不是文件，
      *   且 MoRealm.customCoverUrl 走 CoverStorage 文件，这里不映射避免引用失效
      */
     internal fun mapBookGroup(dto: LegadoBookGroupDto): BookGroup = BookGroup(
@@ -897,16 +897,16 @@ object LegadoImporter {
     )
 
     /**
-     * Legado.ReplaceRule → MoRealm.ReplaceRule。
+     * 参照实现.ReplaceRule → MoRealm.ReplaceRule。
      *
      * - `id` (Long) → `id` (String) toString
      * - `isEnabled` → `enabled`
      * - `isRegex` → `isRegex`（字段名一致）
      * - `timeoutMillisecond` → `timeoutMs`（注意 Long → Int，截断到 Int.MAX_VALUE）
-     * - `sortOrder` (Legado 列名是 sortOrder，但字段名 `order`) → `sortOrder`
-     * - `excludeScope` → `excludeScope`（直接透传，保留 Legado 的换行分隔多值格式）
+     * - `sortOrder` (参照实现列名是 sortOrder，但字段名 `order`) → `sortOrder`
+     * - `excludeScope` → `excludeScope`（直接透传，保留参照实现的换行分隔多值格式）
      * - `kind` 智能推断：replacement 为空 → KIND_PURIFY（净化删除）；否则 KIND_GENERAL
-     *   （语义替换）。Legado 没有 kind 概念，但 replacement="" 的规则本质就是净化。
+     *   （语义替换）。参照实现没有 kind 概念，但 replacement="" 的规则本质就是净化。
      */
     internal fun mapReplaceRule(dto: LegadoReplaceRuleDto): ReplaceRule = ReplaceRule(
         id = dto.id.toString(),
@@ -926,7 +926,7 @@ object LegadoImporter {
     )
 
     /**
-     * Legado.HttpTTS → MoRealm.HttpTts。字段几乎一一对应。
+     * 参照实现.HttpTTS → MoRealm.HttpTts。字段几乎一一对应。
      */
     internal fun mapHttpTts(dto: LegadoHttpTtsDto): HttpTts = HttpTts(
         id = dto.id,
@@ -943,12 +943,12 @@ object LegadoImporter {
     )
 
     /**
-     * Legado.SearchKeyword → MoRealm.SearchKeyword。
+     * 参照实现.SearchKeyword → MoRealm.SearchKeyword。
      *
      * 导入源实体与 MoRealm
      * 实体字段名 / 类型完全相同（word / usage / lastUseTime），1:1 直搬。
      *
-     * 唯一处理：word 在调用方就 trim 过；这里只把 usage 兜底为 ≥1（Legado 老数据
+     * 唯一处理：word 在调用方就 trim 过；这里只把 usage 兜底为 ≥1（参照实现老数据
      * 偶有 0，进库后会因 `usage DESC` 排序消失在最底，不友好）。
      */
     internal fun mapSearchKeyword(dto: LegadoSearchKeywordDto): SearchKeyword = SearchKeyword(
@@ -958,17 +958,17 @@ object LegadoImporter {
     )
 
     // ────────────────────────────────────────────────────────────────────────
-    // Internal: DTOs (Legado JSON shape)
+    // Internal: DTOs (参照实现 JSON shape)
     // ────────────────────────────────────────────────────────────────────────
     //
-    // 这些 DTO 字段名严格对齐 Legado.app.data.entities.* 的 GSON 序列化字段名，
-    // 以便用 kotlinx-serialization decode（Legado 用 GSON 写出 JSON，但只要字段名
+    // 这些 DTO 字段名严格对齐参照实现.app.data.entities.* 的 GSON 序列化字段名，
+    // 以便用 kotlinx-serialization decode（参照实现用 GSON 写出 JSON，但只要字段名
     // 一致，kx-serialization 都能 decode）。
     //
-    // 缺失字段全部带默认值，配合 Json { ignoreUnknownKeys = true } 容忍 Legado
+    // 缺失字段全部带默认值，配合 Json { ignoreUnknownKeys = true } 容忍参照实现
     // 升级时新增的列。
 
-    /** Legado.Book 的 JSON 形态（只取我们映射要用的字段）。 */
+    /** 参照实现.Book 的 JSON 形态（只取我们映射要用的字段）。 */
     @Serializable
     internal data class LegadoBookDto(
         val bookUrl: String = "",
@@ -1025,13 +1025,13 @@ object LegadoImporter {
     )
 
     /**
-     * Legado.ReplaceRule 在 JSON 里字段名是 `sortOrder`（@ColumnInfo(name="sortOrder")）
-     * 但在 Kotlin 字段叫 `order`。Legado 用 GSON，序列化看 Kotlin 字段名 → JSON 是 `order`。
+     * 参照实现.ReplaceRule 在 JSON 里字段名是 `sortOrder`（@ColumnInfo(name="sortOrder")）
+     * 但在 Kotlin 字段叫 `order`。参照实现用 GSON，序列化看 Kotlin 字段名 → JSON 是 `order`。
      * 这里 DTO 用 `sortOrder` 接，实际 JSON key 也试两种（`@SerialName`+ alias 不被 kx 原生支持，
      * 我们就用 fallback：先解 sortOrder，没有则解 order，靠 [decodeReplaceRules] 兜底）。
      *
-     * 但实测 Legado 备份的 JSON 里字段名取决于 GSON 配置，多数情况下是字段名 = `order`。
-     * 为简化，DTO 字段直接叫 `order`，跟 Legado.ReplaceRule.order 对齐。
+     * 但实测参照实现备份的 JSON 里字段名取决于 GSON 配置，多数情况下是字段名 = `order`。
+     * 为简化，DTO 字段直接叫 `order`，跟参照实现.ReplaceRule.order 对齐。
      */
     @Serializable
     internal data class LegadoReplaceRuleDto(
@@ -1066,7 +1066,7 @@ object LegadoImporter {
     )
 
     /**
-     * Legado.SearchKeyword 的 JSON 形态。Legado entity 字段名为 word/usage/lastUseTime，
+     * 参照实现.SearchKeyword 的 JSON 形态。参照实现 entity 字段名为 word/usage/lastUseTime，
      * GSON 默认按 Kotlin 字段名输出 JSON key —— 直接对齐即可。
      */
     @Serializable

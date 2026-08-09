@@ -11,7 +11,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
- * 仿真翻页的原生 View — 参考 Legado 的 HorizontalPageDelegate + SimulationPageDelegate。
+ * 仿真翻页的原生 View — 参考参照实现的 HorizontalPageDelegate + SimulationPageDelegate。
  *
  * 使用原生 View 而非 Compose pointerInput 的原因：
  * - onTouchEvent 直接读取类字段，不存在闭包值捕获陈旧问题
@@ -30,7 +30,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     private var prevBitmap: Bitmap? = null
     private var nextBitmap: Bitmap? = null
 
-    // ── Gesture state (class fields — Legado pattern, no closures!) ──
+    // ── Gesture state (class fields — 参照实现 pattern, no closures!) ──
     private var startX = 0f
     private var startY = 0f
     private var touchX = 0f
@@ -261,7 +261,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // Touch handling — ported from Legado HorizontalPageDelegate.onTouch()
+    // Touch handling — Ported from the reference implementation HorizontalPageDelegate.onTouch()
     // Single entry point, direct field reads, no closures.
     // ══════════════════════════════════════════════════════════════
 
@@ -296,7 +296,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         }
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                // Legado: abortAnim() + onDown()
+                // 参照实现: abortAnim() + onDown()
                 abortAnim()
                 onDown()
                 // 用户开始新交互 → 解锁 idleBitmap：上次动画产生的"自我升格"
@@ -379,7 +379,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         longPressRunnable = null
     }
 
-    // ── Tap handling (3-column zones, like Legado ReadView.onSingleTapUp) ──
+    // ── Tap handling (3-column zones, like 参照实现 ReadView.onSingleTapUp) ──
     private fun handleTap(x: Float, y: Float) {
         // Highlight hit-test (or any consumer-defined precedence) takes priority
         // over the prev/center/next zone routing — lets users tap a saved
@@ -426,7 +426,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         }
     }
 
-    // ── Key/tap page turn (Legado PageDelegate.keyTurnPage) ──
+    // ── Key/tap page turn (参照实现 PageDelegate.keyTurnPage) ──
     //
     // **visibility=internal** 让同 package 的 SimulationPager 能把外部 LaunchedEffect
     // 派发的方向（音量键 / TtsPanel / 顶栏上下章按钮，在 SIMULATION 模式下）转给本 View
@@ -449,7 +449,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         isRunning = true
         isStarted = true
 
-        // Compute animation target (Legado SimulationPageDelegate.onAnimStart)
+        // Compute animation target (参照实现 SimulationPageDelegate.onAnimStart)
         val dx: Int
         val dy: Int
         if (isNext) {
@@ -475,7 +475,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         invalidate()
     }
 
-    // ── Scroll (drag) handling — ported from Legado HorizontalPageDelegate.onScroll ──
+    // ── Scroll (drag) handling — Ported from the reference implementation HorizontalPageDelegate.onScroll ──
     private fun onScroll(x: Float, y: Float) {
         if (!isMoved) {
             val deltaX = (x - startX).toInt()
@@ -501,7 +501,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
                 directionSet = true
                 setBitmaps()
                 isMoved = true
-                // Lock the curl corner once at slop break — matches Legado
+                // Lock the curl corner once at slop break — matches 参照实现
                 // SimulationPageDelegate.setDirection(). Without this lock,
                 // every ACTION_MOVE recomputes cornerY from the live touch
                 // point, so a finger drifting across the screen midline
@@ -516,7 +516,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
 
         if (isMoved) {
             isRunning = true
-            // Update cancel state (Legado: dragging back toward start = cancel)
+            // Update cancel state (参照实现: dragging back toward start = cancel)
             isCancel = if (isNext) {
                 x - startX > 0
             } else {
@@ -544,7 +544,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
      * - NEXT and startY in [h/2, 2h/3): lower-mid → snap touchY to bottom (h).
      * - Otherwise (startY in top or bottom third) → follow finger as-is.
      *
-     * The PREV-always-bottom rule matches Legado's behavior: previous-page
+     * The PREV-always-bottom rule matches 参照实现 behavior: previous-page
      * pulls always animate from the lower-left, regardless of where the
      * finger started.
      */
@@ -559,7 +559,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         }
     }
 
-    // ── Animation start (drag end) — Legado SimulationPageDelegate.onAnimStart ──
+    // ── Animation start (drag end) — 参照实现 SimulationPageDelegate.onAnimStart ──
     private fun onAnimStart() {
         if (!isMoved) return
         val dx: Int
@@ -599,7 +599,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         invalidate()
     }
 
-    // ── Animation tick — Legado PageDelegate.computeScroll ──
+    // ── Animation tick — 参照实现 PageDelegate.computeScroll ──
     override fun computeScroll() {
         if (scroller.computeScrollOffset()) {
             val x = scroller.currX.toFloat()
@@ -613,7 +613,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         }
     }
 
-    // ── Animation complete — Legado SimulationPageDelegate.onAnimStop ──
+    // ── Animation complete — 参照实现 SimulationPageDelegate.onAnimStop ──
     private fun onAnimStop() {
         if (!isCancel) {
             // 跨章闪烁防御第一层：把动画露出的对侧页 (prev/nextBitmap) 直接
@@ -643,7 +643,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         }
     }
 
-    // ── Stop scroll — Legado PageDelegate.stopScroll ──
+    // ── Stop scroll — 参照实现 PageDelegate.stopScroll ──
     private fun stopScroll() {
         isStarted = false
         post {
@@ -653,7 +653,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         }
     }
 
-    // ── Abort animation — Legado HorizontalPageDelegate.abortAnim ──
+    // ── Abort animation — 参照实现 HorizontalPageDelegate.abortAnim ──
     private fun abortAnim() {
         isStarted = false
         isMoved = false
@@ -690,7 +690,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         directionSet = false
     }
 
-    // ── Reset — Legado PageDelegate.onDown ──
+    // ── Reset — 参照实现 PageDelegate.onDown ──
     private fun onDown() {
         isMoved = false
         noNext = false
@@ -699,7 +699,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         directionSet = false
     }
 
-    // ── Bitmap setup — Legado SimulationPageDelegate.setBitmap ──
+    // ── Bitmap setup — 参照实现 SimulationPageDelegate.setBitmap ──
     private fun setBitmaps() {
         val provider = bitmapProvider ?: return
         val w = width
@@ -737,7 +737,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
         drawHelper.bgMeanColor = bgMeanColor
     }
 
-    // ── Draw — Legado SimulationPageDelegate.onDraw ──
+    // ── Draw — 参照实现 SimulationPageDelegate.onDraw ──
     override fun onDraw(canvas: Canvas) {
         // Diagnostic [3d] — 节流：只在状态变化或 idleBitmap 切换时记一次，
         // 避免持续 invalidate 时刷屏。lastDrawSig 在每次走完 onDraw 末尾更新。
@@ -778,7 +778,7 @@ class SimulationReadView(context: Context) : android.view.View(context) {
     }
 
     companion object {
-        /** Animation duration factor (px per ms). Matches Legado ReadView.defaultAnimationSpeed. */
+        /** Animation duration factor (px per ms). Matches 参照实现 ReadView.defaultAnimationSpeed. */
         private const val ANIM_SPEED = 300
         /** Tap start position ratio from edge (0.0 = edge, 1.0 = center). */
         private const val TAP_START_RATIO = 0.9f

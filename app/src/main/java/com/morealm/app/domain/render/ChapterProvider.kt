@@ -123,7 +123,7 @@ class ChapterProvider(
     }
 
     /**
-     * 异步流式排版 — 参考 Legado TextChapterLayout。
+     * 异步流式排版 — 参考参照实现 TextChapterLayout。
      * 排完一页立即通过 Channel 发送，UI 可以立即显示第一页，无需等待整章排完。
      *
      * @param scope 协程作用域，用于启动排版协程

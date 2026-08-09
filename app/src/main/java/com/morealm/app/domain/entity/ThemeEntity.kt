@@ -47,7 +47,7 @@ data class ThemeEntity(
 )
 
 /**
- * Legado ThemeConfig.Config compatible format for import/export.
+ * 参照实现 ThemeConfig.Config compatible format for import/export.
  *
  * 对齐通用主题配置结构; field names
  * must match the imported GSON output. Optional fields (`transparentNavBar`,
@@ -57,11 +57,11 @@ data class ThemeEntity(
  *
  * Color derivation (`toThemeEntity`):
  *  - `onBackgroundColor` is chosen by *background luminance*, not the
- *    `isNightTheme` flag — Legado users sometimes mark a paper-tone theme
+ *    `isNightTheme` flag — 参照实现 users sometimes mark a paper-tone theme
  *    `isNightTheme=false` with a near-black background, or vice versa.
  *  - `surfaceColor` shifts the background luminance ±4% so cards/sheets get
  *    a faint elevation shadow (matches the layered look in BuiltinThemes).
- *  - `transparentBars` mirrors Legado's `transparentNavBar`.
+ *  - `transparentBars` mirrors 参照实现 `transparentNavBar`.
  *  - `backgroundImageUri` is set to `backgroundImgPath` *only if it's an
  *    http/https URL*. Local absolute paths from another device are useless
  *    and are dropped. ThemeRepository later resolves http URLs to local
@@ -112,7 +112,7 @@ data class LegadoThemeConfig(
     }
 }
 
-// region Color helpers — used by Legado import to derive surface/onBackground
+// region Color helpers — used by 参照实现 import to derive surface/onBackground
 //        from a single backgroundColor instead of treating them as identical.
 //        Kept private to this file; if these prove useful elsewhere lift them
 //        into a dedicated ColorUtils. Do not export the hex parser without
@@ -149,12 +149,12 @@ private fun argbToHex(argb: Int): String =
 // endregion
 
 /**
- * Legado 「阅读样式配置」（ReadBookConfig.Config）的导入数据类 —— 与 [LegadoThemeConfig]
- * （app 主题色）schema 完全不同。用户从 Legado 设置 → 阅读样式 → 导出得到的就是这种 JSON：
+ * 参照实现「阅读样式配置」（ReadBookConfig.Config）的导入数据类 —— 与 [参照实现ThemeConfig]
+ * （app 主题色）schema 完全不同。用户从参照实现设置 → 阅读样式 → 导出得到的就是这种 JSON：
  * 顶层字段 `bgStr` / `textColor` / `lineSpacingExtra` / `paragraphIndent` / `tipColor` 等，
  * 描述的是「阅读器排版（字号、行距、缩进、padding）+ 日夜各一份的文本色和背景」。
  *
- * MoRealm 把 Legado ReadConfig 映射成「日 + 夜 两个 MoRealm 主题」：
+ * MoRealm 把参照实现 ReadConfig 映射成「日 + 夜 两个 MoRealm 主题」：
  *   - 白天主题：textColor + textAccentColor + bgStr → readerBackground / readerTextColor / accent
  *   - 夜间主题：textColorNight + textAccentColorNight + bgStrNight → 同上
  *
@@ -185,12 +185,12 @@ data class LegadoReadConfig(
 )
 
 /**
- * 把一份 Legado ReadConfig 拆成两个 MoRealm 主题（白天 + 夜间）。返回的 entity 还没做
+ * 把一份参照实现 ReadConfig 拆成两个 MoRealm 主题（白天 + 夜间）。返回的 entity 还没做
  * 「绝对路径 bgStr → file:// resolve」—— 那一步在 [com.morealm.app.domain.repository.ThemeRepository]
  * 里做，因为需要 Context 访问 filesDir。
  *
  * inaccessibleBgPaths 是 out 参数：调用方传一个 MutableList，本函数把无法直接当颜色解析
- * 也无法当 file:// uri 用的路径（Legado 沙盒路径）追加进去，让上层 toast 一次性告知用户。
+ * 也无法当 file:// uri 用的路径（参照实现沙盒路径）追加进去，让上层 toast 一次性告知用户。
  */
 fun LegadoReadConfig.toThemeEntities(inaccessibleBgPaths: MutableList<String>): Pair<ThemeEntity, ThemeEntity> {
     val baseName = name.ifBlank { "Legado 阅读样式" }

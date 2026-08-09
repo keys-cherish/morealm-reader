@@ -6,13 +6,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * HTTP TTS engine configuration — compatible with Legado httpTTS format.
+ * HTTP TTS engine configuration — compatible with 参照实现 httpTTS format.
  *
  * URL template supports:
  * - {{speakText}} — the text to speak
  * - {{speakSpeed}} — speed multiplier (0.5-2.0)
  * - {{speakVoice}} — voice name
- * - {{encode}}    — URLEncoder.encode(speakText)（Legado 兼容）
+ * - {{encode}}    — URLEncoder.encode(speakText)（参照实现兼容）
  *
  * Response should be audio data (MP3/WAV/PCM).
  *
@@ -48,7 +48,7 @@ private val httpTtsHeaderJson by lazy {
 }
 
 /**
- * 解析 [HttpTts.header] —— Legado 兼容格式：JSON 对象 `{ "K": "V" }`。
+ * 解析 [HttpTts.header] —— 参照实现兼容格式：JSON 对象 `{ "K": "V" }`。
  * 解析失败 / null / 空串都返回 null，调用方按需 fallback。
  */
 fun HttpTts.parseHeaderMap(): Map<String, String>? {

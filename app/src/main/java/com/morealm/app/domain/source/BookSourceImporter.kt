@@ -21,7 +21,7 @@ import kotlinx.serialization.json.intOrNull
  * 书源导入器 - 解析 JSON 格式书源并转换为 [BookSource] 实体。
  *
  * 接受的形态（按优先级）：
- *  1. 顶层 `JsonArray`：标准 Legado / Yuedu 多书源数组。
+ *  1. 顶层 `JsonArray`：标准参照实现 / Yuedu 多书源数组。
  *  2. 顶层 `JsonObject` 包含 `bookSourceUrl` 字段：单书源对象。
  *  3. 顶层 `JsonObject` 内含 `sources` / `bookSources` / `data` /
  *     `list` / `items` 等常见包装键，其值为 `JsonArray`：解包后递归。
@@ -107,9 +107,9 @@ object BookSourceImporter {
             return emptyList()
         }
 
-        // MoRealm 仅支持 Legado / yuedu 风格 JSON 书源。整文件 JS 书源
+        // MoRealm 仅支持参照实现 / yuedu 风格 JSON 书源。整文件 JS 书源
         // （SkyBook / OpenSchedule 的 export default { meta, search(ctx)... } lifecycle 模型，
-        // 或 Legado 全 JS 书源）都不是规则模型，运行时全靠 JS runtime —— 移植成本远超收益。
+        // 或参照实现全 JS 书源）都不是规则模型，运行时全靠 JS runtime —— 移植成本远超收益。
         // 检测到 .js 内容直接报错，让用户找 JSON 格式的等价书源。
         if (isJsSource(raw)) {
             val msg = "MoRealm 不支持 JS 格式书源（含 SkyBook / OpenSchedule lifecycle 模型 + " +
@@ -121,7 +121,7 @@ object BookSourceImporter {
 
         // 先用低层 JsonElement 解析，方便分辨数组 / 对象 / 包装。
         // **2026-05-25 fix**：preprocess raw 把 string value 内部的 raw \n / \r / \t escape 成
-        // \\n / \\r / \\t —— JSON spec 规定 string 内 control char 必须 escape；很多 Legado
+        // \\n / \\r / \\t —— JSON spec 规定 string 内 control char 必须 escape；很多参照实现
         // 书源 JSON 文件原样写了多行 selector / JS / exploreUrl 含 raw \n，标准 JSON parser
         // (即使 isLenient=true) 也会 fail。状态机只在 `"..."` string 内部 escape，不动
         // key/value 间空白换行（JSON 允许）。
@@ -225,7 +225,7 @@ object BookSourceImporter {
         // 用户根本想不到错误来自上游服务器。这里早识别一下。
         //
         // 判定条件：有 code 字段且值是非 0/200 的整数 → 视作错误 envelope，
-        // 把 message 字段透到 UI。Legado 自家书源对象不会有 code 字段，所以不会误判。
+        // 把 message 字段透到 UI。参照实现自家书源对象不会有 code 字段，所以不会误判。
         val codeNum = (obj["code"] as? JsonPrimitive)?.intOrNull
         if (codeNum != null && codeNum != 0 && codeNum != 200) {
             val message = (obj["message"] as? JsonPrimitive)?.contentOrNull

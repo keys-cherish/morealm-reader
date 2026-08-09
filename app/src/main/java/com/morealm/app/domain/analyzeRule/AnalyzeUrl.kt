@@ -64,7 +64,7 @@ class AnalyzeUrl(
      */
     private val speakText: String? = null,
     /**
-     * 朗读速度。MoRealm 内部用 0.3-4.0 浮点；为了和 Legado/网络 TTS 服务的整数语速
+     * 朗读速度。MoRealm 内部用 0.3-4.0 浮点；为了和参照实现/网络 TTS 服务的整数语速
      * 对齐，调用方在传入前自行换算（例如 `((speed - 1f) * 10).roundToInt()` 之类，
      * 具体 mapping 视目标服务而定）。当 != null 时通过 `{{speakSpeed}}` 注入。
      */
@@ -74,7 +74,7 @@ class AnalyzeUrl(
      * 用于：
      *   - 当 [headerMapF] 未传时，把 httpTts.header（JSON 字符串）解析为 headerMap；
      *   - 限速 ([concurrentRate]) 与 cookie jar 走 BookSource 那条路径，HttpTts 暂不
-     *     接入（Legado 同款行为：HttpTTS 不参与 ConcurrentRateLimiter）。
+     *     接入（参照实现同款行为：HttpTTS 不参与 ConcurrentRateLimiter）。
      */
     private val httpTts: HttpTts? = null,
 ) {
@@ -162,7 +162,7 @@ class AnalyzeUrl(
     /**
      * 执行 URL 层 `<js>` / `@js:` / `{{...}}` 内的脚本。
      *
-     * 与 [AnalyzeRule.evalJS] 行为对齐（参考 Legado AnalyzeUrl.evalJS）：
+     * 与 [AnalyzeRule.evalJS] 行为对齐（参考参照实现 AnalyzeUrl.evalJS）：
      *
      * 1. **withRuntimeContext** —— 把当前 [source] / [coroutineContext] / [ruleData]
      *    压入 [JsExtensions] 的 ThreadLocal 栈。这样书源 JS 里写 `java.connect(...)`
@@ -192,7 +192,7 @@ class AnalyzeUrl(
                 bindings["baseUrl"] = baseUrl
                 bindings["page"] = page
                 bindings["key"] = key
-                // 兼容部分 Legado/阅读旧书源中仍在使用的别名。
+                // 兼容部分参照实现/阅读旧书源中仍在使用的别名。
                 bindings["searchPage"] = page
                 bindings["searchKey"] = key
                 bindings["source"] = source
@@ -458,7 +458,7 @@ class AnalyzeUrl(
     }
 
     /**
-     * 兼容旧版阅读/Legado 书源中裸写的 searchKey/searchPage。
+     * 兼容旧版阅读/参照实现书源中裸写的 searchKey/searchPage。
      *
      * 新规则通常写作 {{key}}/{{page}}，但不少导出的旧书源仍会在 URL 或
      * URL option 的 body/header 中直接出现 searchKey/searchPage。若不在这里
@@ -571,10 +571,10 @@ class AnalyzeUrl(
 
     /**
      * 设置cookie: 仅在书源显式启用 CookieJar 时，才把持久化 Cookie 自动合并进请求。
-     * 这样保留 header 中手写 Cookie 的同时，避免未启用的 Legado 书源被历史 Cookie 污染。
+     * 这样保留 header 中手写 Cookie 的同时，避免未启用的参照实现书源被历史 Cookie 污染。
      */
     /**
-     * Inject stored cookies into the outgoing header. Aligns with Legado's behavior:
+     * Inject stored cookies into the outgoing header. Aligns with 参照实现 behavior:
      * cookies are always loaded from [CookieStore] (so the user's login state is honored
      * even when the source disables auto-jar). [BookSource.enabledCookieJar] only
      * controls whether the global OkHttp interceptor will *save* Set-Cookie on response —
@@ -600,7 +600,7 @@ class AnalyzeUrl(
     /**
      * Build a synthetic 500 Response from a Throwable.
      * Used by loginCheckJs / HTTP TTS check JS so book-source JS can still inspect the
-     * failure (status / body) when the network call threw — Legado-parity.
+     * failure (status / body) when the network call threw — 参照实现对齐.
      */
     fun getErrResponse(e: Throwable): okhttp3.Response {
         val body = (e.message ?: "Error Response")

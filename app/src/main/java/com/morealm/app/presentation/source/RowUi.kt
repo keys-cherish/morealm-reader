@@ -4,9 +4,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * 书源登录表单的一项 —— 参考 Legado `data.entities.rule.RowUi`。
+ * 书源登录表单的一项 —— 参考参照实现 `data.entities.rule.RowUi`。
  *
- * 字段映射（Legado → MoRealm）：
+ * 字段映射（参照实现 → MoRealm）：
  *   - `name`     表单字段名（与 loginInfo map 的 key 对齐）
  *   - `type`     `text` / `password` / `button` / `toggle` / `select`
  *   - `action`   button：点击触发的 JS（或 http(s) URL，后者由调用方 openUrl）
@@ -18,7 +18,7 @@ import kotlinx.serialization.Serializable
  *
  * 兼容旧 `LoginField`：[name] / [hint] / [type] 字段保留同名时反序列化能直接读出。
  *
- * 跨设备共享 JSON：跟 Legado 字段名一致，可以 import Legado 导出的 loginUi 串。
+ * 跨设备共享 JSON：跟参照实现字段名一致，可以 import 参照实现导出的 loginUi 串。
  */
 @Serializable
 data class RowUi(

@@ -152,7 +152,7 @@ class ReaderChapterController(
     private val _prevPreloadedChapter = MutableStateFlow<PreloadedReaderChapter?>(null)
     val prevPreloadedChapter: StateFlow<PreloadedReaderChapter?> = _prevPreloadedChapter.asStateFlow()
 
-    // ── Three-chapter cache (Legado MD3 ReadBook 模型对齐) ──
+    // ── Three-chapter cache (参照实现 MD3 ReadBook 模型对齐) ──
     //
     // 对齐参考: 成熟开源阅读器的三章缓存模型
     //   var prevTextChapter: TextChapter? = null
@@ -166,7 +166,7 @@ class ReaderChapterController(
     //   }
     //
     // MoRealm 采用 StateFlow 而非 var：StateFlow.value = newValue 在主线程同步生效，
-    // 与 Legado 的同步赋值语义等价；Compose collectAsState 会在下一帧触发重组。
+    // 与参照实现的同步赋值语义等价；Compose collectAsState 会在下一帧触发重组。
     //
     // 三个 flow 的赋值路径：
     //   - publishCurTextChapter / Prev / Next：CanvasRenderer 在 layoutChapterAsync
@@ -188,7 +188,7 @@ class ReaderChapterController(
      * 回调时调用。idx 必须等于当前 currentChapterIndex 才覆写，否则丢弃——
      * 防止用户快速跨章后旧章节的迟到 layout 结果污染新 cur。
      *
-     * 对齐 Legado: ReadBook.contentLoadFinish 中 `curTextChapter = textChapter`。
+     * 对齐参照实现: ReadBook.contentLoadFinish 中 `curTextChapter = textChapter`。
      */
     fun publishCurTextChapter(idx: Int, ch: com.morealm.app.domain.render.TextChapter) {
         if (idx == _currentChapterIndex.value) {
@@ -204,7 +204,7 @@ class ReaderChapterController(
 
     /**
      * prev 章节预排版完成后由 CanvasRenderer 调用。idx 校验为 cur-1。
-     * 对齐 Legado: ReadBook.contentLoadFinish 中 prevTextChapter 赋值。
+     * 对齐参照实现: ReadBook.contentLoadFinish 中 prevTextChapter 赋值。
      */
     fun publishPrevTextChapter(idx: Int, ch: com.morealm.app.domain.render.TextChapter) {
         if (idx == _currentChapterIndex.value - 1) {
@@ -215,7 +215,7 @@ class ReaderChapterController(
 
     /**
      * next 章节预排版完成后由 CanvasRenderer 调用。idx 校验为 cur+1。
-     * 对齐 Legado: ReadBook.contentLoadFinish 中 nextTextChapter 赋值。
+     * 对齐参照实现: ReadBook.contentLoadFinish 中 nextTextChapter 赋值。
      */
     fun publishNextTextChapter(idx: Int, ch: com.morealm.app.domain.render.TextChapter) {
         if (idx == _currentChapterIndex.value + 1) {
@@ -280,7 +280,7 @@ class ReaderChapterController(
                 )
                 return false
             }
-        // 仿 legado ReadBook.moveToNextChapter：_nextTextChapter 未就绪时不 REJECT，
+        // 仿参照实现 ReadBook.moveToNextChapter：_nextTextChapter 未就绪时不 REJECT，
         // 改为推进 index + 置 _curTextChapter = null，由 CanvasRenderer 主路径重排。
         // 只要 nextContent 已缓存（上面那段 when 保证），视觉上就是「章头标题→加载态
         // →内容就位」一帧过渡，不再触发 coordinator REBUILD 的整屏闪。
@@ -359,7 +359,7 @@ class ReaderChapterController(
      *   - `_currentChapterIndex` ← curIdx - 1
      *   - `_chapterContent` ← prevContent（来自 _prevPreloadedChapter / prevChapterCache）
      *   - `_renderedChapter` ← 新章 metadata，**initialChapterPosition = 末尾**让
-     *     CanvasRenderer 启动到末页（PREV 跨章对齐 Legado moveToPrevChapter 行为）
+     *     CanvasRenderer 启动到末页（PREV 跨章对齐参照实现 moveToPrevChapter 行为）
      *   - `_nextPreloadedChapter` ← (curIdx, oldCurTitle, oldCurContent)
      *   - `_prevPreloadedChapter` ← null
      */
@@ -369,7 +369,7 @@ class ReaderChapterController(
      * @param toLast `true`（**默认**）= 跳上一章**末页**（手势 PREV 连续阅读语义，常见路径）；
      *               `false` = 跳上一章**章头**（按钮 PREV，显式覆盖默认）。
      *
-     * 设计对齐 Legado：default 设为手势场景（更常见），按钮调用方显式传 `false`。
+     * 设计对齐参照实现：default 设为手势场景（更常见），按钮调用方显式传 `false`。
      * 详见 MEMORY.md「阅读器导航语义」段。
      */
     fun commitChapterShiftPrev(toLast: Boolean = true): Boolean {
@@ -396,7 +396,7 @@ class ReaderChapterController(
                 )
                 return false
             }
-        // 仿 legado ReadBook.moveToPrevChapter：_prevTextChapter 未就绪时不 REJECT，
+        // 仿参照实现 ReadBook.moveToPrevChapter：_prevTextChapter 未就绪时不 REJECT，
         // 改为推进 index + 置 _curTextChapter = null，由 CanvasRenderer 主路径重排。
         // 连点 PREV 不再落回 loadChapter，避免 coordinator REBUILD 整屏闪。
         val prevCh = _prevTextChapter.value
@@ -918,7 +918,7 @@ class ReaderChapterController(
                             val localPath = book.localPath ?: ""
                             LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapter)
                         }
-                        val replaced = applyReplaceRules(raw)
+                        val replaced = applyReplaceRules(raw, chapterIndex = index)
                         // [DIAGNOSTIC 2026-05-10] 临时排查繁简反复切换后仍是繁体的问题。
                         val capturedMode = chineseConvertMode()
                         AppLog.info(
@@ -943,6 +943,8 @@ class ReaderChapterController(
                     "loadChapter PUBLISH idx=$index len=${content.length}" +
                         " sample='${content.take(20).replace("\n", "\\n")}'",
                 )
+
+                _replaceSupported.value = !WireMarkerGuard.containsWireMarkers(content)
 
                 // Publish new chapter content FIRST, before clearing old preloaded data.
                 // This ensures the UI always has valid content to display during the
@@ -1039,7 +1041,7 @@ class ReaderChapterController(
                     val localPath = book.localPath ?: return@withContext
                     LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapterList[nextIndex])
                 }
-                val replaced = applyReplaceRules(raw)
+                val replaced = applyReplaceRules(raw, chapterIndex = nextIndex)
                 val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
                 _nextPreloadedChapter.value = PreloadedReaderChapter(nextIndex, chapterList[nextIndex].title, converted)
             }
@@ -1065,7 +1067,7 @@ class ReaderChapterController(
                     val localPath = book.localPath ?: return@withContext
                     LocalBookParser.readChapter(context, Uri.parse(localPath), book.format, chapterList[prevIndex])
                 }
-                val replaced = applyReplaceRules(raw)
+                val replaced = applyReplaceRules(raw, chapterIndex = prevIndex)
                 val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
                 _prevPreloadedChapter.value = PreloadedReaderChapter(prevIndex, chapterList[prevIndex].title, converted)
             }
@@ -1271,12 +1273,24 @@ class ReaderChapterController(
      * [hitTitleRules] 暴露给 UI。
      *
      * 「真命中」语义：rule.replace 真的改变了内容才算（含正则全局替换零次匹配 → 不算命中）。
-     * 这与 Legado curTextChapter.effectiveReplaceRules 等价。
+     * 这与参照实现 curTextChapter.effectiveReplaceRules 等价。
      *
      * 切章时：在 setChapterIndex / loadCurrentChapter 头部调用 [clearHitTracking] 重置。
      */
     private val hitContentRulesSet = java.util.Collections.synchronizedSet(linkedSetOf<com.morealm.app.domain.entity.ReplaceRule>())
     private val hitTitleRulesSet = java.util.Collections.synchronizedSet(linkedSetOf<com.morealm.app.domain.entity.ReplaceRule>())
+
+    /**
+     * 当前章内容是否**支持**替换规则 —— 即内容不是带排版 marker 的 EPUB 精排 wire 串。
+     *
+     * 选区菜单据此决定要不要给出「替换」按钮：wire 内容上替换规则被
+     * [skipReplaceForWireContent] 整章拦掉，给了按钮也是静默无效，不如不给。
+     *
+     * 判据取内容本身而不是书籍格式 —— 同一本 EPUB 里纯文本章节与精排章节可以并存，
+     * 按格式一刀切会误伤。
+     */
+    private val _replaceSupported = MutableStateFlow(false)
+    val replaceSupported: StateFlow<Boolean> = _replaceSupported.asStateFlow()
 
     private val _hitContentRules = MutableStateFlow<List<com.morealm.app.domain.entity.ReplaceRule>>(emptyList())
     val hitContentRules: StateFlow<List<com.morealm.app.domain.entity.ReplaceRule>> = _hitContentRules.asStateFlow()
@@ -1530,13 +1544,24 @@ class ReaderChapterController(
         return true
     }
 
-    suspend fun applyReplaceRules(content: String, isTitle: Boolean = false): String {
+    suspend fun applyReplaceRules(
+        content: String,
+        isTitle: Boolean = false,
+        /**
+         * 当前章号 —— 用来筛掉「只对某一章生效」的规则（[ReplaceRule.chapterIndex] 非 null）。
+         * 传 null = 不做章节筛选，只应用全书规则（预加载 / 详情页兜底等无明确章号的场景）。
+         */
+        chapterIndex: Int? = null,
+    ): String {
         if (cachedReplaceRules.isEmpty()) return content
         if (skipReplaceForWireContent(content, isTitle)) return content
         var result = content
         var anyHit = false
         for (rule in cachedReplaceRules) {
             if (!rule.enabled || !rule.isValid()) continue
+            // 章节作用域：null = 全书；非 null 只在该章生效。调用方没给章号时（chapterIndex
+            // == null）一律跳过限章规则 —— 宁可不生效也不要错章生效。
+            if (rule.chapterIndex != null && rule.chapterIndex != chapterIndex) continue
             if (isTitle && !rule.scopeTitle) continue
             if (!isTitle && !rule.scopeContent) continue
             val before = result
@@ -1561,16 +1586,40 @@ class ReaderChapterController(
             }
         }
         if (anyHit) publishHits()
+        logReplaceOutcome(isTitle, chapterIndex, content, result)
         return result
     }
 
-    fun applyLoadedReplaceRulesSync(content: String, isTitle: Boolean = false): String {
+    /**
+     * 替换规则是否真落到文本上 —— 命中与否都留一条痕。
+     *
+     * 「规则加了但正文没变化」是高频反馈，而这条链原先只有被 [skipReplaceForWireContent]
+     * 拦掉时才出声，真命中/全落空一律静默，排查时无从下手。debug 级：release 不输出，
+     * 且 `cachedReplaceRules` 为空时调用方已提前 return，没配规则的用户不会看到。
+     */
+    private fun logReplaceOutcome(isTitle: Boolean, chapterIndex: Int?, before: String, after: String) {
+        val hit = if (isTitle) hitTitleRulesSet.size else hitContentRulesSet.size
+        AppLog.debug(
+            "Chapter",
+            "replace applied: rules=${cachedReplaceRules.size} hit=$hit isTitle=$isTitle " +
+                "chapterIndex=$chapterIndex len=${before.length}->${after.length}",
+        )
+    }
+    private fun applyLoadedReplaceRulesSync(
+        content: String,
+        isTitle: Boolean = false,
+        /** 见 [applyReplaceRules] 同名参数。 */
+        chapterIndex: Int? = null,
+    ): String {
         if (cachedReplaceRules.isEmpty()) return content
         if (skipReplaceForWireContent(content, isTitle)) return content
         var result = content
         var anyHit = false
         for (rule in cachedReplaceRules) {
             if (!rule.enabled || !rule.isValid()) continue
+            // 章节作用域：null = 全书；非 null 只在该章生效。调用方没给章号时（chapterIndex
+            // == null）一律跳过限章规则 —— 宁可不生效也不要错章生效。
+            if (rule.chapterIndex != null && rule.chapterIndex != chapterIndex) continue
             if (isTitle && !rule.scopeTitle) continue
             if (!isTitle && !rule.scopeContent) continue
             val before = result
@@ -1734,7 +1783,7 @@ class ReaderChapterController(
                         epubContainingBlockWidthPx = epubContainingBlockWidthPx,
                     )
                 }
-                val replaced = applyReplaceRules(raw)
+                val replaced = applyReplaceRules(raw, chapterIndex = index)
                 val converted = com.morealm.app.core.text.ChineseConverter.convert(replaced, chineseConvertMode())
                 // 本地 TXT 首行缩进归一化（详见 [normalizeTxtParagraphIndent]）：纯文本路径
                 // 没有 ContentProcessor 预埋的段首 "　　"，统一在此补齐，让 TXT 在滚动 /
@@ -1819,6 +1868,11 @@ class ReaderChapterController(
      *  2. 非空段统一加 [firstLineIndentChars] 个全角空格（用户「首行缩进」设置，0=顶格）。
      *
      * 即源文件本来用 4 空格 / Tab / 全角空格缩进也归一成统一缩进，绝不双重缩进。
+     *
+     * **空行不归此处管**：连续多空行折叠早已由上游
+     * [com.morealm.app.domain.parser.LocalBookParser] 读章时完成（渲染层
+     * [com.morealm.app.domain.render.ChapterProvider] 还有一道兜底），这里原样透传空行
+     * 即可。2026-08-05 曾在此重加过一道折叠 —— 纯重复且更弱（不吃行内空白），已撤销。
      * 标题行即便被加上缩进，引擎 `normalizeTitleForCompare` 比对前会剥掉全角空格，
      * 重复标题去重 / 自画标题块不受影响。
      *

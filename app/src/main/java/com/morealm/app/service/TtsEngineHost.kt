@@ -128,12 +128,12 @@ class TtsEngineHost(
     private var paragraphIndex: Int = 0
 
     /**
-     * 当前段内字符偏移，用于句中续读（仿 Legado paragraphStartPos）。
+     * 当前段内字符偏移，用于句中续读（仿参照实现 paragraphStartPos）。
      * - SystemTtsEngine 批量路径下：onRangeStart 实时回写，pause 不清零；
      *   resume 时第一段切片 substring(paragraphStartPos) 后再入队。
      * - 段切换（onDone 推进 paragraphIndex）时复位为 0。
      * - 用户手动切上/下段（prevParagraph/nextParagraph）也复位为 0。
-     * - 这是 Legado 没做、MoRealm 新增的「真断点续读」能力。
+     * - 这是参照实现没做、MoRealm 新增的「真断点续读」能力。
      */
     private var paragraphStartPos: Int = 0
 
@@ -492,7 +492,7 @@ class TtsEngineHost(
                 chapterTitle = cmd.chapterTitle
                 coverUrl = cmd.coverUrl ?: coverUrl
 
-                // Legado-style single-source-of-truth: when the ViewModel hands
+                // 参照实现-style single-source-of-truth: when the ViewModel hands
                 // us authoritative paragraph offsets (computed from
                 // TextChapter.getParagraphs — the same data the renderer uses
                 // for `upPageAloudSpan`), slice [content] at those offsets
@@ -647,14 +647,14 @@ class TtsEngineHost(
         }
         // 边界场景：当前已经在章首段（且不是从更后段一脚踩到首段），需要跨章。
         // 发 Event.PrevChapterToLast 让 ReaderViewModel 切上一章 + 续接到末段读。
-        // 用户体验对齐 Legado：在章首按"上一段"不会再卡死。
+        // 用户体验对齐参照实现：在章首按"上一段"不会再卡死。
         if (paragraphIndex == 0 && paragraphStartPos == 0) {
             AppLog.info("TtsHost", "prevParagraph: at chapter head → emit PrevChapterToLast")
             TtsEventBus.sendEvent(TtsEventBus.Event.PrevChapterToLast)
             return
         }
         // 跳过"全标点/空白/符号段"——按一次"上一段"应该落在真正有内容的段上，
-        // 而不是停在 ─── / *** / 等装饰段让用户以为按了没反应。仿 Legado prevP 的
+        // 而不是停在 ─── / *** / 等装饰段让用户以为按了没反应。仿参照实现 prevP 的
         // do-while 循环。最坏情况整章都是无声段（不太可能），止于 0 不无限退。
         var newIdx = paragraphIndex - 1
         while (newIdx >= 0 && paragraphs[newIdx].matches(AppPattern.notReadAloudRegex)) {
@@ -725,7 +725,7 @@ class TtsEngineHost(
 
     /**
      * 入口：按引擎类型分流。
-     * - [SystemTtsEngine]：走 [runBatchPlayback]（仿 Legado，一次性入队整章）。
+     * - [SystemTtsEngine]：走 [runBatchPlayback]（仿参照实现，一次性入队整章）。
      * - [EdgeTtsEngine] / 其他：走 [runStreamingPlayback]（callbackFlow 串行）。
      *
      * 之前的统一串行实现遇到「listener 被替换 / onDone 不触发」时整个 host 卡死
@@ -750,7 +750,7 @@ class TtsEngineHost(
     }
 
     /**
-     * 仿 Legado [TTSReadAloudService.play] 的批量入队播放。
+     * 仿参照实现 [TTSReadAloudService.play] 的批量入队播放。
      *
      * 流程：
      * 1. 把当前段及之后所有段全部规划成 utterance 列表（长段二次切句）。
@@ -762,7 +762,7 @@ class TtsEngineHost(
      *    在 await 处抛 CancellationException。
      *
      * 第一段如有 [paragraphStartPos] > 0（pause 时记录的句中位置），切片后再入队，
-     * 实现「真断点续读」——这是 Legado 没做但合理的扩展。
+     * 实现「真断点续读」——这是参照实现没做但合理的扩展。
      */
     private suspend fun runBatchPlayback(engine: SystemTtsEngine) {
         // 等引擎就绪
@@ -1170,7 +1170,7 @@ class TtsEngineHost(
     }
 
     /**
-     * 长段二次切句。Legado 没做这步——它的 contentList 来自排版后的 page.text，自带换行。
+     * 长段二次切句。参照实现没做这步——它的 contentList 来自排版后的 page.text，自带换行。
      * MoRealm 是按章节段 offset 切片，长段（200+ 字）整体扔给引擎会断句不自然。
      *
      * 切分点：。！？；和换行。保留分隔符在前一子句末尾。短于 [LONG_PARA_THRESHOLD]
@@ -1480,7 +1480,7 @@ class TtsEngineHost(
      * 下一章正文回传，然后 host 调 engine 拉缓存。如果 ViewModel 不响应（比如
      * 阅读器已退出），preloadNextChapterJob 自然超时退出，不影响功能。
      *
-     * 当前**简化实现**：直接结束（占位）；ViewModel 桥接留作后续 PR。Legado 的
+     * 当前**简化实现**：直接结束（占位）；ViewModel 桥接留作后续 PR。参照实现的
      * preDownloadAudios 在同 service 内能直接拿 ReadBook.nextTextChapter，MoRealm
      * 的解耦架构需要新增一条事件桥，避免本次 PR 跨过 host/VM 边界改动太大。
      */
@@ -1982,7 +1982,7 @@ class TtsEngineHost(
          */
         private const val WAIT_NEXT_CHAPTER_MS = 2_000L
 
-        /** HttpTts 章节级预下载的段数上限（与 Legado preDownloadAudios 的 10 段对齐）。 */
+        /** HttpTts 章节级预下载的段数上限（与参照实现 preDownloadAudios 的 10 段对齐）。 */
         @Suppress("unused") // 在 [startHttpPreloadNextChapter] VM 桥接打通后会用到
         private const val HTTP_PRELOAD_NEXT_PARAGRAPHS = 10
 

@@ -71,10 +71,10 @@ class ThemeRepository @Inject constructor(
     }
 
     /**
-     * Legado 主题导入结果。两个分支语义：
-     *  - [ThemeImported]：标准 Legado **主题配置（ThemeConfig）**，含 themeName/primaryColor 等
+     * 参照实现主题导入结果。两个分支语义：
+     *  - [ThemeImported]：标准参照实现 **主题配置（ThemeConfig）**，含 themeName/primaryColor 等
      *    app 主题色字段，导入后得到 1 个 [ThemeEntity]。
-     *  - [ReadConfigImported]：Legado **阅读样式配置（ReadBookConfig.Config）**，含 bgStr/textColor/
+     *  - [ReadConfigImported]：参照实现 **阅读样式配置（ReadBookConfig.Config）**，含 bgStr/textColor/
      *    lineSpacingExtra 等字段（与主题色完全不同 schema）。当前只消费颜色 + 背景部分，得到「日 + 夜」
      *    两个 [ThemeEntity]；`inaccessibleBgPaths` 列出无法跨包访问的沙盒路径，UI 应给 toast 提醒。
      *  - [Failed]：JSON 既不像 ThemeConfig 也不像 ReadConfig，或反序列化抛错。
@@ -91,7 +91,7 @@ class ThemeRepository @Inject constructor(
     }
 
     /**
-     * 智能识别 Legado 主题 / 阅读样式 JSON。识别策略 —— 看 JSON 顶层 object 字段：
+     * 智能识别参照实现主题 / 阅读样式 JSON。识别策略 —— 看 JSON 顶层 object 字段：
      *  - 含 `themeName` 或 `primaryColor` → ThemeConfig
      *  - 含 `bgStr` 或 `textColor`（同时大概率有 `lineSpacingExtra`）→ ReadBookConfig.Config
      *
@@ -140,7 +140,7 @@ class ThemeRepository @Inject constructor(
      * apply path, but stores in internal storage to
      * avoid the runtime storage-permission dance.
      *
-     * 新增 file:// 绝对路径分支（Legado ReadConfig 导入用）：
+     * 新增 file:// 绝对路径分支（参照实现 ReadConfig 导入用）：
      *   - 路径在第三方阅读器沙盒（指向其私有 Android/data 目录）→ Android 11+
      *     scoped storage 限制，跨包根本读不到 → 把路径加进 [inaccessibleBgPaths] 让 UI toast，
      *     uri 抹掉为 null（主题颜色照常生效，只是背景没图）
@@ -187,7 +187,7 @@ class ThemeRepository @Inject constructor(
     }
 
     /**
-     * 处理 Legado ReadConfig 里的绝对路径背景图 —— 多数情况指向 Legado 自己的沙盒目录，
+     * 处理参照实现 ReadConfig 里的绝对路径背景图 —— 多数情况指向参照实现自己的沙盒目录，
      * Android 11+ 跨包根本读不到。能读到时复制到 MoRealm 自己的 bgCacheDir 让后续主题
      * 切换/重启后仍可用；读不到时把路径加到 inaccessibleBgPaths 让 UI toast，uri 抹空。
      */

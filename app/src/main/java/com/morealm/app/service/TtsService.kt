@@ -427,7 +427,7 @@ class TtsService : MediaSessionService(), AudioManager.OnAudioFocusChangeListene
      * 抢占续播所需资源。
      *
      * - **WakeLock**：仅在用户开启 [AppPreferences.ttsKeepCpuAwake] 偏好时申请。
-     *   默认关闭，和 Legado 默认行为对齐——靠 audio playback 自带的 doze 豁免，
+     *   默认关闭，和参照实现默认行为对齐——靠 audio playback 自带的 doze 豁免，
      *   不强抢 PARTIAL_WAKE_LOCK 节省电量。个别 ROM 锁屏断声问题可由用户在
      *   设置里手动启用换取稳定性。
      * - **WiFiLock**：仅在引擎类型为在线（Edge / HTTP）时申请。系统 TTS 不联网

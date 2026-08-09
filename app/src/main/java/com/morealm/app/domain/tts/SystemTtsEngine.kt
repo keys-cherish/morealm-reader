@@ -55,7 +55,7 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
     // 走 [setLanguage] 兜底，不会再卡死任何线程。
     @Volatile private var cachedVoices: List<Voice>? = null
 
-    // ── 批量入队模式（仿 Legado TTSReadAloudService）────────────────────────────
+    // ── 批量入队模式（仿参照实现 TTSReadAloudService）────────────────────────────
     //
     // 旧的 [speak] 实现每段都重建 callbackFlow + 替换 OnUtteranceProgressListener，
     // 串行 await 一段读完再喂下一段。问题：
@@ -64,7 +64,7 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
     //   2. 段间多一个 setListener+speak 调用周期，导致段间停顿明显。
     //   3. 长段（一段 200+ 字）整体扔给引擎，引擎自己分句质量参差。
     //
-    // Legado 的做法：入队前 setOnUtteranceProgressListener 一次（全局常驻 listener），
+    // 参照实现的做法：入队前 setOnUtteranceProgressListener 一次（全局常驻 listener），
     // 然后 `for(i) tts.speak(text, QUEUE_FLUSH/QUEUE_ADD, "id$i")` 一次性把整章全
     // 部入队，listener 用 utteranceId 区分回调来源。这里照搬此模型，给 host 用。
     interface BatchCallback {
@@ -436,7 +436,7 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
         }
         // 只在缓存里找——不再触发 binder IPC。缓存为空（onInit 还没完成或异常）
         // 时直接回退到 setLanguage(CHINESE)，避免拖慢/卡死调用线程。这是仿
-        // Legado 但更激进的策略：宁可声音是默认而不是用户选的那个，也不让
+        // 参照实现但更激进的策略：宁可声音是默认而不是用户选的那个，也不让
         // setVoice 把 host 卡 8 秒以上。
         val voice = cachedVoices?.firstOrNull { it.name == voiceName }
         if (voice != null) {
@@ -519,7 +519,7 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
      * 主线程被卡 >8 秒 → ANR Watchdog。修复：把 binder 调用 fire-and-forget 到背景
      * 线程；调用方（pause/stop/setEngine 路径）立刻返回，不再阻塞 Main。
      *
-     * 这种 fire-and-forget 策略和 Legado `TTSReadAloudService` 一致：stop 没返回值
+     * 这种 fire-and-forget 策略和参照实现 `TTSReadAloudService` 一致：stop 没返回值
      * 也不依赖完成时机——引擎下一次 enqueue 时会通过 onError 回调反馈状态。
      */
     override fun stop() {
@@ -570,7 +570,7 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
      * already-bound [TextToSpeech] can degrade into a state where
      * `speak()` returns [TextToSpeech.ERROR] synchronously even though
      * the [OnInitListener] had reported `SUCCESS`. Re-binding clears
-     * the corrupted state — Legado does the same thing in its
+     * the corrupted state — 参照实现 does the same thing in its
      * `TTSReadAloudService.clearTTS()` recovery path.
      *
      * Suspends until init resolves (success or failure). Caller is

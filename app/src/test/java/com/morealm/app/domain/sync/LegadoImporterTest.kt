@@ -12,15 +12,15 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 /**
- * Legado 一键搬家解析 + 字段映射回归测试。
+ * 参照实现一键搬家解析 + 字段映射回归测试。
  *
  * 不依赖真 DAO / DB —— 直接测 [LegadoImporter.parseZip]、[LegadoImporter.mapBook] 等
  * internal 函数。protect 三个层面：
  *
  *  1. **zip 解析鲁棒性**：未知 entry 不阻断、损坏 JSON 不阻断、空 zip 也能跑出空 ParsedBackup
- *  2. **字段映射保真**：Legado.Book.bookUrl / durChapterIndex / order / type 等关键字段
+ *  2. **字段映射保真**：参照实现.Book.bookUrl / durChapterIndex / order / type 等关键字段
  *     不能在搬家时弄丢
- *  3. **Legado 升级容忍**：新增字段（如 `syncTime`、`originOrder` 等）不能 crash 解析；
+ *  3. **参照实现升级容忍**：新增字段（如 `syncTime`、`originOrder` 等）不能 crash 解析；
  *     `Json { ignoreUnknownKeys=true }` 必须真生效
  */
 class LegadoImporterTest {
@@ -67,8 +67,8 @@ class LegadoImporterTest {
 
     @Test
     fun `parseZip should decode minimal Legado bookshelf entry`() {
-        // 模拟 Legado.Book GSON 序列化的最小 JSON。注意 Legado 用字段名不是 SerialName，
-        // 我们的 LegadoBookDto 字段名要严格对齐 Legado.Book Kotlin 字段名。
+        // 模拟参照实现.Book GSON 序列化的最小 JSON。注意参照实现用字段名不是 SerialName，
+        // 我们的参照实现BookDto 字段名要严格对齐参照实现.Book Kotlin 字段名。
         val booksJson = """
             [{
                 "bookUrl": "https://book.com/abc",
@@ -105,7 +105,7 @@ class LegadoImporterTest {
 
     @Test
     fun `parseZip should ignore unknown future Legado fields`() {
-        // Legado 升级后给 Book 加了新字段；我们的 DTO 没有它，但解析不应该 crash。
+        // 参照实现升级后给 Book 加了新字段；我们的 DTO 没有它，但解析不应该 crash。
         val booksJson = """
             [{
                 "bookUrl": "u",
@@ -240,17 +240,17 @@ class LegadoImporterTest {
 
     // ── filter: 空分组 ──────────────────────────────────────────────────────
     //
-    // Legado 备份会把所有内置虚拟分组（IdAll/IdLocal/... 这些负数 groupId）
+    // 参照实现备份会把所有内置虚拟分组（IdAll/IdLocal/... 这些负数 groupId）
     // 和用户自己建过但没分书的分组一并写进 bookGroup.json。MoRealm 不希望把
     // 这些"看着是分组但里面 0 本书"的条目塞给用户（issue 反馈：进首页能看到
     // 一堆"网络未分组/本地未分组/视频/音频"等空分组）。
     //
     // filterNonEmptyBookGroups 就是用来在写库前剔掉它们 —— 这几个 case 把
-    // Legado 几种位掩码场景都摊开测一遍，避免后续重构破坏。
+    // 参照实现几种位掩码场景都摊开测一遍，避免后续重构破坏。
 
     @Test
     fun `filterNonEmptyBookGroups should drop builtin virtual groups by negative groupId`() {
-        // Legado 内置虚拟分组：IdAll=-1, IdLocal=-2, IdAudio=-3, IdNetNone=-4,
+        // 参照实现内置虚拟分组：IdAll=-1, IdLocal=-2, IdAudio=-3, IdNetNone=-4,
         // IdLocalNone=-5, IdVideo=-6, IdError=-11 — 全部应被剔除
         val groups = listOf(
             LegadoImporter.LegadoBookGroupDto(groupId = -1L, groupName = "全部"),
@@ -285,7 +285,7 @@ class LegadoImporterTest {
 
     @Test
     fun `filterNonEmptyBookGroups should recognize bitmask OR of multiple groups`() {
-        // Legado 一本书可以同时属于多个分组：book.group = groupId1 or groupId2
+        // 参照实现一本书可以同时属于多个分组：book.group = groupId1 or groupId2
         // 比如 group=5 (0b101) 表示属于 groupId=1 (0b1) 和 groupId=4 (0b100)
         val groups = listOf(
             LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "A"),
@@ -466,7 +466,7 @@ class LegadoImporterTest {
 
     @Test
     fun `mapSearchKeyword should clamp usage to at least 1`() {
-        // Legado 老数据偶有 usage=0；按 SearchKeyword 表的排序约定要 ≥1
+        // 参照实现老数据偶有 usage=0；按 SearchKeyword 表的排序约定要 ≥1
         val kw = LegadoImporter.mapSearchKeyword(
             LegadoImporter.LegadoSearchKeywordDto(word = "x", usage = 0, lastUseTime = 1L)
         )

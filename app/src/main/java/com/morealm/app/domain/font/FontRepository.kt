@@ -34,7 +34,7 @@ class FontRepository @Inject constructor(
         File(context.filesDir, "fonts").also { if (!it.exists()) it.mkdirs() }
     }
 
-    /** 仅匹配 .ttf / .otf，与 Legado FontSelectDialog.fontRegex 对齐（不含 .ttc 集合字体）。 */
+    /** 仅匹配 .ttf / .otf，与参照实现 FontSelectDialog.fontRegex 对齐（不含 .ttc 集合字体）。 */
     private val fontRegex = Regex("(?i).*\\.[ot]tf")
 
     /**
@@ -165,7 +165,7 @@ class FontRepository @Inject constructor(
      *   3) 默认 [Typeface.DEFAULT]
      *
      * 注意：会抛吞掉 IO 异常，**不会** suspend / 触发 DataStore 写入；调用方需要在
-     * 加载失败后自己决定是否清空 customFontPath（参考 Legado runCatching+save 模式）。
+     * 加载失败后自己决定是否清空 customFontPath（参考参照实现 runCatching+save 模式）。
      * 是否成功用返回 != Typeface.SANS_SERIF（且 customFontPath 非空时）来判断不太准确，
      * 调用方应该自己用 [tryLoadFontFile] 试探。
      */
@@ -270,7 +270,7 @@ class FontRepository @Inject constructor(
 
     /**
      * 加载一个字体路径为 [Typeface]，加载失败返回 null（**不** 兜底，让调用方决策）。
-     * 参考 Legado ChapterProvider.getTypeface()。
+     * 参考参照实现 ChapterProvider.getTypeface()。
      */
     fun tryLoadFontFile(path: String): Typeface? = runCatching {
         when {

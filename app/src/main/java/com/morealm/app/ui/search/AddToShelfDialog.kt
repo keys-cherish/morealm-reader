@@ -33,7 +33,7 @@ import coil.compose.AsyncImage
 import com.morealm.app.presentation.search.SearchResult
 
 /**
- * 「加入书架」预览对话框 —— 复刻 Legado-MD3 的 dialog_add_to_bookshelf 设计哲学。
+ * 「加入书架」预览对话框 —— 复刻参照实现-MD3 的 dialog_add_to_bookshelf 设计哲学。
  *
  * 触发：搜索结果项**长按**触发（短按保持现有"立刻进阅读器 + Snackbar 反馈"路径）。
  * 这样把两种交互形态分开：

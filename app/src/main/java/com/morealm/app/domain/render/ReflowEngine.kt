@@ -101,7 +101,7 @@ class ReflowEngine(
      * @param placeholderForEmpty 空内容时用的占位 chapter 工厂；由 caller 提供（避免本类
      *   依赖 UI 文案）。
      * @param onPartial 首次 / 跨章流式回调：layoutInternal 每排完一页就触发。caller
-     *   据此即时更新 textChapter / pageCount，让用户尽早看到第一页（对齐 Legado）。
+     *   据此即时更新 textChapter / pageCount，让用户尽早看到第一页（对齐参照实现）。
      *   同章重排（Reflowing）路径不触发 onPartial —— 此时 UI 显示 visible，partial 在
      *   后台累积，等 onCompleted 一次性切换。
      */

@@ -13,17 +13,17 @@ import javax.crypto.spec.SecretKeySpec
  * 设计目标：
  *   - 替换原先 [com.morealm.app.domain.entity.BookSource.putLoginInfo] 的明文存储，
  *     避免 root / 恶意应用直接读 CacheManager 看到用户名密码。
- *   - 与 Legado `BaseSource.getLoginInfo` 思路一致 —— 用 ANDROID_ID 派生 16 字节 key
+ *   - 与参照实现 `BaseSource.getLoginInfo` 思路一致 —— 用 ANDROID_ID 派生 16 字节 key
  *     做 AES（设备绑定，跨设备恢复需要重新登录）。
- *   - **不**追求与 Legado 二进制兼容（不同设备 ANDROID_ID 不同，跨 App 也不可解）。
+ *   - **不**追求与参照实现二进制兼容（不同设备 ANDROID_ID 不同，跨 App 也不可解）。
  *   - 兼容旧用户：旧版本写入的明文 JSON 在升级后**仍可读** —— 通过 [tryDecrypt] 返回 null
  *     时调用方 fallback 到原文。下次写入即升级为密文。
  *
  * 安全说明：
  *   - 这层加密能挡住旁观者 / 备份明文外泄，不是对抗具备 root 的攻击者（key 派生本身可逆）。
- *     如果用户机已 root 且攻击者跑 App 自己的进程，仍可拿到明文（Legado 也一样）。
+ *     如果用户机已 root 且攻击者跑 App 自己的进程，仍可拿到明文（参照实现也一样）。
  *   - 不打算用 Android Keystore 是因为：① 用户清缓存就丢登录态（无 backup），② 老设备
- *     兼容性差，③ Legado 的安全模型本身就是 ANDROID_ID 派生，迁移路径直观。
+ *     兼容性差，③ 参照实现的安全模型本身就是 ANDROID_ID 派生，迁移路径直观。
  */
 object LoginCrypto {
 

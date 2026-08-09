@@ -16,7 +16,7 @@ import java.util.regex.PatternSyntaxException
 /**
  * Unified local book parser — handles TXT, EPUB, MOBI, PDF, CBZ, UMD.
  *
- * TXT parsing follows Legado's approach:
+ * TXT parsing follows 参照实现 approach:
  * 1. Read enabled TxtTocRules from DB (fallback to hardcoded defaults)
  * 2. Sample first 512KB, try each rule, pick the one with most matches
  * 3. Parse full file with the best rule
@@ -477,7 +477,7 @@ object LocalBookParser {
         return parts
     }
 
-    // ── TXT read buffer (ported from Legado TextFile.txtBuffer sliding window) ──
+    // ── TXT read buffer (Ported from the reference implementation TextFile.txtBuffer sliding window) ──
     private const val TXT_READ_BUFFER_SIZE = 8 * 1024 * 1024 // 8MB
     private var txtReadBuffer: ByteArray? = null
     private var txtBufferUri: String? = null

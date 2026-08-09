@@ -41,7 +41,7 @@ import com.morealm.app.presentation.profile.BookmarksViewModel.TimeFilter
  * - 点击卡片：打开 reader/{bookId}（如果书还在）
  * - 长按 / 删除按钮：删除该书签
  *
- * 与 Legado AllBookmarkActivity 思路一致 —— 数据来自 BookmarkRepository.getAll()，
+ * 与参照实现 AllBookmarkActivity 思路一致 —— 数据来自 BookmarkRepository.getAll()，
  * book 信息从 BookRepository join。orphan 书签（书已删）保留显示，但点击禁用。
  */
 @OptIn(ExperimentalMaterial3Api::class)

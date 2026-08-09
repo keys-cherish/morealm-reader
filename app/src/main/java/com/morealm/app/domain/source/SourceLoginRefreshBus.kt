@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
 /**
- * 登录脚本反向刷新通道。对齐 Legado `SourceLoginJsExtensions.refresh*`：
+ * 登录脚本反向刷新通道。对齐参照实现 `SourceLoginJsExtensions.refresh*`：
  * 登录完成后脚本调 `java.refreshBookInfo()` 让 UI 立刻反映新 cookie / token，而不是
  * 等用户下次主动下拉。
  *

@@ -64,7 +64,7 @@ class AppPreferences @Inject constructor(
         /**
          * 是否在 TTS 播放期间持有 PARTIAL_WAKE_LOCK，强制让 CPU 不进 doze。
          *
-         * 默认 **false**——和 Legado 默认对齐。Android 的 audio playback 本身在持有
+         * 默认 **false**——和参照实现默认对齐。Android 的 audio playback 本身在持有
          * 音频焦点时已经能避免 CPU 进 deep sleep；额外抢 wakelock 在大多数设备上
          * 是浪费电（夜读 8h 估计高 15-25%）。
          *
@@ -74,12 +74,12 @@ class AppPreferences @Inject constructor(
         val TTS_KEEP_CPU_AWAKE = booleanPreferencesKey("tts_keep_cpu_awake")
         /**
          * 蓝牙耳机/有线耳机/Android Auto 上的「上一首/下一首」按键映射目标 ——
-         * 默认 false：按一下走 **段级**（PrevParagraph/NextParagraph），符合 Legado 默认。
+         * 默认 false：按一下走 **段级**（PrevParagraph/NextParagraph），符合参照实现默认。
          *
          * 改为 true 时改成 **章级**：按一下直接切上/下章。适合用户场景：
          *  - 开车时单手控（章级跳转目的明确，段级误触多）
          *  - 长章节（一段段跳太慢）
-         *  - 习惯 Legado 「按章」模式的老用户
+         *  - 习惯参照实现「按章」模式的老用户
          *
          * 锁屏通知按钮永远是章级，不受此偏好影响（按钮位置固定 + 标签写死「上一章/下一章」）。
          */
@@ -295,7 +295,7 @@ class AppPreferences @Inject constructor(
         //  3. 单源超时调长，让弱网用户能拿到结果而不是一律「超时」。
         //
         // 默认值选择：
-        //  - parallelism = 16 (旧默认 8 的两倍) — 与 legado-MD3 报告对齐；
+        //  - parallelism = 16 (旧默认 8 的两倍) — 与参照实现-MD3 报告对齐；
         //    OkHttp 全局 dispatcher.maxRequests=64、per-host=5，16 并发不会撞上限。
         //  - timeoutSec = 30 — 维持旧行为，不主动让搜索体感变慢。
         //
@@ -508,7 +508,7 @@ class AppPreferences @Inject constructor(
         .map { it[Keys.VOLUME_KEY_PAGE] ?: true }
 
     /**
-     * 音量键方向反转。默认 false：音量下=下一页、音量上=上一页（与系统/Legado 一致）。
+     * 音量键方向反转。默认 false：音量下=下一页、音量上=上一页（与系统/参照实现一致）。
      * 部分用户偏好"音量上=下一页"，开启该项即翻转。仅影响音量键，不影响 MEDIA_*。
      */
     val volumeKeyReverse: Flow<Boolean> = context.dataStore.data
@@ -816,7 +816,7 @@ class AppPreferences @Inject constructor(
      * 因为 [android.content.ContentResolver.takePersistableUriPermission] 只能在系统授权
      * 当下的进程上下文里成功调用。
      *
-     * Legado FontSelectDialog 没做这步，重启 App 后偶发文件夹失效；这里补上。
+     * 参照实现 FontSelectDialog 没做这步，重启 App 后偶发文件夹失效；这里补上。
      * 旧 URI 替换时会主动 release 防止权限表无限膨胀。
      */
     /**
@@ -824,7 +824,7 @@ class AppPreferences @Inject constructor(
      * 因为 [android.content.ContentResolver.takePersistableUriPermission] 只能在系统授权
      * 当下的进程上下文里成功调用。
      *
-     * Legado FontSelectDialog 没做这步，重启 App 后偶发文件夹失效；这里补上。
+     * 参照实现 FontSelectDialog 没做这步，重启 App 后偶发文件夹失效；这里补上。
      * 旧 URI 替换时会主动 release 防止权限表无限膨胀。
      */
     suspend fun setFontFolderUri(uri: String) {

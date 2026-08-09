@@ -215,7 +215,7 @@ class AnalyzeRule(
     // ── 获取文本列表 ──
 
     /**
-     * 通过 [BackstageWebView] 在浏览器壳内执行书源 JS 拿正文（Legado parity）。
+     * 通过 [BackstageWebView] 在浏览器壳内执行书源 JS 拿正文（参照实现对齐）。
      *
      * 用于 `@webjs:` 规则：把上一步的 [result] 通过 JS 前缀注入为全局 `var result`，
      * 然后让书源 JS 在已加载页面（[content] 当 html，[baseUrl] 当 base）中执行。
@@ -298,7 +298,7 @@ class AnalyzeRule(
                     }
                 }
             } else if (result is Map<*, *>) {
-                // Legado parity: GSON 解析 JSON 后 LinkedTreeMap 直接键访问。MoRealm
+                // 参照实现对齐: GSON 解析 JSON 后 LinkedTreeMap 直接键访问。MoRealm
                 // 用 kotlinx.serialization，但这里兜底任意 Map（覆盖 LinkedTreeMap /
                 // HashMap / kotlinx Json $unwrap）。
                 result = (result as Map<*, *>)[ruleList.first().rule]
@@ -390,7 +390,7 @@ class AnalyzeRule(
                     replaceRegex(it, sourceRule)
                 }
             } else if (result is Map<*, *>) {
-                // Legado parity: GSON 解析 JSON 后 LinkedTreeMap 直接键访问。MoRealm
+                // 参照实现对齐: GSON 解析 JSON 后 LinkedTreeMap 直接键访问。MoRealm
                 // 用 kotlinx.serialization，但这里兜底任意 Map（覆盖 LinkedTreeMap /
                 // HashMap / kotlinx Json $unwrap）。
                 result = (result as Map<*, *>)[ruleList.first().rule]?.toString()

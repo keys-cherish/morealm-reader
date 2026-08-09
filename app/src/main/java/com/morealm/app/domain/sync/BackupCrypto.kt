@@ -21,7 +21,7 @@ import javax.crypto.spec.SecretKeySpec
  *   ciphertext + 16-byte GCM auth tag (the rest)
  * ```
  *
- * Why this rather than Legado's `BackupAES` (Base64-of-AES-CBC over a
+ * Why this rather than 参照实现 `BackupAES` (Base64-of-AES-CBC over a
  * derived key):
  *  - GCM provides authentication for free — a tampered backup fails
  *    decryption explicitly instead of producing garbage that the JSON

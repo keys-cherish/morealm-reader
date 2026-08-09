@@ -64,12 +64,12 @@ data class Book(
     val pinned: Boolean = false,
     val sortOrder: Int = 0,
 
-    // ── Update tracking (Legado-parity, since v16) ──
+    // ── Update tracking (参照实现对齐, since v16) ──
     /**
      * Number of new chapters discovered on the most recent toc refresh.
      * Used by the shelf "N 新" badge. Cleared (set to 0) when the user opens
      * the book — not when they finish reading the new chapters, matching
-     * Legado's `Book.lastCheckCount` semantics.
+     * 参照实现 `Book.lastCheckCount` semantics.
      */
     val lastCheckCount: Int = 0,
     /** Wall-clock time (ms) of the most recent toc refresh attempt for this book. */

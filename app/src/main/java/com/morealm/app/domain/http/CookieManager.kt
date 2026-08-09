@@ -9,7 +9,7 @@ import okhttp3.Request
 import okhttp3.Response
 
 /**
- * Cookie 自动持久化层 — Legado parity.
+ * Cookie 自动持久化层 — 参照实现对齐.
  *
  * 职责：
  * - [saveResponse]：把响应里的 Set-Cookie 自动持久化（持久 cookie 写 DB；session cookie 仅写内存）

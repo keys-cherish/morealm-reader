@@ -25,8 +25,8 @@ class HtmlFormatterTest {
 
     @Test
     fun `format strips zero-width characters`() {
-        // Legado parity: 处理的是 thinsp / zwnj / zwj（U+2009 / U+200C / U+200D），
-        // ZWSP (U+200B) 不在剥离表里 — 与 Legado 行为一致。
+        // 参照实现对齐: 处理的是 thinsp / zwnj / zwj（U+2009 / U+200C / U+200D），
+        // ZWSP (U+200B) 不在剥离表里 — 与参照实现行为一致。
         val out = HtmlFormatter.format("a b‌c‍d")
         assertEquals("abcd", out)
     }

@@ -59,7 +59,7 @@ class ScrollCanvasReaderState(
      * 字段已删除）—— 相对当前 `ScrollPageFactory.curPage` 顶的像素偏移。
      *
      * 范围 `[0f, curPage.height]`（正值约定，与 V2 旧 pixelOffset 符号一致；
-     * 与 Legado `pageOffset` 负值约定相反）：
+     * 与参照实现 `pageOffset` 负值约定相反）：
      * - `0f` = curPage 顶贴视口顶（page 完全可见且贴顶）
      * - `curPage.height` = 走完一整 page（即下一 page 顶贴视口顶，准备 swap 到下一 page）
      *

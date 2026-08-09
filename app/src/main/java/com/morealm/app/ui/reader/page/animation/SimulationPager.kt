@@ -22,7 +22,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 // ──────────────────────────────────────────────────────────────────────────────
-// 仿真翻页（贝塞尔曲面 page curl）—— 参考 Legado SimulationPageDelegate。
+// 仿真翻页（贝塞尔曲面 page curl）—— 参考参照实现 SimulationPageDelegate。
 //
 // 关键决定：手势 + 动画 + 离屏 bitmap 全部下沉到 Android View [SimulationReadView]
 // 实现，Compose 层只用 [AndroidView] 做包装。原因详见

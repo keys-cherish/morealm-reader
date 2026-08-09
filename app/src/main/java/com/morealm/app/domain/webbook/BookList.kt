@@ -27,7 +27,7 @@ object BookList {
         body: String?,
         isSearch: Boolean = true,
         /**
-         * Legado-parity: when the search request is redirected to a detail-page-shaped URL
+         * 参照实现对齐: when the search request is redirected to a detail-page-shaped URL
          * (single-result shortcut on many sites), the final response body IS the detail
          * page. We must:
          *   1. Use [baseUrl] (the redirect target) as bookUrl, not the search URL

@@ -40,7 +40,7 @@ internal data class ReaderPageContent(
 }
 
 /**
- * Legado ReadView-like page state for Compose.
+ * 参照实现 ReadView-like page state for Compose.
  *
  * This owns the reading-page transition semantics:
  * delegate -> direction -> fillPage(direction) -> upContent().

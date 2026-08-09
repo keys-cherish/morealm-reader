@@ -19,7 +19,7 @@ import kotlin.math.min
  * - 仅识别阿拉伯数字（含全角）。中文数字「第一百二十章」走相似度路径，对绝大多数网文够用。
  * - Levenshtein O(L·M) 在窗口 ±20 + 标题平均 20 字以内 → 总 O(40·400) ≈ 1.6 万次比较，<1ms。
  *
- * 参考 Legado `BookHelp.getDurChapter`，但删除了对其内部 SearchBook/章节同步状态的耦合，
+ * 参考参照实现 `BookHelp.getDurChapter`，但删除了对其内部 SearchBook/章节同步状态的耦合，
  * 保持纯函数无副作用。
  */
 object ChapterMatcher {

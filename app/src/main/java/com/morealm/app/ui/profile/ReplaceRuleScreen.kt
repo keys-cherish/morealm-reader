@@ -53,7 +53,7 @@ fun ReplaceRuleScreen(
         if (kindFilter == null) rules else rules.filter { it.kind == kindFilter }
     }
 
-    // 导入：兼容 MoRealm bundle / Legado 新格式 / Yuedu 老格式 / 单条 / 数组。
+    // 导入：兼容 MoRealm bundle / 参照实现新格式 / Yuedu 老格式 / 单条 / 数组。
     // 检测/解析逻辑都封在 ViewModel.parseRules 里，这里只管 SAF。
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()

@@ -8,7 +8,7 @@ import com.script.rhino.RhinoScriptEngine
 /**
  * JS bindings 容器 — 持有注入到 Rhino 脚本执行上下文的变量。
  *
- * 与 Legado 对齐：prototype 指向 [RhinoScriptEngine] 单例的 [com.script.rhino.RhinoTopLevel]，
+ * 与参照实现对齐：prototype 指向 [RhinoScriptEngine] 单例的 [com.script.rhino.RhinoTopLevel]，
  * 而非 [Context.initStandardObjects]。
  *
  * [RhinoTopLevel] 继承自 [org.mozilla.javascript.ImporterTopLevel]，内置
@@ -23,7 +23,7 @@ class ScriptBindings : NativeObject() {
     companion object {
         /**
          * 所有 ScriptBindings 实例共享同一个 prototype — [RhinoScriptEngine.topLevel]。
-         * 与 Legado 行为一致：RhinoTopLevel 继承 ImporterTopLevel，
+         * 与参照实现行为一致：RhinoTopLevel 继承 ImporterTopLevel，
          * 提供 importClass / importPackage 等 JS 全局函数。
          */
         private val rhinoTopLevel: ScriptableObject by lazy {

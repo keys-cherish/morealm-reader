@@ -231,6 +231,8 @@ fun ScrollCanvasReaderHost(
     onShareQuote: (String) -> Unit = {},
     /** 选区 → 高亮（KIND_BG）。null 时菜单按钮自动摘掉。 */
     onAddHighlight: ((startCp: Int, endCp: Int, content: String, argb: Int) -> Unit)? = null,
+    /** 选区菜单「替换」——参数为选中文字。null 时不渲染该按钮。见 PageLevelReaderHost 同名参数。 */
+    onReplaceText: ((String) -> Unit)? = null,
     /** 选区 → 字体强调色（KIND_TEXT_COLOR）。null 时按钮自动摘掉。 */
     onAddTextColor: ((startCp: Int, endCp: Int, content: String, argb: Int) -> Unit)? = null,
     /** 选区 → 下划线（KIND_UNDERLINE，含 style 0..3）。null 时按钮自动摘掉。 */
@@ -666,7 +668,7 @@ fun ScrollCanvasReaderHost(
     // ── pageTurnCommand 桥梁（音量键 / TTS / 蓝牙 / 顶栏按钮 → 滚动一页）──
     // SCROLL 模式语义：直接 moveToNext / moveToPrev + reset state.pageOffset = 0。
     // 与 ScrollCanvas 内 auto-snap 同款瞬切（不跑 fling 动画 — fling 由用户 drag 主动产生才有意义；
-    // 音量键单击应像 Legado scroll 模式直接跳一屏）。立即 onPageTurnCommandConsumed() 把 state
+    // 音量键单击应像参照实现 scroll 模式直接跳一屏）。立即 onPageTurnCommandConsumed() 把 state
     // 写回 null，防同方向连按 enum 值不变 LaunchedEffect 被去重吞掉。
     LaunchedEffect(pageTurnCommand) {
         val dir = pageTurnCommand ?: return@LaunchedEffect
@@ -986,6 +988,9 @@ fun ScrollCanvasReaderHost(
                                 cb(cpRange.first, cpRange.last, selText, argb, style)
                                 selection = ScrollSelectionState.Empty
                             }
+                        },
+                        onReplace = onReplaceText?.let { cb ->
+                            { cb(selText); selection = ScrollSelectionState.Empty }
                         },
                         onDismiss = { selection = ScrollSelectionState.Empty },
                         config = selectionMenuConfig,

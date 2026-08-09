@@ -10,7 +10,7 @@ import java.io.FileInputStream
 import kotlin.math.roundToInt
 
 /**
- * Background image utilities — ported from Legado's BitmapUtils + getMeanColor.
+ * Background image utilities — Ported from the reference implementation BitmapUtils + getMeanColor.
  *
  * Key features:
  * - inSampleSize downsampling to avoid OOM on large images
@@ -89,7 +89,7 @@ object BgImageManager {
         cache.evictAll()
     }
 
-    // ── Decode with inSampleSize (ported from Legado BitmapUtils) ──
+    // ── Decode with inSampleSize (Ported from the reference implementation BitmapUtils) ──
 
     private fun decodeBitmap(context: Context, uri: String, width: Int, height: Int): Bitmap? {
         return try {
@@ -145,7 +145,7 @@ object BgImageManager {
         return inSampleSize
     }
 
-    // ── Resize + recycle (ported from Legado) ──
+    // ── Resize + recycle (Ported from the reference implementation) ──
 
     private fun resizeAndRecycle(src: Bitmap, newWidth: Int, newHeight: Int): Bitmap {
         if (src.width == newWidth && src.height == newHeight) return src
@@ -195,7 +195,7 @@ object BgImageManager {
         return result
     }
 
-    // ── Mean color (ported from Legado Bitmap.getMeanColor) ──
+    // ── Mean color (Ported from the reference implementation Bitmap.getMeanColor) ──
 
     /**
      * Sample the bottom 30% of the image in a 100x30 grid to get the average color.

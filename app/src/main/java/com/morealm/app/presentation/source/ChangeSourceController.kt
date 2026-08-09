@@ -141,7 +141,7 @@ class ChangeSourceController(
      * `getChapterListAwait`。 key = origin + bookUrl。生命周期与对话框同步：
      * [closePicker] 清空。
      *
-     * 注意：v1 不在搜索阶段预拉所有候选 toc（与 Legado changeSourceLoadToc 配置项不同），
+     * 注意：v1 不在搜索阶段预拉所有候选 toc（与参照实现 changeSourceLoadToc 配置项不同），
      * 只在用户选定某候选后即时拉一次并写入此 cache —— 既减少无效请求，也保证应用换源时有 toc。
      */
     private val tocCache = ConcurrentHashMap<String, List<ChapterResult>>()
@@ -436,7 +436,7 @@ class ChangeSourceController(
                 searchRepo.searchOnlineSource(source, keyword)
             }
             val elapsed = System.currentTimeMillis() - startTime
-            // 候选过滤策略 —— 与 Legado MD3 行为对齐，比旧实现更宽松：
+            // 候选过滤策略 —— 与参照实现 MD3 行为对齐，比旧实现更宽松：
             //
             // 旧版 bug：
             //   1) `it.name.contains(keyword) || keyword.contains(it.name)` 反向 contains

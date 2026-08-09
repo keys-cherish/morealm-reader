@@ -53,7 +53,7 @@ object BookFileHealthChecker {
                 // 仅校验 PDB 容器（type=BOOK）。原本还检查 record0+16 必须是 "MOBI"
                 // magic 用于挡 DRM 加密 / Topaz —— 但实测会误伤老格式 PalmDOC
                 // 或没显式 MOBI header 的合法文件。改为放行：实际加密/损坏 mobi
-                // 由 reader 阶段（[MobiParser.parseChapters] + Legado MobiReader）
+                // 由 reader 阶段（[MobiParser.parseChapters] + 参照实现 MobiReader）
                 // 自己 catch 返回空章节，再通过空章节占位提示用户。
                 if (isMobiPdbMagic(bytes)) Health.Ok
                 else Health.Invalid("不是有效的 MOBI/AZW3 容器")

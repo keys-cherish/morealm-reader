@@ -20,7 +20,7 @@ import javax.inject.Singleton
 /**
  * Single book / archive entry sitting on the user's WebDav server.
  *
- * Mirrors Legado's `RemoteBook`: anything matching the supported book
+ * Mirrors 参照实现 `RemoteBook`: anything matching the supported book
  * file regex is exposed in the cloud-bookshelf UI for one-tap download.
  */
 data class RemoteBookFile(
@@ -46,9 +46,9 @@ data class RemoteBookFile(
  * download-to-bytes helper. The screen consumes this through
  * [com.morealm.app.presentation.profile.RemoteBookViewModel].
  *
- * Why a dedicated `books/` subdir rather than the root: Legado's
+ * Why a dedicated `books/` subdir rather than the root: 参照实现
  * `RemoteBookWebDav` hardcodes the same convention so users coming from
- * Legado find their existing books in the expected place. The user can
+ * 参照实现 find their existing books in the expected place. The user can
  * still override the parent dir via [AppPreferences.webDavDir].
  */
 @Singleton
@@ -197,7 +197,7 @@ class RemoteBookManager @Inject constructor(
         }
     }
 
-    /** Subdir where book files live; mirrors Legado for cross-tool migration. */
+    /** Subdir where book files live; mirrors 参照实现 for cross-tool migration. */
     suspend fun booksDir(): String {
         val root = prefs.webDavDir.first().ifBlank { "MoRealm" }.trim('/')
         return "$root/books"

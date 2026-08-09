@@ -100,7 +100,7 @@ class HttpTtsManageViewModel @Inject constructor(
     }
 
     /**
-     * 解析用户粘贴的 JSON 文本。兼容三种 Legado 常见格式：
+     * 解析用户粘贴的 JSON 文本。兼容三种参照实现常见格式：
      *   1. 单对象：`{"name":"...","url":"..."}`
      *   2. 多对象数组：`[{...},{...}]`
      *   3. 包了一层 `{"body":[...]}`（部分分享平台导出格式）

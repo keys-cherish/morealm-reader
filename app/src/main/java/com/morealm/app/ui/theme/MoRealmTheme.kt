@@ -17,17 +17,17 @@ import com.morealm.app.domain.entity.BuiltinThemes
 
 /** Parse color string to Compose Color. Supports:
  *  - "#AARRGGBB" / "#RRGGBB" hex
- *  - Integer ARGB (e.g. "-1" = white, Legado format)
+ *  - Integer ARGB (e.g. "-1" = white, 参照实现 format)
  *  - Empty/invalid → transparent fallback (never magenta) */
 fun String.toComposeColor(): Color {
     if (isBlank()) return Color.Transparent
     val trimmed = trim()
-    // Legado 整数格式: "-1" = 0xFFFFFFFF (白), "-16777216" = 0xFF000000 (黑)
+    // 参照实现整数格式: "-1" = 0xFFFFFFFF (白), "-16777216" = 0xFF000000 (黑)
     trimmed.toLongOrNull()?.let { intVal ->
         return Color(intVal.toInt())
     }
     val raw = trimmed.removePrefix("#")
-    // Legado 用 Integer.toHexString() 不零填充，7位实际是8位ARGB省略前导零
+    // 参照实现用 Integer.toHexString() 不零填充，7位实际是8位ARGB省略前导零
     val hex = when (raw.length) {
         7 -> "0$raw"
         5 -> "0$raw"

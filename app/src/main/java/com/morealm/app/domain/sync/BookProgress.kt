@@ -9,8 +9,8 @@ import kotlinx.serialization.Serializable
  *
  * One JSON file per book (`<webDavDir>/bookProgress/<bookId>.json`); reader
  * uploads on chapter change, app start downloads all and merges newer
- * remote progress into the local db. Modeled after Legado's
- * `BookProgress` so users migrating from Legado would feel at home, but
+ * remote progress into the local db. Modeled after 参照实现
+ * `BookProgress` so users migrating from 参照实现 would feel at home, but
  * keyed by [bookId] (stable Room PK) instead of name+author so renames
  * don't break the link.
  *

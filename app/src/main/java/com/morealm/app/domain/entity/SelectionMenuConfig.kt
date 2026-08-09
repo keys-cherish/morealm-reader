@@ -32,6 +32,15 @@ enum class SelectionMenuItem(val displayName: String) {
      * 渲染层在基线下方画线，按 style 切换 PathEffect。默认在 EXPANDED 桶。
      */
     UNDERLINE("下划线"),
+    /**
+     * 替换 —— 把选中的文字换成别的（或删掉）。点击弹独立对话框填「替换为」，
+     * 确认后落一条 [com.morealm.app.domain.entity.ReplaceRule]（限当前书，可再限
+     * 当前章），当前章立刻重载生效。
+     *
+     * 与 HIGHLIGHT / UNDERLINE 那种「点开内嵌面板」不同：替换要输入文本，内嵌到
+     * 选区条里会把条撑得很高，所以走独立弹窗。
+     */
+    REPLACE("替换"),
     ;
 
     companion object {
@@ -138,12 +147,18 @@ data class SelectionMenuConfig(
          * 默认在 EXPANDED 行需要点展开按钮才看到，主行不可见容易被误以为缺失。
          * 高亮+下划线是阅读时最高频的"留痕"操作，主行直显更顺手。LOOKUP（查词）相对
          * 低频，进展开行；用户仍可在阅读设置 → 选区菜单按钮自定义重排。
+         *
+         * **2026-08-02 调整**：选区条改成一行平铺（不再有「更多」折叠），MAIN /
+         * EXPANDED 退化成排序权重——排在前面的先显示，HIDDEN 仍不渲染。同时新增
+         * [SelectionMenuItem.REPLACE] 并排在 COPY 之后，与参照阅读器的「复制、替换…」
+         * 顺序一致。UNDERLINE 因此顺位到 EXPANDED，但一行平铺下照样直显。
          */
         val DEFAULT: SelectionMenuConfig = SelectionMenuConfig(
             listOf(
                 SelectionMenuEntry(SelectionMenuItem.COPY, SelectionMenuPosition.MAIN),
+                SelectionMenuEntry(SelectionMenuItem.REPLACE, SelectionMenuPosition.MAIN),
                 SelectionMenuEntry(SelectionMenuItem.HIGHLIGHT, SelectionMenuPosition.MAIN),
-                SelectionMenuEntry(SelectionMenuItem.UNDERLINE, SelectionMenuPosition.MAIN),
+                SelectionMenuEntry(SelectionMenuItem.UNDERLINE, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.LOOKUP, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.SPEAK, SelectionMenuPosition.EXPANDED),
                 SelectionMenuEntry(SelectionMenuItem.TRANSLATE, SelectionMenuPosition.EXPANDED),

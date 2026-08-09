@@ -26,17 +26,17 @@ import com.morealm.app.domain.sync.LegadoImporter
 import com.morealm.app.presentation.profile.LegadoImportViewModel
 
 /**
- * 「Legado 一键搬家」UI 入口页。流程：
+ * 「参照实现一键搬家」UI 入口页。流程：
  *
- * 1. 进入页 — 还没选 zip，Hero 卡片 + 「选择 Legado 备份 zip」按钮。
+ * 1. 进入页 — 还没选 zip，Hero 卡片 + 「选择参照实现备份 zip」按钮。
  * 2. SAF 选完 → 立即调 [LegadoImportViewModel.onZipPicked] 解 zip + 生成预览
  * 3. 预览完成 → 渲染统计卡（书架 / 书源 / 书签 / 分组 / 替换规则 / 朗读引擎）+ 冲突警告 +
  *    冲突策略 toggle（保守跳过 / 强制覆盖）+ 「开始导入」按钮
  * 4. 导入完成 → 渲染 ImportResult 摘要 + 「再选一个」/「完成」按钮
  *
  * 不做的事（与 [BackupImportScreen] 区别）：
- *  - 不支持加密（Legado 备份 zip 不加密；用户从 WebDav 拉的也是明文）
- *  - 不支持分类勾选（Legado 流程要"一键"，全选；个别项不想要可以导入后到对应页删）
+ *  - 不支持加密（参照实现备份 zip 不加密；用户从 WebDav 拉的也是明文）
+ *  - 不支持分类勾选（参照实现流程要"一键"，全选；个别项不想要可以导入后到对应页删）
  *  - 不接 BackupStatusBus（错误直接显示在本页 banner，不抢全局 Toast 通道）
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -54,7 +54,7 @@ fun LegadoImportScreen(
     val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     val conflictStrategy by viewModel.conflictStrategy.collectAsStateWithLifecycle()
 
-    // SAF 多 mime 兼容：Legado 备份 zip 在某些机型 mime 是 application/octet-stream
+    // SAF 多 mime 兼容：参照实现备份 zip 在某些机型 mime 是 application/octet-stream
     val pickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->

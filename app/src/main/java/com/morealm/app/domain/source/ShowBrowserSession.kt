@@ -12,7 +12,7 @@ import kotlinx.coroutines.sync.withLock
  * 的脚本协程——脚本侧用 [awaitResult] 挂起等待，Activity 侧用 [emit] 提交结果。
  *
  * [mutex] 保证并发请求串行化：第二次调用等第一次 emit 后才能进 channel，避免同一 channel
- * 被多个等待者哄抢导致结果错配。Legado `BottomWebViewDialog` 是单例 dialog，同样是同一时
+ * 被多个等待者哄抢导致结果错配。参照实现 `BottomWebViewDialog` 是单例 dialog，同样是同一时
  * 刻只能开一个——行为对齐。
  *
  * 结果约定：

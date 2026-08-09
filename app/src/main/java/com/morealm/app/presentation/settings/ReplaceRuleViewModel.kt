@@ -30,9 +30,9 @@ class ReplaceRuleViewModel @Inject constructor(
 ) : ViewModel() {
 
     /** Lenient parser:
-     *  - `ignoreUnknownKeys` so future Legado fields don't break import.
+     *  - `ignoreUnknownKeys` so future 参照实现 fields don't break import.
      *  - `coerceInputValues` so a `null` for a non-null field becomes its default
-     *    instead of crashing (Legado occasionally emits `"group": null`).
+     *    instead of crashing (参照实现 occasionally emits `"group": null`).
      *  - `isLenient` to tolerate trailing commas users hand-edit in. */
     private val json = Json {
         ignoreUnknownKeys = true
@@ -120,15 +120,15 @@ class ReplaceRuleViewModel @Inject constructor(
      * Import replace rules from [uri]. Format detection priority:
      *
      *   1. JsonObject with `format == "morealm-replace"` → MoRealm bundle
-     *   2. JsonArray + first element has `pattern` field → Legado new array
+     *   2. JsonArray + first element has `pattern` field → 参照实现 new array
      *   3. JsonArray + first element has `regex` field → legacy Yuedu array
-     *   4. JsonObject with `pattern` field → Legado new single
+     *   4. JsonObject with `pattern` field → 参照实现 new single
      *   5. JsonObject with `regex` field → legacy Yuedu single
      *
      * Rule-level validation (`ReplaceRule.isValid`) runs after the conversion
-     * so a malformed rule in a 200-rule Legado dump doesn't tank the whole
+     * so a malformed rule in a 200-rule 参照实现 dump doesn't tank the whole
      * import — it's just skipped with an INFO log. Import is "additive": it
-     * does NOT clear existing rules. Same id → upsert (Legado id `1760546083765`
+     * does NOT clear existing rules. Same id → upsert (参照实现 id `1760546083765`
      * deterministically becomes MoRealm id `"legado_1760546083765"` so re-imports
      * overwrite instead of duplicate).
      */
@@ -160,7 +160,7 @@ class ReplaceRuleViewModel @Inject constructor(
     /**
      * Parse `text` into MoRealm rules without touching the DB. Public for
      * testability — every supported source format funnels through here so a
-     * unit test can pin behavior on Legado/Yuedu sample payloads without
+     * unit test can pin behavior on 参照实现/Yuedu sample payloads without
      * round-tripping a Uri.
      */
     fun parseRules(text: String): List<ReplaceRule> {
@@ -175,7 +175,7 @@ class ReplaceRuleViewModel @Inject constructor(
             return bundle.rules.mapNotNull { it.toEntity().takeIf { r -> r.isValid() } }
         }
 
-        // Helper to detect which Legado dialect a JsonObject uses.
+        // Helper to detect which 参照实现 dialect a JsonObject uses.
         fun JsonObject.dialect(): SourceDialect = when {
             containsKey("pattern") || containsKey("isEnabled") || containsKey("timeoutMillisecond") -> SourceDialect.LEGADO_NEW
             containsKey("regex") || containsKey("replaceSummary") -> SourceDialect.YUEDU_OLD
@@ -212,8 +212,8 @@ class ReplaceRuleViewModel @Inject constructor(
 // region — DTO + conversion. File-private to ReplaceRuleViewModel; promote to
 //          a separate file only if more than one call site needs them.
 
-/** Legado modern format (matches the imported replace-rule entity
- *  field-for-field as serialized by GSON). Defaults match Legado's @ColumnInfo
+/** 参照实现 modern format (matches the imported replace-rule entity
+ *  field-for-field as serialized by GSON). Defaults match 参照实现 @ColumnInfo
  *  defaultValue annotations so partial JSONs from the wild still parse. */
 @Serializable
 private data class LegadoReplaceRule(
@@ -232,7 +232,7 @@ private data class LegadoReplaceRule(
     val order: Int = 0,
 ) {
     fun toMoRealm(): ReplaceRule = ReplaceRule(
-        // Stable id derived from Legado's numeric id — re-importing the same
+        // Stable id derived from 参照实现 numeric id — re-importing the same
         // rule from an updated dump upserts instead of stacking duplicates.
         // Falls back to a hash of the pattern when id is missing/zero.
         id = if (id != 0L) "legado_$id" else "legado_p${pattern.hashCode()}",
@@ -246,7 +246,7 @@ private data class LegadoReplaceRule(
         scopeContent = scopeContent,
         enabled = isEnabled,
         sortOrder = order,
-        // Legado ms is Long; MoRealm timeoutMs is Int. Clamp to a sane range
+        // 参照实现 ms is Long; MoRealm timeoutMs is Int. Clamp to a sane range
         // so a stray "timeoutMillisecond": 999999 doesn't overflow Int.
         timeoutMs = timeoutMillisecond.coerceIn(500L, 30_000L).toInt(),
         kind = if (replacement.isBlank()) ReplaceRule.KIND_PURIFY else ReplaceRule.KIND_GENERAL,
@@ -254,7 +254,7 @@ private data class LegadoReplaceRule(
     )
 }
 
-/** Legacy Yuedu / older Legado pre-2020 format. Identifier fields:
+/** Legacy Yuedu / older 参照实现 pre-2020 format. Identifier fields:
  *  `regex` (pattern), `replaceSummary` (name), `useTo` (scope), `enable` (enabled),
  *  `serialNumber` (sortOrder). Same conversion target so the rest of the
  *  pipeline doesn't care which dialect produced the rule. */

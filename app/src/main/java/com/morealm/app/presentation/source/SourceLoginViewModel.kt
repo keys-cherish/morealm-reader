@@ -76,7 +76,7 @@ class SourceLoginViewModel @Inject constructor(
     /**
      * JS 反向通道：登录脚本调用 `loginExt.upUiData(map)` 时，把更新的字段值通过
      * 这条 SharedFlow 推到 Compose 端。SourceLoginDialog collect 后 putAll 到表单
-     * fieldValues，等价 Legado SourceLoginDialog.handleUpUiData。
+     * fieldValues，等价参照实现 SourceLoginDialog.handleUpUiData。
      *
      * extraBufferCapacity = 8 让脚本快速连续发多次更新（如分步骤验证码 + 状态文本）
      * 时不丢消息；replay = 0，新打开的对话框不会收到上一次会话的残留 patch。
@@ -86,7 +86,7 @@ class SourceLoginViewModel @Inject constructor(
 
     /**
      * JS 反向通道：脚本调用 `loginExt.reUiView()` 时触发 UI 强制重建。Boolean 参数
-     * 对应 Legado 的 `deltaUp`（true = 增量重建，false = 全量重建）。MoRealm 当前不
+     * 对应参照实现的 `deltaUp`（true = 增量重建，false = 全量重建）。MoRealm 当前不
      * 区分两者，统一全量 —— 复杂度对比收益不划算，可后续优化。
      */
     private val _uiRebuild = MutableSharedFlow<Boolean>(extraBufferCapacity = 4)
@@ -146,7 +146,7 @@ class SourceLoginViewModel @Inject constructor(
     fun showLoginDialog(source: BookSource) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 与 Legado SourceLoginActivity.initView 对齐：判定路径**只看
+                // 与参照实现 SourceLoginActivity.initView 对齐：判定路径**只看
                 // loginUi 是否为空**，不看 loginUrl 形态。
                 //
                 // 老逻辑用 isLoginUrlPureUrl() 判定（loginUrl 是否带 @js: / <js>
@@ -158,7 +158,7 @@ class SourceLoginViewModel @Inject constructor(
                 //   - loginUi 非空：表单登录走 Dialog；loginUrl 视为 JS（getLoginJs
                 //     在内部剥前缀，无前缀时整体作 JS）。
                 //   - loginUi 为空：WebView 登录，loginUrl 当 URL。这条路径如果
-                //     loginUrl 是 JS，本身就坏 —— Legado 也坏，不是 MoRealm 独有。
+                //     loginUrl 是 JS，本身就坏 —— 参照实现也坏，不是 MoRealm 独有。
                 if (source.loginUi.isNullOrBlank()) {
                     val url = source.loginUrl
                     if (url.isNullOrBlank()) {
@@ -209,13 +209,13 @@ class SourceLoginViewModel @Inject constructor(
     }
 
     /**
-     * 跑表单中某个 button / toggle / select 的 [actionJs]。绑定与 Legado
+     * 跑表单中某个 button / toggle / select 的 [actionJs]。绑定与参照实现
      * SourceLoginDialog.handleButtonClick 等价：
      *   - `result`  当前所有字段值（map）
      *   - `book` / `chapter`  暂为 null（MoRealm 没有书上下文进入 login）
      *   - `isLongClick`  暂固定 false（长按尚未在 Compose 端区分）
      *
-     * 配合 [getLoginJs] 拼成 `$loginJs\n$actionJs`，与 Legado evalJS 入口一致，让
+     * 配合 [getLoginJs] 拼成 `$loginJs\n$actionJs`，与参照实现 evalJS 入口一致，让
      * action JS 能调用 loginUrl 中定义的辅助函数（如 doLogin、sendSms）。
      *
      * 不返回 UI 更新差量（reverse channel 是 task D 的范围）。运行结果只通过 toast
@@ -255,9 +255,9 @@ class SourceLoginViewModel @Inject constructor(
 
     /**
      * 解析 [loginUi]：
-     *   - 空 / 异常 → 默认 username + password 表单（与 Legado fallback 一致）。
+     *   - 空 / 异常 → 默认 username + password 表单（与参照实现 fallback 一致）。
      *   - `@js:...` / `<js>...</js>` 前缀 → [BookSource.evalJS] 求值得到 JSON 数组再解析。
-     *     与 Legado SourceLoginDialog.handleReUiView / onFragmentCreated 对齐。
+     *     与参照实现 SourceLoginDialog.handleReUiView / onFragmentCreated 对齐。
      *   - 普通 JSON 数组 → 直接解析为 [RowUi] 列表。
      */
     private fun parseLoginUi(source: BookSource, loginUi: String?): List<RowUi> {

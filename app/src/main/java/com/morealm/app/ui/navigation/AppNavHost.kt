@@ -180,7 +180,7 @@ fun MoRealmNavHost(
                 val onBookClick = remember { { bookId: String -> navController.navigateToReader(bookId) } }
                 val onBookLongClick = remember { { bookId: String -> navController.navigateToDetail(bookId) } }
                 // Smart router: WEB books go to the detail page so the user can confirm
-                // before reading (Legado-parity); local files open straight in the reader.
+                // before reading (参照实现对齐); local files open straight in the reader.
                 val onBookOpen = remember {
                     { book: com.morealm.app.domain.entity.Book ->
                         if (book.format == com.morealm.app.domain.entity.BookFormat.WEB) {
@@ -659,7 +659,7 @@ fun MoRealmNavHost(
         }
         // Floating pill navigation — overlays content, not in Scaffold.bottomBar
         if (!isFullscreen && isOnMainTab) {
-            // 长按"书架" tab 弹分组菜单（Legado-MD3 复刻）。
+            // 长按"书架" tab 弹分组菜单（参照实现-MD3 复刻）。
             //
             // 拿 ShelfViewModel 走 main_tabs 的 backstack entry —— 这样和 ShelfScreen
             // 内部 hiltViewModel() 是同一个 store / 同一份 instance，emit 的
@@ -769,7 +769,7 @@ internal fun canNavigateFromMainTab(
 /**
  * 走 reader/detail 路由前必须 Uri.encode bookId。
  *
- * Legado 搬家来的 Book.id 直接是完整 URL（如 https://m.qingrenyouxi.com/111/111173/）；
+ * 参照实现搬家来的 Book.id 直接是完整 URL（如 https://m.qingrenyouxi.com/111/111173/）；
  * Navigation Compose 用 path 段匹配路由，未编码的 `/`、`?`、`,`、`{` 会让
  * `reader/{bookId}` 匹配失败并抛 IllegalArgumentException。统一在拼路由这一步
  * 编码；composable 接收侧 entry.arguments?.getString("bookId") 自带 URL 解码。

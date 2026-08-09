@@ -5,7 +5,7 @@ import androidx.room.Index
 
 /**
  * 换源候选缓存 — 保存某本书在各个书源中的搜索命中结果，下次打开换源对话框直接展示，
- * 后台再启动一轮异步刷新（Legado-parity，对应 SearchBook db 持久化语义）。
+ * 后台再启动一轮异步刷新（参照实现对齐，对应 SearchBook db 持久化语义）。
  *
  * 设计取舍：
  * - **不复用 [SearchBook] 数据类作为 @Entity**：SearchBook 携带 lazy 字段、Json 序列化逻辑、

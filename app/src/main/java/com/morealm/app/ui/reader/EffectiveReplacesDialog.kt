@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.entity.ReplaceRule
 
 /**
- * EffectiveReplacesDialog — Legado-parity（任务 #5）。
+ * EffectiveReplacesDialog — 参照实现对齐（任务 #5）。
  *
  * 展示「在当前章被实际命中（result≠input）」的替换规则 + 繁简转换占位条目。
  *

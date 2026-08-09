@@ -166,7 +166,7 @@ class BookSourceManageViewModel @Inject constructor(
     val exportResult: kotlinx.coroutines.flow.SharedFlow<Result<Int>> = _exportResult.asSharedFlow()
 
     /** 导出专用 Json 配置：与 [BookSource] 的 jsonParser 不同，**关闭 encodeDefaults**，
-     *  让默认值字段不出现在 JSON 里——这样导出 JSON 体积更小、与 Legado 原生导出风格
+     *  让默认值字段不出现在 JSON 里——这样导出 JSON 体积更小、与参照实现原生导出风格
      *  一致（其他人/其他 App 看到时不会被一堆空 ""、0、false 字段淹没）。
      *  prettyPrint 让用户用文本编辑器直接看也好读。
      */
@@ -177,7 +177,7 @@ class BookSourceManageViewModel @Inject constructor(
     }
 
     /**
-     * 把书源列表导出为 Legado 兼容 JSON 数组写到 [uri]（SAF CreateDocument 拿到的）。
+     * 把书源列表导出为参照实现兼容 JSON 数组写到 [uri]（SAF CreateDocument 拿到的）。
      *
      * @param uri SAF 选中的目标位置；调用方负责通过 ActivityResultContracts.CreateDocument 拿到
      * @param urls 要导出的书源 [BookSource.bookSourceUrl] 集合；null / 空集 = 导出全部

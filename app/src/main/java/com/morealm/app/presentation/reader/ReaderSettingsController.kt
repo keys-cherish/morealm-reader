@@ -81,6 +81,9 @@ class ReaderSettingsController(
 
     val chineseConvertMode: StateFlow<Int> = prefs.chineseConvertMode
         .stateIn(scope, SharingStarted.Eagerly, 0)
+    /** 当前阅读器打开的本地 TXT 目录切分规则。 */
+    val customTxtChapterRegex: StateFlow<String> = prefs.customTxtChapterRegex
+        .stateIn(scope, SharingStarted.Eagerly, "")
 
     // Tap zone customization
     val tapActionTopLeft: StateFlow<String> = prefs.tapActionTopLeft.stateIn(scope, SharingStarted.Eagerly, "prev")

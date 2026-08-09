@@ -435,7 +435,7 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             // ── 书源管理 ──
             ChangelogItem(ChangeType.NEW, "书源管理页新增分组 chip：不分组 / 按分组名 / 按域名 / 按类型，折叠状态在旋转 / 进程死亡后保留"),
 
-            // ── 备份与同步（WebDav 全面对齐 Legado） ──
+            // ── 备份与同步（WebDav 全面对齐参照实现） ──
             ChangelogItem(ChangeType.NEW, "备份导出新增「选项页」：可勾选要导出的数据类别（书籍 / 书源 / 进度 / 主题 / 阅读样式…），并实时显示压缩后体积，避免因书源等占大头让用户误以为备份失败"),
             ChangelogItem(ChangeType.NEW, "备份导入 / 导出 / WebDav 操作完成时显示 Toast：成功 / 失败 / 失败原因；不再静默失败"),
             ChangelogItem(ChangeType.FIX, "WebDav 上传 zip 现在包含主题与阅读样式 — 修 generateBackupBytes 漏写两字段导致跨设备恢复主题 / 阅读样式静默丢失"),
@@ -479,7 +479,7 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             ChangelogItem(ChangeType.NEW, "缓存页支持「导出 TXT」：选择保存位置后自动导出全部已缓存章节，含书名、作者、简介与 ContentProcessor 处理后的正文"),
             ChangelogItem(ChangeType.NEW, "缓存项操作区改为自适应换行布局：全部缓存 / 从当前章 / 导出 TXT / 清除四按钮"),
 
-            // ── 搜索 / 书源引擎 Legado 对齐 ──
+            // ── 搜索 / 书源引擎参照实现对齐 ──
             ChangelogItem(ChangeType.NEW, "搜索结果卡片显示「最新章节 / 字数 / 分类」元信息（与 Legado 对齐）"),
             ChangelogItem(ChangeType.IMPROVE, "AnalyzeUrl：搜索 / 详情 / 目录 / 正文 五处统一走 errResponse + loginCheckJs 错误恢复（Legado-parity）"),
             ChangelogItem(ChangeType.IMPROVE, "AnalyzeUrl：cookie 始终注入 — 关闭 enabledCookieJar 不再误丢已登录会话"),

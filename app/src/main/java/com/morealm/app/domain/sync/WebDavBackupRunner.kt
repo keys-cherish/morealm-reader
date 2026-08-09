@@ -58,7 +58,7 @@ class WebDavBackupRunner @Inject constructor(
             val device = prefs.webDavDeviceName.first().trim()
             val onlyLatest = prefs.onlyLatestBackup.first()
 
-            // 一次性把 Legado 公约里的全部子目录建好（bookProgress / books / background）。
+            // 一次性把参照实现公约里的全部子目录建好（bookProgress / books / background）。
             // 之前只 mkdir 了 dir 自身，子目录靠 just-in-time MKCOL — 第一次同步进度
             // 或导出书时延迟一个网络往返，且某些服务器在并发 MKCOL 同名时返回不一致
             // 状态码。集中初始化一次开销小（每个 MKCOL 几十毫秒），避免后续踩坑。
@@ -177,7 +177,7 @@ class WebDavBackupRunner @Inject constructor(
 
     /**
      * 给手动入口（"测试连接"按钮）用的轻量 init：一次性 mkdir 全部子目录，验证
-     * auth 链路通畅。Legado 在 saveWebDav 后调用一次 [AppWebDav.upConfig] 起到
+     * auth 链路通畅。参照实现在 saveWebDav 后调用一次 [AppWebDav.upConfig] 起到
      * 同样作用 — MoRealm 这里给 ProfileViewModel 一个可调用的入口。
      *
      * 不抛异常：失败信息折叠进 [Result.message]，调用方决定如何回显。
@@ -209,7 +209,7 @@ class WebDavBackupRunner @Inject constructor(
     }
 
     companion object {
-        /** Mirror Legado's daily auto-backup cadence. */
+        /** Mirror 参照实现 daily auto-backup cadence. */
         const val AUTO_BACKUP_INTERVAL_HOURS = 24L
     }
 }

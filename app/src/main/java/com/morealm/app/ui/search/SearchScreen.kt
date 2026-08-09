@@ -116,7 +116,7 @@ fun SearchScreen(
         }
     }
 
-    // 长按搜索结果弹的「加入书架」预览对话框（Legado-MD3 复刻）。
+    // 长按搜索结果弹的「加入书架」预览对话框（参照实现-MD3 复刻）。
     // null = 不显示；非 null 表示当前预览这本书。dialog 三按钮分别走
     // addToShelf / addToShelfAndRead / 关闭，与短按路径共用 ShelfAddedEvent 反馈链。
     var addToShelfDialogTarget by remember { mutableStateOf<SearchResult?>(null) }
@@ -337,7 +337,7 @@ fun SearchScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // Online results first: Legado search keeps remote results as the primary result stream.
+                // Online results first: 参照实现 search keeps remote results as the primary result stream.
                 if (results.isNotEmpty()) {
                     item {
                         Text(

@@ -352,7 +352,7 @@ class TextPage(
         return this
     }
 
-    /** Ported from Legado TextPage.upPageAloudSpan. */
+    /** Ported from the reference implementation TextPage.upPageAloudSpan. */
     fun upPageAloudSpan(aloudSpanStart: Int) {
         removePageAloudSpan()
         hasReadAloudSpan = true
@@ -374,7 +374,7 @@ class TextPage(
         }
     }
 
-    /** Group lines into paragraphs by paragraphNum (ported from Legado TextPage.paragraphs). */
+    /** Group lines into paragraphs by paragraphNum (Ported from the reference implementation TextPage.paragraphs). */
     val paragraphs: List<TextParagraph> by lazy {
         val result = arrayListOf<TextParagraph>()
         val filtered = lines.filter { it.paragraphNum > 0 }
@@ -393,7 +393,7 @@ class TextPage(
     fun format(): TextPage {
         val message = text.ifBlank { title }.ifBlank { "加载中..." }
         if (lines.isEmpty()) {
-            // Legado treats line-less TextPage instances as message pages. MoRealm
+            // 参照实现 treats line-less TextPage instances as message pages. MoRealm
             // must do the same so chapter-boundary/loading placeholders never draw
             // as a pure white page during fast page turns.
             text = message
@@ -427,7 +427,7 @@ class TextPage(
         return sb.toString()
     }
 
-    /** Ported from Legado TextPage.getPosByLineColumn. */
+    /** Ported from the reference implementation TextPage.getPosByLineColumn. */
     fun getPosByLineColumn(lineIndex: Int, columnIndex: Int): Int {
         if (lines.isEmpty()) return 0
         var length = 0
@@ -560,7 +560,7 @@ class TextChapter(
         return if (startPos < sb.length) sb.substring(startPos) else ""
     }
 
-    /** Ported from Legado TextChapter.getNeedReadAloud(pageSplit). */
+    /** Ported from the reference implementation TextChapter.getNeedReadAloud(pageSplit). */
     fun getNeedReadAloud(
         pageIndex: Int,
         pageSplit: Boolean,
@@ -598,7 +598,7 @@ class TextChapter(
         return pageParagraphs.lastOrNull()?.chapterPosition ?: 0
     }
 
-    /** Ported from Legado ReadBookViewModel.searchResultPositions. */
+    /** Ported from the reference implementation ReadBookViewModel.searchResultPositions. */
     fun searchSelectionRange(contentPosition: Int, queryLength: Int): SearchSelectionRange? {
         val snapshot = snapshotPages()
         if (contentPosition < 0 || queryLength <= 0 || snapshot.isEmpty()) return null

@@ -60,6 +60,7 @@ fun SimulationPageTransition(
     bitmapProvider: ScrollPagePageBitmapProvider,
     backgroundColor: Int,
     bgMeanColor: Int = backgroundColor,
+    gesturesEnabled: Boolean = true,
     onTapCenter: () -> Unit = {},
     /** 点击区域翻页动作（透传给 SimulationReadView 的九宫格 tap）。默认左 prev 右 next。 */
     tapActionTopLeft: String = "prev",
@@ -131,8 +132,8 @@ fun SimulationPageTransition(
             // 此期间换主题 setIdleBitmap 会被 REJECT；主动 unpin 让新主题立即生效）。
             view.unpinIdleBitmap()
 
-            view.canTurnNext = { pageFactory.hasNext() }
-            view.canTurnPrev = { pageFactory.hasPrev() }
+            view.canTurnNext = { gesturesEnabled && pageFactory.hasNext() }
+            view.canTurnPrev = { gesturesEnabled && pageFactory.hasPrev() }
 
             // ── bitmap provider：跨章自动 work ──
             // ScrollPageFactory.prevPage/nextPage 已经跨章（章首返 prevChapter 末页 / 章末
@@ -165,7 +166,7 @@ fun SimulationPageTransition(
             }
 
             // ── Host 共享交互透传 ──
-            view.onTapCenter = onTapCenter
+            view.onTapCenter = if (gesturesEnabled) onTapCenter else null
             view.tapActionTopLeft = tapActionTopLeft
             view.tapActionTopRight = tapActionTopRight
             view.tapActionBottomLeft = tapActionBottomLeft

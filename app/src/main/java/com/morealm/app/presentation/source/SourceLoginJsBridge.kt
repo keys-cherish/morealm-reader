@@ -11,8 +11,8 @@ package com.morealm.app.presentation.source
  * loginExt.reUiView()  // 强制重建表单（loginUi 是 @js: 时重新求值）
  * ```
  *
- * 与 Legado SourceLoginJsExtensions 行为对齐，但绑定 key 不同（Legado 用 `java`
- * 整体替换；MoRealm 用 `loginExt` 副绑定，避免覆盖 java.* 全套扩展）。Legado 源迁移
+ * 与参照实现 SourceLoginJsExtensions 行为对齐，但绑定 key 不同（参照实现用 `java`
+ * 整体替换；MoRealm 用 `loginExt` 副绑定，避免覆盖 java.* 全套扩展）。参照实现源迁移
  * 时把 `java.upUiData` 改成 `loginExt.upUiData` 即可，剩下 java.* 调用保持不变。
  *
  * 线程：JS 执行通常在 IO 池，[onUpUiData] 内部通过 SharedFlow 发出，由 Compose 端在

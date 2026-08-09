@@ -47,7 +47,7 @@ object CacheManager {
         runBlocking(Dispatchers.IO) { cacheDao.delete(key) }
     }
 
-    // ── Memory-only API (Legado-parity) ──
+    // ── Memory-only API (参照实现对齐) ──
 
     fun putMemory(key: String, value: Any) {
         memoryCache[key] = value

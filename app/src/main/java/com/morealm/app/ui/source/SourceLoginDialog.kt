@@ -36,12 +36,12 @@ import com.morealm.app.presentation.source.RowUi
  *   - toggle          ：自循环切换 chars 列表，切换后触发 action JS（如有）
  *   - select          ：ExposedDropdownMenuBox，选中后触发 action JS（如有）
  *
- * 与 Legado SourceLoginDialog 行为对齐的部分：
+ * 与参照实现 SourceLoginDialog 行为对齐的部分：
  *   - 点击外部 / 取消按钮关闭对话框时，**自动**把当前输入回写 putLoginInfo
- *     （避免误触丢失输入），等价 Legado onDismiss 自动持久化。
+ *     （避免误触丢失输入），等价参照实现 onDismiss 自动持久化。
  *   - 默认值优先级：已存登录信息 > [RowUi.default]
  *
- * 暂未实现的 Legado 行为（task D 范围）：
+ * 暂未实现的参照实现行为（task D 范围）：
  *   - upUiData / reUiView 反向 UI 通道（JS 期间刷新表单）
  *   - 文本输入 600ms 防抖触发 action（目前需用户显式点 button）
  *   - 长按 button 区分 isLongClick（统一按 false）
@@ -108,7 +108,7 @@ fun SourceLoginDialog(
 
     AlertDialog(
         onDismissRequest = {
-            // 关闭时自动回写当前输入（与 Legado SourceLoginDialog.onDismiss 行为对齐）
+            // 关闭时自动回写当前输入（与参照实现 SourceLoginDialog.onDismiss 行为对齐）
             persistOnDismiss(source, fields, fieldValues.toMap())
             onDismiss()
         },
@@ -288,7 +288,7 @@ fun SourceLoginDialog(
     }
 }
 
-/** 关闭对话框时把表单当前值回写为 loginInfo，与 Legado onDismiss 行为对齐。 */
+/** 关闭对话框时把表单当前值回写为 loginInfo，与参照实现 onDismiss 行为对齐。 */
 private fun persistOnDismiss(source: BookSource, fields: List<RowUi>, values: Map<String, String>) {
     if (values.isEmpty()) return
     // 仅持久化用户实际可输入的字段，过滤掉 button（无值）

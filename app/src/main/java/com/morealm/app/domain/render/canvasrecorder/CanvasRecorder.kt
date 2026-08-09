@@ -3,7 +3,7 @@ package com.morealm.app.domain.render.canvasrecorder
 import android.graphics.Canvas
 
 /**
- * 绘制录制回放接口 — 参考 Legado。
+ * 绘制录制回放接口 — 参考参照实现。
  * 录制一次绘制命令，后续帧直接回放，避免重复绘制。
  */
 interface CanvasRecorder {

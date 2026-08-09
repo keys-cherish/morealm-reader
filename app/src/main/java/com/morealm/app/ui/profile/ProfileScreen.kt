@@ -91,7 +91,7 @@ fun ProfileScreen(
     onNavigateDonate: () -> Unit = {},
     onNavigateBackupExport: () -> Unit = {},
     onNavigateBackupImport: () -> Unit = {},
-    /** 跳到 Legado 一键搬家页（独立流程，不复用备份导入页的状态）。 */
+    /** 跳到参照实现一键搬家页（独立流程，不复用备份导入页的状态）。 */
     onNavigateLegadoImport: () -> Unit = {},
     /** 跳到外观设置页。 */
     onNavigateAppearance: () -> Unit = {},
@@ -414,7 +414,7 @@ fun ProfileScreen(
                 onClick = onNavigateWebDav)
         }
 
-        // UX-2 (分组直觉): 书源 / 书签 / 缓存 / Legado 搬家 / 小组件 也加锚点.
+        // UX-2 (分组直觉): 书源 / 书签 / 缓存 / 参照实现搬家 / 小组件 也加锚点.
         SectionTitle("内容管理")
 
         SettingsCard(Icons.Default.Extension, "书源管理",

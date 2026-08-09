@@ -26,7 +26,7 @@ object BookContent {
 
     private const val TAG = "BookContent"
 
-    /** Legado AppPattern.useHtmlRegex parity — 标记希望保留原 HTML 不被净化的段。 */
+    /** 参照实现 AppPattern.useHtmlRegex parity — 标记希望保留原 HTML 不被净化的段。 */
     private val useHtmlRegex = Regex("<usehtml>.*?</usehtml>", RegexOption.DOT_MATCHES_ALL)
 
     suspend fun analyzeContent(
@@ -146,7 +146,7 @@ object BookContent {
                     )
                 }
             }
-            // Legado parity: 先把 <usehtml> 段占位 → HtmlFormatter.formatKeepImg
+            // 参照实现对齐: 先把 <usehtml> 段占位 → HtmlFormatter.formatKeepImg
             // (清 HTML 标签但保留 img 并 absolute src) → unescapeHtml4 → 还原占位。
             // 不走这条管道之前 jsoup outerHtml 的 <p>/<br>/<img> 标签会原样进阅读器，
             // 用户感知就是「本章内容为空」或乱码。

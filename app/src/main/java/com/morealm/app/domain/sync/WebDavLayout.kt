@@ -1,7 +1,7 @@
 package com.morealm.app.domain.sync
 
 /**
- * 集中 WebDav 远端目录公约 — 跟 Legado 的 [AppWebDav] 保持同构：
+ * 集中 WebDav 远端目录公约 — 跟参照实现的 [AppWebDav] 保持同构：
  *
  * ```
  * <root>/                       ← 用户填的服务器根（如 https://dav.jianguoyun.com/dav/）

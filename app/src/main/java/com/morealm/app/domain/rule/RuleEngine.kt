@@ -12,7 +12,7 @@ import org.seimicrawler.xpath.JXNode
 /**
  * MoRealm rule engine — parses content using CSS, XPath, JSONPath, or Regex rules.
  *
- * Compatible with Legado rule syntax:
+ * Compatible with 参照实现 rule syntax:
  * - No prefix or @css: → JSoup CSS selector
  * - @XPath: or starts with / → XPath
  * - @Json: or starts with $. → JSONPath
@@ -172,7 +172,7 @@ class RuleEngine {
 
     private fun evalCss(rule: String): String {
         val el = htmlContent ?: return ""
-        // Handle Legado's @text, @href, @src suffixes
+        // Handle 参照实现 @text, @href, @src suffixes
         val atIdx = rule.lastIndexOf('@')
         if (atIdx > 0) {
             val selector = rule.substring(0, atIdx).trim()

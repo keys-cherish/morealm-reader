@@ -40,7 +40,7 @@ import java.io.File
  *  - 外部文件夹：扫用户挂的 SAF Tree URI，只读不删。
  *
  * 每条字体用其自身 Typeface 渲染预览文本（"永和九年岁在癸丑 / The quick brown fox"），
- * 与 Legado FontAdapter 等效。Snackbar 收 ViewModel 的 toast SharedFlow。
+ * 与参照实现 FontAdapter 等效。Snackbar 收 ViewModel 的 toast SharedFlow。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

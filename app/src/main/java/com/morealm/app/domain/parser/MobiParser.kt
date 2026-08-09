@@ -15,12 +15,12 @@ import java.nio.charset.Charset
 /**
  * MOBI / AZW3 parser —— 两条路径：
  *
- * 1. **主路径（NCX 真章节）**：用 `mobi/` 子包内参考 Legado 实现的完整 [MobiReader]
+ * 1. **主路径（NCX 真章节）**：用 `mobi/` 子包内参考参照实现实现的完整 [MobiReader]
  *    打开 PDB → [KF6Book] / [KF8Book]，从 NCX index 拿真实章节列表 + 通过
  *    `kindle:pos:fid:xxxx:off:yyyy` 定位每章 HTML 内容（HUFF/CDIC 解压 / KF8 fragment 拼装
- *    都在 Legado lib 内完成）。
+ *    都在参照实现 lib 内完成）。
  *
- * 2. **Fallback 路径（regex 切章节）**：极旧的 MOBI 没 NCX / Legado lib 抛错时启用。
+ * 2. **Fallback 路径（regex 切章节）**：极旧的 MOBI 没 NCX / 参照实现 lib 抛错时启用。
  *    走原 PalmDOC LZ77 解压 + chapterRegex 全文匹配 + title dedup。准确率低但能保命。
  *
  * 还保留两个独立 helper：
@@ -106,7 +106,7 @@ object MobiParser {
             }
         }
 
-        // Fallback：旧 regex 路径（NCX 不可用 / Legado lib 抛错时启用）
+        // Fallback：旧 regex 路径（NCX 不可用 / 参照实现 lib 抛错时启用）
         AppLog.info(TAG, "NCX 不可用，fallback 到 regex 路径")
         return parseChaptersLegacy(context, uri)
     }
@@ -293,7 +293,7 @@ object MobiParser {
     /**
      * 提取 MOBI/AZW3 封面图。
      *
-     * 主路径：用 Legado [MobiBook.getCover] 走 **EXTH 201 (coverOffset)** /
+     * 主路径：用参照实现 [MobiBook.getCover] 走 **EXTH 201 (coverOffset)** /
      * **EXTH 202 (thumbnailOffset)** 拿到的相对 firstImageIndex 偏移，**精确定位**
      * 真封面 record，而不是粗暴取 PDB 第一个 image record（截图见用户实测 azw3 拿
      * 到了版权页扫描）。

@@ -393,7 +393,7 @@ private fun RuleField(
     mono: Boolean = false,
     placeholder: String = "",
     /**
-     * **2026-05-25 fix**：`singleLine = true` 让粘贴含 \n 的书源规则 (Legado ruleChapterList /
+     * **2026-05-25 fix**：`singleLine = true` 让粘贴含 \n 的书源规则 (参照实现 ruleChapterList /
      * exploreUrl 多分类块 / JS / 多步 selector) 时换行被过滤导致内容截断或粘贴失败。
      * 默认改 false 让 RuleField 多行；short field (书源名称 / URL / 分组) 调用方可显式传 true。
      */

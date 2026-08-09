@@ -45,7 +45,7 @@ import com.morealm.app.domain.source.ShowBrowserSession
 /**
  * 登录脚本 `loginExt.showBrowser(url, html, preloadJs)` 的交互式容器。
  *
- * 用途：Legado 书源里扫码登录 / 图形验证码 / 滑块验证类场景——脚本启一个浏览器让用户操作，
+ * 用途：参照实现书源里扫码登录 / 图形验证码 / 滑块验证类场景——脚本启一个浏览器让用户操作，
  * 操作完后脚本拿到最终 HTML 继续解析 token / cookie。MoRealm 原来用 [com.morealm.app.domain.http.BackstageWebView]
  * 是无 UI 后台抓取，不能和用户交互，这类源全挂。
  *

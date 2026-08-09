@@ -4,18 +4,18 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.net.URI
 
 /**
- * Network helpers — Legado-parity utilities used by CookieManager / AnalyzeUrl.
+ * Network helpers — 参照实现对齐 utilities used by CookieManager / AnalyzeUrl.
  *
  * - [getSubDomain] returns the registrable two-level domain (e.g. example.com from www.a.example.com),
  *   which is the unit Cookie persistence is keyed on.
  * - [getBaseUrl] returns the scheme://host[:port] portion of a URL.
- * - [splitNotBlank] is a small string helper matching Legado's extension.
+ * - [splitNotBlank] is a small string helper matching 参照实现 extension.
  */
 object NetworkUtils {
 
     /**
      * Best-effort sub-domain extraction. We don't ship a Public Suffix List, so we use the
-     * simple "last two labels" heuristic — this matches what Legado does in practice for the
+     * simple "last two labels" heuristic — this matches what 参照实现 does in practice for the
      * vast majority of book-source domains (.com / .net / .cn / .org / etc.).
      *
      * Edge cases:
@@ -64,11 +64,11 @@ object NetworkUtils {
         }
     }
 
-    /** Match Legado's String.splitNotBlank — split by a delimiter and drop blank segments */
+    /** Match 参照实现 String.splitNotBlank — split by a delimiter and drop blank segments */
     fun splitNotBlank(s: String, delimiter: String): List<String> =
         s.split(delimiter).map { it.trim() }.filter { it.isNotEmpty() }
 }
 
-/** Match Legado's `"a;b;".splitNotBlank(";")` extension form */
+/** Match 参照实现 `"a;b;".splitNotBlank(";")` extension form */
 fun String.splitNotBlank(delimiter: String): List<String> =
     NetworkUtils.splitNotBlank(this, delimiter)

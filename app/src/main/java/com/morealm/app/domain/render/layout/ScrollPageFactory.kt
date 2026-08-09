@@ -18,7 +18,7 @@ import com.morealm.epub.render.ScrollPage
  * | 滚动单元    | chapter (~22000px)                   | **page (~1800px)**             |
  * | swap 频率   | 每次跨章必触发                       | 仅当 page 跨章 boundary 才触发 |
  * | 章号变化    | 每次 swap 章号必变                   | page 跨章才变（章内不变）      |
- * | InfoBar 闪 | 频繁                                 | **罕见**（对齐 Legado 体感）   |
+ * | InfoBar 闪 | 频繁                                 | **罕见**（对齐参照实现体感）   |
  *
  * ── 跨章自动 swap 算法 ──
  *
@@ -32,11 +32,11 @@ import com.morealm.epub.render.ScrollPage
  * Factory 不自己存这 3 个引用，每次访问通过 dataSource get —— 这样 Host 异步 load 完
  * 新章节后填回 dataSource，下一次 hasNext()/nextPage 自然看到新值，无需额外同步。
  *
- * ── 与 Legado TextPageFactory 的差异 ──
+ * ── 与参照实现 TextPageFactory 的差异 ──
  *
- * - chapter 引用 swap 这一步在 Legado 由 `ReadBook.moveToNextChapter` 全局单例做，
+ * - chapter 引用 swap 这一步在参照实现由 `ReadBook.moveToNextChapter` 全局单例做，
  *   本工程改由 [chapterShiftCallback] 通知 Host，Host 在 ViewModel 层 swap dataSource state
- * - Legado `upContent` UI 通知本工程不需要（Compose 重组自动驱动）
+ * - 参照实现 `upContent` UI 通知本工程不需要（Compose 重组自动驱动）
  *
  * @property dataSource Host 注入的 3 章 layout 数据源（Compose state-backed）。
  * @property chapterShiftCallback 跨章 swap 完成后回调 (delta=+1 next / -1 prev)。
@@ -58,7 +58,7 @@ class ScrollPageFactory(
         get() = _pageIndex.intValue
         private set(value) { _pageIndex.intValue = value }
 
-    // ── 4 page 槽（仿 Legado）──
+    // ── 4 page 槽（仿参照实现）──
     // 章末 page 时 nextPage 自然取 nextChapter.pages[0]（跨章拼接），nextPlusPage 取 [1]。
     // currentChapter == null（加载中）时所有槽返回 emptyPage 占位，避免上层 NPE。
 

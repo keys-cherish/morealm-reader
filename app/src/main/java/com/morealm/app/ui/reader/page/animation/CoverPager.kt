@@ -21,7 +21,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlin.math.abs
 
-/** 滑入页左侧阴影渐变宽度（px）。Legado CoverPageDelegate 同名常量。*/
+/** 滑入页左侧阴影渐变宽度（px）。参照实现 CoverPageDelegate 同名常量。*/
 private const val COVER_SHADOW_WIDTH = 30f
 
 /** 滑入页左侧阴影最大透明度。 */

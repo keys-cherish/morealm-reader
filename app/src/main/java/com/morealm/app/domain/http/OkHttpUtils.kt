@@ -149,7 +149,7 @@ suspend fun Call.await(): Response = suspendCancellableCoroutine { block ->
 }
 
 /**
- * 把 ResponseBody 解码成字符串。charset 优先级（与 Legado parity）：
+ * 把 ResponseBody 解码成字符串。charset 优先级（与参照实现对齐）：
  *   1. 显式 [encode] 参数（调用方知道目标编码时强制使用——书源 searchUrl 等 option 里的
  *      `"charset": "gbk"` 沿此路径透传）
  *   2. Response Content-Type 的 charset（server 主动声明时尊重）
@@ -160,7 +160,7 @@ suspend fun Call.await(): Response = suspendCancellableCoroutine { block ->
  * 为什么 step 3+4 不可省：书源作者通常只在 searchUrl option 里写 charset，章节正文 URL
  * 没有 option JSON，charset 不透传；如果服务端响应 Content-Type 又不带 charset（典型老
  * GBK 站），UTF-8 fallback 解码 GBK bytes → 中文乱码（图片中 `�` + 拉丁字符就是 mojibake
- * 签名）。Legado 同等位置走 EncodingDetect sniff，本实现用更轻量的 meta + byte heuristic
+ * 签名）。参照实现同等位置走 EncodingDetect sniff，本实现用更轻量的 meta + byte heuristic
  * 达到同等覆盖。
  */
 fun ResponseBody.text(encode: String? = null): String {

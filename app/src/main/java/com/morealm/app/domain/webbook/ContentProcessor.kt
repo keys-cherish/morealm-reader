@@ -10,7 +10,7 @@ import java.util.concurrent.TimeoutException
 /**
  * 正文后处理器 - 去重标题、替换净化、繁简转换
  *
- * Legado parity（v1.2 对齐）：
+ * 参照实现对齐（v1.2 对齐）：
  * - **Title / Content 规则分别查 DB** —— 走 [ReplaceRuleDao.findEnabledByTitleScope] /
  *   [ReplaceRuleDao.findEnabledByContentScope]，SQL 已经 filter scopeTitle/scopeContent
  *   + scope LIKE + excludeScope 反向排除，Kotlin 侧不再做二次 filter。
@@ -59,12 +59,12 @@ class ContentProcessor(
     /**
      * 处理正文内容：去重标题 + 替换净化 + 段首缩进
      *
-     * Legado-parity behavior:
+     * 参照实现对齐 behavior:
      * - 标题去重尝试两遍：原标题，再用应用过 titleReplaceRules 的标题
      * - 第一行（章节标题）不加段首缩进；其他段才加 "　　"
      * - 单条替换规则失败 / 超时不影响其他规则
      * - `<usehtml>...</usehtml>` 段在替换循环前占位、循环后还原 —— 让用户显式声明
-     *   "这段保留原文不要净化"真正起作用（对齐 Legado adaptSpecialStyle）
+     *   "这段保留原文不要净化"真正起作用（对齐参照实现 adaptSpecialStyle）
      */
     fun process(
         chapterTitle: String,
@@ -97,7 +97,7 @@ class ContentProcessor(
         //     再做语义替换；倒过来会让 GENERAL 误中广告里出现的关键字。
         //   - <usehtml> 占位让用户显式声明的"这段保留原文"段不被任何规则误伤；
         //     占位字符必须是规则极不可能匹配的形式（HTML 元字符不出现 + 数字下标），
-        //     对齐 Legado `adaptSpecialStyle` 块。
+        //     对齐参照实现 `adaptSpecialStyle` 块。
         if (useReplace) {
             val useHtmlMap = mutableMapOf<String, String>()
             if (USEHTML_HINT in mContent) {
@@ -152,7 +152,7 @@ class ContentProcessor(
      *  - 正常完成 → 返回替换后的字符串
      *  - 抛异常（pattern 语法错 / replacement `$` 转义错）→ 静默返回原文，规则跳过
      *  - 超过 [ReplaceRule.timeoutMs] → cancel future，记 warn，自动写回 DB 把规则
-     *    enabled = false（对齐 Legado RegexTimeoutException → `item.isEnabled = false`），
+     *    enabled = false（对齐参照实现 RegexTimeoutException → `item.isEnabled = false`），
      *    避免下次进入这一章再被卡住。
      *
      * 注意 Java regex 在 catastrophic backtracking 下**不响应 Thread.interrupt**，
@@ -214,7 +214,7 @@ class ContentProcessor(
         /** 单条规则替换的下限超时（500ms），防御用户配置 0 / 负数。 */
         private const val MIN_TIMEOUT_MS = 500
 
-        /** 单条规则替换的上限超时（30s），catastrophic backtracking 兜底。Legado 默认 3s。 */
+        /** 单条规则替换的上限超时（30s），catastrophic backtracking 兜底。参照实现默认 3s。 */
         private const val MAX_TIMEOUT_MS = 30_000
 
         /** 快速判断 content 是否含 `<usehtml>` 段，避免 regex 调度开销。 */

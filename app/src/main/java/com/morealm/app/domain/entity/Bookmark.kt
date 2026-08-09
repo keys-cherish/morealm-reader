@@ -22,7 +22,7 @@ data class Bookmark(
      */
     val scrollProgress: Int = 0,
     /**
-     * 章内字符偏移（对齐 Legado Bookmark.chapterPos）。
+     * 章内字符偏移（对齐参照实现 Bookmark.chapterPos）。
      *
      * - 0 表示章节首字符；用 `TextPage.chapterPosition + getPosByLineColumn(...)` 计算得到。
      * - 跳转书签时优先用此字段精确定位到具体页（仿真/滑动/覆盖翻页都生效）；

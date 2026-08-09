@@ -2,7 +2,7 @@ package com.morealm.app.ui.reader.renderer
 
 import android.os.SystemClock
 
-/** Full reader-side AutoPager state, ported from Legado AutoPager. */
+/** Full reader-side AutoPager state, Ported from the reference implementation AutoPager. */
 internal class ReaderAutoPagerState {
     var progress: Int = 0
         private set

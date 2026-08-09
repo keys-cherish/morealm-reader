@@ -142,7 +142,7 @@ fun hitTestPage(page: TextPage, x: Float, y: Float): TextPos? {
     return null
 }
 
-/** Legado ContentTextView.touchRough equivalent for selection handles.
+/** 参照实现 ContentTextView.touchRough equivalent for selection handles.
  *
  * 返回的 TextPos 保证 lineIndex ≥ 0 且 columnIndex ≥ 0（即 isSelected() == true），
  * 避免拖拽到行首左侧时 columnIndex = -1 导致 SelectionState.isActive 被置 false、
@@ -170,7 +170,7 @@ fun hitTestPageRough(page: TextPage, x: Float, y: Float, relativePagePos: Int = 
 
 /**
  * Hit-test: find the actual BaseColumn at a given (x, y) coordinate on a page.
- * Used to detect taps on ImageColumn for image preview (ported from Legado ContentTextView.click).
+ * Used to detect taps on ImageColumn for image preview (Ported from the reference implementation ContentTextView.click).
  */
 fun hitTestColumn(page: TextPage, x: Float, y: Float): BaseColumn? {
     val paddingTop = page.paddingTop
@@ -187,7 +187,7 @@ fun hitTestColumn(page: TextPage, x: Float, y: Float): BaseColumn? {
 
 /**
  * Find word boundaries around a tap position.
- * Ported from Legado ReadView.onLongPress() 鈥?uses BreakIterator to find word boundaries
+ * Ported from the reference implementation ReadView.onLongPress() 鈥?uses BreakIterator to find word boundaries
  * across the paragraph containing the tapped position.
  */
 fun findWordRange(page: TextPage, tapPos: TextPos): Pair<TextPos, TextPos> {
@@ -319,6 +319,13 @@ fun SelectionToolbar(
      * 与 onHighlight / onTextColor 走同一套 PRESETS 配色，但落库 kind=2 走另一条数据路径。
      */
     onUnderline: ((colorArgb: Int, style: Int) -> Unit)? = null,
+    /**
+     * 替换回调。null 时 REPLACE 按钮自动从渲染列表里摘掉。
+     *
+     * 点击后不在条内做任何事 —— 由上层弹独立对话框（[com.morealm.app.ui.reader.ReplaceTextDialog]）
+     * 收集"替换为什么"，因此这里只是一个无参通知。
+     */
+    onReplace: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     config: com.morealm.app.domain.entity.SelectionMenuConfig =
         com.morealm.app.domain.entity.SelectionMenuConfig.DEFAULT,
@@ -326,7 +333,6 @@ fun SelectionToolbar(
 ) {
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
-    var expanded by remember { mutableStateOf(false) }
     /** HIGHLIGHT 按钮点开调色板的开关。和 [expanded] 解耦：用户在主行点
      *  HIGHLIGHT 不展开扩展行；在扩展行点 HIGHLIGHT 也不收起扩展行。 */
     var paletteVisible by remember { mutableStateOf(false) }
@@ -335,47 +341,55 @@ fun SelectionToolbar(
     var textColorPaletteVisible by remember { mutableStateOf(false) }
     /** UNDERLINE 按钮的"线型+颜色"网格开关。与上两者三方互斥。 */
     var underlinePaletteVisible by remember { mutableStateOf(false) }
-    val arrowColor = MaterialTheme.colorScheme.surfaceContainerHigh
-
-    // 按 position 切分，并把 HIDDEN / 不可用的 HIGHLIGHT / TEXT_COLOR / UNDERLINE 摘掉。
-    val grouped = remember(config, onHighlight, onTextColor, onUnderline) {
+    // 按 position 切分，并把 HIDDEN / 不可用的 HIGHLIGHT / TEXT_COLOR / UNDERLINE / REPLACE 摘掉。
+    val grouped = remember(config, onHighlight, onTextColor, onUnderline, onReplace) {
         val raw = config.groupedByPosition()
         val filterHighlight = onHighlight == null
         val filterTextColor = onTextColor == null
         val filterUnderline = onUnderline == null
+        val filterReplace = onReplace == null
         fun List<com.morealm.app.domain.entity.SelectionMenuItem>?.cleaned() =
             this.orEmpty().filter {
                 (!filterHighlight || it != com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT) &&
                     (!filterTextColor || it != com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR) &&
-                    (!filterUnderline || it != com.morealm.app.domain.entity.SelectionMenuItem.UNDERLINE)
+                    (!filterUnderline || it != com.morealm.app.domain.entity.SelectionMenuItem.UNDERLINE) &&
+                    (!filterReplace || it != com.morealm.app.domain.entity.SelectionMenuItem.REPLACE)
             }
-        val main = raw[com.morealm.app.domain.entity.SelectionMenuPosition.MAIN].cleaned().take(3)
+        val main = raw[com.morealm.app.domain.entity.SelectionMenuPosition.MAIN].cleaned()
         val ext = raw[com.morealm.app.domain.entity.SelectionMenuPosition.EXPANDED].cleaned()
         main to ext
     }
-    val mainItems = grouped.first
-    val expandedItems = grouped.second
-    val hasExpandedRow = expandedItems.isNotEmpty()
 
-    // 动态宽度：每个 MenuBtn ~52dp + 「更多」按钮 ~36dp + 两侧内边距 ~12dp。
-    // 下限 120dp 保证箭头 / 调色板不被挤瘦得难看；上限不越屏。
-    val mainColumns = mainItems.size + if (hasExpandedRow) 1 else 0
-    val menuWidthDp = (mainColumns.coerceAtLeast(1) * 56 + 16)
-        .coerceAtLeast(120)
-        .coerceAtMost(configuration.screenWidthDp - 16)
-    val menuWidth = menuWidthDp.dp
+    // ── 一行平铺 ──
+    //
+    // 旧版是「主行最多 3 项 + 『更多』按钮 + 可展开第二行」的窄药丸，用户反馈臃肿。
+    // 改成参照阅读器那样的一条扁平宽条：所有非 HIDDEN 的动作直接平铺在一行，没有
+    // 折叠。config 的 MAIN / EXPANDED 因此退化成**排序权重**（MAIN 在前），HIDDEN
+    // 仍然完全不渲染，用户在阅读设置里的隐藏配置照旧生效。
+    val barItems = grouped.first + grouped.second
+
+    // 条宽：屏宽两侧各留 24dp，上限 360dp。两个数都来自参照实测 —— 实测条宽
+    // = 屏宽 × 0.872（392dp 屏上 342dp），其代码里写死 width = min(屏宽, 360dp)。
+    val menuWidth = (configuration.screenWidthDp - 48).coerceIn(160, 360).dp
+
+    // 每次选区变化打一行：条目列表受用户配置 + 回调可用性双重过滤，"某个按钮不见了"
+    // 是这块最常见的反馈，有这行就不用靠猜。LaunchedEffect 键控，一次选区只打一次。
+    androidx.compose.runtime.LaunchedEffect(barItems, menuWidth, offset) {
+        com.morealm.app.core.log.AppLog.debug(
+            "SelectionMenu",
+            "SelectionToolbar compose offset=$offset menuWidth=$menuWidth " +
+                "barItems=${barItems.map { it.name }} config(${config.summary()})",
+        )
+    }
 
     // Anchor: caller 给的是一个屏幕坐标点（长按位置 / 选区中心）；我们把它包成
     // 一个 0×0 的 IntRect，让 PositionProvider 用 popupContentSize 自己测量真实宽高
     // 来决定 above/below + 居中对齐。**不再**在 dp 层硬编码 menuHeightDp = 46+40+38 这类
     // 估算累加：那是 View 时代的做法，菜单按钮 padding / 系统字体放大 / 中英文行高
     // 任意一项变化都会让估算和真实高度脱节。Compose 已经帮我们测好了，直接用。
-    val xDp = with(density) { offset.x.toDp() }
-    val menuX = (xDp - menuWidth / 2).coerceIn(
-        8.dp,
-        (configuration.screenWidthDp.dp - menuWidth - 8.dp).coerceAtLeast(8.dp),
-    )
-    val arrowX = (xDp - menuX - 7.dp).coerceIn(18.dp, menuWidth - 18.dp)
+    //
+    // 箭头（指向选区的小三角）已随扁平宽条一起去掉 —— 参照阅读器的选区条没有箭头，
+    // 条本身就贴着选区，多一个尖角只会让它显得更"胖"。
 
     // ── Popup 化 ──
     //
@@ -402,7 +416,6 @@ fun SelectionToolbar(
             showBelowState = showBelowState,
         )
     }
-    val showBelow = showBelowState.value
 
     Popup(
         popupPositionProvider = provider,
@@ -417,32 +430,36 @@ fun SelectionToolbar(
             modifier = modifier.width(menuWidth),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (showBelow) {
-                ToolbarArrow(arrowColor, pointsDown = false, modifier = Modifier.offset(x = arrowX - menuWidth / 2))
-            }
-            // Pill body
+            // Bar body —— 扁平宽条。圆角 4dp / 阴影 3dp 都是相对旧版（16dp / 12dp）
+            // 的大幅收敛：参照实测圆角 ≈ 4.3dp 且完全无投影，我们保留一点点投影是
+            // 因为它要压在**任意**阅读背景（含浅色纸纹）上，零投影会糊在背景里。
             Surface(
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(BAR_CORNER),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shadowElevation = 12.dp,
+                shadowElevation = 3.dp,
                 tonalElevation = 2.dp,
-                modifier = Modifier.widthIn(max = menuWidth),
+                modifier = Modifier.width(menuWidth),
             ) {
                 Column {
-                    // ── Main row ──
+                    // ── 动作行（一行平铺，无折叠）──
+                    // 每项 weight(1f) 均分条宽：参照那条 8 项 × 40dp 正好填满内宽，
+                    // 等价于均分。项数变化（用户隐藏了某些动作）时自动适配，不会溢出。
                     Row(
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = BAR_SIDE_PADDING),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        mainItems.forEachIndexed { idx, item ->
-                            if (idx > 0) MenuSep()
+                        barItems.forEach { item ->
                             ItemButton(
                                 item = item,
+                                modifier = Modifier.weight(1f),
                                 onCopy = onCopy,
                                 onSpeak = onSpeak,
                                 onTranslate = onTranslate,
                                 onShare = onShare,
                                 onLookup = onLookup,
+                                onReplace = onReplace ?: {},
                                 onToggleHighlight = {
                                     paletteVisible = !paletteVisible
                                     if (paletteVisible) {
@@ -466,74 +483,13 @@ fun SelectionToolbar(
                                 },
                             )
                         }
-                        if (hasExpandedRow) {
-                            if (mainItems.isNotEmpty()) MenuSep()
-                            IconButton(
-                                onClick = { expanded = !expanded },
-                                modifier = Modifier.size(32.dp),
-                            ) {
-                                Icon(
-                                    Icons.Default.MoreHoriz, "更多",
-                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                    modifier = Modifier.size(16.dp),
-                                )
-                            }
-                        }
-                    }
-                    // ── Expanded row ──
-                    androidx.compose.animation.AnimatedVisibility(visible = expanded && hasExpandedRow) {
-                        Column {
-                            HorizontalDivider(
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
-                                thickness = 0.5.dp,
-                                modifier = Modifier.padding(horizontal = 8.dp),
-                            )
-                            Row(
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                expandedItems.forEachIndexed { idx, item ->
-                                    if (idx > 0) MenuSep()
-                                    ItemButton(
-                                        item = item,
-                                        onCopy = onCopy,
-                                        onSpeak = onSpeak,
-                                        onTranslate = onTranslate,
-                                        onShare = onShare,
-                                        onLookup = onLookup,
-                                        onToggleHighlight = {
-                                            paletteVisible = !paletteVisible
-                                            if (paletteVisible) {
-                                                textColorPaletteVisible = false
-                                                underlinePaletteVisible = false
-                                            }
-                                        },
-                                        onToggleTextColor = {
-                                            textColorPaletteVisible = !textColorPaletteVisible
-                                            if (textColorPaletteVisible) {
-                                                paletteVisible = false
-                                                underlinePaletteVisible = false
-                                            }
-                                        },
-                                        onToggleUnderline = {
-                                            underlinePaletteVisible = !underlinePaletteVisible
-                                            if (underlinePaletteVisible) {
-                                                paletteVisible = false
-                                                textColorPaletteVisible = false
-                                            }
-                                        },
-                                    )
-                                }
-                            }
-                        }
                     }
                     // ── Highlight palette row ──
                     // 仅当 onHighlight 非空、调色板被显式打开、且 HIGHLIGHT 按钮
                     // 当前真的在某个可见行（主行 / 已展开的扩展行）才渲染，
                     // 防止"HIGHLIGHT 在 EXPANDED 但用户没点更多"的情况下空显示。
                     val showPalette = paletteVisible && onHighlight != null &&
-                        (com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in mainItems ||
-                            (expanded && com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in expandedItems))
+                        com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT in barItems
                     androidx.compose.animation.AnimatedVisibility(visible = showPalette) {
                         Column {
                             HorizontalDivider(
@@ -590,8 +546,7 @@ fun SelectionToolbar(
                     // [HighlightPalette.PRESETS] 但点选时回调走 onTextColor，
                     // 落库 kind=1 → 渲染层替换字符前景色而不是画背景。
                     val showTextColorPalette = textColorPaletteVisible && onTextColor != null &&
-                        (com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR in mainItems ||
-                            (expanded && com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR in expandedItems))
+                        com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR in barItems
                     androidx.compose.animation.AnimatedVisibility(visible = showTextColorPalette) {
                         Column {
                             HorizontalDivider(
@@ -663,8 +618,7 @@ fun SelectionToolbar(
                     // 用户的语义流：先点线型选 style（暂存到 selectedStyle），再点颜色
                     // 触发回调。默认 style=0（实线），保证用户进面板第一眼就能直接选色。
                     val showUnderlinePalette = underlinePaletteVisible && onUnderline != null &&
-                        (com.morealm.app.domain.entity.SelectionMenuItem.UNDERLINE in mainItems ||
-                            (expanded && com.morealm.app.domain.entity.SelectionMenuItem.UNDERLINE in expandedItems))
+                        com.morealm.app.domain.entity.SelectionMenuItem.UNDERLINE in barItems
                     var selectedUnderlineStyle by remember(showUnderlinePalette) {
                         mutableStateOf(com.morealm.app.domain.entity.Highlight.UNDERLINE_STYLE_SOLID)
                     }
@@ -780,9 +734,6 @@ fun SelectionToolbar(
                 }
             }
             // Arrow pointing down toward selection
-            if (!showBelow) {
-                ToolbarArrow(arrowColor, pointsDown = true, modifier = Modifier.offset(x = arrowX - menuWidth / 2))
-            }
         }
     }
 }
@@ -798,29 +749,34 @@ private fun ItemButton(
     onTranslate: () -> Unit,
     onShare: () -> Unit,
     onLookup: () -> Unit,
+    onReplace: () -> Unit,
     onToggleHighlight: () -> Unit,
     onToggleTextColor: () -> Unit,
     onToggleUnderline: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     when (item) {
         com.morealm.app.domain.entity.SelectionMenuItem.COPY ->
-            MenuBtn(Icons.Default.ContentCopy, "复制", onCopy)
+            MenuBtn(Icons.Default.ContentCopy, "复制", onCopy, modifier)
         com.morealm.app.domain.entity.SelectionMenuItem.SPEAK ->
-            MenuBtn(Icons.Default.VolumeUp, "朗读", onSpeak)
+            MenuBtn(Icons.Default.VolumeUp, "朗读", onSpeak, modifier)
         com.morealm.app.domain.entity.SelectionMenuItem.TRANSLATE ->
-            MenuBtn(Icons.Default.Translate, "翻译", onTranslate)
+            MenuBtn(Icons.Default.Translate, "翻译", onTranslate, modifier)
         com.morealm.app.domain.entity.SelectionMenuItem.SHARE ->
-            MenuBtn(Icons.Default.Share, "分享", onShare)
+            MenuBtn(Icons.Default.Share, "分享", onShare, modifier)
         com.morealm.app.domain.entity.SelectionMenuItem.LOOKUP ->
-            MenuBtn(Icons.Default.Search, "查词", onLookup)
+            MenuBtn(Icons.Default.Search, "查词", onLookup, modifier)
         com.morealm.app.domain.entity.SelectionMenuItem.HIGHLIGHT ->
-            MenuBtn(Icons.Default.FormatColorFill, "高亮", onToggleHighlight)
+            MenuBtn(Icons.Default.FormatColorFill, "高亮", onToggleHighlight, modifier)
         // 字体强调色用 FormatColorText 图标（"A"上面一笔色块），
         // 视觉上和"高亮"图标的填色块明确区分，用户一眼分辨"改字色"vs"涂背景"。
         com.morealm.app.domain.entity.SelectionMenuItem.TEXT_COLOR ->
-            MenuBtn(Icons.Default.FormatColorText, "字体色", onToggleTextColor)
+            MenuBtn(Icons.Default.FormatColorText, "字体色", onToggleTextColor, modifier)
         com.morealm.app.domain.entity.SelectionMenuItem.UNDERLINE ->
-            MenuBtn(Icons.Default.FormatUnderlined, "下划线", onToggleUnderline)
+            MenuBtn(Icons.Default.FormatUnderlined, "下划线", onToggleUnderline, modifier)
+        // 替换用 FindReplace（放大镜+箭头），和"查词"的纯放大镜区分开
+        com.morealm.app.domain.entity.SelectionMenuItem.REPLACE ->
+            MenuBtn(Icons.Default.FindReplace, "替换", onReplace, modifier)
     }
 }
 
@@ -852,32 +808,53 @@ private fun ToolbarArrow(
     )
 }
 
+/**
+ * 选区条上的单个动作按钮 —— 图标在上、小字在下。
+ *
+ * 尺寸全部按参照阅读器截图实测反推（其条目步距 40dp 经独立来源交叉验证吻合，
+ * 因此换算比例是可信的，非目测）：
+ *   图标 14dp / 标签 9sp / 上内边距 11dp / 图标与标签间距 10dp / 下内边距 9dp
+ * 合计条高约 52dp。旧版是图标 16dp + 间距 1dp + 10sp，字大图小、挤成一坨，
+ * 反而显胖 —— 真正让它显瘦的是**留白**，不是把元素做小。
+ */
 @Composable
 private fun MenuBtn(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
+            .clip(RoundedCornerShape(BAR_CORNER))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .padding(top = 9.dp, bottom = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(
             icon, label,
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(14.dp),
         )
-        Spacer(Modifier.height(1.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
             label,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
-            fontSize = 10.sp,
+            fontSize = 9.sp,
+            // 显式钳死行盒：9sp 文字的默认行高约 13dp，CJK 下还会更高，白白把条撑
+            // 高一截。参照那条的标签只占 8.2dp，这里给 10sp 行盒最接近。
+            lineHeight = 10.sp,
+            maxLines = 1,
             fontWeight = FontWeight.Medium,
         )
     }
 }
+
+/** 选区条圆角 —— 参照实测 ≈ 4.3dp（旧版 16dp 的药丸感是"臃肿"的主因之一）。 */
+private val BAR_CORNER = 4.dp
+
+/** 选区条左右内边距 —— 参照实测 ≈ 10.5dp。 */
+private val BAR_SIDE_PADDING = 10.dp
 
 @Composable
 private fun MenuSep() {
@@ -953,7 +930,7 @@ fun CursorHandle(
  * 高亮调色板预设。
  *
  * 5 色覆盖常用的「黄绿蓝粉紫」语义集，alpha 0.4 让底色透出文字 — 类似 Apple Books
- * / Legado 的可读性折衷：太浅看不见标记，太深盖住字。
+ * / 参照实现的可读性折衷：太浅看不见标记，太深盖住字。
  *
  * 色相按可见度排序（黄最显眼放最左，紫最低调放最右），用户从左到右选 = 由强到弱
  * 标记。每个 Int 是 ARGB；存到 Highlight.colorArgb。

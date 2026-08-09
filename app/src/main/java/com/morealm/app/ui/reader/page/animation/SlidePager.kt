@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.map
  * 上下文里翻找；按动画类型一类一文件后，每种动画的代码、注释、相关常量都集中
  * 在一个 ~50 行文件，单测/调试范围立刻收敛。
  *
- * 行为对齐 Legado 的 SlidePageDelegate：当前/相邻页一起平移，不带阴影。
+ * 行为对齐参照实现的 SlidePageDelegate：当前/相邻页一起平移，不带阴影。
  *
  * 这两个 pager 共享同一份 settled-detect 模板，共在一个文件方便对照纵向变体
  * 的差异（仅 [HorizontalPager] vs [VerticalPager]）。
@@ -95,7 +95,7 @@ internal fun SlidePager(
         reverseLayout = reverseLayout,
     ) { pageIndex ->
         // Default HorizontalPager already does slide — both pages move together.
-        // 这正好等价 Legado SlidePageDelegate 的行为。
+        // 这正好等价参照实现 SlidePageDelegate 的行为。
         if (bitmapProvider != null) {
             BitmapPageContent(bitmapProvider, pageIndex)
         } else {

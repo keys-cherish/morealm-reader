@@ -4,7 +4,7 @@ import java.util.regex.Pattern
 
 /**
  * Pre-compiled regex patterns used across the app.
- * Ported from Legado's AppPattern — avoids per-call Regex() allocation.
+ * Ported from the reference implementation AppPattern — avoids per-call Regex() allocation.
  *
  * Rules:
  * - All patterns are top-level vals (compiled once at class load)
@@ -46,6 +46,6 @@ object AppPattern {
     // 符号(\p{S}) 组成，朗读出来不是"什么都不读"就是"读出 '破折号 破折号'" 这种
     // 让人困惑的字符名 —— 都不是用户想要的。段级跳转时遇到这种段直接跳过。
     //
-    // 规则参考 Legado AppPattern.notReadAloudRegex（同款 Unicode 类）。
+    // 规则参考参照实现 AppPattern.notReadAloudRegex（同款 Unicode 类）。
     val notReadAloudRegex = Regex("^(\\s|\\p{C}|\\p{P}|\\p{Z}|\\p{S})+$")
 }

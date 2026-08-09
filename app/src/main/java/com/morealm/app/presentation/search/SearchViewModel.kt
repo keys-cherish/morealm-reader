@@ -272,7 +272,7 @@ class SearchViewModel @Inject constructor(
                     searchBook = sb,
                 )
             }.filter { result ->
-                // 只把 Legado 默认文本书源送入小说阅读器，并过滤掉标题和作者都不包含关键词的结果。
+                // 只把参照实现默认文本书源送入小说阅读器，并过滤掉标题和作者都不包含关键词的结果。
                 result.sourceType == TEXT_BOOK_SOURCE_TYPE &&
                     (result.title.contains(keyword, ignoreCase = true) ||
                     result.author.contains(keyword, ignoreCase = true)

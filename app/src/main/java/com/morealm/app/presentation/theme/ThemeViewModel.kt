@@ -44,7 +44,7 @@ class ThemeViewModel @Inject constructor(
      *
      * 内容场景：
      *   - "已导入主题：XXX" — 普通成功
-     *   - "检测到这是 Legado 阅读样式配置..." — ReadConfig 命中、配上 inaccessibleBgPaths 数量提示
+     *   - "检测到这是参照实现阅读样式配置..." — ReadConfig 命中、配上 inaccessibleBgPaths 数量提示
      *   - "主题导入失败：XXX" — 解析报错
      */
     private val _importMessage = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 4)
@@ -215,7 +215,7 @@ class ThemeViewModel @Inject constructor(
             try {
                 val trimmed = jsonStr.trim()
                 if (trimmed.startsWith("[")) {
-                    // Array of Legado themes — import all, activate the first
+                    // Array of 参照实现 themes — import all, activate the first
                     val themes = themeRepo.importLegadoThemes(trimmed)
                     if (themes.isNotEmpty()) {
                         themeRepo.activateTheme(themes.first().id)
@@ -298,7 +298,7 @@ class ThemeViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 // 用 bundle 信封包一层并打上 format/version 标识。这样以后 import 端
-                // 不必再用「字段名嗅探」（"themeName" → Legado / "name" → MoRealm）
+                // 不必再用「字段名嗅探」（"themeName" → 参照实现 / "name" → MoRealm）
                 // 这种脆弱的方式做识别，新增字段也不会触发误判。旧版无 format 字段
                 // 的导出仍然兼容（importThemeFromUri 走 fallback 分支）。
                 val bundle = MoRealmThemeBundle(
@@ -345,8 +345,8 @@ class ThemeViewModel @Inject constructor(
      *
      *  Format detection priority:
      *    1. JsonObject with `format == "morealm-theme"` → new MoRealm bundle
-     *    2. JsonObject with `themeName` field → Legado single
-     *    3. JsonArray whose first element has `themeName` → Legado array
+     *    2. JsonObject with `themeName` field → 参照实现 single
+     *    3. JsonArray whose first element has `themeName` → 参照实现 array
      *    4. Otherwise → legacy MoRealm single (raw `ThemeExportData`)
      *
      *  Step 1 is preferred because string-field sniffing (steps 2/3/4) breaks
@@ -380,7 +380,7 @@ class ThemeViewModel @Inject constructor(
                     return@launch
                 }
 
-                // Path 2/3: Legado format — array or single object with themeName.
+                // Path 2/3: 参照实现 format — array or single object with themeName.
                 val isLegadoArray = parsed is JsonArray &&
                     (parsed.firstOrNull() as? JsonObject)?.containsKey("themeName") == true
                 val isLegadoSingle = parsed is JsonObject && parsed.containsKey("themeName")
@@ -403,11 +403,11 @@ class ThemeViewModel @Inject constructor(
                     return@launch
                 }
 
-                // Path 3.5: Legado **阅读样式配置**（ReadBookConfig.Config，含 bgStr / textColor /
+                // Path 3.5: 参照实现 **阅读样式配置**（ReadBookConfig.Config，含 bgStr / textColor /
                 // lineSpacingExtra 等字段）。与 ThemeConfig schema 完全不同 ——
-                // 用户从 Legado 的 阅读 → 设置 → 阅读样式 → 导出 拿到的就是这种 JSON。
+                // 用户从参照实现的 阅读 → 设置 → 阅读样式 → 导出 拿到的就是这种 JSON。
                 // 之前没有专门分支会被 Path 4 ThemeExportData 接管，反序列化所有字段拿默认值，
-                // 导致主题颜色全异常。这里识别后走 ThemeRepository.importLegadoTheme 的 ReadConfig 分支。
+                // 导致主题颜色全异常。这里识别后走 ThemeRepository.import参照实现Theme 的 ReadConfig 分支。
                 val isLegadoReadConfig = parsed is JsonObject &&
                     (parsed.containsKey("bgStr") || parsed.containsKey("textColor")) &&
                     parsed.containsKey("lineSpacingExtra")
@@ -453,7 +453,7 @@ class ThemeViewModel @Inject constructor(
 
 /** Stable id for re-imports — same source name produces the same id, so
  *  re-importing an updated copy *upserts* instead of stacking duplicates.
- *  Matches Legado's behavior (`addConfig` replaces by themeName). Earlier
+ *  Matches 参照实现 behavior (`addConfig` replaces by themeName). Earlier
  *  versions appended `System.currentTimeMillis()` here, which let stale
  *  copies pile up in the database — that's been removed. */
 private fun ThemeExportData.toEntity(): ThemeEntity = ThemeEntity(
