@@ -21,5 +21,17 @@ data class ReadProgress(
     val chapterPosition: Int = 0,
     val chapterOffset: Float = 0f,
     val totalProgress: Float = 0f,
+    /**
+     * 章稳定 id（= BookChapter.url；EPUB 为 spine href，网络书为章 url）。
+     * 空 = 旧数据没存过。恢复时若它与 chapterIndex 处的章对不上，按 id 重映射
+     * 章号 —— 目录刷新 / 换源 / 书文件更新导致的章序漂移在这里被吸收。
+     */
+    @androidx.room.ColumnInfo(defaultValue = "") val chapterId: String = "",
+    /**
+     * 锚点处正文快照（[com.morealm.app.domain.render.layout.ANCHOR_SNIPPET_CP_SPAN]
+     * 个 cp 跨度内的可见字符）。恢复时用它对 [chapterPosition] 做内容自校验：
+     * 对得上直用，对不上就近搜索重定位（详见 AnchorTextIndex）。空 = 旧数据。
+     */
+    @androidx.room.ColumnInfo(defaultValue = "") val anchorSnippet: String = "",
     val updatedAt: Long = System.currentTimeMillis(),
 )

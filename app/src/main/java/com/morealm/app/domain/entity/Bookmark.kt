@@ -29,5 +29,13 @@ data class Bookmark(
      * - 老书签由 v23→v24 迁移补 0，跳转时退化到章节首页（行为兼容）。
      */
     val chapterPos: Int = 0,
+    /**
+     * 章稳定 id（= BookChapter.url）。空 = v40 之前的旧书签。
+     *
+     * 兼职「锚点 v2 标记」：非空说明该书签的 [content] 是**书签位置处**的正文快照
+     * （可用于内容自校验/快照重定位）；空的旧书签 content 是章首文本（历史实现），
+     * **绝不能**拿去重定位 —— 会把书签挪到章首。
+     */
+    @androidx.room.ColumnInfo(defaultValue = "") val chapterId: String = "",
     val createdAt: Long = System.currentTimeMillis(),
 )

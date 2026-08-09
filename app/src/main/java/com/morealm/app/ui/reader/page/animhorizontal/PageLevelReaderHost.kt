@@ -45,6 +45,8 @@ import com.morealm.app.domain.render.pageanim.rememberPageLevelCore
 import com.morealm.app.domain.render.layout.pagedProgressToPageIndex
 import com.morealm.app.domain.render.layout.resolveRestoreTarget
 import com.morealm.app.domain.render.layout.visibleChapterPosition
+import com.morealm.app.domain.render.layout.ANCHOR_SNIPPET_CP_SPAN
+import com.morealm.app.domain.render.layout.buildAnchorTextIndex
 import com.morealm.epub.render.ScrollImageDimensionsResolver
 import com.morealm.epub.render.ScrollLayoutEngine
 import com.morealm.epub.render.ScrollPage
@@ -56,6 +58,7 @@ import com.morealm.epub.render.findColumnAt
 import com.morealm.epub.render.findColumnByPixel
 import com.morealm.app.ui.reader.page.animation.PageAnimType
 import com.morealm.app.ui.reader.renderer.SelectionToolbar
+import com.morealm.app.ui.reader.renderer.ReaderLoadingIndicator
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
 import com.morealm.app.ui.reader.renderer.rememberBottomCornerInsetDp
 import com.morealm.app.ui.reader.renderer.scroll.LINK_HIT_TOLERANCE_DP
@@ -159,14 +162,20 @@ fun PageLevelReaderHost(
     initialChapterPosition: Int = 0,
     /** 跳 Slider 拖动 / 同章 in-place seek 的章内进度百分比（0..100）。initialChapterPosition > 0 优先。 */
     initialProgress: Int = 0,
+    /**
+     * 锚点 v2 正文快照（保存端 [AnchorFrame.anchorSnippet] 的回传）。非空时恢复链
+     * 先做内容自校验（cp 处文字对得上直用，含 cp==0），对不上就快照搜索重定位；
+     * 空 = 旧数据 / 无快照场景，走旧降级链。
+     */
+    initialAnchorSnippet: String = "",
     /** JUMP 完成后回调（caller 通常清除 navigateDirection）。 */
     onProgressRestored: () -> Unit = {},
     /** InfoBar 顶/底状态栏配置；null = 不画状态栏（纯净内容模式）。 */
     infoBar: ScrollCanvasInfoBarConfig? = null,
     /** 进度上报回调（每章 0-100 整数）—— 与 cp 锚点同帧发出（详见锚点上报 flow 内注释）。 */
     onChapterProgressLive: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
-    /** 当前页字符锚点变化；用于持久化与排版无关的精确续读位置。 */
-    onVisibleChapterPositionChanged: (chapterIndex: Int, chapterPosition: Int) -> Unit = { _, _ -> },
+    /** 当前页字符锚点变化；anchorSnippet = 锚点处正文快照（锚点 v2，见 AnchorTextIndex）。 */
+    onVisibleChapterPositionChanged: (chapterIndex: Int, chapterPosition: Int, anchorSnippet: String) -> Unit = { _, _, _ -> },
     // ── 选区 / 长按 / 高亮（P4.4 接入）──
     /** 全书所有高亮（用于 tap-on-highlight 命中检测）。 */
     chapterHighlightsRaw: List<com.morealm.app.domain.entity.Highlight> = emptyList(),
@@ -227,6 +236,11 @@ fun PageLevelReaderHost(
      * 可解析性（虚线提示数据源 LinkTargetResolvability）。
      */
     onChapterLinksSeen: (Int, List<com.morealm.epub.render.LinkRange>) -> Unit = { _, _ -> },
+    /**
+     * 章文本索引就绪（锚点 v2）：该章存在高亮 / positional 书签时才构建并上报，
+     * 供上层做锚点内容自校验 + 快照重定位自愈（relocateChapterAnchors）。
+     */
+    onChapterAnchorIndexReady: (Int, com.morealm.app.domain.render.layout.AnchorTextIndex) -> Unit = { _, _ -> },
     /**
      * 点击区域翻页动作（对齐旧 renderer.Reader 九宫格）：4 角动作由用户设置驱动，
      * `tapActionTopLeft/BottomLeft` 默认跟随「轻按页面左侧」、右两角跟随右侧；
@@ -428,12 +442,18 @@ fun PageLevelReaderHost(
         }
 
         val total = layout.pages.size.coerceAtLeast(1)
-        // 分级降级恢复（RestoreTargetResolver）：L1 cp 锚点 → L2 progress 兜底 → L3 章首。
-        // 此前 cp 未命中直接 `?: 0` 回章首，存着的 progress 从没被用过；cp==0（整页插图
-        // 章首的合法值）被当「没存过」。降级链两个都治。
+        // 分级降级恢复（RestoreTargetResolver，锚点 v2）：
+        // L0 快照自校验 cp → L1 快照重定位 → L2 裸 cp → L3 progress → L4 章首。
+        // 快照索引只在有快照时才建（O(章字符数)，JUMP 是低频事件）。
+        val textIndex = if (initialAnchorSnippet.isNotEmpty()) layout.buildAnchorTextIndex() else null
         val resolved = resolveRestoreTarget(
             chapterPosition = initialChapterPosition,
             progressPercent = initialProgress,
+            snippet = initialAnchorSnippet,
+            verifyAnchor = { cp -> textIndex?.verifyAt(cp, initialAnchorSnippet) == true },
+            resolveBySnippet = {
+                textIndex?.findNearestCp(initialAnchorSnippet, initialChapterPosition)?.startCp
+            },
             resolveByAnchor = { cp ->
                 layout.findColumnAt(cp)?.page?.pageIndex?.coerceIn(0, total - 1)
             },
@@ -461,7 +481,18 @@ fun PageLevelReaderHost(
     // 链接虚线提示：cur/prev/next 章 layout 就绪即上报链接列表，上层异步判定可解析性
     LaunchedEffect(core.state.currentChapter, core.state.prevChapter, core.state.nextChapter) {
         listOfNotNull(core.state.currentChapter, core.state.prevChapter, core.state.nextChapter)
-            .forEach { onChapterLinksSeen(it.chapterIndex, it.links) }
+            .forEach { layout ->
+                onChapterLinksSeen(layout.chapterIndex, layout.links)
+                // 锚点 v2 自愈：该章有高亮 / positional 书签才建文本索引（后台线程）
+                val hasAnchors = chapterHighlightsRaw.any { it.chapterIndex == layout.chapterIndex } ||
+                    bookmarks.any { it.chapterIndex == layout.chapterIndex && it.chapterId.isNotEmpty() }
+                if (hasAnchors) {
+                    val idx = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        layout.buildAnchorTextIndex()
+                    }
+                    onChapterAnchorIndexReady(layout.chapterIndex, idx)
+                }
+            }
     }
 
     // 百分比只能在当前排版参数下近似定位；续读的稳定真值必须是当前页首字符 cp。
@@ -488,12 +519,19 @@ fun PageLevelReaderHost(
             if (layout == null) {
                 null
             } else {
+                val cp = visibleChapterPosition(layout = layout, pageIndex = pageIndex, pageOffset = 0f)
                 AnchorFrame(
                     layoutChapter = layout.chapterIndex,
                     liveChapter = liveChapterIndex,
                     pageIndex = pageIndex,
                     pageCount = layout.pages.size,
-                    chapterPosition = visibleChapterPosition(layout = layout, pageIndex = pageIndex, pageOffset = 0f),
+                    chapterPosition = cp,
+                    // 锚点 v2 正文快照：cp 起固定 cp 跨度内的可见字符。恢复端拿它做
+                    // 内容自校验/快照重定位（AnchorTextIndex）。extractText O(跨度)，
+                    // 且只在帧内容真变时进 collect，成本可忽略。
+                    anchorSnippet = cp?.let {
+                        layout.extractText(it until it + ANCHOR_SNIPPET_CP_SPAN)
+                    } ?: "",
                 )
             }
         }
@@ -526,9 +564,9 @@ fun PageLevelReaderHost(
                 // 与恢复端 JUMP-DONE 的落点直接对照，即可判定偏差发生在保存端还是恢复端。
                 AppLog.debug(
                     "ReadAnchor",
-                    "存锚点 ch=${frame.layoutChapter} page=${frame.pageIndex}/${frame.pageCount} cp=$cp prog=$progress",
+                    "存锚点 ch=${frame.layoutChapter} page=${frame.pageIndex}/${frame.pageCount} cp=$cp prog=$progress snip='${frame.anchorSnippet.take(10)}'",
                 )
-                onVisibleChapterPositionChanged(frame.layoutChapter, cp)
+                onVisibleChapterPositionChanged(frame.layoutChapter, cp, frame.anchorSnippet)
             }
     }
 
@@ -961,6 +999,10 @@ fun PageLevelReaderHost(
         }
 
         val currentLayout = core.state.currentChapter
+        if (currentLayout == null) {
+            // 章 layout 未就绪（远章跳转 / 网络取章）：延迟出现的加载指示，替代生硬空白
+            ReaderLoadingIndicator(resolvedTextColor)
+        }
         if (currentLayout != null) {
             val selectionChapterIndex = if (selection.isActive) selection.chapterIndex else -1
             val selectionCpRange = if (selection.isActive) selection.cpRange else IntRange.EMPTY
@@ -1264,4 +1306,6 @@ private data class AnchorFrame(
     val pageIndex: Int,
     val pageCount: Int,
     val chapterPosition: Int?,
+    /** 锚点处正文快照（cp 为 null 时空串）。 */
+    val anchorSnippet: String = "",
 )

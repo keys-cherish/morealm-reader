@@ -68,6 +68,12 @@ data class Highlight(
      * 不变动行为（虽然老数据里实际上 kind 不会是 UNDERLINE，所以也读不到这一列）。
      */
     val underlineStyle: Int = UNDERLINE_STYLE_SOLID,
+    /**
+     * 章稳定 id（= BookChapter.url）。空 = v40 之前的旧高亮。
+     * [content] 本就是选区原文，天然是内容快照 —— 章文本变化后可据此重定位
+     * (startChapterPos, endChapterPos)（新旧高亮都适用）。
+     */
+    @androidx.room.ColumnInfo(defaultValue = "") val chapterId: String = "",
 ) {
     companion object {
         /** 背景高亮（默认） —— 在文字下铺一层透明色块。 */

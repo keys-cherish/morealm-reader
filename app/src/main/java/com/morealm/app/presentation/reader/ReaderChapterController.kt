@@ -580,7 +580,7 @@ class ReaderChapterController(
 
                     // Show chapters immediately, load first chapter
                     val progress = bookRepo.getProgress(bookId)
-                    val resumeCursor = resolveReaderResumeCursor(book, progress, cachedChapters.size)
+                    val resumeCursor = resolveReaderResumeCursor(book, progress, cachedChapters)
                     val startIndex = resumeCursor.chapterIndex
                     lastPreCacheCenter = startIndex
                     val savedScrollProgress = resumeCursor.chapterProgress
@@ -597,7 +597,12 @@ class ReaderChapterController(
                             " dbProgress.chapterPosition=${progress?.chapterPosition}",
                     )
                     scrollProgressState.value = savedScrollProgress
-                    loadChapter(startIndex, restoreProgress = savedScrollProgress, restoreChapterPosition = savedChapterPosition)
+                    loadChapter(
+                        startIndex,
+                        restoreProgress = savedScrollProgress,
+                        restoreChapterPosition = savedChapterPosition,
+                        restoreAnchorSnippet = resumeCursor.anchorSnippet,
+                    )
 
                     // Refresh chapters in background (non-blocking)
                     scope.launch(Dispatchers.IO) {
@@ -805,7 +810,7 @@ class ReaderChapterController(
             }
 
             val progress = bookRepo.getProgress(bookId)
-            val resumeCursor = resolveReaderResumeCursor(_book.value ?: book, progress, chapters.size)
+            val resumeCursor = resolveReaderResumeCursor(_book.value ?: book, progress, chapters)
             val startIndex = resumeCursor.chapterIndex
             lastPreCacheCenter = startIndex
 
@@ -823,7 +828,12 @@ class ReaderChapterController(
                     " dbProgress.chapterPosition=${progress?.chapterPosition}",
             )
             scrollProgressState.value = savedScrollProgress
-            loadChapter(startIndex, restoreProgress = savedScrollProgress, restoreChapterPosition = savedChapterPosition)
+            loadChapter(
+                startIndex,
+                restoreProgress = savedScrollProgress,
+                restoreChapterPosition = savedChapterPosition,
+                restoreAnchorSnippet = resumeCursor.anchorSnippet,
+            )
 
             if (book.folderId != null) {
                 val folderBooks = bookRepo.getBooksByFolderId(book.folderId!!)
@@ -849,7 +859,13 @@ class ReaderChapterController(
         }
     }
 
-    fun loadChapter(index: Int, restoreProgress: Int = 0, restoreChapterPosition: Int = 0) {
+    fun loadChapter(
+        index: Int,
+        restoreProgress: Int = 0,
+        restoreChapterPosition: Int = 0,
+        /** 锚点 v2 正文快照 —— 续读 / 跳书签时透传给渲染 Host 做内容自校验/重定位。 */
+        restoreAnchorSnippet: String = "",
+    ) {
         val chapterList = _chapters.value
         if (index < 0 || index >= chapterList.size) return
 
@@ -957,6 +973,7 @@ class ReaderChapterController(
                     contentVersion = System.nanoTime(),
                     initialProgress = targetProgress,
                     initialChapterPosition = targetChapterPosition,
+                    initialAnchorSnippet = restoreAnchorSnippet,
                     restoreToken = System.nanoTime(),
                 )
                 _currentChapterIndex.value = index

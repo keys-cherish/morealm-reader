@@ -81,10 +81,51 @@ class ReaderHighlightController(
             note = note,
             kind = kind,
             underlineStyle = underlineStyle,
+            // 锚点 v2：章稳定 id。content 本就是选区原文（内容快照），配合它
+            // 章文本变化后可自校验/重定位（relocateChapterAnchors）。
+            chapterId = chapterObj?.url ?: "",
         )
         scope.launch(Dispatchers.IO) {
             highlightRepo.insert(highlight)
             AppLog.info("Highlight", "added id=${highlight.id} ch=$chapterIndex range=$startChapterPos..$endChapterPos kind=$kind underlineStyle=$underlineStyle len=${highlight.content.length}")
+        }
+    }
+
+    /**
+     * 锚点自愈（锚点 v2）：章 layout 就绪后，对该章所有高亮做内容自校验 ——
+     * startChapterPos 处正文与 content 对不上（wire 协议变 / 替换规则变 / 换源）
+     * 时用 content 快照就近搜索重定位，并把新区间写回 DB。
+     *
+     * 幂等：校验通过的条目直接跳过，重定位成功后下次进章即走「通过」分支；
+     * 找不到的条目保持原样（宁可错位显示也不删用户数据）。
+     * 区间长度保持原 cp 跨度（快照搜索可能用了截短核心串，end 不能取命中串尾）。
+     */
+    fun relocateChapterAnchors(
+        chapterIndex: Int,
+        textIndex: com.morealm.app.domain.render.layout.AnchorTextIndex,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            val candidates = runCatching {
+                highlightRepo.getForChapterSync(bookId, chapterIndex)
+            }.getOrElse { return@launch }
+            var moved = 0
+            candidates.forEach { h ->
+                val snippet = h.content
+                if (snippet.length < com.morealm.app.domain.render.layout.MIN_SNIPPET_CHARS) return@forEach
+                if (textIndex.verifyAt(h.startChapterPos, snippet)) return@forEach
+                val hit = textIndex.findNearestCp(snippet, h.startChapterPos) ?: return@forEach
+                val span = (h.endChapterPos - h.startChapterPos).coerceAtLeast(1)
+                if (hit.startCp == h.startChapterPos) return@forEach
+                runCatching {
+                    highlightRepo.insert(
+                        h.copy(startChapterPos = hit.startCp, endChapterPos = hit.startCp + span),
+                    )
+                    moved++
+                }
+            }
+            if (moved > 0) {
+                AppLog.info("Highlight", "relocateChapterAnchors ch=$chapterIndex moved=$moved/${candidates.size}")
+            }
         }
     }
 

@@ -114,23 +114,47 @@ class ScrollCanvasReaderState(
     /**
      * 外部跳章接口 —— 书签 / 目录 / Slider 拖动 / 续读 / 搜索定位 用。
      *
-     * 与 page swap 路径不同：本方法整体重设 state（prev/cur/next 全 null），
-     * Host 在 LaunchedEffect 监听 currentChapterIndex 变化重新加载 3 章 + 排版。
-     * pixelOffset 也重设为 0（章首页起点）；如需 cp/progress 级精确定位由 Host 在
-     * layout 加载完后另设。
+     * 邻章跳转（目标正好是已排版的 next/prev）按 swap 语义平移窗口复用 layout ——
+     * 按钮「下一章」与手势翻页同样秒切，不再「整窗清空 → 空白帧 → 重排」（屏闪根因）。
+     * 其余（跳远章 / 邻章未就绪）整体重设，Host 监听 currentChapterIndex 重新加载。
+     * pageOffset 重设为 0（章首起点）；cp/progress 级精确定位由 Host 的 JUMP 在
+     * layout 就绪后另设。
+     *
+     * 注意：复用路径**不重置 pageFactory.pageIndex**（state 不持有 factory）——
+     * 调用方（rememberPageLevelCore 的 external jump effect）负责在复用后立刻
+     * moveToPage(0)，防旧章页号越界新 layout（EMPTY_PAGE 卡死，P0 2026-05-24）。
+     *
+     * @return true = 复用了邻章 layout（currentChapter 非 null），调用方需自行重置页号
      */
-    fun setExternalChapterIndex(idx: Int) {
+    fun setExternalChapterIndex(idx: Int): Boolean {
         val before = currentChapterIndex
+        val reuseNext = idx == before + 1 && nextChapter?.chapterIndex == idx
+        val reusePrev = idx == before - 1 && prevChapter?.chapterIndex == idx
         androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+            when {
+                reuseNext -> {
+                    prevChapter = currentChapter
+                    currentChapter = nextChapter
+                    nextChapter = null
+                }
+                reusePrev -> {
+                    nextChapter = currentChapter
+                    currentChapter = prevChapter
+                    prevChapter = null
+                }
+                else -> {
+                    prevChapter = null
+                    currentChapter = null
+                    nextChapter = null
+                }
+            }
             currentChapterIndex = idx
             pageOffset = 0f
-            prevChapter = null
-            currentChapter = null
-            nextChapter = null
         }
         com.morealm.app.core.log.AppLog.info(
             "SwapDiag",
-            "[SET-EXT] idx=$before→$idx (reset all chapters)",
+            "[SET-EXT] idx=$before→$idx reuse=${if (reuseNext) "next" else if (reusePrev) "prev" else "none"}",
         )
+        return reuseNext || reusePrev
     }
 }

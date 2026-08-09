@@ -61,6 +61,8 @@ data class RenderedReaderChapter(
     val contentVersion: Long = 0L,
     val initialProgress: Int = 0,
     val initialChapterPosition: Int = 0,
+    /** 锚点 v2 正文快照（续读/跳书签用），透传给渲染 Host 做内容自校验/重定位。 */
+    val initialAnchorSnippet: String = "",
     /**
      * 手势 PREV 跨章语义：true = 跳上一章末页（连续阅读体感）；false = 跳章头。
      *
@@ -92,6 +94,8 @@ data class VisibleReaderPage(
     val title: String = "",
     val readProgress: String = "0.0%",
     val chapterPosition: Int = 0,
+    /** 锚点处正文快照（锚点 v2）；空 = 上报端不支持（legacy 渲染路径）。 */
+    val anchorSnippet: String = "",
 )
 
 @HiltViewModel
@@ -419,12 +423,25 @@ class ReaderViewModel @Inject constructor(
      * 重排当前章 —— 用于「烘进正文的设置」变更（首行缩进等）。clearPreloaded + loadChapter，
      * 与 [setChineseConvertMode] 共享 [chineseConvertMutex] 串行化，避免和简繁切换的
      * loadChapter 并行 race。方法体在**运行时**解析 mutex，规避 init 块声明顺序陷阱。
+     *
+     * 带当前阅读位置重载（修「调首行缩进跳回章首」）：此前裸 loadChapter(idx) 的
+     * restoreToken JUMP 落在 page 0。烘缩进会让正文 cp 整体位移（每段 +N 个全角空格），
+     * cp 单独不可靠 —— 锚点 v2 快照重定位正好吸收这种位移，progress 作再下一级兜底。
      */
     private suspend fun reloadForBakedSettingChange() {
         chineseConvertMutex.withLock {
             chapter.clearPreloadedChapters()
             val idx = chapter.currentChapterIndex.value
-            withContext(Dispatchers.Main) { chapter.loadChapter(idx) }
+            val visible = progress.visiblePage.value
+            val sameChapter = visible.chapterIndex == idx
+            withContext(Dispatchers.Main) {
+                chapter.loadChapter(
+                    idx,
+                    restoreProgress = if (sameChapter) progress.scrollProgress.value else 0,
+                    restoreChapterPosition = if (sameChapter) visible.chapterPosition else 0,
+                    restoreAnchorSnippet = if (sameChapter) visible.anchorSnippet else "",
+                )
+            }
         }
     }
 
@@ -605,19 +622,33 @@ class ReaderViewModel @Inject constructor(
     /**
      * V2 滚动/分页 Host 只需要上报排版无关的字符锚点；章节标题与展示进度由 VM
      * 从当前状态补齐，避免两个 UI Host 各自复制一套 VisibleReaderPage 组装逻辑。
+     * anchorSnippet = 锚点处正文快照（锚点 v2，随进度一起入库做内容自校验）。
      */
-    fun onVisibleChapterPositionChanged(index: Int, chapterPosition: Int) {
+    fun onVisibleChapterPositionChanged(index: Int, chapterPosition: Int, anchorSnippet: String = "") {
         val target = chapter.chapters.value.getOrNull(index) ?: return
         progress.onVisiblePageChanged(
             index = index,
             title = target.title,
             readProgress = progress.visiblePage.value.readProgress,
             chapterPosition = chapterPosition,
+            anchorSnippet = anchorSnippet,
         )
         updateVisibleReadAloudPosition(index, chapterPosition)
     }
 
     fun onVisibleChapterChanged(index: Int) = progress.onVisibleChapterChanged(index)
+
+    /**
+     * 章文本索引就绪（锚点 v2，渲染 Host 上报）：对该章高亮 / positional 书签做
+     * 内容自校验 + 快照重定位自愈。幂等，重复上报无副作用。
+     */
+    fun onChapterAnchorIndexReady(
+        chapterIndex: Int,
+        textIndex: com.morealm.app.domain.render.layout.AnchorTextIndex,
+    ) {
+        highlight.relocateChapterAnchors(chapterIndex, textIndex)
+        bookmark.relocateChapterAnchors(chapterIndex, textIndex)
+    }
     fun saveProgressNow() = progress.saveProgressNow()
     suspend fun saveProgressNowAndWait() = progress.saveProgressNowAndWait()
 

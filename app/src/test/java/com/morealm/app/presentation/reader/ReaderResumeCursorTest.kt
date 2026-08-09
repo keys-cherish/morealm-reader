@@ -1,6 +1,7 @@
 package com.morealm.app.presentation.reader
 
 import com.morealm.app.domain.entity.Book
+import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.ReadProgress
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -20,6 +21,10 @@ class ReaderResumeCursorTest {
         lastReadAt = updatedAt,
     )
 
+    private fun chapters(count: Int): List<BookChapter> = List(count) { i ->
+        BookChapter(id = "book_$i", bookId = "book", index = i, title = "第${i}章", url = "ch/$i.xhtml")
+    }
+
     @Test
     fun `专用进度较新时整份使用专用进度`() {
         val cursor = resolveReaderResumeCursor(
@@ -31,7 +36,7 @@ class ReaderResumeCursorTest {
                 totalProgress = 0.35f,
                 updatedAt = 200L,
             ),
-            chapterCount = 10,
+            chapters = chapters(10),
         )
 
         assertEquals(3, cursor.chapterIndex)
@@ -51,7 +56,7 @@ class ReaderResumeCursorTest {
                 totalProgress = 0.25f,
                 updatedAt = 200L,
             ),
-            chapterCount = 10,
+            chapters = chapters(10),
         )
 
         assertEquals(7, cursor.chapterIndex)
@@ -71,7 +76,7 @@ class ReaderResumeCursorTest {
                 totalProgress = 0.4f,
                 updatedAt = 200L,
             ),
-            chapterCount = 10,
+            chapters = chapters(10),
         )
 
         assertEquals(4, cursor.chapterIndex)
@@ -89,11 +94,73 @@ class ReaderResumeCursorTest {
                 totalProgress = 0.9f,
                 updatedAt = 200L,
             ),
-            chapterCount = 5,
+            chapters = chapters(5),
         )
 
         assertEquals(4, cursor.chapterIndex)
         assertEquals(0, cursor.chapterPosition)
         assertEquals(0, cursor.chapterProgress)
+    }
+
+    // ── 锚点 v2 ──
+
+    @Test
+    fun `chapterId 失配时按 id 重映射章号并保留 cp 与快照`() {
+        // 目录刷新后原第 3 章挪到了第 5 章；index 存的 3 已经指向别的章
+        val cursor = resolveReaderResumeCursor(
+            book = book(updatedAt = 100L),
+            progress = ReadProgress(
+                bookId = "book",
+                chapterIndex = 3,
+                chapterPosition = 333,
+                totalProgress = 0.35f,
+                chapterId = "ch/5.xhtml",
+                anchorSnippet = "云与云之间的缝隙里漏下来光",
+                updatedAt = 200L,
+            ),
+            chapters = chapters(10),
+        )
+
+        assertEquals(5, cursor.chapterIndex)
+        assertEquals(333, cursor.chapterPosition)
+        // totalProgress 是按旧章号编码的，重映射后失义 → 清零（cp/快照才是真锚）
+        assertEquals(0, cursor.chapterProgress)
+        assertEquals("云与云之间的缝隙里漏下来光", cursor.anchorSnippet)
+    }
+
+    @Test
+    fun `chapterId 在目录里找不到时保持原 index 行为不变`() {
+        val cursor = resolveReaderResumeCursor(
+            book = book(updatedAt = 100L),
+            progress = ReadProgress(
+                bookId = "book",
+                chapterIndex = 3,
+                chapterPosition = 333,
+                totalProgress = 0.35f,
+                chapterId = "gone.xhtml",
+                updatedAt = 200L,
+            ),
+            chapters = chapters(10),
+        )
+
+        assertEquals(3, cursor.chapterIndex)
+        assertEquals(333, cursor.chapterPosition)
+    }
+
+    @Test
+    fun `Book 源较新时不使用进度表的快照`() {
+        val cursor = resolveReaderResumeCursor(
+            book = book(chapter = 7, position = 777, updatedAt = 300L),
+            progress = ReadProgress(
+                bookId = "book",
+                chapterIndex = 2,
+                chapterPosition = 222,
+                anchorSnippet = "旧快照",
+                updatedAt = 200L,
+            ),
+            chapters = chapters(10),
+        )
+
+        assertEquals("", cursor.anchorSnippet)
     }
 }

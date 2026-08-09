@@ -31,12 +31,19 @@ class ReaderBookmarkController(
     fun addBookmark() {
         val chapterIdx = chapter.currentChapterIndex.value
         val chapterObj = chapter.chapters.value.getOrNull(chapterIdx) ?: return
-        val content = chapter.chapterContent.value
-        val snippet = content.stripHtml().take(80).trim()
         // 章内字符偏移：仿真/滑动/覆盖翻页下的精确定位字段（对齐参照实现.chapterPos）；
         // _scrollProgress（0-100 百分比）保留作为滚动模式兜底。
-        val chapterPos = progress._visiblePage.value.chapterPosition
+        val visible = progress._visiblePage.value
+        val chapterPos = visible.chapterPosition
         val scrollPct = progress._scrollProgress.value
+        // 锚点 v2：渲染 Host 上报过位置快照（书签位置处的正文）就用它当 content，
+        // 并写 chapterId 作「positional content」标记 —— 恢复端可据此自校验/重定位。
+        // 快照缺失（legacy 渲染路径）退回旧行为：章首文本 + chapterId 空（标记
+        // 不可重定位，防止拿章首文本把书签挪到章首）。
+        val positionalSnippet = visible.anchorSnippet
+            .takeIf { visible.chapterIndex == chapterIdx && it.isNotBlank() }
+        val content = chapter.chapterContent.value
+        val snippet = positionalSnippet ?: content.stripHtml().take(80).trim()
         val bookmark = Bookmark(
             id = "${bookId}_bm_${System.currentTimeMillis()}",
             bookId = bookId,
@@ -45,11 +52,13 @@ class ReaderBookmarkController(
             content = snippet,
             scrollProgress = scrollPct,
             chapterPos = chapterPos,
+            chapterId = if (positionalSnippet != null) chapterObj.url else "",
         )
         AppLog.info(
             "BookmarkDebug",
             "addBookmark id=${bookmark.id} chapterIdx=$chapterIdx" +
                 " chapterPos=$chapterPos scrollProgress=$scrollPct" +
+                " positional=${positionalSnippet != null}" +
                 " title='${chapterObj.title.take(20)}' snippetLen=${snippet.length}",
         )
         scope.launch(Dispatchers.IO) {
@@ -59,6 +68,36 @@ class ReaderBookmarkController(
 
     fun deleteBookmark(id: String) {
         scope.launch(Dispatchers.IO) { bookmarkRepo.deleteById(id) }
+    }
+
+    /**
+     * 锚点自愈（锚点 v2）：章 layout 就绪后，对该章「positional」书签（chapterId
+     * 非空，content = 书签位置处正文快照）做内容自校验，失配就快照重定位并写回。
+     * 旧书签（chapterId 空，content 是章首文本）一律不动 —— 拿章首文本重定位
+     * 等于把书签挪到章首，是数据损坏。
+     */
+    fun relocateChapterAnchors(
+        chapterIndex: Int,
+        textIndex: com.morealm.app.domain.render.layout.AnchorTextIndex,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            var moved = 0
+            bookmarks.value
+                .filter { it.chapterIndex == chapterIndex && it.chapterId.isNotEmpty() }
+                .forEach { bm ->
+                    if (bm.content.length < com.morealm.app.domain.render.layout.MIN_SNIPPET_CHARS) return@forEach
+                    if (textIndex.verifyAt(bm.chapterPos, bm.content)) return@forEach
+                    val hit = textIndex.findNearestCp(bm.content, bm.chapterPos) ?: return@forEach
+                    if (hit.startCp == bm.chapterPos) return@forEach
+                    runCatching {
+                        bookmarkRepo.insert(bm.copy(chapterPos = hit.startCp))
+                        moved++
+                    }
+                }
+            if (moved > 0) {
+                AppLog.info("BookmarkDebug", "relocateChapterAnchors ch=$chapterIndex moved=$moved")
+            }
+        }
     }
 
     fun jumpToBookmark(bookmark: Bookmark) {
@@ -92,6 +131,10 @@ class ReaderBookmarkController(
             bookmark.chapterIndex,
             restoreProgress = bookmark.scrollProgress,
             restoreChapterPosition = effectiveChapterPos,
+            // 锚点 v2 书签（chapterId 非空 = content 是书签位置处的正文快照）：
+            // 透传给渲染 Host 做内容自校验/快照重定位。旧书签 content 是章首文本，
+            // 绝不能当快照传（会把落点拽到章首）。
+            restoreAnchorSnippet = if (bookmark.chapterId.isNotEmpty()) bookmark.content else "",
         )
     }
 }

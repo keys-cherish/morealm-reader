@@ -108,6 +108,10 @@ import com.morealm.app.domain.entity.*
         // 生效）。选区菜单的「替换」允许把作用域限到当前章，而旧 schema 只有「全局 /
         // 按书」两档。纯加列且默认 NULL，老规则行为完全不变。
         AutoMigration(from = 38, to = 39),
+        // v39→v40: 锚点 v2（对照成熟阅读器位置体系）。read_progress 加 chapterId +
+        // anchorSnippet（正文快照自校验，替代版本号记账）；bookmarks / highlights 加
+        // chapterId（章序漂移重映射 + 锚点 v2 标记）。纯加列带默认值，老数据行为不变。
+        AutoMigration(from = 39, to = 40),
     ],
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -140,6 +144,6 @@ abstract class AppDatabase : RoomDatabase() {
          * 注解直接引用，外部模块（[com.morealm.app.di.APP_DB_SCHEMA_VERSION]）也
          * 通过 const val 编译期同步。
          */
-        const val SCHEMA_VERSION = 39
+        const val SCHEMA_VERSION = 40
     }
 }

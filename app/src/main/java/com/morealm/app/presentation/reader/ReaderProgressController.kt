@@ -260,6 +260,9 @@ class ReaderProgressController(
                 chapterIndex = chapterIdx,
                 chapterPosition = chapterPosition,
                 totalProgress = totalProgress.coerceIn(0f, 1f),
+                // 锚点 v2：章稳定 id + 正文快照（恢复端自校验/重定位用；详 AnchorTextIndex）
+                chapterId = chapterController.chapters.value.getOrNull(chapterIdx)?.url.orEmpty(),
+                anchorSnippet = visible.anchorSnippet,
                 updatedAt = savedAt,
             )
             AppLog.debug("Progress", buildString {
@@ -293,7 +296,13 @@ class ReaderProgressController(
 
     // ── Visible Page Tracking ──
 
-    fun onVisiblePageChanged(index: Int, title: String, readProgress: String, chapterPosition: Int = 0) {
+    fun onVisiblePageChanged(
+        index: Int,
+        title: String,
+        readProgress: String,
+        chapterPosition: Int = 0,
+        anchorSnippet: String = "",
+    ) {
         if (index !in chapterController.chapters.value.indices) return
         val oldVisiblePage = _visiblePage.value
         // ── chapterPosition=0 feedback loop 守卫 ──
@@ -322,7 +331,10 @@ class ReaderProgressController(
         } else {
             chapterPosition
         }
-        _visiblePage.value = VisibleReaderPage(index, title, readProgress, keptPosition)
+        // 快照跟着被采纳的 cp 走：cp 被判定为影子上报保留旧值时，快照也保留旧的，
+        // 避免「旧 cp + 新快照」错配入库（恢复端自校验会因此失败白走一次重定位）。
+        val keptSnippet = if (keptPosition != chapterPosition) oldVisiblePage.anchorSnippet else anchorSnippet
+        _visiblePage.value = VisibleReaderPage(index, title, readProgress, keptPosition, keptSnippet)
         // 持久化由 [start] 启动的快照收集器接管，这里只更新内存 state。
         // - SCROLL 模式跨章 preview 由 collector 内 filter 拦截
         // - 同章页内变化经 distinctUntilChanged + debounce 自然合并

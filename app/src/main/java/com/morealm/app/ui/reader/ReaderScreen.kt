@@ -807,6 +807,7 @@ fun ReaderScreen(
                 // （cp == 0 时按章内 progress 算 pixelOffset）。
                 initialChapterPosition = renderedChapter.initialChapterPosition,
                 initialProgress = renderedChapter.initialProgress,
+                initialAnchorSnippet = renderedChapter.initialAnchorSnippet,
                 restoreToken = renderedChapter.restoreToken,
                 onProgressRestored = { viewModel.clearNavigateDirection() },
                 bgImageUri = readerBgImage,
@@ -863,6 +864,7 @@ fun ReaderScreen(
                 },
                 onLinkTap = { href, _ -> handleReaderLinkTap(href) },
                 onChapterLinksSeen = ::handleChapterLinksSeen,
+                onChapterAnchorIndexReady = viewModel::onChapterAnchorIndexReady,
                 onCopyText = { text -> viewModel.copyTextToClipboard(text); centerToast.show("已复制") },
                 onSpeakFromHere = { chapterPosition -> viewModel.readAloudFromPosition(chapterPosition) },
                 onTranslateText = { text -> openTranslate(text) },
@@ -998,6 +1000,7 @@ fun ReaderScreen(
                 restoreToken = renderedChapter.restoreToken,
                 initialChapterPosition = renderedChapter.initialChapterPosition,
                 initialProgress = renderedChapter.initialProgress,
+                initialAnchorSnippet = renderedChapter.initialAnchorSnippet,
                 onProgressRestored = { viewModel.clearNavigateDirection() },
                 // progress 与 cp 锚点在 Host 内同帧发出（详 PageLevelReaderHost 锚点 flow 注释）；
                 // 持久化频控由 ReaderProgressController 的 snapshot debounce 统一负责。
@@ -1105,6 +1108,7 @@ fun ReaderScreen(
                 },
                 onLinkTap = { href, _ -> handleReaderLinkTap(href) },
                 onChapterLinksSeen = ::handleChapterLinksSeen,
+                onChapterAnchorIndexReady = viewModel::onChapterAnchorIndexReady,
                 // 点击区域翻页动作（与设置「轻按页面左侧」联动）。此前只喂给旧 renderer.Reader，
                 // page-level 横翻 Host 漏接 → 设置不生效；四角值 ReaderScreen 早已 collect。
                 tapActionTopLeft = tapTL,

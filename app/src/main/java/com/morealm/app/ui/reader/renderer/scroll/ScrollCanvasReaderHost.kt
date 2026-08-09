@@ -41,6 +41,8 @@ import com.morealm.app.domain.reader.scroll.ScrollChapterContent
 import com.morealm.app.domain.render.ImageCache
 import com.morealm.app.domain.render.layout.resolveRestoreTarget
 import com.morealm.app.domain.render.layout.visibleChapterPosition
+import com.morealm.app.domain.render.layout.ANCHOR_SNIPPET_CP_SPAN
+import com.morealm.app.domain.render.layout.buildAnchorTextIndex
 import com.morealm.epub.render.ScrollImageDimensionsResolver
 import com.morealm.epub.render.ScrollLayoutEngine
 import com.morealm.epub.render.extractText
@@ -50,6 +52,7 @@ import com.morealm.app.domain.render.color.RuleColorScanner
 import com.morealm.epub.render.findColumnAt
 import com.morealm.epub.render.findColumnByPixel
 import com.morealm.app.ui.reader.renderer.ReaderInfoBar
+import com.morealm.app.ui.reader.renderer.ReaderLoadingIndicator
 import com.morealm.app.ui.reader.renderer.SelectionToolbar
 import com.morealm.app.ui.reader.renderer.drawBgBitmap
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
@@ -176,7 +179,7 @@ fun ScrollCanvasReaderHost(
     /** 进度 persist 回调 —— debounce 800ms，停手才上报；caller 在此写 DB。 */
     onChapterProgressPersist: (chapterIndex: Int, progress: Int) -> Unit = { _, _ -> },
     /** 当前视口字符锚点变化；用于持久化与排版无关的精确续读位置。 */
-    onVisibleChapterPositionChanged: (chapterIndex: Int, chapterPosition: Int) -> Unit = { _, _ -> },
+    onVisibleChapterPositionChanged: (chapterIndex: Int, chapterPosition: Int, anchorSnippet: String) -> Unit = { _, _, _ -> },
     /**
      * 全书所有高亮（含 KIND_BACKGROUND / KIND_TEXT_COLOR / KIND_UNDERLINE）。
      * Host 内按 prev/cur/next 章过滤 + 投影为 spec → 透传给 ChapterPaneCanvas 绘制。
@@ -210,6 +213,11 @@ fun ScrollCanvasReaderHost(
      */
     initialProgress: Int = 0,
     /**
+     * 锚点 v2 正文快照（保存端锚点上报帧的回传）。非空时恢复链先做内容自校验
+     * （cp 处文字对得上直用，含 cp==0），对不上就快照搜索重定位；空 = 旧数据。
+     */
+    initialAnchorSnippet: String = "",
+    /**
      * 跳转幂等 key（每次跳转 caller 用 System.nanoTime() 换新值）；0L 表示无跳转。
      * Host 监听此值变化触发 imperative scroll；不变则正常滚动状态不被打扰。
      */
@@ -224,6 +232,11 @@ fun ScrollCanvasReaderHost(
     onLinkTap: (href: String, anchor: Offset) -> Unit = { _, _ -> },
     /** 章 layout 就绪时上报链接列表。语义同 PageLevelReaderHost.onChapterLinksSeen。 */
     onChapterLinksSeen: (Int, List<com.morealm.epub.render.LinkRange>) -> Unit = { _, _ -> },
+    /**
+     * 章文本索引就绪（锚点 v2）：该章存在高亮 / positional 书签时才构建并上报，
+     * 供上层做锚点内容自校验 + 快照重定位自愈（relocateChapterAnchors）。
+     */
+    onChapterAnchorIndexReady: (Int, com.morealm.app.domain.render.layout.AnchorTextIndex) -> Unit = { _, _ -> },
     // ── M4-revive 选区菜单 callbacks（直接复用 SelectionToolbar）──
     onCopyText: (String) -> Unit = {},
     onSpeakFromHere: (chapterPosition: Int) -> Unit = {},
@@ -420,7 +433,7 @@ fun ScrollCanvasReaderHost(
     LaunchedEffect(restoreToken, state.currentChapter) {
         if (restoreToken == 0L) return@LaunchedEffect
         if (restoreToken == lastConsumedRestoreToken) return@LaunchedEffect
-        if (initialChapterPosition <= 0 && initialProgress <= 0) return@LaunchedEffect
+        if (initialChapterPosition <= 0 && initialProgress <= 0 && initialAnchorSnippet.isEmpty()) return@LaunchedEffect
         val layout = state.currentChapter ?: return@LaunchedEffect
         if (layout.chapterIndex != state.currentChapterIndex) return@LaunchedEffect
 
@@ -432,22 +445,29 @@ fun ScrollCanvasReaderHost(
         // return —— 连 restoreToken 都不消费，progress 兜底永远落不到，effect 还会
         // 随 layout 变化反复重试同一个注定失配的 cp。现在 L1 失配落 L2 百分比。
         val scrollableRange = (layout.totalHeight - viewportH).coerceAtLeast(1f)
+        // cp → chapter-relative Y（视口上 1/3 视觉锚点，与保存端互为逆运算）
+        val anchorToY: (Int) -> Float? = { cp ->
+            layout.findColumnAt(cp)?.let { hit ->
+                var y = 0f
+                for (i in 0 until hit.page.pageIndex) y += layout.pages[i].height
+                y += hit.line.lineTop
+                (y - viewportH / 3f).coerceAtLeast(0f)
+            }
+        }
+        // 锚点 v2：快照自校验 / 快照重定位（详见 RestoreTargetResolver KDoc）
+        val textIndex = if (initialAnchorSnippet.isNotEmpty()) layout.buildAnchorTextIndex() else null
         val resolvedRestore = resolveRestoreTarget(
             chapterPosition = initialChapterPosition,
             progressPercent = initialProgress,
-            resolveByAnchor = { cp ->
-                layout.findColumnAt(cp)?.let { hit ->
-                    // cp 字符级 —— 找 cp 所在 page + 行；视口上 1/3 显示
-                    var y = 0f
-                    for (i in 0 until hit.page.pageIndex) y += layout.pages[i].height
-                    y += hit.line.lineTop
-                    (y - viewportH / 3f).coerceAtLeast(0f)
-                }
+            snippet = initialAnchorSnippet,
+            verifyAnchor = { cp -> textIndex?.verifyAt(cp, initialAnchorSnippet) == true },
+            resolveBySnippet = {
+                textIndex?.findNearestCp(initialAnchorSnippet, initialChapterPosition)?.startCp
             },
+            resolveByAnchor = anchorToY,
             // 章内 progress 百分比 —— 按 totalHeight 反算 chapter-relative Y，
             // 与滚动模式的进度上报算法对偶
             resolveByProgress = { p -> (scrollableRange * p / 100f).coerceIn(0f, scrollableRange) },
-            // 上方守门保证 cp/prog 至少一个 > 0，L3 实际不可达；给 0f 保持完备
             chapterStart = { 0f },
         )
         val targetChapterY: Float = resolvedRestore.target
@@ -484,7 +504,17 @@ fun ScrollCanvasReaderHost(
     // 链接虚线提示：cur/prev/next 章 layout 就绪即上报链接列表，上层异步判定可解析性
     LaunchedEffect(state.currentChapter, state.prevChapter, state.nextChapter) {
         listOfNotNull(state.currentChapter, state.prevChapter, state.nextChapter)
-            .forEach { onChapterLinksSeen(it.chapterIndex, it.links) }
+            .forEach { layout ->
+                onChapterLinksSeen(layout.chapterIndex, layout.links)
+                // 锚点 v2 自愈：该章有高亮 / positional 书签才建文本索引（O(章字符数)，
+                // 后台线程），上报给上层做内容自校验 + 快照重定位。
+                val hasAnchors = chapterHighlightsRaw.any { it.chapterIndex == layout.chapterIndex } ||
+                    bookmarks.any { it.chapterIndex == layout.chapterIndex && it.chapterId.isNotEmpty() }
+                if (hasAnchors) {
+                    val idx = withContext(Dispatchers.Default) { layout.buildAnchorTextIndex() }
+                    onChapterAnchorIndexReady(layout.chapterIndex, idx)
+                }
+            }
     }
 
     // 滚动恢复会把目标字符放在视口上方 1/3；保存时也取同一视觉锚点，二者互为逆运算。
@@ -505,32 +535,35 @@ fun ScrollCanvasReaderHost(
             if (layout == null) {
                 null
             } else {
-                // (layout 归属章, 当前真值章, 视觉锚点处的 cp)
-                Triple(
-                    layout.chapterIndex,
-                    liveChapterIndex,
-                    visibleChapterPosition(
-                        layout = layout,
-                        pageIndex = pageIndex,
-                        pageOffset = pageOffset,
-                        viewportAnchorY = viewHeight.coerceAtLeast(0) / 3f,
-                    ),
+                // (layout 归属章, 当前真值章, 视觉锚点处的 cp, 锚点处正文快照)
+                val cp = visibleChapterPosition(
+                    layout = layout,
+                    pageIndex = pageIndex,
+                    pageOffset = pageOffset,
+                    viewportAnchorY = viewHeight.coerceAtLeast(0) / 3f,
+                )
+                ScrollAnchorFrame(
+                    layoutChapter = layout.chapterIndex,
+                    liveChapter = liveChapterIndex,
+                    chapterPosition = cp,
+                    anchorSnippet = cp?.let {
+                        layout.extractText(it until it + ANCHOR_SNIPPET_CP_SPAN)
+                    } ?: "",
                 )
             }
         }
             .distinctUntilChanged()
             .collect { frame ->
                 if (frame == null) return@collect
-                val (layoutChapter, liveChapter, chapterPosition) = frame
-                if (layoutChapter != liveChapter) {
+                if (frame.layoutChapter != frame.liveChapter) {
                     AppLog.debug(
                         "ReadAnchor",
-                        "丢弃换章过渡帧 layoutCh=$layoutChapter liveCh=$liveChapter cp=$chapterPosition",
+                        "丢弃换章过渡帧 layoutCh=${frame.layoutChapter} liveCh=${frame.liveChapter} cp=${frame.chapterPosition}",
                     )
                     return@collect
                 }
-                if (chapterPosition != null) {
-                    onVisibleChapterPositionChanged(layoutChapter, chapterPosition)
+                if (frame.chapterPosition != null) {
+                    onVisibleChapterPositionChanged(frame.layoutChapter, frame.chapterPosition, frame.anchorSnippet)
                 }
             }
     }
@@ -821,6 +854,10 @@ fun ScrollCanvasReaderHost(
         }
 
         val currentLayout = state.currentChapter
+        if (currentLayout == null) {
+            // 章 layout 未就绪（远章跳转 / 网络取章）：延迟出现的加载指示，替代生硬空白
+            ReaderLoadingIndicator(resolvedTextColor)
+        }
         if (currentLayout != null) {
             ScrollCanvasRenderer(
                 state = state,
@@ -1128,3 +1165,15 @@ fun ScrollCanvasReaderHost(
         }
     }
 }
+
+/**
+ * 滚动模式锚点上报的一帧快照。只装小字段：snapshotFlow 靠 equals 去重，
+ * ScrollChapterLayout 挂整章 pages 不能进来（同 PageLevelReaderHost.AnchorFrame）。
+ */
+private data class ScrollAnchorFrame(
+    val layoutChapter: Int,
+    val liveChapter: Int,
+    val chapterPosition: Int?,
+    /** 锚点处正文快照（cp 为 null 时空串）。 */
+    val anchorSnippet: String = "",
+)

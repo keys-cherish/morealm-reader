@@ -224,6 +224,10 @@ fun rememberPageLevelCore(
     // cp 越界 / 边缘命中失败时按比例就近落页，而非粗暴回章首（边缘漂移到章首根因）。
     var reflowAnchorFraction by remember { mutableFloatStateOf(0f) }
     var appliedContentVersion by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    // contentVersion 上次被记账时对应的章 idx —— 区分「同章正文重发布」（TTX 缩进烘录 /
+    // 替换规则 / 简繁转换，必须整窗失效重排）与「普通跨章导航」（loadChapter 每次都换
+    // nanoTime，但正文没变，失效会把预载好的三章窗口全炸掉 → 按钮「下一章」黑/白屏闪）。
+    var appliedContentChapter by remember { mutableIntStateOf(-1) }
     val pageFactory = remember(state) {
         ScrollPageFactory(
             dataSource = state,
@@ -330,7 +334,13 @@ fun rememberPageLevelCore(
                 "PageLevelCore",
                 "[external jump] idx ${state.currentChapterIndex} → $currentChapterIndex (token=$restoreToken)",
             )
-            state.setExternalChapterIndex(currentChapterIndex)
+            val reusedLayout = state.setExternalChapterIndex(currentChapterIndex)
+            if (reusedLayout) {
+                // 邻章复用：layout 已就绪但 pageIndex 还是旧章的，立刻归零防越界
+                // （EMPTY_PAGE 卡死，P0 2026-05-24）。Host 的 JUMP 随后按 cp/progress
+                // 精确定位（按钮/目录跳转本就是章头语义，0 即终值）。
+                pageFactory.moveToPage(0)
+            }
         }
     }
 
@@ -397,25 +407,32 @@ fun rememberPageLevelCore(
             contentVersion != appliedContentVersion &&
             curIdx == currentChapterIndex
         ) {
-            val oldLayout = state.currentChapter
-            if (oldLayout != null && reflowAnchorCp < 0) {
-                reflowAnchorCp = visibleChapterPosition(
-                    layout = oldLayout,
-                    pageIndex = pageFactory.pageIndex,
-                    pageOffset = state.pageOffset,
-                ) ?: -1
-                reflowAnchorFraction = if (oldLayout.pages.isNotEmpty()) {
-                    pageFactory.pageIndex.toFloat() / oldLayout.pages.size
-                } else {
-                    0f
+            // 仅「同一章的正文重发布」才整窗失效；跨章导航只记账不失效 ——
+            // loadChapter 的 contentVersion 每次都是新 nanoTime，正文并没有变，
+            // 失效会把预载好的 prev/next 全部作废，按钮跳章从秒切退化成整屏重排（屏闪）。
+            val sameChapterRepublish = appliedContentChapter == curIdx
+            if (sameChapterRepublish) {
+                val oldLayout = state.currentChapter
+                if (oldLayout != null && reflowAnchorCp < 0) {
+                    reflowAnchorCp = visibleChapterPosition(
+                        layout = oldLayout,
+                        pageIndex = pageFactory.pageIndex,
+                        pageOffset = state.pageOffset,
+                    ) ?: -1
+                    reflowAnchorFraction = if (oldLayout.pages.isNotEmpty()) {
+                        pageFactory.pageIndex.toFloat() / oldLayout.pages.size
+                    } else {
+                        0f
+                    }
                 }
+                state.prevChapter = null
+                state.currentChapter = null
+                state.nextChapter = null
+                coordinator.invalidateAll()
+                AppLog.info("PageLevelCore", "content version changed -> invalidate layouts idx=$curIdx")
             }
-            state.prevChapter = null
-            state.currentChapter = null
-            state.nextChapter = null
             appliedContentVersion = contentVersion
-            coordinator.invalidateAll()
-            AppLog.info("PageLevelCore", "content version changed -> invalidate layouts idx=$curIdx")
+            appliedContentChapter = curIdx
         }
         coordinator.alignCurrent(curIdx)
         if (state.currentChapter?.chapterIndex != curIdx) {
