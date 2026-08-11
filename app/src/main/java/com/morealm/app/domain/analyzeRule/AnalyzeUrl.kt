@@ -91,7 +91,15 @@ class AnalyzeUrl(
     private var encodedQuery: String? = null
     private var charset: String? = null
     private var method = RequestMethod.GET
-    private var retry: Int = 0
+    /**
+     * 额外重试次数。默认 1 —— 书源站点瞬时抖动（连接重置 / 读超时 / DNS 偶发失败）是
+     * 「书加载不出来」最常见的成因，补打一次即可自愈多数情况（详见
+     * [com.morealm.app.domain.http.newCallResponse]）。
+     * 书源规则 option JSON 里显式写的 `"retry": N` 会在解析时覆盖它。
+     */
+    private var retry: Int = 1
+    /** 书源 option 里是否显式写过 retry —— 决定 POST 要不要退回「不重试」。 */
+    private var retryExplicit: Boolean = false
     private var useWebView: Boolean = false
     private var webJs: String? = null
     private val domain: String
@@ -430,7 +438,7 @@ class AnalyzeUrl(
                 option.headers?.let { headerMap.putAll(headersElementToMap(it)) }
                 option.body?.let { body = bodyElementToString(it) }
                 option.charset?.let { charset = it }
-                option.retry?.asIntCompat()?.let { retry = it }
+                option.retry?.asIntCompat()?.let { retry = it; retryExplicit = true }
                 option.type?.let { type = it }
                 option.webView?.asBooleanCompat()?.let { useWebView = it }
                 option.webJs?.let { webJs = it }
@@ -438,6 +446,13 @@ class AnalyzeUrl(
                     evalJS(jsStr, url)?.toString()?.let { url = it }
                 }
             } catch (_: Exception) {}
+        }
+
+        // POST 默认不重试：书源的 POST 多为搜索/取目录（幂等），但也可能是登录之类的
+        // 提交操作，自动重发有重复提交风险。只有书源在 option 里显式写了 retry 才认。
+        // GET 保持默认 1 次补打（瞬时抖动自愈，见 retry 字段 KDoc）。
+        if (method == RequestMethod.POST && !retryExplicit) {
+            retry = 0
         }
 
         urlNoQuery = url

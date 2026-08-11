@@ -110,24 +110,60 @@ fun OkHttpClient.installDispatcherExceptionLogger(tag: String) {
     }
 }
 
+/**
+ * 带重试的请求。
+ *
+ * [retry] = **额外**重试次数（0 = 只打一次）。默认 1：书源站点的瞬时抖动（连接重置、
+ * 读超时、DNS 偶发失败）是「书加载不出来」最常见的成因，一次补打就能自愈绝大多数。
+ * 书源规则 option JSON 里显式写的 `"retry": N` 仍然优先（见 AnalyzeUrl）。
+ *
+ * 两个此前的缺陷一并修掉：
+ *  - **IOException 一次都不重试**：旧实现只在「响应非 2xx」时循环，而 `await()` 抛出的
+ *    IO 异常直接冒泡出去。于是最该重试的失败（连不上、连接被重置）反而从不重试，
+ *    书源即使配了 retry 也对这类失败无效。
+ *  - **失败响应未关闭**：非 2xx 的 Response 直接丢弃再发下一次，body 不 close 会让连接
+ *    无法归还连接池（OkHttp 要求显式关闭）。
+ *
+ * ⚠️ [CancellationException] 必须原样抛出，绝不能当作「可重试的失败」——
+ * `withTimeout` 抛的正是它的子类 TimeoutCancellationException，吞掉会让上层超时形同虚设
+ * （发现页曾因同类问题整轮刷新卡死）。协程被取消时也应立刻停手。
+ */
 suspend fun OkHttpClient.newCallResponse(
-    retry: Int = 0,
+    retry: Int = 1,
     builder: Request.Builder.() -> Unit
 ): Response {
     val requestBuilder = Request.Builder()
     requestBuilder.apply(builder)
     var response: Response? = null
+    var lastIoError: IOException? = null
     for (i in 0..retry) {
-        response = newCall(requestBuilder.build()).await()
-        if (response.isSuccessful) {
-            return response
+        try {
+            // 上一轮的失败响应在这里才关闭：留到下一轮开头关，可保证返回给调用方的
+            // 那个 response 绝不会被误关。
+            response?.close()
+            response = newCall(requestBuilder.build()).await()
+            if (response.isSuccessful) {
+                return response
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            response = null
+            lastIoError = e
+            if (i == retry) throw e
+            AppLog.warn(
+                "Http",
+                "request failed (${e.javaClass.simpleName}: ${e.message}), retrying ${i + 1}/$retry"
+            )
         }
     }
-    return response!!
+    // 循环结束仍无成功响应：要么最后一轮是非 2xx（response 非空），
+    // 要么全程 IO 失败（上面已抛）。lastIoError 仅用于兜底断言不出现静默 null。
+    return response ?: throw (lastIoError ?: IOException("request failed with no response"))
 }
 
 suspend fun OkHttpClient.newCallStrResponse(
-    retry: Int = 0,
+    retry: Int = 1,
     charset: String? = null,
     builder: Request.Builder.() -> Unit
 ): StrResponse {
@@ -298,7 +334,7 @@ fun Request.Builder.postMultipart(type: String?, bodyMap: Map<String, Any>) {
 }
 
 suspend fun OkHttpClient.newCallByteArrayResponse(
-    retry: Int = 0,
+    retry: Int = 1,
     builder: Request.Builder.() -> Unit
 ): ByteArray {
     val response = newCallResponse(retry, builder)
