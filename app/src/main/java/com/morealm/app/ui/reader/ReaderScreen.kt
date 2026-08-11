@@ -1713,6 +1713,8 @@ fun ReaderScreen(
             val ttsSleepMinutes by viewModel.tts.ttsSleepMinutes.collectAsStateWithLifecycle()
             val ttsVoices by viewModel.tts.ttsVoices.collectAsStateWithLifecycle()
             val ttsVoiceName by viewModel.tts.ttsVoiceName.collectAsStateWithLifecycle()
+            // 音色列表懒加载：面板首次可见才初始化 system TTS 引擎 + 拉列表（幂等）。
+            LaunchedEffect(Unit) { viewModel.tts.ensureVoicesLoaded() }
             // 如果还没播放（ttsTotalParagraphs == 0），使用当前章节的段落数作为预览
             val effectiveTotalParagraphs = if (ttsTotalParagraphs > 0) ttsTotalParagraphs
                 else viewModel.getCurrentChapterParagraphCount()

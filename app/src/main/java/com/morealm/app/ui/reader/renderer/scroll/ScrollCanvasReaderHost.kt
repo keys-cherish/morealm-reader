@@ -319,6 +319,9 @@ fun ScrollCanvasReaderHost(
     // 实测到后刷新触发一次 engine 重建（同章重排由 PageLevelCore.reflowAnchorCp 保位）。
     var measuredViewWidth by remember { mutableStateOf(viewWidth) }
     var measuredViewHeight by remember { mutableStateOf(viewHeight) }
+    // 首次 onSizeChanged 之前 = 首帧临时 engine（入参尺寸 / inset 未定稿），不派发排版
+    // （layoutInputsSettled 门控，防 cur 章白排一遍，进阅读器/恢复白屏时长翻倍根因）。
+    var viewportMeasured by remember { mutableStateOf(false) }
     @Suppress("NAME_SHADOWING") val viewWidth = measuredViewWidth
     @Suppress("NAME_SHADOWING") val viewHeight = measuredViewHeight
 
@@ -406,6 +409,7 @@ fun ScrollCanvasReaderHost(
         onChapterIndexChange = onChapterIndexChange,
         loadChapterContent = loadChapterContent,
         engine = engine,
+        layoutInputsSettled = viewportMeasured,
     )
     val state = core.state
     val pageFactory = core.pageFactory
@@ -837,6 +841,7 @@ fun ScrollCanvasReaderHost(
             .onSizeChanged {
                 if (it.width > 0) measuredViewWidth = it.width
                 if (it.height > 0) measuredViewHeight = it.height
+                if (it.width > 0 && it.height > 0 && !viewportMeasured) viewportMeasured = true
             }
             .background(androidx.compose.ui.graphics.Color(bgColorArgb)),
     ) {

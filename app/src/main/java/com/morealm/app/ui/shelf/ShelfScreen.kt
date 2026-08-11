@@ -150,6 +150,10 @@ fun ShelfScreen(
     val snackbarHost = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    // 书架可见 → 触发每进程一次的自动刷新（见 ShelfViewModel.onShelfVisible KDoc：
+    // 恢复直进阅读器时不再与恢复关键路径抢资源，返回书架才刷）。
+    LaunchedEffect(viewModel) { viewModel.onShelfVisible() }
+
     // 外层（如 PillNavigationBar 长按"书架" tab 弹分组菜单）通过 ViewModel 的
     // navigateToFolder SharedFlow 请求切到指定分组；这里订阅后直接写回
     // currentFolderId。同时把 batchMode / showSearch 等"妨碍跳转可见性"的状态

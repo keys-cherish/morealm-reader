@@ -129,17 +129,29 @@ class ReaderTtsController(
     // 静态 AtomicBoolean —— 服务被系统强杀后本地 bool 不复位，会卡死「点播放没声音」。
     // 见 [TtsService.isRunning] 注释。
 
+    // 懒加载门闩：TTS 面板首次打开才初始化 system 引擎 + 拉音色列表。
+    // 此前 init 即绑定外部 TTS 引擎（跨进程 IPC + onInit 等待）+ 刷 voices，发生在
+    // 每次进阅读器 / 进程死亡恢复的启动关键路径上 —— 而音色列表只有面板打开才被看到。
+    // 实际朗读不受影响：播放走 TtsService/TtsEngineHost 的独立引擎实例。
+    private val voicesRequested = MutableStateFlow(false)
+
     init {
-        // 异步 init system TTS（它内部 onInit 完成后会填 cachedVoices）。Edge 是纯 HTTP，
-        // 不需要 init。HttpTts 走 dao 查源也是即时的。
-        systemTtsEngine.initialize()
-        // 监听 prefs.ttsEngine 变化即刻刷一次 voices。collectLatest 保证用户连点切引擎
-        // 时只跑最新一次（前一次未完成的 fetchRemoteVoices 会被 cancel）。
         scope.launch {
+            voicesRequested.first { it }
+            // 异步 init system TTS（它内部 onInit 完成后会填 cachedVoices）。Edge 是纯 HTTP，
+            // 不需要 init。HttpTts 走 dao 查源也是即时的。
+            systemTtsEngine.initialize()
+            // 监听 prefs.ttsEngine 变化即刻刷一次 voices（含订阅时的当前值）。collectLatest
+            // 保证用户连点切引擎时只跑最新一次（前一次未完成的 fetchRemoteVoices 会被 cancel）。
             prefs.ttsEngine.collectLatest { engine ->
                 refreshVoicesForEngine(engine)
             }
         }
+    }
+
+    /** TTS 面板打开时调用 —— 首次触发 system 引擎初始化 + 音色加载；幂等，重复调用无副作用。 */
+    fun ensureVoicesLoaded() {
+        voicesRequested.value = true
     }
 
     /**

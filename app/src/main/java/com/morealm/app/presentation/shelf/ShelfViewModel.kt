@@ -679,8 +679,19 @@ class ShelfViewModel @Inject constructor(
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    // ── Auto-refresh on cold start ──
-    init {
+    // ── Auto-refresh：书架首次可见后触发（每进程一次） ──
+    //
+    // 旧实现在 VM init 无条件跑「books 非空 + 5s → 全量刷新」：进程死亡恢复直进阅读器
+    // 时它照跑，网络抓目录 + 解析 + DB 写与恢复关键路径（开书 / 排版）抢 CPU/IO ——
+    // 白屏时长实测被拖长。刷新的产物（更新角标）只在书架上可见，改为书架真正
+    // 组合出来才触发，语义与「冷启动到书架自动刷新」完全一致；恢复进阅读器的场景
+    // 推迟到用户返回书架那一刻。
+    private var autoRefreshTriggered = false
+
+    /** ShelfScreen 组合时调用。幂等 —— 每进程只触发一次自动刷新。 */
+    fun onShelfVisible() {
+        if (autoRefreshTriggered) return
+        autoRefreshTriggered = true
         viewModelScope.launch {
             books.first { it.isNotEmpty() }
             delay(5_000L)

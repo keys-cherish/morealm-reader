@@ -89,7 +89,27 @@ internal class WindowLoadCoordinator(
 ) {
     /** 每次重组由 SideEffect 刷新：engine 重建 → 新 loader 实例（换代判定靠引用比较）。 */
     var loader: ArtifactLoader? = null
+        private set
     var contentVersion: Long = 0L
+
+    /**
+     * loader 换代入口（SideEffect 每次重组调用，引用相同为 no-op）。
+     *
+     * 换代时若有旧 loader 的在飞加载，立刻取消并清 store —— 否则旧 engine 的排版
+     * 会白跑到终点线才被 [launchLoad] 的引用比较作废再重派（进阅读器 / 进程死亡
+     * 恢复时首帧 engine 与实测尺寸 engine 不同，cur 章整整多排一遍的根因）。
+     * 重派不在这里做：load effect 以 engine 为 key，换代后必然重跑并 requestLoad。
+     */
+    fun updateLoader(newLoader: ArtifactLoader) {
+        val old = loader
+        loader = newLoader
+        if (old != null && old !== newLoader && activeLoads.isNotEmpty()) {
+            AppLog.info("PageLevelCore", "loader superseded with ${activeLoads.size} in-flight -> cancel & reload")
+            activeLoads.values.forEach { it.cancel() }
+            activeLoads.clear()
+            store.invalidateAll()
+        }
+    }
 
     /** cur 章排版就绪回调（reflow 锚点恢复 / 跨章 reset 在这里做，由 composable 注入）。 */
     var onCurrentReady: (ScrollChapterLayout) -> Unit = {}
@@ -211,6 +231,14 @@ fun rememberPageLevelCore(
      * 恢复到含锚点的整页（offset=0），垂直恢复到锚点行的页内 Y。详见 reflow restore 处。
      */
     horizontalPaged: Boolean = false,
+    /**
+     * false = Host 的排版输入还没定稿（首帧组合时 onSizeChanged 实测尺寸 / 系统栏 inset
+     * 尚未到位，engine 是注定被换代的临时实例）。此时不派发加载 —— 否则临时 engine 的
+     * 排版白跑一整遍（1s+ 量级）才被换代作废重排，是进阅读器 / 进程死亡恢复白屏时长
+     * 翻倍的根因。true 后 load effect 正常派发；后续 engine 再换代由
+     * [WindowLoadCoordinator.updateLoader] 的在飞取消兜底。
+     */
+    layoutInputsSettled: Boolean = true,
 ): PageLevelCoreHandle {
     val state = remember { ScrollCanvasReaderState(initialChapterIndex = currentChapterIndex) }
     // 同章重排（改字号/字体/行距 → engine 重建 → styleSignature 变）锚点：重排前记当前视口顶 cp，
@@ -228,6 +256,8 @@ fun rememberPageLevelCore(
     // 替换规则 / 简繁转换，必须整窗失效重排）与「普通跨章导航」（loadChapter 每次都换
     // nanoTime，但正文没变，失效会把预载好的三章窗口全炸掉 → 按钮「下一章」黑/白屏闪）。
     var appliedContentChapter by remember { mutableIntStateOf(-1) }
+    // 已消费的外部跳章 token（每个 token 至多触发一次 setExternalChapterIndex，防振荡）。
+    var appliedExternalJumpToken by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
     val pageFactory = remember(state) {
         ScrollPageFactory(
             dataSource = state,
@@ -315,7 +345,7 @@ fun rememberPageLevelCore(
     }
 
     SideEffect {
-        coordinator.loader = loader
+        coordinator.updateLoader(loader)
         coordinator.contentVersion = contentVersion
         coordinator.onCurrentReady = ::applyCurrentLayout
     }
@@ -325,11 +355,22 @@ fun rememberPageLevelCore(
         state.chapterCount = chapterCount
     }
 
-    // 外部 jump 触发器：仅看 restoreToken 变化。
-    // page-level swap 反向通知 VM 时不动 restoreToken（契约），故此 effect 不触发
-    // = 避免反向 setExternal 振荡（2026-05-19 MoRealm_log_20260519_195536 根因案例）。
-    LaunchedEffect(restoreToken) {
-        if (restoreToken != 0L && state.currentChapterIndex != currentChapterIndex) {
+    // 外部 jump 触发器。key 含 currentChapterIndex 是修「恢复竞态丢进度」：进程死亡
+    // 恢复的首帧组合里 renderedChapter（带新 token）可能先于 currentChapterIndex 流
+    // 到位（两条 StateFlow 跨帧竞态，prop 仍是 0）——只 key restoreToken 时该帧条件
+    // `state.idx != prop` 不成立，之后 prop 变真值 effect 也不再醒来 → 窗口自顾自
+    // 加载第 0 章并把可见页上报出去，进度被覆写成第 0 章（「间歇性丢进度」成因）。
+    //
+    // 防振荡（2026-05-19 根因案例）依旧成立：appliedExternalJumpToken 保证每个 token
+    // 至多触发一次 setExternal —— page-level swap 反向通知 VM 后 prop 迟到追平时，
+    // 旧 token 已消费，不会再被拿来把窗口拽回去。
+    LaunchedEffect(restoreToken, currentChapterIndex) {
+        if (
+            restoreToken != 0L &&
+            restoreToken != appliedExternalJumpToken &&
+            state.currentChapterIndex != currentChapterIndex
+        ) {
+            appliedExternalJumpToken = restoreToken
             AppLog.info(
                 "PageLevelCore",
                 "[external jump] idx ${state.currentChapterIndex} → $currentChapterIndex (token=$restoreToken)",
@@ -361,6 +402,23 @@ fun rememberPageLevelCore(
                 if (reflowAnchorCp >= 0 && idx != reflowSettlePageIdx) {
                     AppLog.info("PageLevelCore", "  user paged (pageIdx=$idx != settle=$reflowSettlePageIdx) -> clear reflow anchor")
                     reflowAnchorCp = -1
+                }
+            }
+    }
+
+    // 边界补载自愈：翻到章末页 / 章首页时确保邻章在载。正常路径 ensureNeighbors 已经
+    // 预载过，这里 requestLoad 撞上 Loading/Ready 都是 store 门控下的 no-op；真正的
+    // 服务对象是 **Failed 条目**（网络书瞬时失败后没人重试，用户翻到章末就卡死 ——
+    // 「页有时候加载不出来」）：ensure 对 Failed 返回 Started，翻到边界即重试一次。
+    LaunchedEffect(state, pageFactory) {
+        snapshotFlow { Triple(pageFactory.pageIndex, state.currentChapter, state.currentChapterIndex) }
+            .collect { (pageIdx, cur, curIdx) ->
+                if (cur == null || cur.chapterIndex != curIdx) return@collect
+                if (pageIdx >= cur.pages.size - 1 && state.nextChapter == null && curIdx + 1 < state.chapterCount) {
+                    coordinator.requestLoad(curIdx + 1)
+                }
+                if (pageIdx == 0 && state.prevChapter == null && curIdx > 0) {
+                    coordinator.requestLoad(curIdx - 1)
                 }
             }
     }
@@ -397,7 +455,9 @@ fun rememberPageLevelCore(
 
     // 加载编排：cur 缺失即 ensure（Started 才真加载，Loading 表示已在飞 —— 完成回调负责
     // 投影与预载）；cur 已就绪则直接对齐邻窗 + 预载 prev/next。
-    LaunchedEffect(state.currentChapterIndex, currentChapterIndex, engine, contentVersion) {
+    LaunchedEffect(state.currentChapterIndex, currentChapterIndex, engine, contentVersion, layoutInputsSettled) {
+        // 输入未定稿（首帧临时 engine）不派发 —— settled 翻 true 时本 effect 重跑补派。
+        if (!layoutInputsSettled) return@LaunchedEffect
         val curIdx = state.currentChapterIndex
         // 同章 TXT 写回时 external chapter index 不变，旧逻辑不会走 setExternalChapterIndex，
         // state.currentChapter 因而一直保留旧分页。正文版本变化后在这里显式失效三章布局；

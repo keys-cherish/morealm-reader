@@ -889,6 +889,13 @@ object AppLog {
     // ── Core dispatch ──
 
     private fun dispatch(level: LogLevel, tag: String, msg: String, t: Throwable? = null) {
+        // 渲染热路径诊断 tag（逐行/逐帧级）默认整体丢弃 —— 见 [RenderDiag]。
+        // WARN 及以上不拦：热路径上的异常仍要可见。
+        if (level.priority < LogLevel.WARN.priority &&
+            !RenderDiag.verbose && RenderDiag.isHotPathTag(tag)
+        ) {
+            return
+        }
         val record = LogRecord(id = nextId(),
             time = System.currentTimeMillis(),
             level = level,

@@ -300,6 +300,9 @@ fun PageLevelReaderHost(
     // 与垂直滚动用 BoxWithConstraints 真实容器高的做法对齐。
     var measuredViewWidth by remember { mutableStateOf(viewWidth) }
     var measuredViewHeight by remember { mutableStateOf(viewHeight) }
+    // 首次 onSizeChanged 之前 = 首帧临时 engine（入参尺寸 / inset 未定稿），不派发排版
+    // （layoutInputsSettled 门控，防 cur 章白排一遍，进阅读器/恢复白屏时长翻倍根因）。
+    var viewportMeasured by remember { mutableStateOf(false) }
     @Suppress("NAME_SHADOWING") val viewWidth = measuredViewWidth
     @Suppress("NAME_SHADOWING") val viewHeight = measuredViewHeight
 
@@ -399,6 +402,7 @@ fun PageLevelReaderHost(
         loadChapterContent = loadChapterContent,
         engine = engine,
         horizontalPaged = true, // 横向翻页：reflow 恢复整页对齐（pageOffset=0），不卡半页
+        layoutInputsSettled = viewportMeasured,
     )
     val runtimeSession = core.session
 
@@ -971,15 +975,16 @@ fun PageLevelReaderHost(
             .onSizeChanged {
                 // 渲染容器实测尺寸 → shadow 掉入参 viewHeight/viewWidth（修「底部凭空留白」根因：
                 // 入参来自 screenHeightDp 扣了状态栏，比真实容器小 72px）。仅在变化时更新避免重组抖动。
-                if (it.width > 0 && it.height > 0 &&
-                    (it.width != measuredViewWidth || it.height != measuredViewHeight)
-                ) {
-                    com.morealm.app.core.log.AppLog.info(
-                        "PageFillDiag",
-                        "viewport measured ${measuredViewWidth}x${measuredViewHeight} → ${it.width}x${it.height}",
-                    )
-                    measuredViewWidth = it.width
-                    measuredViewHeight = it.height
+                if (it.width > 0 && it.height > 0) {
+                    if (!viewportMeasured) viewportMeasured = true
+                    if (it.width != measuredViewWidth || it.height != measuredViewHeight) {
+                        com.morealm.app.core.log.AppLog.info(
+                            "PageFillDiag",
+                            "viewport measured ${measuredViewWidth}x${measuredViewHeight} → ${it.width}x${it.height}",
+                        )
+                        measuredViewWidth = it.width
+                        measuredViewHeight = it.height
+                    }
                 }
             }
             .background(androidx.compose.ui.graphics.Color(bgColorArgb))

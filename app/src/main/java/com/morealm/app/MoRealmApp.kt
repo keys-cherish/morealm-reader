@@ -103,7 +103,13 @@ class MoRealmApp : Application(), ImageLoaderFactory {
         //
         // 这里 fire-and-forget；database.openHelper.writableDatabase 第一次访问会触发
         // Room 真正打开 + migration —— 此调用前的 backup/preserve 已经跑完了。
+        //
+        // 先让路 20s 再跑：全量导出实测 23 表 / 2.7 万行 / 18MB 要 8s+ 的 IO+CPU，
+        // 跨天后的首次冷启动（最常见=「后台放一晚再打开」）它会正面撞上恢复关键路径
+        // （开书 / 章节加载 / 排版），是长时间白屏的成因之一。延后不损语义 ——
+        // due 判断照旧，进程若在 20s 内死掉则下次启动补跑，快照本就是天级粒度。
         appScope.launch {
+            kotlinx.coroutines.delay(STARTUP_SNAPSHOT_GRACE_MS)
             runCatching {
                 snapshotManager.runDailySnapshotIfDue(database.openHelper.writableDatabase)
             }.onFailure { AppLog.warn("App", "Daily snapshot failed: ${it.message}") }
@@ -120,6 +126,9 @@ class MoRealmApp : Application(), ImageLoaderFactory {
     companion object {
         lateinit var instance: MoRealmApp
             private set
+
+        /** 每日快照的启动让路窗口 —— 见 onCreate 内注释。 */
+        private const val STARTUP_SNAPSHOT_GRACE_MS = 20_000L
     }
 
     /**
