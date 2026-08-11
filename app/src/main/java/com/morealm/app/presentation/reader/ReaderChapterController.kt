@@ -58,7 +58,8 @@ internal const val EMPTY_CONTENT_PLACEHOLDER =
         "• 当前书源的正文规则不适配此章节\n" +
         "• 网络超时或被拦截\n\n" +
         "请尝试：\n" +
-        "• 点击屏幕中央 → 顶栏「换源」选择其他书源\n" +
+        "• 点击屏幕中央呼出菜单 → 「换源」换一个书源\n" +
+        "  （若菜单里没有该按钮，长按工具栏可把「换源」拖出来）\n" +
         "• 或退回详情页后重新打开"
 
 /** True when the rendered chapter body is the placeholder above (avoid mistreating it as real content). */
@@ -1693,7 +1694,7 @@ class ReaderChapterController(
             append("\n\n")
             append(readableDetail)
             append("\n\n")
-            append("可以返回搜索页换一个书源，或稍后重试。")
+            append("可以点击屏幕中央呼出菜单 → 「换源」换一个书源，或稍后重试。")
         }
     }
 

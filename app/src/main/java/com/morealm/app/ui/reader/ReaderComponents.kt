@@ -241,6 +241,9 @@ fun ReaderControlBar(
     onTts: () -> Unit, onSettings: () -> Unit, onChapterSelect: () -> Unit,
     onSearch: () -> Unit = {},
     onAutoPage: () -> Unit = {},
+    onChangeSource: () -> Unit = {},
+    /** 当前书是否可换源（网络书 + 有已启用书源）。false 时常态工具栏隐藏换源项。 */
+    changeSourceAvailable: Boolean = false,
     editing: Boolean = false,
     layout: ReaderToolLayout = ReaderToolLayout.Default,
     onEnterEdit: () -> Unit = {},
@@ -608,22 +611,28 @@ fun ReaderControlBar(
             )
 
             val visibleTools = if (editing) {
-                // 编辑模式：先 Bottom 再 Hidden，Hidden 后绘制不会被遮挡
+                // 编辑模式：先 Bottom 再 Hidden，Hidden 后绘制不会被遮挡。
+                // 换源在编辑态**始终列出**（哪怕当前是本地书）：否则用户无法为将来要读的
+                // 网络书预先调整它的位置，且工具会在切书时凭空出现/消失。
                 val bottom = layout.toolsIn(ReaderToolZone.Bottom)
                 val hidden = layout.order.filter {
                     (layout.zones[it] ?: it.defaultZone) == ReaderToolZone.Hidden
                 }
                 bottom + hidden
             } else {
-                // 常态：只显示Bottom的
+                // 常态：只显示 Bottom 的；换源对本地书无意义（没有书源可换）→ 隐藏。
                 layout.toolsIn(ReaderToolZone.Bottom)
+                    .filterNot { it == ReaderTool.ChangeSource && !changeSourceAvailable }
             }
+            // ⚠️ 这是 map 不是穷尽 when：新增 ReaderTool 若漏加一行，编译不报错，
+            // 下面 `toolActions[tool] ?: {}` 会让按钮变成静默死键。加枚举必同步加这里。
             val toolActions = mapOf(
                 ReaderTool.Catalog to onChapterSelect,
                 ReaderTool.Search to onSearch,
                 ReaderTool.Audio to onTts,
                 ReaderTool.AutoPage to onAutoPage,
                 ReaderTool.Settings to onSettings,
+                ReaderTool.ChangeSource to onChangeSource,
             )
 
             var draggedTool by remember { mutableStateOf<ReaderTool?>(null) }

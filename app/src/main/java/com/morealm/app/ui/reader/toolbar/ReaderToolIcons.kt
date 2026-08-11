@@ -12,4 +12,6 @@ fun ReaderTool.icon(): ImageVector = when (this) {
     ReaderTool.Audio -> Icons.Outlined.Mic
     ReaderTool.AutoPage -> Icons.Outlined.Timer
     ReaderTool.Settings -> Icons.Outlined.TextFields
+    // 与详情页换源按钮同图标，保持视觉语言一致
+    ReaderTool.ChangeSource -> Icons.Outlined.SwapHoriz
 }

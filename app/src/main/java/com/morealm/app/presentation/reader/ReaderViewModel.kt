@@ -14,7 +14,11 @@ import com.morealm.app.domain.repository.BookRepository
 import com.morealm.app.domain.repository.BookmarkRepository
 import com.morealm.app.domain.repository.ReadStatsRepository
 import com.morealm.app.domain.repository.ReplaceRuleRepository
+import com.morealm.app.domain.repository.SearchRepository
 import com.morealm.app.domain.repository.SourceRepository
+import com.morealm.app.presentation.source.ChangeSourceCandidate
+import com.morealm.app.presentation.source.ChangeSourceController
+import com.morealm.app.presentation.source.ChangeSourceProgress
 import com.morealm.app.domain.storage.TxtEditScope
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.core.text.stripHtml
@@ -43,6 +47,9 @@ enum class PageTurnMode(val key: String, val label: String) {
     TAP_ZONE("tap_zone", "\u70b9\u51fb\u7ffb\u9875\uff08\u4e09\u533a\u57df\uff09"),
     FULLSCREEN("fullscreen", "\u5168\u5c4f\u70b9\u51fb\u7ffb\u9875"),
 }
+
+/** 文本类书源（bookSourceType=0）；换源只在文本源之间进行，与项目其他处定义一致。 */
+private const val TEXT_BOOK_SOURCE_TYPE = 0
 
 data class PreloadedReaderChapter(
     val index: Int,
@@ -111,6 +118,10 @@ class ReaderViewModel @Inject constructor(
     private val sourceRepo: SourceRepository,
     private val progressSync: com.morealm.app.domain.sync.WebDavBookProgressSync,
     private val fontRepo: com.morealm.app.domain.font.FontRepository,
+    /** 换源控制器依赖 —— 详情页与阅读器各持一个 ChangeSourceController 实例（见其 KDoc）。 */
+    private val searchRepo: SearchRepository,
+    private val searchBookCacheDao: com.morealm.app.domain.db.SearchBookCacheDao,
+    private val chapterDao: com.morealm.app.domain.db.ChapterDao,
     /**
      * 用于阅读器 TTS 面板的"语音"下拉自加载（http_* 引擎走 dao 取源名作单元素 voice）。
      * 见 [ReaderTtsController]：reader 不再依赖 host 那条 voices 路径，独立维护。
@@ -168,6 +179,110 @@ class ReaderViewModel @Inject constructor(
         progress = progress,
         shared = sharedState,
     )
+
+    // ── 换源（阅读器内）────────────────────────────────────────────────────
+    // 独立实例（不与 BookDetailViewModel 共享），让两屏的对话框状态互不干扰
+    // ——详见 ChangeSourceController KDoc。
+    private val changeSource = ChangeSourceController(
+        scope = viewModelScope,
+        bookRepo = bookRepo,
+        sourceRepo = sourceRepo,
+        searchRepo = searchRepo,
+        searchBookCacheDao = searchBookCacheDao,
+        chapterDao = chapterDao,
+        prefs = prefs,
+    )
+
+    val isSourcePickerVisible: StateFlow<Boolean> = changeSource.isPickerVisible
+    val changeSourceCandidates: StateFlow<List<ChangeSourceCandidate>> = changeSource.candidates
+    val changeSourceProgress: StateFlow<List<ChangeSourceProgress>> = changeSource.progress
+    val changeSourceSearching: StateFlow<Boolean> = changeSource.searching
+    val changeSourceErrorEvents = changeSource.errorEvents
+
+    /**
+     * 换源入口可用性 = 网络书 + 至少有一个启用的文本书源。
+     *
+     * 本地书没有源可换，无源时对话框必然空手而归 —— 两种情况都不该在工具栏上留一个
+     * 点了没反应的按钮。只在 book 变化时查一次源表（不是每次重组），开销可忽略。
+     */
+    val changeSourceAvailable: StateFlow<Boolean> = chapter.book
+        .map { current ->
+            if (current == null || !chapter.isWebBook(current)) return@map false
+            runCatching {
+                sourceRepo.getEnabledSourcesList().any { it.bookSourceType == TEXT_BOOK_SOURCE_TYPE }
+            }.getOrDefault(false)
+        }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** 工具栏「换源」入口：用阅读器当前持有的 book 开搜。 */
+    fun showSourcePicker() {
+        val current = chapter.book.value ?: run {
+            AppLog.warn("ChangeSource", "showSourcePicker but book not loaded yet: bookId=$bookId")
+            return
+        }
+        changeSource.openPicker(current)
+    }
+
+    /** 「刷新」按钮：忽略缓存新鲜度窗口，强制重跑全源搜索。 */
+    fun refreshSourcePicker() {
+        val current = chapter.book.value ?: return
+        changeSource.refresh(current)
+    }
+
+    fun hideSourcePicker() {
+        changeSource.closePicker()
+    }
+
+    fun cancelCrossSourceSearch() {
+        changeSource.cancelSearch()
+    }
+
+    /**
+     * 应用换源结果，然后**整本重载**。
+     *
+     * 为什么是 `chapter.loadBook()` 而不是 `reloadCurrentChapter()`：
+     * [ChangeSourceController.applyCandidate] 成功时已经把新源的 toc 落库、把
+     * `lastReadChapter` 改写成 [ChapterMatcher] 对齐后的**新章号**、并把
+     * `lastReadPosition/Offset` 归零 + 清掉 `anchorSnippet`（旧源的文本锚点在新源
+     * 上无意义，留着会让锚点自愈链把位置拉回错误的地方）。
+     *
+     * `loadBook()` 正好重走「读 book → 取 DB 章节 → resolveReaderResumeCursor」
+     * 全链路，会自然读到上述新状态并落在新章首屏；它内部也会经由注入的
+     * `setSuppressNextProgressSave` / `onInitialChapterLoaded` 回调抑制恢复期的
+     * 进度误写。相比之下 `reloadCurrentChapter()` 只重排当前章，既不会刷新
+     * `_chapters`，也不会重解析 resume cursor —— 换源后必然错位。
+     */
+    fun applyChangedSource(candidate: ChangeSourceCandidate) {
+        val current = chapter.book.value ?: run {
+            AppLog.warn("ChangeSource", "applyChangedSource but book is null: bookId=$bookId")
+            return
+        }
+        AppLog.info(
+            "ChangeSource",
+            "reader applyChangedSource: book='${current.title}' (origin=${current.origin}) " +
+                "→ candidate=${candidate.sourceName}/${candidate.sourceUrl} " +
+                "fromCache=${candidate.fromCache}"
+        )
+        changeSource.applyCandidate(current, candidate) { updated ->
+            viewModelScope.launch {
+                // TTS 若还在朗读，队列里排的是旧源正文；不停会在重载后接着念旧内容。
+                if (tts.ttsPlaying.value) {
+                    AppLog.info("ChangeSource", "stopping TTS before reload (was reading old source)")
+                    tts.ttsStop()
+                }
+                // 旧源的预加载章节此刻仍挂在内存里，内容属于旧源；不清会在
+                // 重载后的第一次翻页被当成"下一章"直接显示（修 1 造 2 的典型）。
+                chapter.clearPreloadedChapters()
+                AppLog.info(
+                    "ChangeSource",
+                    "reader reload after source change: origin=${updated.origin} " +
+                        "chapter=${updated.lastReadChapter}"
+                )
+                chapter.loadBook()
+            }
+        }
+    }
 
     val search = ReaderSearchController(
         scope = viewModelScope,

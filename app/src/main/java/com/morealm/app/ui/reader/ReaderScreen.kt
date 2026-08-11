@@ -79,6 +79,7 @@ import com.morealm.app.presentation.reader.ReaderSearchController
 import com.morealm.app.presentation.reader.TxtReplaceState
 import com.morealm.app.presentation.reader.ReaderToolBarViewModel
 import com.morealm.app.presentation.source.SourceLoginViewModel
+import com.morealm.app.ui.source.ChangeSourceDialog
 import com.morealm.app.ui.source.SourceLoginOverlay
 import com.morealm.app.ui.reader.toolbar.ReaderEditGuideTooltip
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -266,6 +267,8 @@ fun ReaderScreen(
     val toolbarMarkedHide by toolBarViewModel.markedHide.collectAsStateWithLifecycle()
     val toolbarGuideSeen by toolBarViewModel.guideSeen.collectAsStateWithLifecycle()
     var showToolbarGuide by remember { mutableStateOf(false) }
+    // 换源入口可用性（网络书 + 有启用文本源）；本地书 / 无源时常态工具栏不显示该项。
+    val changeSourceAvailable by viewModel.changeSourceAvailable.collectAsStateWithLifecycle()
 
     // Apply screen orientation
     val activity = LocalContext.current as? android.app.Activity
@@ -1434,6 +1437,11 @@ fun ReaderScreen(
                     }
                     viewModel.setAutoPageInterval(next)
                 },
+                onChangeSource = {
+                    viewModel.hideControls()
+                    viewModel.showSourcePicker()
+                },
+                changeSourceAvailable = changeSourceAvailable,
                 editing = toolbarEditing,
                 layout = toolbarLayout,
                 markedHide = toolbarMarkedHide,
@@ -1953,6 +1961,26 @@ fun ReaderScreen(
 
         // 登录流程 UI —— 直接复用书源管理页同款 overlay，避免阅读器内另起一套。
         SourceLoginOverlay(loginViewModel = loginViewModel)
+
+        // 换源对话框 —— 与详情页共用 ChangeSourceDialog，行为差异只在成功后的重载。
+        val sourcePickerVisible by viewModel.isSourcePickerVisible.collectAsStateWithLifecycle()
+        if (sourcePickerVisible) {
+            val candidates by viewModel.changeSourceCandidates.collectAsStateWithLifecycle()
+            val searchProgress by viewModel.changeSourceProgress.collectAsStateWithLifecycle()
+            val searching by viewModel.changeSourceSearching.collectAsStateWithLifecycle()
+            ChangeSourceDialog(
+                candidates = candidates,
+                progress = searchProgress,
+                isSearching = searching,
+                currentSourceUrl = book?.origin,
+                onRefresh = viewModel::refreshSourcePicker,
+                onApply = viewModel::applyChangedSource,
+                onDismiss = viewModel::hideSourcePicker,
+            )
+        }
+        LaunchedEffect(Unit) {
+            viewModel.changeSourceErrorEvents.collect { msg -> centerToast.show(msg) }
+        }
 
         // 统一居中瞬时反馈（书签 / 复制等）—— 挂根 Box 顶层、屏幕正中、短时自动消失、不拦手势。
         CenterToastHost(centerToast)

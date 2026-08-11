@@ -31,7 +31,12 @@ enum class ReaderTool(
     Search(id = "search", label = "搜索", removable = true, defaultZone = ReaderToolZone.Bottom),
     Audio(id = "audio", label = "听书", removable = true, defaultZone = ReaderToolZone.Bottom),
     AutoPage(id = "auto_page", label = "自动翻页", removable = true, defaultZone = ReaderToolZone.Bottom),
-    Settings(id = "settings", label = "设置", removable = true, defaultZone = ReaderToolZone.Bottom);
+    Settings(id = "settings", label = "设置", removable = true, defaultZone = ReaderToolZone.Bottom),
+    /**
+     * 换源（仅网络书有意义，本地书不显示入口）。
+     * id 一旦随版本发布就是持久化契约（写进 reader_toolbar_layout 的 JSON），不可再改。
+     */
+    ChangeSource(id = "change_source", label = "换源", removable = true, defaultZone = ReaderToolZone.Bottom);
 
     companion object {
         /** byId 查询；未知 id 返回 null（反序列化时用来跳过旧版删除的工具）。 */

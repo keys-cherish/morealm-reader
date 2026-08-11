@@ -6,6 +6,7 @@ import com.morealm.app.domain.db.SearchBookCacheDao
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.BookChapter
 import com.morealm.app.domain.entity.BookSource
+import com.morealm.app.domain.entity.ReadProgress
 import com.morealm.app.domain.entity.SearchBook
 import com.morealm.app.domain.entity.SearchBookCache
 import com.morealm.app.domain.preference.AppPreferences
@@ -325,13 +326,43 @@ class ChangeSourceController(
                 hasDetail = true,
             )
             bookRepo.update(updated)
+
+            // Step 5.1: 同步覆写 read_progress —— 少了这一步，上面的章节匹配等于没做。
+            //   恢复游标（resolveReaderResumeCursor）按 `progress.updatedAt >= book.lastReadAt`
+            //   整份二选一。换源只写 Book 而不动进度表时，进度表仍留着换源前的时间戳，
+            //   于是 useProgress=true → 取旧 progress.chapterIndex，newIndex 被丢弃；
+            //   兜底的 chapterId 自校验也救不回来（存的是旧源章 url，新目录里找不到）。
+            //   净效果：换源后停在旧序号。
+            //   顺带清掉两个跨源无意义的残留：chapterPosition（旧章字符偏移）与
+            //   anchorSnippet（旧源正文快照，留着会让锚点自愈拿旧文本去新正文里搜）。
+            //   saveProgress 内部事务会把位置镜像回 books 表，与上面的 update 同值不冲突。
+            val newChapterId = newChapters.getOrNull(newIndex)?.url.orEmpty()
+            runCatching {
+                bookRepo.saveProgress(
+                    ReadProgress(
+                        bookId = book.id,
+                        chapterIndex = newIndex,
+                        chapterPosition = 0,
+                        chapterOffset = 0f,
+                        totalProgress = newIndex.toFloat() / newToc.size.coerceAtLeast(1),
+                        chapterId = newChapterId,
+                        anchorSnippet = "",
+                    ),
+                    totalChapters = newToc.size,
+                )
+            }.onFailure {
+                // 换源主流程已成功，进度覆写失败不该让整次换源失败回滚。
+                AppLog.warn("ChangeSource", "saveProgress after switch failed: ${it.message}")
+            }
+
             _isPickerVisible.value = false
             cancelSearch()
             tocCache.clear()
             AppLog.info(
                 "ChangeSource",
                 "Switched '${updated.title}' to ${updated.originName} (${updated.bookUrl}); " +
-                    "chapter $oldIndex → $newIndex (${newToc.size} total)"
+                    "chapter $oldIndex → $newIndex (${newToc.size} total); " +
+                    "progress chapterId='${newChapterId.take(60)}'"
             )
             onApplied(updated)
         }

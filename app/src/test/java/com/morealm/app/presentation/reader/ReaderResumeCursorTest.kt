@@ -163,4 +163,75 @@ class ReaderResumeCursorTest {
 
         assertEquals("", cursor.anchorSnippet)
     }
+
+    // ── 换源 ──
+    //
+    // 换源后 ChangeSourceController 会同步覆写 read_progress（新 index / 新章 url /
+    // 清 anchorSnippet / 顶 updatedAt），使恢复游标选中它而非旧 Book 镜像 ——
+    // 否则 ChapterMatcher 算出的目标章会被旧进度覆盖（详见 ChangeSourceController
+    // Step 5.1 注释）。以下三个用例验证「覆写后的进度表」是恢复游标的最终依据。
+
+    @Test
+    fun `换源覆写后的进度优先于旧 Book 镜像`() {
+        val cursor = resolveReaderResumeCursor(
+            // book.lastReadChapter = newIndex（ChapterMatcher 的结果），但 updatedAt 较旧
+            book = book(chapter = 7, position = 0, totalProgress = 0.7f, updatedAt = 100L),
+            // 换源覆写后的进度表：chapterIndex = newIndex、chapterId = 新源章 url
+            progress = ReadProgress(
+                bookId = "book",
+                chapterIndex = 7,
+                chapterPosition = 0,
+                totalProgress = 0.7f,
+                chapterId = "ch/7.xhtml",
+                anchorSnippet = "",
+                updatedAt = 200L,
+            ),
+            chapters = chapters(10),
+        )
+
+        assertEquals(7, cursor.chapterIndex)
+        assertEquals(0, cursor.chapterPosition)
+        assertEquals(ReaderResumeCursor.Source.READ_PROGRESS, cursor.source)
+    }
+
+    @Test
+    fun `换源后进度与 Book 镜像同源且 chapterId 对得上时保持新章`() {
+        val cursor = resolveReaderResumeCursor(
+            // 换源同时写了 Book（lastReadChapter=newIndex）与 read_progress（同 index + 新 url）
+            book = book(chapter = 7, position = 0, totalProgress = 0.7f, updatedAt = 200L),
+            progress = ReadProgress(
+                bookId = "book",
+                chapterIndex = 7,
+                chapterPosition = 0,
+                totalProgress = 0.7f,
+                chapterId = "ch/7.xhtml",
+                anchorSnippet = "",
+                updatedAt = 200L,
+            ),
+            chapters = chapters(10),
+        )
+
+        assertEquals(7, cursor.chapterIndex)
+        assertEquals(0, cursor.chapterPosition)
+    }
+
+    @Test
+    fun `换源后进度 chapterId 指向新源章时按 id 重映射生效`() {
+        // 极端：chapterIndex 与 chapterId 不同步（目录结构差异），id 自校验应按 url 重映射
+        val cursor = resolveReaderResumeCursor(
+            book = book(chapter = 7, position = 0, totalProgress = 0.7f, updatedAt = 100L),
+            progress = ReadProgress(
+                bookId = "book",
+                chapterIndex = 7,
+                chapterPosition = 0,
+                totalProgress = 0.7f,
+                chapterId = "ch/5.xhtml", // 新源目录里目标章实际是第 5 章
+                anchorSnippet = "",
+                updatedAt = 200L,
+            ),
+            chapters = chapters(10),
+        )
+
+        assertEquals(5, cursor.chapterIndex)
+    }
 }
