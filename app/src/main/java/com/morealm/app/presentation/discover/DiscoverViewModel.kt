@@ -3,6 +3,7 @@ package com.morealm.app.presentation.discover
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.SearchBook
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.analyzeRule.AnalyzeUrl
@@ -14,6 +15,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +38,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.io.IOException
 import kotlin.coroutines.coroutineContext
 import javax.inject.Inject
 
@@ -123,9 +126,6 @@ class DiscoverViewModel @Inject constructor(
                 fallbackBooks = promotePreloadedCache(enabledSourceUrls)
                 visibleFallback = fallbackBooks.rotateFrom((cycle + 1) * RESULT_ROTATION_STEP)
                 val sourcePool = sourceRepository.getExploreSourcesLite(MAX_SOURCE_POOL)
-                val sources = sourcePool
-                    .rotateFrom(cycle * MAX_SOURCES)
-                    .take(MAX_SOURCES)
                 if (sourceCount == 0) {
                     // 没有书源时旧缓存已失去上下文，保留它会导致下次冷启动短暂显示过期推荐。
                     clearCaches()
@@ -140,51 +140,85 @@ class DiscoverViewModel @Inject constructor(
                 _state.value = _state.value.copy(
                     sourceCount = sourceCount,
                     books = visibleFallback,
-                    isRefreshing = sources.isNotEmpty(),
+                    isRefreshing = sourcePool.isNotEmpty(),
                     message = when {
-                        sources.isEmpty() && fallbackBooks.isNotEmpty() -> "书源没有发现规则，正在显示上次内容"
-                        sources.isEmpty() -> "已启用的书源没有发现规则"
+                        sourcePool.isEmpty() && fallbackBooks.isNotEmpty() -> "书源没有发现规则，正在显示上次内容"
+                        sourcePool.isEmpty() -> "已启用的书源没有发现规则"
                         else -> null
                     },
                 )
-                if (sources.isEmpty()) return@launch
+                if (sourcePool.isEmpty()) return@launch
 
-                val gate = Semaphore(MAX_CONCURRENCY)
+                // 串行按批补位：首轮打 MAX_SOURCES 个源，凑不够 DISPLAY_BOOKS 就从池中
+                // 取下一批继续，最多 MAX_BACKFILL_ROUNDS 轮。首轮够书时开销与旧实现一致
+                // （补位只在缺书时发生）；旧实现打完一批就收工，一批全挂即整页空。
                 val resultMutex = Mutex()
                 val progressiveBooks = mutableListOf<DiscoverBook>()
-                val batches = supervisorScope {
-                    sources.mapIndexed { sourceIndex, lite ->
-                        async {
-                            gate.withPermit {
-                                val batch = loadSourceBatch(
-                                    sourceUrl = lite.bookSourceUrl,
-                                    cycle = cycle,
-                                    sourceIndex = sourceIndex,
-                                )
-                                if (batch.isNotEmpty()) {
-                                    resultMutex.withLock {
-                                        progressiveBooks += batch
-                                        val immediateBooks = (
-                                            progressiveBooks.distinctBy(DiscoverBook::cacheKey) +
-                                                visibleFallback
+                val collected = mutableListOf<DiscoverBook>()
+                // 池先按 cycle 旋转一次，批次再顺序切片：同一次刷新不会重复请求刚失败的源
+                // （若每批各自 rotateFrom，池长小于 2×MAX_SOURCES 时第二批会绕回打旧源）。
+                // 旋转本身用 floorMod，故排在 MAX_SOURCES 之后的源在若干轮刷新内必然被取到。
+                val rotatedPool = sourcePool.rotateFrom(cycle * MAX_SOURCES)
+                var attemptedSources = 0
+                var failedSources = 0
+                var round = 0
+                while (
+                    round < MAX_BACKFILL_ROUNDS &&
+                    collected.distinctBy(DiscoverBook::cacheKey).size < DISPLAY_BOOKS
+                ) {
+                    val batch = rotatedPool.drop(attemptedSources).take(MAX_SOURCES)
+                    if (batch.isEmpty()) break
+                    attemptedSources += batch.size
+                    round++
+
+                    val gate = Semaphore(MAX_CONCURRENCY)
+                    val batchResults = supervisorScope {
+                        batch.mapIndexed { sourceIndex, lite ->
+                            async {
+                                gate.withPermit {
+                                    val outcome = loadSourceBatch(
+                                        sourceUrl = lite.bookSourceUrl,
+                                        cycle = cycle,
+                                        sourceIndex = sourceIndex,
+                                    )
+                                    if (outcome.books.isNotEmpty()) {
+                                        resultMutex.withLock {
+                                            progressiveBooks += outcome.books
+                                            val immediateBooks = (
+                                                progressiveBooks.distinctBy(DiscoverBook::cacheKey) +
+                                                    visibleFallback
+                                                )
+                                                .filter(::isBookFromEnabledSource)
+                                                .distinctBy(DiscoverBook::cacheKey)
+                                                .take(DISPLAY_BOOKS)
+                                            _state.value = _state.value.copy(
+                                                books = immediateBooks,
+                                                isRefreshing = true,
+                                                message = null,
                                             )
-                                            .filter(::isBookFromEnabledSource)
-                                            .distinctBy(DiscoverBook::cacheKey)
-                                            .take(DISPLAY_BOOKS)
-                                        _state.value = _state.value.copy(
-                                            books = immediateBooks,
-                                            isRefreshing = true,
-                                            message = null,
-                                        )
+                                        }
                                     }
+                                    outcome
                                 }
-                                batch
                             }
-                        }
-                    }.awaitAll()
+                        }.awaitAll()
+                    }
+                    failedSources += batchResults.count { it.failed }
+                    collected += batchResults.flatMap { it.books }
                 }
-                val freshBooks = batches
-                    .flatten()
+                if (round > 1) {
+                    AppLog.info(
+                        LOG_TAG,
+                        "backfill: $round rounds / $attemptedSources sources tried " +
+                            "($failedSources failed), " +
+                            "${collected.distinctBy(DiscoverBook::cacheKey).size} books collected",
+                    )
+                }
+                // 全部尝试过的源都是「请求失败」→ 网络/书源不可用，重试有意义；
+                // 否则是站点响应了但发现规则没匹配上，重试无用（得换源或改规则）。
+                val allSourcesFailed = attemptedSources > 0 && failedSources == attemptedSources
+
+                val freshBooks = collected
                     .filter(::isBookFromEnabledSource)
                     .distinctBy { "${it.sourceUrl}|${it.bookUrl}|${it.title}" }
                     .rotateFrom((cycle + 1) * RESULT_ROTATION_STEP)
@@ -206,10 +240,11 @@ class DiscoverViewModel @Inject constructor(
                     _state.value = _state.value.copy(
                         books = visibleFallback,
                         isRefreshing = false,
-                        message = if (fallbackBooks.isEmpty()) {
-                            "书源暂时没有返回内容"
-                        } else {
-                            "刷新未取得新内容，正在显示上次结果"
+                        message = when {
+                            fallbackBooks.isNotEmpty() -> "刷新未取得新内容，正在显示上次结果"
+                            allSourcesFailed ->
+                                "已试 $attemptedSources 个书源都没能连上，请检查网络后重试"
+                            else -> "书源都响应了但没解析出书，可能是发现规则已失效"
                         },
                     )
                 }
@@ -230,49 +265,99 @@ class DiscoverViewModel @Inject constructor(
     }
 
     /**
+     * 单源抓取结果。区分「请求失败」与「响应了但零结果」——整页空时前者应提示网络/书源
+     * 不可用（可重试），后者应提示发现规则没匹配上（重试无用，得换源或修规则）。
+     */
+    private data class SourceOutcome(
+        val books: List<DiscoverBook>,
+        val failed: Boolean,
+    )
+
+    /**
      * 每轮切换书源分类和分页；分页规则失效时回退第一页，避免刷新后整页变空。
      */
     private suspend fun loadSourceBatch(
         sourceUrl: String,
         cycle: Int,
         sourceIndex: Int,
-    ): List<DiscoverBook> {
+    ): SourceOutcome {
         return try {
-            val source = sourceRepository.getByUrl(sourceUrl) ?: return emptyList()
-            if (!source.enabled || source.bookSourceUrl !in activeSourceUrls) return emptyList()
+            val source = sourceRepository.getByUrl(sourceUrl)
+                ?: return SourceOutcome(emptyList(), failed = true)
+            if (!source.enabled || source.bookSourceUrl !in activeSourceUrls) {
+                return SourceOutcome(emptyList(), failed = false)
+            }
             val urls = resolveExploreUrls(source)
                 .rotateFrom(cycle + sourceIndex)
                 .take(MAX_URLS_PER_SOURCE)
-            if (urls.isEmpty()) return emptyList()
+            if (urls.isEmpty()) {
+                AppLog.info(LOG_TAG, "source='${source.bookSourceName}' no usable exploreUrl")
+                return SourceOutcome(emptyList(), failed = false)
+            }
             val page = cycle % EXPLORE_PAGE_WINDOW + 1
-            withTimeout(SOURCE_TIMEOUT_MS) {
-                urls.flatMap { url ->
-                    val preferred = loadExplorePage(source, url, page)
-                    if (preferred.isNotEmpty() || page == 1) {
-                        preferred
-                    } else {
-                        loadExplorePage(source, url, 1)
-                    }
+            // 每次 HTTP 尝试各自计时（见 loadExplorePage）。此前是外层一个 withTimeout 包住
+            // 「首选页 + 退回第 1 页」两次请求，二次请求实际几乎没有预算可用。
+            var anyFailure = false
+            val books = urls.flatMap { url ->
+                val preferred = loadExplorePage(source, url, page)
+                val result = if (preferred.books.isNotEmpty() || page == 1) {
+                    preferred
+                } else {
+                    loadExplorePage(source, url, 1)
                 }
-            }.map(::toDiscoverBook)
+                if (result.failed) anyFailure = true
+                result.books
+            }
+            if (books.isEmpty() && !anyFailure) {
+                // 请求没抛错但零结果 = 站点响应了、发现规则没匹配上。与「请求失败」区分记录：
+                // 它决定整页空时的用户文案走「规则不匹配」而不是「书源都没响应」。
+                AppLog.info(LOG_TAG, "source='${source.bookSourceName}' responded with 0 books (rule mismatch?)")
+            }
+            SourceOutcome(books.map(::toDiscoverBook), failed = books.isEmpty() && anyFailure)
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Throwable) {
-            emptyList()
+        } catch (error: Throwable) {
+            AppLog.warn(LOG_TAG, "source=$sourceUrl batch failed: ${error.javaClass.simpleName} ${error.message}")
+            SourceOutcome(emptyList(), failed = true)
         }
     }
 
+    /**
+     * 单次发现页请求，带独立超时预算。
+     *
+     * 🔴 [TimeoutCancellationException] 是 [CancellationException] 的子类，必须在
+     * 它之前捕获：否则单源超时会被 `throw error` 重新抛出、经 awaitAll 冒泡到
+     * [refresh] 的 catch，整轮刷新被当成协程取消终止 —— isRefreshing 永远停在 true，
+     * fallback 与失败文案都不会展示（用户侧＝无限转圈 + 整页空）。
+     * 真正的协程取消（VM 清理 / 用户再次下拉）仍要原样抛出，故两个分支都保留。
+     */
     private suspend fun loadExplorePage(
         source: BookSource,
         url: String,
         page: Int,
-    ): List<SearchBook> = try {
-        WebBook.exploreBookAwait(source, url, page)
+    ): PageOutcome = try {
+        val books = withTimeout(SOURCE_TIMEOUT_MS) {
+            WebBook.exploreBookAwait(source, url, page)
+        }
+        PageOutcome(books, failed = false)
+    } catch (_: TimeoutCancellationException) {
+        AppLog.warn(LOG_TAG, "source='${source.bookSourceName}' page=$page timeout after ${SOURCE_TIMEOUT_MS}ms")
+        PageOutcome(emptyList(), failed = true)
     } catch (error: CancellationException) {
         throw error
-    } catch (_: Throwable) {
-        emptyList()
+    } catch (error: IOException) {
+        AppLog.warn(LOG_TAG, "source='${source.bookSourceName}' page=$page io: ${error.message}")
+        PageOutcome(emptyList(), failed = true)
+    } catch (error: Throwable) {
+        AppLog.warn(LOG_TAG, "source='${source.bookSourceName}' page=$page rule/parse: ${error.message}")
+        PageOutcome(emptyList(), failed = true)
     }
+
+    /** 单页抓取结果，[failed] 为真表示请求/解析出错而非站点返回了空列表。 */
+    private data class PageOutcome(
+        val books: List<SearchBook>,
+        val failed: Boolean,
+    )
 
     private fun toDiscoverBook(book: SearchBook) = DiscoverBook(
         title = book.name,
@@ -406,10 +491,21 @@ class DiscoverViewModel @Inject constructor(
         json.encodeToString(ListSerializer(DiscoverBook.serializer()), books)
 
     companion object {
+        private const val LOG_TAG = "Discover"
         private const val MAX_SOURCES = 8
-        private const val MAX_SOURCE_POOL = 24
+        /**
+         * 源池上限。旧值 24 是硬截断：装 100 个源时永远只有 customOrder 前 24 位可能
+         * 进发现页，其余永不轮到。放宽到 200 实际等于不截断，同时给超大源库留查询上限。
+         */
+        private const val MAX_SOURCE_POOL = 200
+        /** 结果不足 [DISPLAY_BOOKS] 时最多再取几批源补位（含首轮），见 refresh()。 */
+        private const val MAX_BACKFILL_ROUNDS = 3
         private const val MAX_CONCURRENCY = 6
-        private const val SOURCE_TIMEOUT_MS = 6_000L
+        /**
+         * 单次发现请求预算。必须 ≥ OkHttpUtils 的 connect 超时（15s），否则握手慢的源
+         * 在连接尚未建立时就被判死 —— 旧值 6s 且还是「首选页 + 退回第 1 页」两次请求共享。
+         */
+        private const val SOURCE_TIMEOUT_MS = 15_000L
         private const val MAX_URLS_PER_SOURCE = 1
         private const val EXPLORE_PAGE_WINDOW = 3
         private const val RESULT_ROTATION_STEP = 17

@@ -221,7 +221,12 @@ interface BookSourceDao {
     @Query("SELECT COUNT(*) FROM book_sources WHERE enabled = 1")
     suspend fun getEnabledSourceCount(): Int
 
-    /** 发现页只调度带发现 URL 的源，完整规则在真正请求前按 URL 单条加载。 */
+    /**
+     * 发现页只调度带发现 URL 的源，完整规则在真正请求前按 URL 单条加载。
+     *
+     * [limit] 由调用方给足（发现页传 200）：截断得太小会让 customOrder 靠后的源永远
+     * 轮不到发现页，源池贫瘠时一批全挂就直接整页空。
+     */
     @Query(
         "SELECT bookSourceUrl, bookSourceName FROM book_sources " +
             "WHERE enabled = 1 AND enabledExplore = 1 AND exploreUrl IS NOT NULL " +
