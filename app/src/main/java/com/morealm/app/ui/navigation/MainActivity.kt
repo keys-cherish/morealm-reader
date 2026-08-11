@@ -69,13 +69,16 @@ class MainActivity : ComponentActivity() {
             }
 
             // ── 分辨率等比自适应 ──
-            // UI 全部按 ~392dp 屏宽设计；宽屏机（1.5K/2K，最小屏宽 430-480dp）在系统
-            // 密度下 dp 物理尺寸不变 → 元素相对屏幕显小。按最小屏宽放大 LocalDensity
-            // 让整体布局等比铺满（字号 sp 同步跟随）。只放大不缩小（窄屏机不动），
-            // 上限 1.35 防平板/分屏被吹爆——平板本就该多显示内容而非纯放大。
+            // 设计基准 = 360dp 屏宽（1080×1920@480dpi 基准机 —— 用户验收「大小正好」的
+            // 环境；uiScale 恰为 1.0，视觉零变化）。宽屏机（1.5K/2K，最小屏宽 400-480dp）
+            // 在系统密度下 dp 物理尺寸不变 → 元素相对屏幕显小；按「实际最小屏宽 / 360」
+            // 放大 LocalDensity 让整体布局随分辨率等比铺满（字号 sp 同步跟随）。
+            // 首版基准取 392 放大量只有 5-10%，2K 机实测仍显小 —— 等比语义应以
+            // 验收基准机为 1.0 起点。只放大不缩小（更窄屏机不动）；上限 1.35 防
+            // 平板/分屏被吹爆——平板本就该多显示内容而非纯放大。
             val configuration = LocalConfiguration.current
             val systemDensity = LocalDensity.current
-            val uiScale = (configuration.smallestScreenWidthDp / 392f).coerceIn(1f, 1.35f)
+            val uiScale = (configuration.smallestScreenWidthDp / 360f).coerceIn(1f, 1.35f)
             val scaledDensity = Density(
                 density = systemDensity.density * uiScale,
                 fontScale = systemDensity.fontScale,
