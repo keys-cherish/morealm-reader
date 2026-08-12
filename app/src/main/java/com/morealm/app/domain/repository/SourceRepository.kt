@@ -32,6 +32,17 @@ class SourceRepository @Inject constructor(
     /** 发现页源池。limit 传 200（见 DAO KDoc：过小会截断池让后位源永无轮换机会）。 */
     suspend fun getExploreSourcesLite(limit: Int = 200) = sourceDao.getExploreSourcesLite(limit)
 
+    /** 发现页书源列表（分类浏览视图），见 [BookSourceDao.observeExploreSources]。 */
+    fun observeExploreSources() = sourceDao.observeExploreSources()
+
+    /** 置顶：customOrder = 当前最小值 - 1。 */
+    suspend fun moveSourceToTop(url: String) {
+        sourceDao.updateCustomOrder(url, sourceDao.getMinCustomOrder() - 1)
+    }
+
+    /** 关闭某源的发现（enabled 不变，仅从发现页隐藏）。 */
+    suspend fun disableExplore(url: String) = sourceDao.disableExplore(url)
+
     fun getAllSources(): Flow<List<BookSource>> = sourceDao.getAllSources()
 
     suspend fun getByUrl(url: String): BookSource? = sourceDao.getByUrl(url)

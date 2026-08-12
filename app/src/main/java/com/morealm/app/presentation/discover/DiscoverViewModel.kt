@@ -6,9 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.entity.SearchBook
 import com.morealm.app.domain.entity.BookSource
-import com.morealm.app.domain.analyzeRule.AnalyzeUrl
-import com.morealm.app.domain.analyzeRule.RuleData
 import com.morealm.app.domain.repository.SourceRepository
+import com.morealm.app.domain.source.exploreKinds
 import com.morealm.app.domain.webbook.WebBook
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -35,11 +34,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.io.IOException
-import kotlin.coroutines.coroutineContext
 import javax.inject.Inject
 
 @Serializable
@@ -376,52 +371,18 @@ class DiscoverViewModel @Inject constructor(
     )
 
     /**
-     * 参照实现书源的 exploreUrl 是“分类配置”，不保证是可直接请求的 URL：
-     * 它可能是 JSON 数组、`标题::URL` 多行文本，或返回前两者的 @js/<js> 脚本。
+     * 参照实现书源的 exploreUrl 是“分类配置”，不保证是可直接请求的 URL。
+     * 统一走 [exploreKinds]（与发现页分类浏览共享解析和缓存），此处只取可请求的
+     * 分类 URL：过滤解析错误项、分节标题（url 为空）与重复项。
      */
-    private suspend fun resolveExploreUrls(source: BookSource): List<String> {
-        val configured = source.exploreUrl?.trim().orEmpty()
-        if (configured.isEmpty()) return emptyList()
-        val resolved = if (configured.startsWith("@js:") || configured.startsWith("<js>")) {
-            runCatching {
-                AnalyzeUrl(
-                    mUrl = configured,
-                    page = 1,
-                    baseUrl = source.bookSourceUrl,
-                    source = source,
-                    ruleData = RuleData(),
-                    coroutineContext = coroutineContext,
-                ).ruleUrl
-            }.getOrDefault("")
-        } else {
-            configured
-        }.trim()
-        if (resolved.isEmpty()) return emptyList()
-
-        parseExploreJson(resolved).takeIf { it.isNotEmpty() }?.let { return it }
-        val titled = resolved.lineSequence().mapNotNull { line ->
-            val trimmed = line.trim().trimEnd(',')
-            val separator = trimmed.indexOf("::")
-            if (separator < 0) return@mapNotNull null
-            trimmed.substring(separator + 2).trim().takeIf { it.isNotEmpty() }
-        }.toList()
-        if (titled.isNotEmpty()) return titled.distinct()
-
-        return listOf(resolved).filterNot { it.startsWith("[") || it.startsWith("{") }
-    }
-
-    private fun parseExploreJson(value: String): List<String> = runCatching {
-        val root = json.parseToJsonElement(value)
-        val entries = when (root) {
-            is JsonArray -> root
-            is JsonObject -> root["data"] as? JsonArray ?: JsonArray(emptyList())
-            else -> JsonArray(emptyList())
-        }
-        entries.mapNotNull { element ->
-            (element as? JsonObject)?.get("url")?.jsonPrimitive?.content
-                ?.trim()?.takeIf(String::isNotEmpty)
-        }.distinct()
-    }.getOrDefault(emptyList())
+    private suspend fun resolveExploreUrls(source: BookSource): List<String> =
+        source.exploreKinds()
+            .asSequence()
+            .filterNot { it.title.startsWith("ERROR:") }
+            .mapNotNull { it.url?.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
 
     /** 冷启动优先消费上轮预加载；没有预加载时退回上次展示与旧版单缓存。 */
     private fun promotePreloadedCache(enabledSourceUrls: Set<String>): List<DiscoverBook> {

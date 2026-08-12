@@ -196,6 +196,17 @@ data class ExploreSourceLite(
     val bookSourceName: String,
 )
 
+/**
+ * 发现页书源列表投影（对照参照实现 BookSourcePart 中发现页用到的字段）。
+ * 不携带规则 JSON blob——分类解析在用户展开某源时才按 URL 加载完整实体。
+ */
+data class ExploreSourcePart(
+    val bookSourceUrl: String,
+    val bookSourceName: String,
+    val bookSourceGroup: String?,
+    val customOrder: Int = 0,
+)
+
 @Dao
 interface BookSourceDao {
     @Query("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY customOrder")
@@ -233,6 +244,29 @@ interface BookSourceDao {
             "AND TRIM(exploreUrl) != '' ORDER BY customOrder LIMIT :limit"
     )
     suspend fun getExploreSourcesLite(limit: Int): List<ExploreSourceLite>
+
+    /**
+     * 发现页书源列表：启用 + 开了发现 + 有发现规则，按手动排序。对照参照实现
+     * bookSourceDao.flowExplore()。分组/关键字过滤在 ViewModel 内存侧做（投影
+     * 极轻，百级到千级源都远小于一屏图片的内存开销）。
+     */
+    @Query(
+        "SELECT bookSourceUrl, bookSourceName, bookSourceGroup, customOrder FROM book_sources " +
+            "WHERE enabled = 1 AND enabledExplore = 1 AND exploreUrl IS NOT NULL " +
+            "AND TRIM(exploreUrl) != '' ORDER BY customOrder"
+    )
+    fun observeExploreSources(): Flow<List<ExploreSourcePart>>
+
+    /** 置顶 = customOrder 设为全表最小值 - 1（对照参照实现 upOrder 语义）。 */
+    @Query("SELECT COALESCE(MIN(customOrder), 0) FROM book_sources")
+    suspend fun getMinCustomOrder(): Int
+
+    @Query("UPDATE book_sources SET customOrder = :order WHERE bookSourceUrl = :url")
+    suspend fun updateCustomOrder(url: String, order: Int)
+
+    /** 发现页长按「不再显示」：只关 enabledExplore，不动 enabled（搜索仍可用）。 */
+    @Query("UPDATE book_sources SET enabledExplore = 0 WHERE bookSourceUrl = :url")
+    suspend fun disableExplore(url: String)
 
     @Query("SELECT * FROM book_sources ORDER BY customOrder")
     fun getAllSources(): Flow<List<BookSource>>

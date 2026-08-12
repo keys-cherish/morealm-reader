@@ -355,6 +355,13 @@ fun MoRealmNavHost(
                         }
                         BottomTab.Discover -> DiscoverScreen(
                             onNavigateDetail = { bookId -> navController.navigateToDetail(bookId) },
+                            onOpenExplore = { sourceUrl, title, exploreUrl ->
+                                navController.safeNavigate(
+                                    "explore_show?sourceUrl=${Uri.encode(sourceUrl)}" +
+                                        "&title=${Uri.encode(title)}" +
+                                        "&exploreUrl=${Uri.encode(exploreUrl)}"
+                                )
+                            },
                         )
                         BottomTab.Library -> LibraryScreen(
                             onBookClick = { bookId ->
@@ -389,6 +396,20 @@ fun MoRealmNavHost(
                     }
                 }
                 } // GlobalBackgroundScaffold
+            }
+
+            composable(
+                route = "explore_show?sourceUrl={sourceUrl}&title={title}&exploreUrl={exploreUrl}",
+                arguments = listOf(
+                    navArgument("sourceUrl") { type = NavType.StringType; defaultValue = "" },
+                    navArgument("title") { type = NavType.StringType; defaultValue = "" },
+                    navArgument("exploreUrl") { type = NavType.StringType; defaultValue = "" },
+                ),
+            ) {
+                com.morealm.app.ui.discover.ExploreShowScreen(
+                    onBack = { navController.safePopBackStack() },
+                    onNavigateDetail = { bookId -> navController.navigateToDetail(bookId) },
+                )
             }
 
             composable(
