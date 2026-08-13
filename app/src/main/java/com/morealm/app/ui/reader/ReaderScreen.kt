@@ -241,6 +241,19 @@ fun ReaderScreen(
     val tapTR by viewModel.settings.tapActionTopRight.collectAsStateWithLifecycle()
     val tapBL by viewModel.settings.tapActionBottomLeft.collectAsStateWithLifecycle()
     val tapBR by viewModel.settings.tapActionBottomRight.collectAsStateWithLifecycle()
+    // 点击九宫格生效网格：用户 READER_TAP_GRID 全配置优先，未配置回退四角合成矩阵
+    val tapGridPref by viewModel.settings.readerTapGrid.collectAsStateWithLifecycle()
+    val tapGrid = remember(tapGridPref, tapTL, tapTR, tapBL, tapBR) {
+        ReaderTapZones.effectiveGrid(tapGridPref, tapTL, tapTR, tapBL, tapBR)
+    }
+    // EPUB 图片与排版来源（本次新增设置）+ 每书屏蔽集
+    val epubHideImages by viewModel.settings.epubHideImages.collectAsStateWithLifecycle()
+    val epubTypographyOverride by viewModel.settings.epubTypographyOverride.collectAsStateWithLifecycle()
+    val blockedImageSrcs by viewModel.blockedImageSrcs.collectAsStateWithLifecycle()
+    // 图片长按弹层目标（src + view-local 长按点）；null = 不显示
+    var imageActionTarget by remember {
+        mutableStateOf<Pair<String, androidx.compose.ui.geometry.Offset>?>(null)
+    }
     val readerStyles by viewModel.settings.allStyles.collectAsStateWithLifecycle()
     val activeStyleId by viewModel.settings.activeStyleId.collectAsStateWithLifecycle()
     val activeStyle by viewModel.settings.activeStyle.collectAsStateWithLifecycle()
@@ -457,6 +470,7 @@ fun ReaderScreen(
             showChapterList -> showChapterList = false
             showTtsPanel -> viewModel.hideTtsPanel()
             showSettings -> viewModel.hideSettingsPanel()
+            imageActionTarget != null -> imageActionTarget = null
             viewingImageSrc != null -> viewModel.dismissImageViewer()
             autoPageInterval > 0 -> viewModel.stopAutoPage()
             showControls -> viewModel.hideControls()
@@ -801,9 +815,17 @@ fun ReaderScreen(
                 titleMode = effectiveReaderStyle?.titleMode ?: 0,
                 titleAlign = titleAlign,
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
-                // 恒开、无用户入口 —— 参照阅读器默认档同语义（原书 CSS 行距/缩进优先，
-                // 字号始终用户赢）；引擎侧下限 1 倍字高兜底烂书，无需逃生开关。
-                respectAuthoredStyle = true,
+                // 排版来源设置：「跟随书籍」= respectAuthoredStyle（原书 CSS 行距/缩进优先，
+                // 字号始终用户赢，引擎侧下限 1 倍字高兜底烂书）；「用户定义」= 关档 +
+                // overrideAuthoredSpacing（用户缩进/行距/段距取代书内声明）。
+                respectAuthoredStyle = !epubTypographyOverride,
+                overrideAuthoredSpacing = epubTypographyOverride,
+                // 无图模式 + 每书「屏蔽此图」集合（变化即重排版）
+                hideImages = epubHideImages,
+                blockedImageSrcs = blockedImageSrcs,
+                // 图片交互：tap 查看大图；长按弹图片操作条（查看/保存/复制源/屏蔽）
+                onImageTap = { src -> viewModel.onImageClick(src) },
+                onImageLongPress = { src, anchor -> imageActionTarget = src to anchor },
                 // 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer jumpToken/jumpChapterPosition 等价）：
                 // renderedChapter.restoreToken 由 ReaderChapterController.loadChapter / seekProgressInPlace
                 // 每次 nanoTime 换新值。initialProgress 用于「Slider 拖动 in-place seek」路径
@@ -995,9 +1017,13 @@ fun ReaderScreen(
                 titleMode = effectiveReaderStyle?.titleMode ?: 0,
                 titleAlign = titleAlign,
                 textFullJustify = (effectiveReaderStyle?.textAlign ?: "justify") == "justify",
-                // 恒开、无用户入口 —— 参照阅读器默认档同语义（原书 CSS 行距/缩进优先，
-                // 字号始终用户赢）；引擎侧下限 1 倍字高兜底烂书，无需逃生开关。
-                respectAuthoredStyle = true,
+                // 排版来源设置：语义同 SCROLL 宿主同名参数（跟随书籍 / 用户定义）。
+                respectAuthoredStyle = !epubTypographyOverride,
+                overrideAuthoredSpacing = epubTypographyOverride,
+                hideImages = epubHideImages,
+                blockedImageSrcs = blockedImageSrcs,
+                onImageTap = { src -> viewModel.onImageClick(src) },
+                onImageLongPress = { src, anchor -> imageActionTarget = src to anchor },
                 bgColorArgb = readerBg.toArgb(),
                 bgImageUri = readerBgImage,
                 restoreToken = renderedChapter.restoreToken,
@@ -1112,12 +1138,18 @@ fun ReaderScreen(
                 onLinkTap = { href, _ -> handleReaderLinkTap(href) },
                 onChapterLinksSeen = ::handleChapterLinksSeen,
                 onChapterAnchorIndexReady = viewModel::onChapterAnchorIndexReady,
-                // 点击区域翻页动作（与设置「轻按页面左侧」联动）。此前只喂给旧 renderer.Reader，
-                // page-level 横翻 Host 漏接 → 设置不生效；四角值 ReaderScreen 早已 collect。
-                tapActionTopLeft = tapTL,
-                tapActionTopRight = tapTR,
-                tapActionBottomLeft = tapBL,
-                tapActionBottomRight = tapBR,
+                // 点击九宫格生效网格（用户「点击区域」全配置 / 四角合成矩阵）+ 扩展动作出口
+                tapGrid = tapGrid,
+                onPrevChapter = { viewModel.prevChapter() },
+                onNextChapter = { viewModel.nextChapter() },
+                onToggleTts = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                        notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    viewModel.toggleTtsPanel()
+                },
+                onAddBookmark = { addBookmarkWithToast() },
                 // v1.5 page-level 重构遗留桥梁缺失修复：音量键 / 蓝牙 / TTS / 顶栏按钮路径
                 // 在 COVER/SLIDE/NONE 模式下通过 Host 内 LaunchedEffect 桥到 turnCtrl 动画 / fallback 瞬切
                 pageTurnCommand = pageTurnCommand,
@@ -1274,10 +1306,7 @@ fun ReaderScreen(
                 onAddBookmark = { addBookmarkWithToast() },
                 bookTitle = book?.title ?: "",
                 bookAuthor = book?.author ?: "",
-                tapActionTopLeft = tapTL,
-                tapActionTopRight = tapTR,
-                tapActionBottomLeft = tapBL,
-                tapActionBottomRight = tapBR,
+                tapGrid = tapGrid,
                 readerStyle = effectiveReaderStyle,
                 chaptersSize = chapters.size,
                 titleAlign = titleAlign,
@@ -1636,6 +1665,15 @@ fun ReaderScreen(
                 onParagraphSpacingChange = viewModel.settings::setParagraphSpacing,
                 firstLineIndent = firstLineIndent,
                 onFirstLineIndentChange = viewModel.settings::setFirstLineIndent,
+                epubHideImages = epubHideImages,
+                onEpubHideImagesChange = viewModel.settings::setEpubHideImages,
+                epubTypographyOverride = epubTypographyOverride,
+                onEpubTypographyOverrideChange = viewModel.settings::setEpubTypographyOverride,
+                blockedImageCount = blockedImageSrcs.size,
+                onClearBlockedImages = {
+                    viewModel.clearBlockedImages()
+                    centerToast.show("已恢复被屏蔽的图片")
+                },
                 marginHorizontal = marginHorizontal,
                 onMarginHorizontalCommit = { v ->
                     viewModel.settings.setMarginHorizontal(v)
@@ -1853,6 +1891,39 @@ fun ReaderScreen(
             ImageViewerDialog(
                 imageSrc = src,
                 onDismiss = { viewModel.dismissImageViewer() },
+            )
+        }
+
+        // EPUB 图片长按弹层：查看大图 / 保存图片 / 复制图片源 / 屏蔽此图
+        imageActionTarget?.let { (src, anchor) ->
+            ImageActionsPopup(
+                offset = anchor,
+                onView = {
+                    imageActionTarget = null
+                    viewModel.onImageClick(src)
+                },
+                onSave = {
+                    imageActionTarget = null
+                    screenScope.launch {
+                        val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.morealm.app.domain.storage.ImageSaver.saveToPictures(context, src)
+                        }
+                        centerToast.show(if (ok) "已保存到相册" else "保存失败")
+                    }
+                },
+                onCopySource = {
+                    imageActionTarget = null
+                    viewModel.copyTextToClipboard(
+                        com.morealm.app.domain.storage.ImageSaver.sourceLabel(src),
+                    )
+                    centerToast.show("已复制图片源")
+                },
+                onBlock = {
+                    imageActionTarget = null
+                    viewModel.blockImage(src)
+                    centerToast.show("已屏蔽此图，设置中可恢复")
+                },
+                onDismiss = { imageActionTarget = null },
             )
         }
 

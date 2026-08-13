@@ -62,11 +62,10 @@ fun SimulationPageTransition(
     bgMeanColor: Int = backgroundColor,
     gesturesEnabled: Boolean = true,
     onTapCenter: () -> Unit = {},
-    /** 点击区域翻页动作（透传给 SimulationReadView 的九宫格 tap）。默认左 prev 右 next。 */
-    tapActionTopLeft: String = "prev",
-    tapActionTopRight: String = "next",
-    tapActionBottomLeft: String = "prev",
-    tapActionBottomRight: String = "next",
+    /** 点击九宫格动作矩阵（透传 SimulationReadView；ReaderTapZones 生效网格）。 */
+    tapGrid: List<String> = com.morealm.app.ui.reader.ReaderTapZones.DEFAULT_GRID,
+    /** 九宫格扩展动作出口（prev_chapter/next_chapter/tts/bookmark）；null 退化呼出菜单。 */
+    onZoneAction: ((action: String) -> Unit)? = null,
     onTapOnHighlight: ((Offset) -> Boolean)? = null,
     onLongPress: ((Offset) -> Unit)? = null,
     isSelectionActive: () -> Boolean = { false },
@@ -167,10 +166,8 @@ fun SimulationPageTransition(
 
             // ── Host 共享交互透传 ──
             view.onTapCenter = if (gesturesEnabled) onTapCenter else null
-            view.tapActionTopLeft = tapActionTopLeft
-            view.tapActionTopRight = tapActionTopRight
-            view.tapActionBottomLeft = tapActionBottomLeft
-            view.tapActionBottomRight = tapActionBottomRight
+            view.tapGrid = tapGrid
+            view.onZoneAction = onZoneAction
             view.onSingleTap = if (onTapOnHighlight != null) {
                 { x, y -> onTapOnHighlight.invoke(Offset(x, y)) }
             } else null

@@ -330,6 +330,8 @@ internal fun SimulationPager(
                 }
             }
             view.onTapCenter = { params.onTapCenter() }
+            view.tapGrid = params.tapGrid
+            view.onZoneAction = params.onZoneAction
             view.onLongPress = { x, y -> params.onLongPress?.invoke(Offset(x, y)) }
             view.onSingleTap = { x, y -> params.onSingleTap?.invoke(Offset(x, y)) ?: false }
             // 把 selectionState.isActive 接到 View 的触摸门控字段：popup 弹出期间

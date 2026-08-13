@@ -569,6 +569,27 @@ class ReaderViewModel @Inject constructor(
     private val _viewingImageSrc = MutableStateFlow<String?>(null)
     val viewingImageSrc: StateFlow<String?> = _viewingImageSrc.asStateFlow()
 
+    // ── EPUB「屏蔽此图」（图片长按弹层）──
+    /**
+     * 当前书已屏蔽的图片 src 集合（每书持久化于 AppPreferences 动态 key）。
+     * 宿主透传给排版引擎 blockedImageSrcs，集合变化即触发重排版让图即时消失/恢复。
+     */
+    val blockedImageSrcs: StateFlow<Set<String>> =
+        (if (bookId.isBlank()) kotlinx.coroutines.flow.flowOf(emptySet()) else prefs.epubBlockedImages(bookId))
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    /** 长按弹层「屏蔽此图」：加入本书屏蔽集（持久化 + 即时重排版）。 */
+    fun blockImage(src: String) {
+        if (bookId.isBlank()) return
+        viewModelScope.launch { prefs.addEpubBlockedImage(bookId, src) }
+    }
+
+    /** 设置面板「恢复已屏蔽图片」。 */
+    fun clearBlockedImages() {
+        if (bookId.isBlank()) return
+        viewModelScope.launch { prefs.clearEpubBlockedImages(bookId) }
+    }
+
     // ── TTS integration state ──
     private val _readAloudPageTurn = MutableSharedFlow<Int>(extraBufferCapacity = 1)
     val readAloudPageTurn = _readAloudPageTurn.asSharedFlow()

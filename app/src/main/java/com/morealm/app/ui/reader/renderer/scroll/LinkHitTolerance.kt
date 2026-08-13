@@ -13,6 +13,12 @@ import com.morealm.epub.render.findColumnByPixel
 internal const val LINK_HIT_TOLERANCE_DP: Float = 10f
 
 /**
+ * 图片 tap/长按命中容差（[EpubImageHitTester]）。比链接容差略小：块图本身就按
+ * 整个 slot 矩形算命中（够大），容差主要服务行内注号小图的热区放大。
+ */
+internal const val IMAGE_HIT_TOLERANCE_DP: Float = 8f
+
+/**
  * 在 (x, [yInChapter]) 附近命中链接 —— 精确命中落空时向两侧重采样。
  *
  * [ScrollChapterLayout.findColumnByPixel] 横向是**精确匹配**（x 必须落在

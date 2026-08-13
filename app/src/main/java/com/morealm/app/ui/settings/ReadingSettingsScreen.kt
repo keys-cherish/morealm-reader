@@ -70,6 +70,11 @@ fun ReadingSettingsScreen(
     val pageAnim by viewModel.pageAnim.collectAsStateWithLifecycle()
     val readingDirection by viewModel.readingDirection.collectAsStateWithLifecycle()
     val tapLeftAction by viewModel.tapLeftAction.collectAsStateWithLifecycle()
+    val readerTapGrid by viewModel.readerTapGrid.collectAsStateWithLifecycle()
+    val tapTL by viewModel.tapActionTopLeft.collectAsStateWithLifecycle()
+    val tapTR by viewModel.tapActionTopRight.collectAsStateWithLifecycle()
+    val tapBL by viewModel.tapActionBottomLeft.collectAsStateWithLifecycle()
+    val tapBR by viewModel.tapActionBottomRight.collectAsStateWithLifecycle()
     val volumeKeyPage by viewModel.volumeKeyPage.collectAsStateWithLifecycle()
     val volumeKeyReverse by viewModel.volumeKeyReverse.collectAsStateWithLifecycle()
     val headsetButtonPage by viewModel.headsetButtonPage.collectAsStateWithLifecycle()
@@ -87,7 +92,7 @@ fun ReadingSettingsScreen(
 
     // Dialog states
     var showAnimDialog by remember { mutableStateOf(false) }
-    var showTapLeftDialog by remember { mutableStateOf(false) }
+    var showTapZoneDialog by remember { mutableStateOf(false) }
     var showTimeoutDialog by remember { mutableStateOf(false) }
     var showLongPressDialog by remember { mutableStateOf(false) }
     var showSelectionMenuDialog by remember { mutableStateOf(false) }
@@ -129,9 +134,15 @@ fun ReadingSettingsScreen(
                 )
                 SettingsClickRow(
                     icon = Icons.Outlined.TouchApp,
-                    title = "轻按页面左侧",
-                    value = if (tapLeftAction == "next") "翻到下一页" else "翻到上一页",
-                    onClick = { showTapLeftDialog = true },
+                    title = "点击区域",
+                    value = if (com.morealm.app.ui.reader.ReaderTapZones.parseGrid(readerTapGrid) != null) {
+                        "自定义"
+                    } else if (tapLeftAction == "next") {
+                        "默认 · 左侧下一页"
+                    } else {
+                        "默认 · 左侧上一页"
+                    },
+                    onClick = { showTapZoneDialog = true },
                 )
             }
 
@@ -429,11 +440,16 @@ fun ReadingSettingsScreen(
             onDismiss = { showAnimDialog = false },
         )
     }
-    if (showTapLeftDialog) {
-        TapLeftDialog(
-            current = tapLeftAction,
-            onSelect = { viewModel.setTapLeftAction(it); showTapLeftDialog = false },
-            onDismiss = { showTapLeftDialog = false },
+    if (showTapZoneDialog) {
+        TapZoneGridDialog(
+            currentGrid = com.morealm.app.ui.reader.ReaderTapZones.effectiveGrid(
+                readerTapGrid, tapTL, tapTR, tapBL, tapBR,
+            ),
+            onSave = { grid ->
+                viewModel.setReaderTapGrid(com.morealm.app.ui.reader.ReaderTapZones.encodeGrid(grid))
+            },
+            onReset = { viewModel.setReaderTapGrid("") },
+            onDismiss = { showTapZoneDialog = false },
         )
     }
     if (showTimeoutDialog) {
@@ -781,13 +797,91 @@ private fun PageAnimDialog(current: String, onSelect: (String) -> Unit, onDismis
     BottomSheetPicker("翻页动画", options, current, onSelect, onDismiss)
 }
 
+/**
+ * 点击区域九宫格编辑器 —— 每格一个按钮显示当前动作，点格弹动作菜单即改即存；
+ * 「恢复默认」清 READER_TAP_GRID 回四角合成矩阵。改动会被拒绝当且仅当它会移除
+ * 最后一格「呼出菜单」（防止用户把自己锁在菜单外）。
+ */
 @Composable
-private fun TapLeftDialog(current: String, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
-    val options = listOf(
-        "next" to "翻到下一页",
-        "prev" to "翻到上一页",
+private fun TapZoneGridDialog(
+    currentGrid: List<String>,
+    onSave: (List<String>) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val zones = com.morealm.app.ui.reader.ReaderTapZones
+    var grid by remember(currentGrid) { mutableStateOf(currentGrid) }
+    var pickerFor by remember { mutableStateOf(-1) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("点击区域") },
+        text = {
+            Column {
+                Text(
+                    "点任意分区修改其动作，改动立即生效。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+                Spacer(Modifier.height(10.dp))
+                for (row in 0..2) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        for (col in 0..2) {
+                            val idx = row * 3 + col
+                            Box(Modifier.weight(1f)) {
+                                OutlinedButton(
+                                    onClick = { pickerFor = idx },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 10.dp),
+                                ) {
+                                    Text(
+                                        zones.labelOf(grid.getOrElse(idx) { zones.ACTION_MENU }),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = pickerFor == idx,
+                                    onDismissRequest = { pickerFor = -1 },
+                                ) {
+                                    zones.ACTIONS.forEach { action ->
+                                        DropdownMenuItem(
+                                            text = { Text(zones.labelOf(action)) },
+                                            onClick = {
+                                                pickerFor = -1
+                                                val next = grid.toMutableList()
+                                                    .also { it[idx] = action }
+                                                if (next.none { t -> t == zones.ACTION_MENU }) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        "至少保留一格「呼出菜单」",
+                                                        android.widget.Toast.LENGTH_SHORT,
+                                                    ).show()
+                                                } else {
+                                                    grid = next
+                                                    onSave(next)
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("完成") }
+        },
+        dismissButton = {
+            TextButton(onClick = { onReset(); onDismiss() }) { Text("恢复默认") }
+        },
     )
-    BottomSheetPicker("轻按页面左侧", options, current, onSelect, onDismiss)
 }
 
 @Composable

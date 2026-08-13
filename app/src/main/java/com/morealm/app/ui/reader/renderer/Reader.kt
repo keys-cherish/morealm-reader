@@ -152,12 +152,9 @@ fun Reader(
     onSearchSelectionConsumed: () -> Unit = {},
     bookTitle: String = "",
     bookAuthor: String = "",
-    // 9-zone tap actions (Ported from the reference implementation ReadView.click)
-    // Values: "prev", "next", "menu", "prev_chapter", "next_chapter", "tts", "bookmark", "none"
-    tapActionTopLeft: String = "prev",
-    tapActionTopRight: String = "next",
-    tapActionBottomLeft: String = "prev",
-    tapActionBottomRight: String = "next",
+    // 9-zone tap grid（ReaderTapZones 单一权威；整格可配，caller 传生效网格）。
+    // token: "prev" / "next" / "menu" / "prev_chapter" / "next_chapter" / "tts" / "bookmark" / "none"
+    tapGrid: List<String> = com.morealm.app.ui.reader.ReaderTapZones.DEFAULT_GRID,
     readerStyle: ReaderStyle? = null,
     chaptersSize: Int = 0,
     showChapterName: Boolean = true,
@@ -1877,6 +1874,18 @@ fun Reader(
          onProgress = onProgress,
          controlsVisible = controlsVisible,
          onTapCenter = onTapCenter,
+        // 仿真路径九宫格：与非仿真 detectTapGestures 同一张网格 + 同一动作集
+        tapGrid = tapGrid,
+        onZoneAction = { action ->
+            when (action) {
+                "prev_chapter" -> onPrevChapter()
+                "next_chapter" -> onNextChapter()
+                "tts" -> onToggleTts()
+                "bookmark" -> onAddBookmark()
+                "none" -> Unit
+                else -> onTapCenter()
+            }
+        },
         onImageClick = onImageClick,
         setHighlightActionTarget = { highlightActionTarget = it },
         setHighlightActionOffset = { highlightActionOffset = it },
@@ -2005,43 +2014,20 @@ fun Reader(
                                 // this, a stuck isRunning from a prior animation blocks
                                 // all future tap-based page turns.
                                 coordinator.pageDelegateState.onDown()
-                                // 9-zone tap (Ported from the reference implementation ReadView.onSingleTapUp + setRect9x)
+                                // 9-zone tap —— ReaderTapZones 单一映射（整格可配）
                                 val w = size.width; val h = size.height
-                                val tapColumn = when {
-                                    offset.x < w * 0.33f -> 0  // left
-                                    offset.x < w * 0.66f -> 1  // center
-                                    else -> 2                   // right
-                                }
-                                val row = when {
-                                    offset.y < h * 0.33f -> 0  // top
-                                    offset.y < h * 0.66f -> 1  // middle
-                                    else -> 2                   // bottom
-                                }
-                                // Determine action for this zone
-                                val action = when (row to tapColumn) {
-                                    0 to 0 -> tapActionTopLeft      // TL
-                                    0 to 1 -> "prev"                // TC: prev page
-                                    0 to 2 -> tapActionTopRight     // TR
-                                    1 to 0 -> tapActionBottomLeft   // ML: 跟随「轻按左侧」设置
-                                    1 to 1 -> "menu"                // MC: show menu
-                                    1 to 2 -> tapActionBottomRight  // MR: 跟随「轻按右侧」设置
-                                    2 to 0 -> tapActionBottomLeft   // BL
-                                    2 to 1 -> "next"                // BC: next page
-                                    2 to 2 -> tapActionBottomRight  // BR
-                                    else -> "menu"
-                                }
-                                // 诊断：用户报告"点屏直接跳下一章"。把 9-zone 命中、各
-                                // 角落的 tapAction 配置、最终 action、以及当前 PageAnim
-                                // 类型一并打印，方便定位是 zone 误判（通常 row/col 计算错）
-                                // 还是用户把某角配成了 next_chapter。仅 info 级，按需关。
+                                val action = com.morealm.app.ui.reader.ReaderTapZones.actionAt(
+                                    tapGrid, offset.x, offset.y, w.toFloat(), h.toFloat(),
+                                )
+                                // 诊断：用户报告"点屏直接跳下一章"。把命中动作、网格配置与
+                                // 当前 PageAnim 类型一并打印，方便定位是 zone 误判还是用户
+                                // 把某格配成了 next_chapter。仅 info 级，按需关。
                                 AppLog.info(
                                     "ReaderTap",
-                                    "tap zone row=$row col=$tapColumn action=$action " +
+                                    "tap zone action=$action " +
                                         "offset=(${offset.x.toInt()},${offset.y.toInt()}) " +
                                         "size=(${w.toInt()}x${h.toInt()}) " +
-                                        "anim=$pageAnimType corners=[TL=$tapActionTopLeft," +
-                                        "TR=$tapActionTopRight,BL=$tapActionBottomLeft," +
-                                        "BR=$tapActionBottomRight]"
+                                        "anim=$pageAnimType grid=$tapGrid"
                                 )
                                 if (action == "menu") {
                                     onTapCenter()

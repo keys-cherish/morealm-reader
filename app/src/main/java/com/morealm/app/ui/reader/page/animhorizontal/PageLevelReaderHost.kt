@@ -61,6 +61,8 @@ import com.morealm.app.ui.reader.renderer.SelectionToolbar
 import com.morealm.app.ui.reader.renderer.ReaderLoadingIndicator
 import com.morealm.app.ui.reader.renderer.rememberBatteryStatus
 import com.morealm.app.ui.reader.renderer.rememberBottomCornerInsetDp
+import com.morealm.app.ui.reader.renderer.scroll.EpubImageHitTester
+import com.morealm.app.ui.reader.renderer.scroll.IMAGE_HIT_TOLERANCE_DP
 import com.morealm.app.ui.reader.renderer.scroll.LINK_HIT_TOLERANCE_DP
 import com.morealm.app.ui.reader.renderer.scroll.PAGED_INFO_BAR_LINE_DP
 import com.morealm.app.ui.reader.renderer.scroll.linkNearPixel
@@ -150,6 +152,16 @@ fun PageLevelReaderHost(
     textFullJustify: Boolean = true,
     /** 「尊重原书排版」：authored 行距/缩进（含显式 0）赢过用户设置，详 ScrollLayoutEngine 同名参数。 */
     respectAuthoredStyle: Boolean = false,
+    /** 无图模式（引擎 hideImages）：隐藏全部插图与背景图，重排版不留空洞。 */
+    hideImages: Boolean = false,
+    /** 每书「屏蔽此图」集合（引擎 blockedImageSrcs），集合变化触发重排版。 */
+    blockedImageSrcs: Set<String> = emptySet(),
+    /** 「用户定义排版」（引擎 overrideAuthoredSpacing）：用户缩进/段距取代 authored 声明。 */
+    overrideAuthoredSpacing: Boolean = false,
+    /** tap 命中图片 → 查看大图（仅原「呼出菜单」兜底分支尝试，保留翻页分区语义）。 */
+    onImageTap: (src: String) -> Unit = {},
+    /** 长按命中图片 → 图片操作弹层；anchor 为 view-local 长按点。图片优先于文字选区。 */
+    onImageLongPress: (src: String, anchor: Offset) -> Unit = { _, _ -> },
     bgColorArgb: Int = Color.WHITE,
     /**
      * 用户选择的阅读区背景图 uri；空串 = 纯色背景。
@@ -242,16 +254,17 @@ fun PageLevelReaderHost(
      */
     onChapterAnchorIndexReady: (Int, com.morealm.app.domain.render.layout.AnchorTextIndex) -> Unit = { _, _ -> },
     /**
-     * 点击区域翻页动作（对齐旧 renderer.Reader 九宫格）：4 角动作由用户设置驱动，
-     * `tapActionTopLeft/BottomLeft` 默认跟随「轻按页面左侧」、右两角跟随右侧；
-     * 中列上=prev / 下=next、正中=menu 固定。取值 prev / next / menu（其它如 tts /
-     * bookmark 本 Host 无对应入口，退化为 menu）。此前本 Host 硬编码「左=prev / 右=next」、
-     * 不读这套配置，导致设置里改「轻按页面左侧→翻到下一页」对 page-level 横翻不生效。
+     * 点击九宫格动作矩阵（[com.morealm.app.ui.reader.ReaderTapZones] 单一权威；
+     * caller 传生效网格 = 用户 READER_TAP_GRID 或四角合成矩阵）。每格可配全动作集：
+     * prev/next/menu + prev_chapter/next_chapter/tts/bookmark/none（后四类经下面的
+     * 扩展回调出去）。此前 4 角 param + 硬编码中列，现在整格可配。
      */
-    tapActionTopLeft: String = "prev",
-    tapActionTopRight: String = "next",
-    tapActionBottomLeft: String = "prev",
-    tapActionBottomRight: String = "next",
+    tapGrid: List<String> = com.morealm.app.ui.reader.ReaderTapZones.DEFAULT_GRID,
+    /** 九宫格「上一章 / 下一章 / 朗读 / 添加书签」动作出口（ReaderScreen 接 VM 现成入口）。 */
+    onPrevChapter: () -> Unit = {},
+    onNextChapter: () -> Unit = {},
+    onToggleTts: () -> Unit = {},
+    onAddBookmark: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // ── paint 派生（与 ScrollCanvasReaderHost L225-260 同算法）──
@@ -344,6 +357,8 @@ fun PageLevelReaderHost(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
         contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing,
         paragraphIndent, titleMode, titleAlign, textFullJustify, respectAuthoredStyle,
+        // 无图/屏蔽/用户定义排版都改变字符坐标 → 进 key 触发 engine 重建重排版
+        hideImages, blockedImageSrcs, overrideAuthoredSpacing,
         // ruleColorEnabled / isNight / ruleColorPalette 进 key：开关、日夜切换、改调色板 →
         // engine 重建 → 重排版（颜色被 computeStyleSignature 排除，靠 engine 重建做缓存失效，
         // 对齐 MVP 策略 A）。
@@ -368,6 +383,9 @@ fun PageLevelReaderHost(
             titleAlign = titleAlign,
             textFullJustify = textFullJustify,
             respectAuthoredStyle = respectAuthoredStyle,
+            hideImages = hideImages,
+            blockedImageSrcs = blockedImageSrcs,
+            overrideAuthoredSpacing = overrideAuthoredSpacing,
             // 注入真实 dims 解析器 — 让 emitImage 拿到原图 aspect ratio 不走 4:3 fallback。
             // 修「某轻小说 01 cover 1000x1333 被算成 798x598 (4:3 压扁) 视觉只占视口 1/3」根因
             // (resolver 默认 NoOp → dims=null → fallback `visibleWidth*0.75=598`)。
@@ -845,19 +863,31 @@ fun PageLevelReaderHost(
         }
         consumed
     }
-    // 优先级 5：长按 → 算选区（NONE/COVER/SLIDE 走 detectTapGestures.onLongPress；
-    // SIMULATION 走 SimulationReadView.onLongPress）。
+    // 优先级 5：长按 → 图片优先弹图片操作条，否则算选区（NONE/COVER/SLIDE 走
+    // detectTapGestures.onLongPress；SIMULATION 走 SimulationReadView.onLongPress，
+    // 两条路都汇到本 resolver → 仿真模式长按图片同样生效）。
     val resolveLongPress: (Offset) -> Unit = { offset ->
         val layout = core.state.currentChapter
         if (layout != null) {
-            val sel = handleLongPress(
-                layout = layout,
-                chapterIndex = layout.chapterIndex,
+            val img = EpubImageHitTester.findImageAt(
+                layout,
                 x = offset.x - layout.paddingLeft,
                 yInChapter = offset.y + pageTopYInChapter(),
-                anchorInBox = offset,
+                tolerancePx = with(density) { IMAGE_HIT_TOLERANCE_DP.dp.toPx() },
             )
-            if (sel.isActive) selection = sel
+            if (img != null) {
+                // 图片优先于文字选区：长按图片不再落进「选中 U+FFFC 占位符」的老路
+                onImageLongPress(img.src, offset)
+            } else {
+                val sel = handleLongPress(
+                    layout = layout,
+                    chapterIndex = layout.chapterIndex,
+                    x = offset.x - layout.paddingLeft,
+                    yInChapter = offset.y + pageTopYInChapter(),
+                    anchorInBox = offset,
+                )
+                if (sel.isActive) selection = sel
+            }
         }
     }
 
@@ -869,10 +899,9 @@ fun PageLevelReaderHost(
             Modifier.pointerInput(
                 animType, selection.isActive, highlightActionTarget != null, chapterHighlightsRaw,
                 // tap 配置必须进 key：否则 detectTapGestures 闭包在 pointerInput 启动时
-                // 捕获的 tapAction* 不会随参数更新（pointerInput 不因捕获值变化重启），
-                // 表现为「设置改了不生效，退出重进 / 再改一次才生效」。把四角动作纳入 key，
-                // 配置一变即重启手势识别、捕获最新动作。
-                tapActionTopLeft, tapActionTopRight, tapActionBottomLeft, tapActionBottomRight,
+                // 捕获的 tapGrid 不会随参数更新（pointerInput 不因捕获值变化重启），
+                // 表现为「设置改了不生效，退出重进 / 再改一次才生效」。
+                tapGrid,
             ) {
                 detectTapGestures(
                     onTap = { offset ->
@@ -889,38 +918,15 @@ fun PageLevelReaderHost(
                         // 优先级 3: tap-on-highlight 命中已存高亮 → 弹菜单
                         if (resolveTapOnHighlight(offset)) return@detectTapGestures
                         // 优先级 4: zone tap 翻页（所有横向 page-level 模式：NONE/COVER/SLIDE/SIMULATION）。
-                        // 9 宫格映射对齐旧 renderer.Reader：4 角动作随用户配置（tapAction* 默认
-                        // 跟随「轻按页面左侧/右侧」），中列上=prev / 下=next、正中=menu 固定。
-                        // 此前这里硬编码「左=prev / 右=next」，用户在设置里把「轻按页面左侧」
-                        // 改成「翻到下一页」对 page-level 横翻完全不生效（根因）。
-                        val w = size.width.toFloat()
-                        val h = size.height.toFloat()
-                        val tapCol = when {
-                            offset.x < w * 0.33f -> 0
-                            offset.x < w * 0.66f -> 1
-                            else -> 2
-                        }
-                        val tapRow = when {
-                            offset.y < h * 0.33f -> 0
-                            offset.y < h * 0.66f -> 1
-                            else -> 2
-                        }
-                        val action = when (tapRow to tapCol) {
-                            0 to 0 -> tapActionTopLeft       // TL
-                            0 to 1 -> "prev"                 // TC
-                            0 to 2 -> tapActionTopRight      // TR
-                            1 to 0 -> tapActionBottomLeft    // ML：跟随「轻按左侧」
-                            1 to 2 -> tapActionBottomRight   // MR：跟随「轻按右侧」
-                            2 to 0 -> tapActionBottomLeft    // BL
-                            2 to 2 -> tapActionBottomRight   // BR
-                            2 to 1 -> "next"                 // BC
-                            else -> "menu"                   // MC (1,1)
-                        }
+                        // 九宫格映射走 ReaderTapZones 单一实现——整格可配（用户「点击区域」
+                        // 编辑器），caller 未配置时传四角合成矩阵，与旧硬编码逐格一致。
+                        val action = com.morealm.app.ui.reader.ReaderTapZones.actionAt(
+                            tapGrid, offset.x, offset.y, size.width.toFloat(), size.height.toFloat(),
+                        )
                         com.morealm.app.core.log.AppLog.info(
                             "PageLvlHost",
-                            "DIAG onTap action=$action row=$tapRow col=$tapCol animType=$animType " +
-                                "corners=[TL=$tapActionTopLeft,TR=$tapActionTopRight," +
-                                "BL=$tapActionBottomLeft,BR=$tapActionBottomRight]",
+                            "DIAG onTap action=$action animType=$animType " +
+                                "offset=(${offset.x.toInt()},${offset.y.toInt()}) grid=$tapGrid",
                         )
                         when (action) {
                             "prev" -> {
@@ -957,9 +963,27 @@ fun PageLevelReaderHost(
                                     }
                                 } else commitPageTurn(true, NavigationSource.GESTURE)
                             }
-                            // "menu" 及无对应入口的动作（tts/bookmark/none —— 本 Host 没有这些
-                            // callback）一律退化为呼出/隐藏菜单，避免点击无反馈。
-                            else -> onTapCenter()
+                            // 九宫格扩展动作（与旧 renderer.Reader 动作集对齐）
+                            "prev_chapter" -> onPrevChapter()
+                            "next_chapter" -> onNextChapter()
+                            "tts" -> onToggleTts()
+                            "bookmark" -> onAddBookmark()
+                            "none" -> Unit
+                            // "menu"（及未知 token 兜底）退化为呼出/隐藏菜单前，先试图片
+                            // 命中：中央区 tap 在图上 = 查看大图（对齐 TXT 老管线行为），
+                            // 翻页分区（prev/next 等）优先级不受影响。
+                            else -> {
+                                val layout = core.state.currentChapter
+                                val img = layout?.let {
+                                    EpubImageHitTester.findImageAt(
+                                        it,
+                                        x = offset.x - it.paddingLeft,
+                                        yInChapter = offset.y + pageTopYInChapter(),
+                                        tolerancePx = with(density) { IMAGE_HIT_TOLERANCE_DP.dp.toPx() },
+                                    )
+                                }
+                                if (img != null) onImageTap(img.src) else onTapCenter()
+                            }
                         }
                     },
                     onLongPress = { offset -> resolveLongPress(offset) },
@@ -1167,10 +1191,18 @@ fun PageLevelReaderHost(
                         bgMeanColor = bgColorArgb,
                         gesturesEnabled = gesturesEnabled,
                         onTapCenter = onTapCenter,
-                        tapActionTopLeft = tapActionTopLeft,
-                        tapActionTopRight = tapActionTopRight,
-                        tapActionBottomLeft = tapActionBottomLeft,
-                        tapActionBottomRight = tapActionBottomRight,
+                        tapGrid = tapGrid,
+                        // 仿真路径的扩展动作出口 —— 与非仿真 onTap 的 when 分发同一动作集
+                        onZoneAction = { action ->
+                            when (action) {
+                                "prev_chapter" -> onPrevChapter()
+                                "next_chapter" -> onNextChapter()
+                                "tts" -> onToggleTts()
+                                "bookmark" -> onAddBookmark()
+                                "none" -> Unit
+                                else -> onTapCenter()
+                            }
+                        },
                         onTapOnHighlight = resolveTapOnHighlight,
                         onLongPress = resolveLongPress,
                         // popup 弹出门控：选区 / 高亮 action menu 任一活跃即视为 popup 弹出。

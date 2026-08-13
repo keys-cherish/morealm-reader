@@ -932,6 +932,15 @@ fun ReaderSettingsPanel(
     /** 首行缩进字符数：0=顶格 / 1 / 2（默认两字）。见 [ReaderSettingsController.setFirstLineIndent]。 */
     firstLineIndent: Int = 2,
     onFirstLineIndentChange: (Int) -> Unit = {},
+    /** EPUB 无图模式：隐藏全部插图与背景图（重排版不留空洞）。 */
+    epubHideImages: Boolean = false,
+    onEpubHideImagesChange: (Boolean) -> Unit = {},
+    /** EPUB 排版来源：false = 跟随书籍（原书 CSS 优先）；true = 用户定义（缩进/行距/段距用用户值）。 */
+    epubTypographyOverride: Boolean = false,
+    onEpubTypographyOverrideChange: (Boolean) -> Unit = {},
+    /** 本书「屏蔽此图」张数；>0 时显示恢复入口。 */
+    blockedImageCount: Int = 0,
+    onClearBlockedImages: () -> Unit = {},
     marginHorizontal: Int = 24,
     /**
      * 松手时回写 prefs 触发 reflow。设计上**不**走"拖动期间实时预览"——
@@ -1450,6 +1459,67 @@ fun ReaderSettingsPanel(
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
                             selectedLabelColor = MaterialTheme.colorScheme.primary),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // ── EPUB 图片与原书排版 ──
+            // 无图模式 + 排版来源（跟随书籍/用户定义）+ 恢复已屏蔽图片。三者都走引擎
+            // 参数（hideImages / blockedImageSrcs / overrideAuthoredSpacing），改了即重排版。
+            Text("图片与原书排版", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("无图模式", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "隐藏书内全部插图与背景图，正文重新排版",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                }
+                Switch(checked = epubHideImages, onCheckedChange = onEpubHideImagesChange)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("排版来源", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = !epubTypographyOverride,
+                    onClick = { onEpubTypographyOverrideChange(false) },
+                    label = { Text("跟随书籍") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                        selectedLabelColor = MaterialTheme.colorScheme.primary),
+                )
+                FilterChip(
+                    selected = epubTypographyOverride,
+                    onClick = { onEpubTypographyOverrideChange(true) },
+                    label = { Text("用户定义") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                        selectedLabelColor = MaterialTheme.colorScheme.primary),
+                )
+            }
+            Text(
+                if (epubTypographyOverride) "首行缩进 / 行距 / 段距按上面的设置，忽略书内声明"
+                else "书内声明的缩进 / 行距 / 段距优先（字号始终用你的）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
+            if (blockedImageCount > 0) {
+                TextButton(
+                    onClick = onClearBlockedImages,
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                ) {
+                    Text(
+                        "恢复本书已屏蔽的 $blockedImageCount 张图",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
             }

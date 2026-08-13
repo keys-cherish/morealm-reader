@@ -96,6 +96,10 @@ class SimulationParams(
     val onPageChanged: (Int) -> Unit,
     val onFillPage: (Int, ReaderPageDirection) -> Int?,
     val onTapCenter: () -> Unit = {},
+    /** 点击九宫格动作矩阵（ReaderTapZones 生效网格；prev/next/menu 由 View 原生分发）。 */
+    val tapGrid: List<String> = com.morealm.app.ui.reader.ReaderTapZones.DEFAULT_GRID,
+    /** 九宫格扩展动作出口（prev_chapter/next_chapter/tts/bookmark）；null 退化呼出菜单。 */
+    val onZoneAction: ((String) -> Unit)? = null,
     val onLongPress: ((Offset) -> Unit)? = null,
     /**
      * 在 simulation 模式下做"已存高亮命中检测"的入口。返回 true = 本次 tap

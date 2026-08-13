@@ -154,6 +154,16 @@ fun ScrollCanvasReaderHost(
     textFullJustify: Boolean = true,
     /** 「尊重原书排版」：authored 行距/缩进（含显式 0）赢过用户设置，详 ScrollLayoutEngine 同名参数。 */
     respectAuthoredStyle: Boolean = false,
+    /** 无图模式（引擎 hideImages）：隐藏全部插图与背景图，重排版不留空洞。 */
+    hideImages: Boolean = false,
+    /** 每书「屏蔽此图」集合（引擎 blockedImageSrcs），集合变化触发重排版。 */
+    blockedImageSrcs: Set<String> = emptySet(),
+    /** 「用户定义排版」（引擎 overrideAuthoredSpacing）：用户缩进/段距取代 authored 声明。 */
+    overrideAuthoredSpacing: Boolean = false,
+    /** tap 命中图片 → 查看大图（链接/高亮优先级更高）。 */
+    onImageTap: (src: String) -> Unit = {},
+    /** 长按命中图片 → 图片操作弹层；anchor 为 view-local 长按点。图片优先于文字选区。 */
+    onImageLongPress: (src: String, anchor: Offset) -> Unit = { _, _ -> },
     /** 阅读区背景图 uri；空串 = 纯色背景。来自 ReaderScreen 的 readerBgImage。 */
     bgImageUri: String = "",
     /** 阅读区纯色背景（android argb）—— 无背景图 / 背景图加载失败时使用。 */
@@ -351,6 +361,8 @@ fun ScrollCanvasReaderHost(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
         contentPaint, titlePaint, chapterNumPaint, lineSpacingExtra, paragraphSpacing,
         paragraphIndent, titleMode, titleAlign, textFullJustify, respectAuthoredStyle,
+        // 无图/屏蔽/用户定义排版都改变字符坐标 → 进 key 触发 engine 重建重排版
+        hideImages, blockedImageSrcs, overrideAuthoredSpacing,
         // ruleColorEnabled / isNight / ruleColorPalette 进 key：开关、日夜切换、改调色板 →
         // engine 重建 → 重排版（颜色被 computeStyleSignature 排除，靠 engine 重建做缓存失效）。
         ruleColorEnabled, isNight, ruleColorPalette, highlightWords,
@@ -374,6 +386,9 @@ fun ScrollCanvasReaderHost(
             titleAlign = titleAlign,
             textFullJustify = textFullJustify,
             respectAuthoredStyle = respectAuthoredStyle,
+            hideImages = hideImages,
+            blockedImageSrcs = blockedImageSrcs,
+            overrideAuthoredSpacing = overrideAuthoredSpacing,
             // 注入真实 dims 解析器 — 让 emitImage 拿到原图 aspect ratio 不走 4:3 fallback。
             // 修「cover/inline image 被压扁」根因 (resolver 默认 NoOp → dims=null → fallback)。
             imageDimensionsResolver = ScrollImageDimensionsResolver { src, _ -> ImageCache.getBounds(src) },
@@ -900,38 +915,56 @@ fun ScrollCanvasReaderHost(
                     }
                 },
                 onTap = { offset ->
-                    // tap-on-link / tap-on-highlight 命中：Phase 6 page-level 坐标转换：
+                    // tap-on-link / tap-on-highlight / tap-on-image 命中：Phase 6 page-level 坐标转换：
                     //   view-local y → chapter-local y = pageStartY(curPageIdx) + state.pageOffset + view-y
                     //   （curPage 顶在 view 中 y = -state.pageOffset，所以 view-y 对应 page-y = view-y + pageOffset）
-                    if (chapterHighlightsRaw.isEmpty() && currentLayout.links.isEmpty()) {
-                        return@ScrollCanvasRenderer false
-                    }
                     var pageStartY = 0f
                     val pageIdx = pageFactory.pageIndex.coerceAtMost(currentLayout.pages.lastIndex)
                     for (i in 0 until pageIdx) pageStartY += currentLayout.pages[i].height
                     val yInChapter = pageStartY + state.pageOffset + offset.y
                     val xInChapter = offset.x - currentLayout.paddingLeft
-                    val hit = currentLayout.findColumnByPixel(xInChapter, yInChapter)
-                        ?: return@ScrollCanvasRenderer false
-                    val cp = hit.column?.chapterPosition ?: hit.line.firstChapterPos
-                    // 链接（脚注号/跳转）优先于高亮——脚注号被高亮盖住时点击仍应弹脚注。
-                    // 精确命中落空时按触摸容差重找（注号是缩小的上标，详见 linkNearPixel）。
-                    val link = currentLayout.linkAt(cp)
-                        ?: currentLayout.linkNearPixel(
-                            xInChapter, yInChapter,
-                            with(density) { LINK_HIT_TOLERANCE_DP.dp.toPx() },
-                        )
-                    if (link != null) {
-                        onLinkTap(link.href, offset)
-                        return@ScrollCanvasRenderer true
+                    val hit = if (chapterHighlightsRaw.isEmpty() && currentLayout.links.isEmpty()) {
+                        null
+                    } else {
+                        currentLayout.findColumnByPixel(xInChapter, yInChapter)
                     }
-                    val highlight = chapterHighlightsRaw.firstOrNull { h ->
-                        h.chapterIndex == currentLayout.chapterIndex &&
-                            cp >= h.startChapterPos && cp < h.endChapterPos
-                    } ?: return@ScrollCanvasRenderer false
-                    highlightActionAnchor = offset
-                    highlightActionTarget = highlight
-                    true
+                    var consumed = false
+                    if (hit != null) {
+                        val cp = hit.column?.chapterPosition ?: hit.line.firstChapterPos
+                        // 链接（脚注号/跳转）优先于高亮——脚注号被高亮盖住时点击仍应弹脚注。
+                        // 精确命中落空时按触摸容差重找（注号是缩小的上标，详见 linkNearPixel）。
+                        val link = currentLayout.linkAt(cp)
+                            ?: currentLayout.linkNearPixel(
+                                xInChapter, yInChapter,
+                                with(density) { LINK_HIT_TOLERANCE_DP.dp.toPx() },
+                            )
+                        if (link != null) {
+                            onLinkTap(link.href, offset)
+                            consumed = true
+                        } else {
+                            val highlight = chapterHighlightsRaw.firstOrNull { h ->
+                                h.chapterIndex == currentLayout.chapterIndex &&
+                                    cp >= h.startChapterPos && cp < h.endChapterPos
+                            }
+                            if (highlight != null) {
+                                highlightActionAnchor = offset
+                                highlightActionTarget = highlight
+                                consumed = true
+                            }
+                        }
+                    }
+                    // tap 命中图片 → 查看大图（链接/高亮优先；linked 注号小图归链接语义管）
+                    if (!consumed) {
+                        val img = EpubImageHitTester.findImageAt(
+                            currentLayout, xInChapter, yInChapter,
+                            with(density) { IMAGE_HIT_TOLERANCE_DP.dp.toPx() },
+                        )
+                        if (img != null) {
+                            onImageTap(img.src)
+                            consumed = true
+                        }
+                    }
+                    consumed
                 },
                 onLongPress = { offset ->
                     // longPress 触发选区命中。Phase 6 page-level 坐标转换（同 onTap）：
@@ -942,14 +975,24 @@ fun ScrollCanvasReaderHost(
                     val pageIdx = pageFactory.pageIndex.coerceAtMost(currentLayout.pages.lastIndex)
                     for (i in 0 until pageIdx) pageStartY += currentLayout.pages[i].height
                     val yInChapter = pageStartY + state.pageOffset + offset.y
-                    val sel = handleLongPress(
-                        layout = currentLayout,
-                        chapterIndex = currentLayout.chapterIndex,
-                        x = xInChapter,
-                        yInChapter = yInChapter,
-                        anchorInBox = offset,
+                    // 图片优先于文字选区（参照阅读器语义）：长按图片弹图片操作条，不再落进
+                    // 「选中 U+FFFC 占位符 → 复制到空内容」的老路。
+                    val img = EpubImageHitTester.findImageAt(
+                        currentLayout, xInChapter, yInChapter,
+                        with(density) { IMAGE_HIT_TOLERANCE_DP.dp.toPx() },
                     )
-                    if (sel.isActive) selection = sel
+                    if (img != null) {
+                        onImageLongPress(img.src, offset)
+                    } else {
+                        val sel = handleLongPress(
+                            layout = currentLayout,
+                            chapterIndex = currentLayout.chapterIndex,
+                            x = xInChapter,
+                            yInChapter = yInChapter,
+                            anchorInBox = offset,
+                        )
+                        if (sel.isActive) selection = sel
+                    }
                 },
             )
             // 选区 overlay（画 handle + handle drag）

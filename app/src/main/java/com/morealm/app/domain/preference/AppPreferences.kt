@@ -209,6 +209,19 @@ class AppPreferences @Inject constructor(
         val TAP_ACTION_TOP_RIGHT = stringPreferencesKey("tap_action_top_right")
         val TAP_ACTION_BOTTOM_LEFT = stringPreferencesKey("tap_action_bottom_left")
         val TAP_ACTION_BOTTOM_RIGHT = stringPreferencesKey("tap_action_bottom_right")
+        /**
+         * 阅读器点击九宫格动作全配置：9 个动作 token 行主序（TL,TC,TR,ML,MC,MR,BL,BC,BR）
+         * 逗号连接。空/缺省 = 由上面四角 key + 硬编码 TC=prev/BC=next/MC=menu 合成现状矩阵
+         * （老用户零行为变化）。token 见 [com.morealm.app.ui.reader.ReaderTapZones.ACTIONS]。
+         */
+        val READER_TAP_GRID = stringPreferencesKey("reader_tap_grid")
+        /** EPUB 无图模式：隐藏全部插图与背景图（引擎级重排版，不留空洞）。默认 false。 */
+        val EPUB_HIDE_IMAGES = booleanPreferencesKey("epub_hide_images")
+        /**
+         * EPUB 排版来源：false = 跟随书籍（现状，authored 缩进/行距/段距优先）；
+         * true = 用户定义（用户首行缩进/行距/段距取代书内声明）。默认 false。
+         */
+        val EPUB_TYPOGRAPHY_OVERRIDE = booleanPreferencesKey("epub_typography_override")
         // Header/footer content: time/battery/chapter/progress/page/none
         val HEADER_LEFT = stringPreferencesKey("header_left")
         val HEADER_CENTER = stringPreferencesKey("header_center")
@@ -660,6 +673,43 @@ class AppPreferences @Inject constructor(
     val tapActionBottomLeft: Flow<String> = context.dataStore.data.map { it[Keys.TAP_ACTION_BOTTOM_LEFT] ?: it[Keys.TAP_LEFT_ACTION] ?: "prev" }
     val tapActionBottomRight: Flow<String> = context.dataStore.data.map { it[Keys.TAP_ACTION_BOTTOM_RIGHT] ?: "next" }
     suspend fun setTapAction(key: Preferences.Key<String>, action: String) = update(key, action)
+
+    /** 九宫格点击分区（见 [Keys.READER_TAP_GRID]）；"" = 未配置，回退四角合成。 */
+    val readerTapGrid: Flow<String> = context.dataStore.data.map { it[Keys.READER_TAP_GRID] ?: "" }
+    suspend fun setReaderTapGrid(value: String) = update(Keys.READER_TAP_GRID, value)
+    suspend fun clearReaderTapGrid() {
+        context.dataStore.edit { it.remove(Keys.READER_TAP_GRID) }
+    }
+
+    // ── EPUB 图片与排版来源 ──
+    val epubHideImages: Flow<Boolean> = context.dataStore.data.map { it[Keys.EPUB_HIDE_IMAGES] ?: false }
+    suspend fun setEpubHideImages(enabled: Boolean) = update(Keys.EPUB_HIDE_IMAGES, enabled)
+
+    val epubTypographyOverride: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.EPUB_TYPOGRAPHY_OVERRIDE] ?: false }
+    suspend fun setEpubTypographyOverride(enabled: Boolean) =
+        update(Keys.EPUB_TYPOGRAPHY_OVERRIDE, enabled)
+
+    /**
+     * 每书「屏蔽此图」集合（存排版引擎所见 src —— 解包后的 file:// 缓存路径，同书稳定）。
+     * 动态 key：`epub_blocked_images_{bookId}`；删除书籍不清理（体量 KB 级，重导入还能复用）。
+     */
+    private fun epubBlockedImagesKey(bookId: String) =
+        stringSetPreferencesKey("epub_blocked_images_$bookId")
+
+    fun epubBlockedImages(bookId: String): Flow<Set<String>> =
+        context.dataStore.data.map { it[epubBlockedImagesKey(bookId)] ?: emptySet() }
+
+    suspend fun addEpubBlockedImage(bookId: String, src: String) {
+        context.dataStore.edit { prefs ->
+            val key = epubBlockedImagesKey(bookId)
+            prefs[key] = (prefs[key] ?: emptySet()) + src
+        }
+    }
+
+    suspend fun clearEpubBlockedImages(bookId: String) {
+        context.dataStore.edit { it.remove(epubBlockedImagesKey(bookId)) }
+    }
 
     // Header/footer slots
     val headerLeft: Flow<String> = context.dataStore.data.map { it[Keys.HEADER_LEFT] ?: "chapter" }

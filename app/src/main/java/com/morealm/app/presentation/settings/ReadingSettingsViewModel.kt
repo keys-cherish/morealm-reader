@@ -27,6 +27,19 @@ class ReadingSettingsViewModel @Inject constructor(
     val tapLeftAction: StateFlow<String> = prefs.tapLeftAction
         .stateIn(viewModelScope, SharingStarted.Eagerly, "next")
 
+    // ── 点击九宫格（「点击区域」编辑器）──
+    /** 全网格配置串；"" = 未配置（编辑器展示四角合成矩阵）。 */
+    val readerTapGrid: StateFlow<String> = prefs.readerTapGrid
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+    val tapActionTopLeft: StateFlow<String> = prefs.tapActionTopLeft
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "prev")
+    val tapActionTopRight: StateFlow<String> = prefs.tapActionTopRight
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "next")
+    val tapActionBottomLeft: StateFlow<String> = prefs.tapActionBottomLeft
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "prev")
+    val tapActionBottomRight: StateFlow<String> = prefs.tapActionBottomRight
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "next")
+
     val volumeKeyPage: StateFlow<Boolean> = prefs.volumeKeyPage
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
@@ -103,6 +116,10 @@ class ReadingSettingsViewModel @Inject constructor(
     }
     fun setReadingDirection(v: String) = viewModelScope.launch { prefs.setReadingDirection(v) }
     fun setTapLeftAction(v: String) = viewModelScope.launch { prefs.setTapLeftAction(v) }
+    /** 保存点击九宫格全配置；空串 = 清配置回四角合成（「恢复默认」）。 */
+    fun setReaderTapGrid(v: String) = viewModelScope.launch {
+        if (v.isBlank()) prefs.clearReaderTapGrid() else prefs.setReaderTapGrid(v)
+    }
     fun setVolumeKeyPage(v: Boolean) = viewModelScope.launch { prefs.setVolumeKeyPage(v) }
     fun setVolumeKeyReverse(v: Boolean) = viewModelScope.launch { prefs.setVolumeKeyReverse(v) }
     fun setHeadsetButtonPage(v: Boolean) = viewModelScope.launch { prefs.setHeadsetButtonPage(v) }

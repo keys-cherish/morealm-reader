@@ -100,6 +100,10 @@ internal fun rememberSimulationParams(
      onProgress: (Int) -> Unit,
      controlsVisible: Boolean,
      onTapCenter: () -> Unit,
+    /** 点击九宫格动作矩阵（ReaderTapZones 生效网格），透传 SimulationParams。 */
+    tapGrid: List<String> = com.morealm.app.ui.reader.ReaderTapZones.DEFAULT_GRID,
+    /** 九宫格扩展动作出口（prev_chapter/next_chapter/tts/bookmark）。 */
+    onZoneAction: ((String) -> Unit)? = null,
     onImageClick: (String) -> Unit,
     /** 设新 highlight action target（旧 var 等价：`highlightActionTarget = ...`） */
     setHighlightActionTarget: (Highlight?) -> Unit,
@@ -143,6 +147,8 @@ internal fun rememberSimulationParams(
         // bitmap 不会按新数据重出 → 看不到刚划的高亮。
         highlightSpans,
         textColorSpans,
+        // 点击区域配置变化 → params 重建 → SimulationReadView 拿到新网格
+        tapGrid,
     ) {
         if (pageAnimType == PageAnimType.SIMULATION && pages.isNotEmpty()) {
             SimulationParams(
@@ -189,6 +195,8 @@ internal fun rememberSimulationParams(
                     coordinator.commitPageTurn(displayIndex, direction) { setReaderPageIndex(it) }
                 },
                  onTapCenter = if (controlsVisible) ({}) else onTapCenter,
+                tapGrid = tapGrid,
+                onZoneAction = if (controlsVisible) null else onZoneAction,
                 onSingleTap = if (chapterHighlights.isEmpty()) null else { offset ->
                     val page = coordinator.getPageAt(coordinator.lastSettledDisplayPage)
                     val pos = chapterPositionAt(page, offset.x, offset.y)

@@ -91,6 +91,19 @@ class ReaderSettingsController(
     val tapActionBottomLeft: StateFlow<String> = prefs.tapActionBottomLeft.stateIn(scope, SharingStarted.Eagerly, "prev")
     val tapActionBottomRight: StateFlow<String> = prefs.tapActionBottomRight.stateIn(scope, SharingStarted.Eagerly, "next")
 
+    /** 九宫格点击分区完整配置（"" = 未配置，消费端回退四角合成矩阵）。 */
+    val readerTapGrid: StateFlow<String> = prefs.readerTapGrid
+        .stateIn(scope, SharingStarted.Eagerly, "")
+
+    // ── EPUB 图片与排版来源 ──
+    /** 无图模式：隐藏结构化管线全部插图（重排版，不留空洞）。 */
+    val epubHideImages: StateFlow<Boolean> = prefs.epubHideImages
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    /** 排版来源：false=跟随书籍（authored 优先）；true=用户定义（缩进/行距/段距用用户值）。 */
+    val epubTypographyOverride: StateFlow<Boolean> = prefs.epubTypographyOverride
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
     // Header/footer customization
     val headerLeft: StateFlow<String> = prefs.headerLeft.stateIn(scope, SharingStarted.Eagerly, "chapter")
     val headerCenter: StateFlow<String> = prefs.headerCenter.stateIn(scope, SharingStarted.Eagerly, "none")
@@ -295,6 +308,20 @@ class ReaderSettingsController(
             else -> return
         }
         scope.launch { prefs.setTapAction(key, action) }
+    }
+
+    fun setReaderTapGrid(value: String) {
+        scope.launch {
+            if (value.isBlank()) prefs.clearReaderTapGrid() else prefs.setReaderTapGrid(value)
+        }
+    }
+
+    fun setEpubHideImages(enabled: Boolean) {
+        scope.launch { prefs.setEpubHideImages(enabled) }
+    }
+
+    fun setEpubTypographyOverride(enabled: Boolean) {
+        scope.launch { prefs.setEpubTypographyOverride(enabled) }
     }
 
     fun setHeaderFooter(slot: String, value: String) {
