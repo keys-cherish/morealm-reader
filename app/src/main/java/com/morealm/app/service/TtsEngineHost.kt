@@ -12,6 +12,7 @@ import com.morealm.app.domain.tts.EdgeTtsEngine
 import com.morealm.app.domain.tts.HttpTtsEngine
 import com.morealm.app.domain.tts.SystemTtsEngine
 import com.morealm.app.domain.tts.TtsEngine
+import com.morealm.epub.render.WirePlainText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -492,6 +493,11 @@ class TtsEngineHost(
                 chapterTitle = cmd.chapterTitle
                 coverUrl = cmd.coverUrl ?: coverUrl
 
+                // Service 自加载 EPUB 章节时拿到的是 flatten wire，不经过 ReaderViewModel
+                // 的 cleanContentForTts。统一入口再投影一次，覆盖自动续章与通知栏切章；
+                // 对已经清洗过的正文以及 TXT / Web 内容是 no-op。
+                val readableContent = WirePlainText.project(cmd.content)
+
                 // 参照实现-style single-source-of-truth: when the ViewModel hands
                 // us authoritative paragraph offsets (computed from
                 // TextChapter.getParagraphs — the same data the renderer uses
@@ -501,14 +507,16 @@ class TtsEngineHost(
                 // [paragraphIndex → chapterPosition] lookup never falls back to
                 // 0, which previously caused the highlight to freeze on the
                 // first paragraph whenever the two splitters disagreed.
-                val pos = cmd.paragraphPositions
+                // wire 投影改变字符坐标；结构化 EPUB 当前本就不提供 positions。若未来
+                // 某调用方误把两者同时传入，宁可退回纯文本顺序坐标，也不拿旧 offset 错切。
+                val pos = cmd.paragraphPositions?.takeIf { readableContent == cmd.content }
                 val sliceMode: String
                 if (pos != null && pos.isNotEmpty()) {
-                    paragraphs = paragraphsFromPositions(cmd.content, pos)
+                    paragraphs = paragraphsFromPositions(readableContent, pos)
                     paragraphPositions = pos
                     sliceMode = "fromPositions(${pos.size})"
                 } else {
-                    paragraphs = parseParagraphs(cmd.content)
+                    paragraphs = parseParagraphs(readableContent)
                     paragraphPositions = buildSequentialPositions(paragraphs)
                     sliceMode = "parseParagraphs"
                 }

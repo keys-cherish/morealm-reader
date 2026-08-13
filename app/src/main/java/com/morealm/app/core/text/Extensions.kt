@@ -3,6 +3,7 @@ package com.morealm.app.core.text
 import android.content.Context
 import android.net.Uri
 import androidx.compose.ui.graphics.Color
+import com.morealm.epub.render.WirePlainText
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -82,7 +83,9 @@ fun String.stripHtmlTags(): String = replace(AppPattern.htmlTagRegex, "")
  * 空格 —— 这是已知偏差，由调用侧的兜底（slice 内残留 `<` 碎片裁断）兜住）。
  */
 fun String.cleanContentForTts(): String {
-    return this
+    // EPUB 结构化章先从 flatten wire 投影回正文。投影函数对 TXT / Web HTML
+    // 是严格 no-op，后面的既有 HTML 清洗语义不变。
+    return WirePlainText.project(this)
         .replace(AppPattern.htmlImgRegex, " ")
         .replace(AppPattern.htmlSvgRegex, " ")
         .replace(AppPattern.htmlDivCloseRegex, "\n")
