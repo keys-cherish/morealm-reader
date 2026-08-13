@@ -345,18 +345,18 @@ fun PageLevelReaderHost(
     }.toInt()
     val topInsetPx = maxOf(statusBarPx, cutoutTopPx)
     val bottomInsetPx = maxOf(navBarPx, cutoutBottomPx)
-    // page-level 模式 padding 仅"状态栏 + InfoBar"让位，不再叠加用户配置的 paddingTop/Bottom
-    // —— 后者本意是"正文与边界留白"，但 InfoBar 让位已经远超它（infoBarHeightPx=192>paddingTop=120），
-    // 叠加会浪费 ~120px 屏幕空间（截图章中 page 顶/底两块大空白）。
+    // 2026-07-07 修复「关时间电量后底部空一截」：预留按「gateInfoSlot 门控后 header/footer
+    // 是否真有内容」分别判定（与 PagePaneCanvas.PageInfoBars 绘制同口径）。
     //
-    // 2026-07-07 修复「关时间电量后底部空一截」：预留改按「gateInfoSlot 门控后 header/footer
-    // 是否真有内容」分别判定（与 PagePaneCanvas.PageInfoBars 绘制同口径，Reader.kt:358 旧滚动
-    // 模式同款语义）。footer 全空 → 正文下沉占用该行；但保留 bottomInset + 用户 paddingBottom
-    // 作安全边距（仿页脚自身的 inset 让位逻辑，防止末行贴导航栏 / 屏幕底被切）。
+    // **2026-08-13 修「用户上下页边距失效」**：此前 InfoBar 有内容时 effectivePad 只取
+    // inset + infoBarHeightPx，用户 paddingTop/Bottom 被**替换丢弃**——设置里滑上/下边距
+    // 在翻页模式（默认覆盖翻页）零反应，而左右直通生效、滚动宿主又是叠加语义，同一设置
+    // 三种行为。历史注释担心"叠加浪费空间"，但那剥夺了设置的可控性：留白多少应由用户
+    // 滑块决定。对齐 ScrollCanvasReaderHost 的叠加语义：padding + inset + InfoBar 让位。
     val infoHeaderHasContent = infoBar?.headerHasContent() == true
     val infoFooterHasContent = infoBar?.footerHasContent() == true
-    val effectivePadTop = if (infoHeaderHasContent) topInsetPx + infoBarHeightPx else topInsetPx + paddingTop
-    val effectivePadBottom = if (infoFooterHasContent) bottomInsetPx + infoBarHeightPx else bottomInsetPx + paddingBottom
+    val effectivePadTop = paddingTop + topInsetPx + (if (infoHeaderHasContent) infoBarHeightPx else 0)
+    val effectivePadBottom = paddingBottom + bottomInsetPx + (if (infoFooterHasContent) infoBarHeightPx else 0)
 
     val engine = remember(
         viewWidth, viewHeight, paddingLeft, paddingRight, effectivePadTop, effectivePadBottom,
