@@ -383,6 +383,15 @@ fun ChapterPaneCanvas(
                                 nc.drawText(col.charData, col.start, colBaselineY, paint)
                             }
                         }
+                        // v23 着重号：记号色 = 声明色（夜间适配）> 该字符实际前景色
+                        col.emphasis?.let { mark ->
+                            val markColor = mark.colorArgb?.let {
+                                adaptAuthoredForegroundForReaderBg(it, readerBgArgb, line.blockStyle.backgroundColor)
+                            } ?: overrideColor ?: paragraphColor ?: defaultColor
+                            drawEmphasisMark(
+                                nc, mark, (col.start + col.end) / 2f, colBaselineY, paint.textSize, paint, markColor,
+                            )
+                        }
                     }
                     if (blockRotationSave != null) nc.restoreToCount(blockRotationSave)
                     if (paragraphColor != null) paint.color = defaultColor
@@ -517,6 +526,29 @@ private fun drawAtomsRow(
                         }
                         canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
                         if (atomOverrideColor != null) basePaint.color = origColor
+                    }
+                    // v23 着重号：逐字符按实测 advance 定字心（同 PagePaneCanvas.drawByAtoms）
+                    atom.emphasis?.let { mark ->
+                        val markColor = mark.colorArgb?.let {
+                            adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
+                        } ?: atomOverrideColor ?: defaultColor
+                        var cx = textX
+                        var ci = 0
+                        while (ci < atom.text.length) {
+                            val end = if (atom.text[ci].isHighSurrogate() && ci + 1 < atom.text.length &&
+                                atom.text[ci + 1].isLowSurrogate()
+                            ) ci + 2 else ci + 1
+                            val ch = atom.text.substring(ci, end)
+                            val w = basePaint.measureText(ch)
+                            if (ch.isNotBlank()) {
+                                drawEmphasisMark(
+                                    canvas, mark, cx + w / 2f, effectiveBaselineY,
+                                    basePaint.textSize, basePaint, markColor,
+                                )
+                            }
+                            cx += w
+                            ci = end
+                        }
                     }
                     if (rotationSave != null) canvas.restoreToCount(rotationSave)
                 }

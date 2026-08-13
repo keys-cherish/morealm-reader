@@ -771,6 +771,15 @@ internal fun drawScrollPageOnCanvas(
                     nc.drawText(col.charData, col.start, colBaselineY, paint)
                 }
             }
+            // v23 着重号：记号色 = 声明色（夜间适配）> 该字符实际前景色
+            col.emphasis?.let { mark ->
+                val markColor = mark.colorArgb?.let {
+                    adaptAuthoredForegroundForReaderBg(it, decorBgArgb, line.blockStyle.backgroundColor)
+                } ?: overrideColor ?: paragraphColor ?: defaultColor
+                drawEmphasisMark(
+                    nc, mark, (col.start + col.end) / 2f, colBaselineY, paint.textSize, paint, markColor,
+                )
+            }
         }
         if (blockRotationSave != null) nc.restoreToCount(blockRotationSave)
         if (paragraphColor != null) paint.color = defaultColor
@@ -972,6 +981,23 @@ private fun drawByAtoms(
                         canvas.drawText(atom.text, textX, effectiveBaselineY, basePaint)
                         if (atomOverrideColor != null) basePaint.color = origColor
                     }
+                    // v23 着重号：逐字符按实测 advance 定字心，画点/圈/芝麻点
+                    atom.emphasis?.let { mark ->
+                        val markColor = mark.colorArgb?.let {
+                            adaptAuthoredForegroundForReaderBg(it, readerBgArgb, atom.inlineBgArgb)
+                        } ?: atomOverrideColor ?: defaultColor
+                        var cx = textX
+                        for (ch in atom.text.chunkedByCodePoint()) {
+                            val w = basePaint.measureText(ch)
+                            if (ch.isNotBlank()) {
+                                drawEmphasisMark(
+                                    canvas, mark, cx + w / 2f, effectiveBaselineY,
+                                    basePaint.textSize, basePaint, markColor,
+                                )
+                            }
+                            cx += w
+                        }
+                    }
                     if (rotationSave != null) canvas.restoreToCount(rotationSave)
                 }
                 if (scale != 1f) basePaint.textSize = baseSize
@@ -997,6 +1023,19 @@ private fun drawByAtoms(
         }
         atomStartCp += atom.cpCount
     }
+}
+
+/** 按 code point 切分字符串（surrogate pair 不拆），供逐字符定位着重号。 */
+private fun String.chunkedByCodePoint(): List<String> {
+    if (isEmpty()) return emptyList()
+    val out = ArrayList<String>(length)
+    var i = 0
+    while (i < length) {
+        val end = if (this[i].isHighSurrogate() && i + 1 < length && this[i + 1].isLowSurrogate()) i + 2 else i + 1
+        out.add(substring(i, end))
+        i = end
+    }
+    return out
 }
 
 /**

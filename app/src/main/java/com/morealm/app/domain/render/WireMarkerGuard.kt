@@ -31,7 +31,13 @@ object WireMarkerGuard {
             .commonPrefixWith(StructuredChapterContent.TABLE_START)
     }
 
-    /** 控制字符形 marker 的起始符（heading / span 颜色 / inline 图 / inline 背景盒）。 */
+    /**
+     * 控制字符形 marker 的起始符（heading / span 颜色 / inline 图 / inline 背景盒 /
+     * 字号 / 字体 / 链接 / 着重号）。
+     *
+     * 2026-08-13 补 SIZE / TEXT_STYLE / LINK / EMPH 四类：此前只列了首批 marker，
+     * 「段落只带链接或着重号、无其他 marker」时替换规则仍可能打碎协议。
+     */
     private val controlMarkers: List<String> by lazy {
         listOf(
             StructuredChapterContent.HEADING_LEVEL_START,
@@ -39,6 +45,10 @@ object WireMarkerGuard {
             StructuredChapterContent.INLINE_IMG_START,
             StructuredChapterContent.SPAN_BG_START,
             StructuredChapterContent.HR_MARKER,
+            StructuredChapterContent.SIZE_START,
+            StructuredChapterContent.TEXT_STYLE_START,
+            StructuredChapterContent.LINK_START,
+            StructuredChapterContent.EMPH_START,
         )
     }
 
