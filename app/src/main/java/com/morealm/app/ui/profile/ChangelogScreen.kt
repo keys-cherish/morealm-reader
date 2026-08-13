@@ -193,10 +193,25 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v1.9",
+        date = "2026-08-13",
+        title = "EPUB 精排大版本：中文排版 + 图片体验 + 自定义点击",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            ChangelogItem(ChangeType.NEW, "EPUB 中文精排四件套 —— 着重号（字旁点/圈/芝麻点）、首字下沉、行尾标点悬挂、作者声明的分页控制全部生效，精排书的排版观感对齐专业阅读器"),
+            ChangelogItem(ChangeType.NEW, "长按图片弹出操作条 —— 查看大图 / 保存到相册 / 复制图片源 / 屏蔽此图；长按有震动确认，被选中的图片会压暗描边，一眼看到选中了哪张（之前长按图片复制到的是空内容）"),
+            ChangelogItem(ChangeType.NEW, "无图模式 —— 阅读设置一键隐藏书内全部插图与背景图，正文重新排版不留空洞；「排版很好但配图拉胯」的书也可以只屏蔽某几张图，设置里随时恢复"),
+            ChangelogItem(ChangeType.NEW, "排版来源可选 —— 「跟随书籍」保留原书排版（默认），「用户定义」让你的首行缩进 / 行距 / 段距取代书内声明"),
+            ChangelogItem(ChangeType.NEW, "点击区域全自定义 —— 阅读设置新增九宫格编辑器，每个分区都能配 上一页 / 下一页 / 上一章 / 下一章 / 呼出菜单 / 朗读 / 书签 / 无操作，四种翻页动画都生效"),
+            ChangelogItem(ChangeType.FIX, "部分 EPUB 插图被放大裁切修复 —— 错标固定版式的书不再把插图撑满整屏裁掉两边，按原书声明的尺寸完整显示"),
+            ChangelogItem(ChangeType.FIX, "部分 EPUB 图片显示成一行代码修复 —— 特定图片容器写法（宽高 100%）导致图片位置显示字面 img 标签，现已正常出图"),
+            ChangelogItem(ChangeType.IMPROVE, "小图不再强行拉满屏宽 —— 没有声明尺寸的小插图 / 装饰图按原始大小显示，只有超宽大图才缩小适配，不再放大糊掉"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.8",
         date = "2026-07-07",
         title = "大文件秒导入 + 阅读排版增强",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             ChangelogItem(ChangeType.IMPROVE, "导入大文件 / 海量书籍飞快，不再占双倍空间 —— 导入改为「原地引用」：不再把书复制一份塞进应用，导入 1GB 大文件、上万个文件都是秒完成，手机存储也不会翻倍（提示：导入后请不要移动 / 删除原文件，否则需要重新导入；软件里删书永远不会动你的原文件）"),
             ChangelogItem(ChangeType.IMPROVE, "读过的大 txt 再打开秒进 —— 大文本第一次打开解析好目录后会记住，之后再打开直接进入，不用每次重新分章等待（原文件有改动时会自动重新解析）"),

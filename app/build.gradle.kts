@@ -76,7 +76,7 @@ android {
         applicationId = "com.morealm.app"
         minSdk = 21
         targetSdk = 35
-        versionCode = 14
+        versionCode = 15
         versionName = "1.9"
 
         // Room schema export
