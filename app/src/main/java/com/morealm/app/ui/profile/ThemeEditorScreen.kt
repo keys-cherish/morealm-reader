@@ -52,15 +52,15 @@ fun ThemeEditorScreen(
 ) {
     val allThemes by themeViewModel.allThemes.collectAsStateWithLifecycle()
     val activeTheme by themeViewModel.activeTheme.collectAsStateWithLifecycle()
-    val existingTheme = remember(editThemeId, allThemes) {
-        editThemeId?.let { id -> allThemes.find { it.id == id } }
-    }
 
     val customThemes = remember(allThemes) { allThemes.filter { !it.isBuiltin } }
     var selectedThemeId by remember(editThemeId) { mutableStateOf(editThemeId) }
-    val editingTheme = remember(selectedThemeId, allThemes) {
-        selectedThemeId?.let { id -> allThemes.find { it.id == id && !it.isBuiltin } }
-    } ?: existingTheme
+    val selectedSourceTheme = remember(selectedThemeId, allThemes) {
+        selectedThemeId?.let { id -> allThemes.find { it.id == id } }
+    }
+    // 自定义主题原位编辑；内置主题只能作为模板复制，绝不能拿同 id 覆盖内置行。
+    val editingTheme = selectedSourceTheme?.takeUnless { it.isBuiltin }
+    val cloningBuiltinTheme = selectedSourceTheme?.takeIf { it.isBuiltin }
 
     var themeName by remember { mutableStateOf("我的主题") }
     var isNight by remember { mutableStateOf(false) }
@@ -77,20 +77,25 @@ fun ThemeEditorScreen(
     // SAF Uri 字符串；rememberAsyncImagePainter 直接消费。
     var backgroundImageUri by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(editingTheme, activeTheme) {
-        val sourceTheme = editingTheme ?: activeTheme
-        themeName = editingTheme?.name ?: "我的主题"
-        bgColor = sourceTheme?.backgroundColor?.removePrefix("#") ?: "FF0A0A0F"
-        textColor = sourceTheme?.onBackgroundColor?.removePrefix("#") ?: "FFEDEDEF"
+    LaunchedEffect(selectedSourceTheme, activeTheme) {
+        val sourceTheme = selectedSourceTheme ?: activeTheme
+        themeName = when {
+            editingTheme != null -> editingTheme.name
+            cloningBuiltinTheme != null -> "${cloningBuiltinTheme.name}副本"
+            else -> "我的主题"
+        }
+        // 从阅读器专用字段初始化，保证长按配色球看到的就是球内实际文字/背景。
+        bgColor = sourceTheme?.readerBackground?.removePrefix("#") ?: "FF0A0A0F"
+        textColor = sourceTheme?.readerTextColor?.removePrefix("#") ?: "FFEDEDEF"
         accentColor = sourceTheme?.accentColor?.removePrefix("#") ?: "FF818CF8"
-        customCss = editingTheme?.customCss ?: sourceTheme?.customCss.orEmpty()
+        customCss = sourceTheme?.customCss.orEmpty()
         backgroundImageUri = sourceTheme?.backgroundImageUri
         // 编辑现有主题：尊重 entity 已保存的 isNightTheme，并视为「用户已选定」不再联动；
         // 新建主题：以当前 bgColor 的亮度做默认值，让浅色背景默认归到「白天」、深色归到
         // 「夜晚」。比之前盲目拷 active.isNightTheme=true 友好得多——active 是 moRealm
         // 时所有新建主题默认夜间，是用户报「白天对话框看不到自定义主题」的根因。
-        if (editingTheme != null) {
-            isNight = editingTheme.isNightTheme
+        if (selectedSourceTheme != null) {
+            isNight = selectedSourceTheme.isNightTheme
             userOverrodeIsNight = true
         } else {
             isNight = "#$bgColor".toComposeColor().luminance() < 0.5f
@@ -142,7 +147,15 @@ fun ThemeEditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (editingTheme != null) "编辑主题" else "自定义主题") },
+                title = {
+                    Text(
+                        when {
+                            editingTheme != null -> "编辑主题"
+                            cloningBuiltinTheme != null -> "基于${cloningBuiltinTheme.name}自定义"
+                            else -> "自定义主题"
+                        },
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
@@ -299,16 +312,14 @@ fun ThemeEditorScreen(
             }
             Spacer(Modifier.height(24.dp))
 
-            // ── 首页背景图（v1.3 新增：每个主题绑一张背景，应用到书架/我的等首页 Tab）──
+            // ── 阅读背景图：与 readerTextColor / readerBackground 同属一份 ThemeEntity ──
             //
-            // 与「阅读器背景」（在阅读设置里设置日/夜两张）解耦：
-            //   - 阅读器背景：阅读器内的纸面，不随主题切换
-            //   - 主题背景图：首页 Tab 的整体背景，随主题切换（例：夜枫主题带枫叶背景，
-            //     莫兰迪主题带磨砂质感）
+            // 阅读设置的配色球按主题整组切换三者；旧版按 ReaderStyle / day-night prefs
+            // 单独保存的背景仅作升级兼容，用户选择配色球后即清除覆盖。
             //
             // SAF takePersistableUriPermission 让 URI 重启后仍可访问；
             // 失败（用户撤销权限/老 URI）静默吞，rememberAsyncImagePainter 会画灰底兜底。
-            Text("首页背景图", style = MaterialTheme.typography.titleSmall,
+            Text("阅读背景图", style = MaterialTheme.typography.titleSmall,
                 color = previewTextColor, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             val ctxForBg = LocalContext.current

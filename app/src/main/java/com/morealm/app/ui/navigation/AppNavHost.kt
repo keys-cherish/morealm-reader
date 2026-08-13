@@ -478,6 +478,7 @@ fun MoRealmNavHost(
                 ReadingSettingsScreen(
                     onBack = { navController.safePopBackStack() },
                     onNavigateRuleColor = { navController.safeNavigate("rule_color") },
+                    onNavigateThemeEditor = { navController.safeNavigate("theme_editor") },
                 )
             }
 
@@ -548,10 +549,20 @@ fun MoRealmNavHost(
                 )
             }
 
-            composable("theme_editor") {
+            composable(
+                route = "theme_editor?editId={editId}",
+                arguments = listOf(
+                    navArgument("editId") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    },
+                ),
+            ) { entry ->
                 ThemeEditorScreen(
                     themeViewModel = themeViewModel,
                     onBack = { navController.safePopBackStack() },
+                    editThemeId = entry.arguments?.getString("editId"),
                 )
             }
 
@@ -642,6 +653,11 @@ fun MoRealmNavHost(
                                 },
                                 onNavigateToFontManager = {
                                     navController.safeNavigate("font_manager")
+                                },
+                                onNavigateToThemeEditor = { themeId ->
+                                    navController.safeNavigate(
+                                        "theme_editor?editId=${Uri.encode(themeId)}",
+                                    )
                                 },
                                 themeViewModel = themeViewModel,
                             )

@@ -375,7 +375,21 @@ class ReaderSettingsController(
 
     fun setCustomCss(css: String) = updateStyle { it.copy(customCss = css) }
 
-    fun setCustomBgImage(uri: String) = updateStyle { it.copy(customBgImage = uri) }
+    /**
+     * 用户明确选择/编辑“阅读配色组”后，清掉旧版三处独立背景覆盖。
+     *
+     * 升级时不主动迁移或删除，保证老用户首次打开仍是原视觉；只有用户操作配色球才把
+     * 背景控制权交回 [com.morealm.app.domain.entity.ThemeEntity.backgroundImageUri]。
+     */
+    fun clearLegacyReaderBackgroundOverrides() {
+        scope.launch(Dispatchers.IO) {
+            activeStyle.value
+                ?.takeIf { it.customBgImage.isNotEmpty() }
+                ?.let { styleRepo.upsert(it.copy(customBgImage = "")) }
+            prefs.setReaderBgImageDay("")
+            prefs.setReaderBgImageNight("")
+        }
+    }
 
     fun setPageAnim(anim: String) {
         scope.launch { prefs.setPageAnim(anim) }

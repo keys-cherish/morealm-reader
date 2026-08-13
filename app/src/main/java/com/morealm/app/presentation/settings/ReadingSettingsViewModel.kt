@@ -95,12 +95,6 @@ class ReadingSettingsViewModel @Inject constructor(
     val ttsKeepCpuAwake: StateFlow<Boolean> = prefs.ttsKeepCpuAwake
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    val readerBgImageDay: StateFlow<String> = prefs.readerBgImageDay
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
-
-    val readerBgImageNight: StateFlow<String> = prefs.readerBgImageNight
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
-
     /**
      * 选区 mini-menu 自定义配置（显示 / 顺序 / 主行分配）。订阅 prefs，设置页 UI
      * 通过 [setSelectionMenuConfig] 写回 —— reader 端通过自己持有的
@@ -144,9 +138,6 @@ class ReadingSettingsViewModel @Inject constructor(
     fun setInnerSearchMode(v: String) = viewModelScope.launch { prefs.setInnerSearchMode(v) }
     fun setTtsSkipPattern(v: String) = viewModelScope.launch { prefs.setTtsSkipPattern(v) }
     fun setTtsKeepCpuAwake(v: Boolean) = viewModelScope.launch { prefs.setTtsKeepCpuAwake(v) }
-    fun setReaderBgImageDay(v: String) = viewModelScope.launch { prefs.setReaderBgImageDay(v) }
-    fun setReaderBgImageNight(v: String) = viewModelScope.launch { prefs.setReaderBgImageNight(v) }
-
     /**
      * 保存选区菜单配置 —— 落 DataStore 前打 INFO 日志，记录三个桶的项数 +
      * 列表顺序中各 item 的位置缩写，方便排查"用户报按钮顺序丢了"。

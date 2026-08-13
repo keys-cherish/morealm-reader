@@ -14,8 +14,8 @@ import kotlinx.serialization.Serializable
  * 重构后（v20）：
  *  - **删除颜色字段** `bgColor / bgColorNight / textColor / textColorNight /`
  *    `bgImageUri / bgImageUriNight / bgAlpha`（共 7 个）。颜色完全归 [ThemeEntity]
- *    管理，阅读区背景图走 [com.morealm.app.domain.preference.AppPreferences]
- *    的 `READER_BG_IMAGE_DAY / NIGHT` 两个 prefs key。
+ *    管理。2026-08-13 起阅读区背景图也归 [ThemeEntity.backgroundImageUri]，与
+ *    `readerBackground` / `readerTextColor` 组成一个阅读配色组。
  *  - **5 个内置 preset 重定义为真正的排版差异**：默认 / 紧凑 / 宽松 / 大字 / 文章。
  *    保留原来的 id（preset_paper 等）避免 active_reader_style migration——只换 name
  *    和排版字段值。老用户切到 preset_green 时从"绿色护眼"变成"紧凑"，UX 跳变不可避免。
@@ -70,6 +70,10 @@ data class ReaderStyle(
 
     // ── Custom styling ──
     val customCss: String = "",
+    /**
+     * 旧版排版预设独立背景，仅保留升级兼容读取；新 UI 不再写入。
+     * 用户首次选择阅读配色组后由 ReaderSettingsController 清空。
+     */
     val customBgImage: String = "",
 
     // ── Flags ──

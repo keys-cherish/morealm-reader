@@ -118,6 +118,8 @@ fun ReaderScreen(
     onNavigateToReplaceRule: (ruleId: String) -> Unit = {},
     /** 跳转到字体管理页（设置面板「字体管理…」按钮）。 */
     onNavigateToFontManager: () -> Unit = {},
+    /** 长按阅读配色球后进入主题编辑器；参数为被长按主题 id。 */
+    onNavigateToThemeEditor: (themeId: String) -> Unit = {},
     themeViewModel: ThemeViewModel? = null,
     viewModel: ReaderViewModel = hiltViewModel(),
     /**
@@ -317,8 +319,6 @@ fun ReaderScreen(
     var showFullSearch by remember { mutableStateOf(false) }
     var readerMenuOpen by remember { mutableStateOf(false) }
     var seekUndoTarget by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    // Texture from theme (e.g., "texture:paper")
-    val bgTexture = moColors.backgroundImageUri?.takeIf { it.startsWith("texture:") }
     val readerBrightness by viewModel.readerBrightness.collectAsStateWithLifecycle()
 
     // Set auto-navigate callback for seamless multi-TXT reading
@@ -672,12 +672,16 @@ fun ReaderScreen(
         val readerFontSize = activeStyle?.textSize?.toFloat() ?: fontSize
         val readerLineHeight = activeStyle?.lineHeight ?: lineHeight
         val readerFontFamily = activeStyle?.fontFamily ?: fontFamily
-        // Resolve background image priority:
-        // 1. Per-style customBgImage (from reader bottom panel)
-        // 2. Global day/night bg image (from Reading Settings)
+        // 阅读配色组背景图。升级兼容期保留旧覆盖优先级；用户一旦点击/长按配色球，
+        // clearLegacyReaderBackgroundOverrides 会清掉 1/3，之后 ThemeEntity 成为唯一权威。
+        // `texture:*` 是内置伪 URI，当前 bitmap loader 不支持，按主题纯色背景处理。
         val readerBgImage = customBgImage.ifEmpty {
-            val globalBg = if (isNight) readerBgImageNight else readerBgImageDay
-            globalBg
+            activeTheme?.backgroundImageUri
+                ?.takeUnless { it.startsWith("texture:") }
+                .orEmpty()
+                .ifEmpty {
+                    if (isNight) readerBgImageNight else readerBgImageDay
+                }
         }
         val themeCss = activeTheme?.customCss.orEmpty()
         val currentStyle = activeStyle
@@ -1665,7 +1669,15 @@ fun ReaderScreen(
                 onOpenFontManager = onNavigateToFontManager,
                 allThemes = allThemes.ifEmpty { BuiltinThemes.all() },
                 activeThemeId = activeTheme?.id ?: "",
-                onThemeChange = { id -> themeViewModel?.switchTheme(id) },
+                onThemeChange = { id ->
+                    viewModel.settings.clearLegacyReaderBackgroundOverrides()
+                    themeViewModel?.switchTheme(id)
+                },
+                onThemeLongPress = { id ->
+                    viewModel.settings.clearLegacyReaderBackgroundOverrides()
+                    viewModel.hideSettingsPanel()
+                    onNavigateToThemeEditor(id)
+                },
                 brightness = readerBrightness,
                 onBrightnessChange = viewModel::setReaderBrightness,
                 paragraphSpacing = paragraphSpacing,
@@ -1693,8 +1705,8 @@ fun ReaderScreen(
                 onMarginBottomCommit = { v ->
                     viewModel.settings.setMarginBottom(v)
                 },
-                customBgImage = customBgImage,
-                onCustomBgImageChange = viewModel.settings::setCustomBgImage,
+                hasLegacyBackgroundOverride = customBgImage.isNotEmpty() ||
+                    readerBgImageDay.isNotEmpty() || readerBgImageNight.isNotEmpty(),
                 readerStyles = readerStyles,
                 activeStyleId = activeStyleId,
                 onStyleChange = viewModel.settings::switchStyle,

@@ -38,8 +38,8 @@ data class ThemeEntity(
     val readerBackground: String = "#FF0A0A0F",
     val readerTextColor: String = "#FFEDEDEF",
 
-    // Background image support
-    val backgroundImageUri: String? = null,   // SAF URI to background image
+    // 阅读配色组背景图：与 readerBackground / readerTextColor 同步切换。
+    val backgroundImageUri: String? = null,   // SAF/file/http URI；null = 纯色背景
     val transparentBars: Boolean = false,     // Make primary/bottom bar transparent for full image coverage
 
     // Optional reader CSS bundled with the theme. Reader style CSS can still override it.

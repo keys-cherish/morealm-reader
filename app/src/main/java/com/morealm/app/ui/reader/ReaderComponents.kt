@@ -2,13 +2,17 @@ package com.morealm.app.ui.reader
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,6 +49,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -70,6 +75,7 @@ import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.runtime.snapshotFlow
+import coil.compose.AsyncImage
 
 // ── Top Bar ─────────────────────────────────────────────
 
@@ -905,6 +911,7 @@ internal fun EmbeddedPercentTrack(
 
 // ── Settings Panel (font, page turn mode) ───────────────
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ReaderSettingsPanel(
     currentMode: PageTurnMode,
@@ -925,6 +932,7 @@ fun ReaderSettingsPanel(
     allThemes: List<ThemeEntity> = emptyList(),
     activeThemeId: String = "",
     onThemeChange: (String) -> Unit = {},
+    onThemeLongPress: (String) -> Unit = {},
     brightness: Float = -1f,
     onBrightnessChange: (Float) -> Unit = {},
     paragraphSpacing: Int = 8,
@@ -953,8 +961,8 @@ fun ReaderSettingsPanel(
     onMarginTopCommit: (Int) -> Unit = {},
     marginBottom: Int = 24,
     onMarginBottomCommit: (Int) -> Unit = {},
-    customBgImage: String = "",
-    onCustomBgImageChange: (String) -> Unit = {},
+    /** 升级前独立背景仍在覆盖配色组；点击任意配色球后由调用方清除。 */
+    hasLegacyBackgroundOverride: Boolean = false,
     readerStyles: List<com.morealm.app.domain.entity.ReaderStyle> = emptyList(),
     activeStyleId: String = "",
     onStyleChange: (String) -> Unit = {},
@@ -1585,59 +1593,65 @@ fun ReaderSettingsPanel(
 
             Spacer(Modifier.height(16.dp))
 
-            // ── Theme ──
+            // ── 阅读配色组：文字色 + 背景色 + 背景图 ──
             if (allThemes.isNotEmpty()) {
-                // #4：与上方「排版预设」做对照，改为「配色主题」明确语义。
-                Text("配色主题", style = MaterialTheme.typography.labelMedium,
+                Text("文字颜色和背景（长按自定义）", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                 Spacer(Modifier.height(6.dp))
-                // #4：选中标签原本只在卡片下方居中显示「当前主题名」一行，
-                // 用户容易误以为「整组卡片都叫这个名字」。改为每张卡下面都显示自己的
-                // 名字（与上面「排版预设」对齐）；选中卡名字用主色 + 加粗即可，
-                // 不再额外画底部一行汇总。
-                Row(
+                LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    allThemes.forEach { theme ->
+                    items(allThemes, key = { it.id }) { theme ->
                         val isActive = theme.id == activeThemeId
                         val bgColor = theme.readerBackground.toComposeColor()
                         val fgColor = theme.readerTextColor.toComposeColor()
-                        val acColor = theme.accentColor.toComposeColor()
+                        val previewImage = theme.backgroundImageUri
+                            ?.takeUnless { it.startsWith("texture:") }
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
+                                .width(58.dp)
                                 .semantics {
                                     contentDescription = "配色主题：${theme.name}"
                                     role = Role.Button
                                 }
-                                .clickable { onThemeChange(theme.id) },
+                                .combinedClickable(
+                                    onClick = { onThemeChange(theme.id) },
+                                    onLongClick = { onThemeLongPress(theme.id) },
+                                ),
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(MaterialTheme.shapes.small)
-                                    .background(bgColor),
+                                    .size(52.dp)
+                                    .clip(CircleShape)
+                                    .background(bgColor)
+                                    .border(
+                                        width = if (isActive) 2.dp else 1.dp,
+                                        color = if (isActive) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
+                                        shape = CircleShape,
+                                    ),
                                 contentAlignment = Alignment.Center,
                             ) {
+                                if (!previewImage.isNullOrBlank()) {
+                                    AsyncImage(
+                                        model = previewImage,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.matchParentSize(),
+                                    )
+                                    Box(
+                                        Modifier.matchParentSize()
+                                            .background(bgColor.copy(alpha = 0.18f)),
+                                    )
+                                }
                                 Text(
-                                    "文",
+                                    "文字",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = fgColor,
                                     fontWeight = FontWeight.Bold,
                                 )
-                                if (isActive) {
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.BottomCenter)
-                                            .fillMaxWidth()
-                                            .height(3.dp)
-                                            .background(
-                                                acColor,
-                                                RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp),
-                                            ),
-                                    )
-                                }
                             }
                             Spacer(Modifier.height(4.dp))
                             Text(
@@ -1651,52 +1665,14 @@ fun ReaderSettingsPanel(
                         }
                     }
                 }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            // ── Custom background image ──
-            // 之前的 `val context = LocalContext.current` 在字体区被删后，这里的
-            // `val ctx = context` 引用悬空 —— 在 Composable 顶部就近补一份，
-            // SAF 持久化权限必须用真 Context（lambda 内部不能直接 LocalContext.current）。
-            val bgCtx = LocalContext.current
-            val bgImageLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.OpenDocument()
-            ) { uri ->
-                uri?.let {
-                    // Take persistable permission
-                    try {
-                        bgCtx.contentResolver.takePersistableUriPermission(
-                            it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        )
-                    } catch (_: Exception) {}
-                    onCustomBgImageChange(it.toString())
-                }
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("背景图片", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                Spacer(Modifier.weight(1f))
-                if (customBgImage.isNotEmpty()) {
-                    FilterChip(
-                        selected = false,
-                        onClick = { onCustomBgImageChange("") },
-                        label = { Text("清除") },
+                if (hasLegacyBackgroundOverride) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "当前仍保留旧版独立背景；点击任意配色球后将改为整组跟随。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
                     )
-                    Spacer(Modifier.width(8.dp))
                 }
-                FilterChip(
-                    selected = customBgImage.isNotEmpty(),
-                    onClick = { bgImageLauncher.launch(arrayOf("image/*")) },
-                    label = { Text(if (customBgImage.isNotEmpty()) "更换" else "选择图片") },
-                    leadingIcon = { Icon(Icons.Default.Image, null, modifier = Modifier.size(16.dp)) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                        selectedLabelColor = MaterialTheme.colorScheme.primary),
-                )
             }
 
             Spacer(Modifier.height(16.dp))

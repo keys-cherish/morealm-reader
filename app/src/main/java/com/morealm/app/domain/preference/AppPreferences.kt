@@ -187,6 +187,7 @@ class AppPreferences @Inject constructor(
         val MARGIN_BOTTOM = intPreferencesKey("margin_bottom")
         val CUSTOM_CSS = stringPreferencesKey("custom_css")
         val CUSTOM_BG_IMAGE = stringPreferencesKey("custom_bg_image")
+        /** 旧版独立阅读背景：仅升级兼容读取，用户选择 ThemeEntity 配色组后清空。 */
         val READER_BG_IMAGE_DAY = stringPreferencesKey("reader_bg_image_day")
         val READER_BG_IMAGE_NIGHT = stringPreferencesKey("reader_bg_image_night")
         // ── 全局背景图（书架/发现/听书/我的 四 Tab 共用；阅读器自成一套不受此影响）──
