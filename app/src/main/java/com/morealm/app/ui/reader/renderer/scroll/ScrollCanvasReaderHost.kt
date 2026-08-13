@@ -162,8 +162,11 @@ fun ScrollCanvasReaderHost(
     overrideAuthoredSpacing: Boolean = false,
     /** tap 命中图片 → 查看大图（链接/高亮优先级更高）。 */
     onImageTap: (src: String) -> Unit = {},
-    /** 长按命中图片 → 图片操作弹层；anchor 为 view-local 长按点。图片优先于文字选区。 */
-    onImageLongPress: (src: String, anchor: Offset) -> Unit = { _, _ -> },
+    /**
+     * 长按命中图片 → 图片操作弹层；anchor 为 view-local 长按点。图片优先于文字选区。
+     * imageRect = 图片实际绘制矩形（view 坐标，选中态压暗/描边用）；整页图为 null。
+     */
+    onImageLongPress: (src: String, anchor: Offset, imageRect: androidx.compose.ui.geometry.Rect?) -> Unit = { _, _, _ -> },
     /** 阅读区背景图 uri；空串 = 纯色背景。来自 ReaderScreen 的 readerBgImage。 */
     bgImageUri: String = "",
     /** 阅读区纯色背景（android argb）—— 无背景图 / 背景图加载失败时使用。 */
@@ -339,6 +342,8 @@ fun ScrollCanvasReaderHost(
     // 让正文（含章首大字 title 块）的起始 y 在 InfoBar 之下，避免被 InfoBar 遮挡。
     // 与 V1 CanvasRenderer effectivePadTop = maxOf(padTopPx, cutoutTop) + topInfoBarPx 等价。
     val density = androidx.compose.ui.platform.LocalDensity.current
+    // 长按命中图片的震动确认（对齐参照阅读器的选中手感）
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val infoBarHeightPx = with(density) { 64.dp.toPx() }.toInt()
     val statusBarPx = with(density) {
         WindowInsets.statusBars.asPaddingValues().calculateTopPadding().toPx()
@@ -958,6 +963,7 @@ fun ScrollCanvasReaderHost(
                         val img = EpubImageHitTester.findImageAt(
                             currentLayout, xInChapter, yInChapter,
                             with(density) { IMAGE_HIT_TOLERANCE_DP.dp.toPx() },
+                            contentWidthPx = (viewWidth - paddingLeft - paddingRight).toFloat(),
                         )
                         if (img != null) {
                             onImageTap(img.src)
@@ -980,9 +986,21 @@ fun ScrollCanvasReaderHost(
                     val img = EpubImageHitTester.findImageAt(
                         currentLayout, xInChapter, yInChapter,
                         with(density) { IMAGE_HIT_TOLERANCE_DP.dp.toPx() },
+                        contentWidthPx = (viewWidth - paddingLeft - paddingRight).toFloat(),
                     )
                     if (img != null) {
-                        onImageLongPress(img.src, offset)
+                        // 手感三件套之一：震动确认选中（对齐参照阅读器）
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        // 章坐标 → view 坐标（x + paddingLeft；y − pageStartY − pageOffset）
+                        val viewRect = img.drawnRect?.let { r ->
+                            androidx.compose.ui.geometry.Rect(
+                                left = r.left + currentLayout.paddingLeft,
+                                top = r.top - pageStartY - state.pageOffset,
+                                right = r.right + currentLayout.paddingLeft,
+                                bottom = r.bottom - pageStartY - state.pageOffset,
+                            )
+                        }
+                        onImageLongPress(img.src, offset, viewRect)
                     } else {
                         val sel = handleLongPress(
                             layout = currentLayout,

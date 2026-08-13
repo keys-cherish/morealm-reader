@@ -160,8 +160,11 @@ fun PageLevelReaderHost(
     overrideAuthoredSpacing: Boolean = false,
     /** tap 命中图片 → 查看大图（仅原「呼出菜单」兜底分支尝试，保留翻页分区语义）。 */
     onImageTap: (src: String) -> Unit = {},
-    /** 长按命中图片 → 图片操作弹层；anchor 为 view-local 长按点。图片优先于文字选区。 */
-    onImageLongPress: (src: String, anchor: Offset) -> Unit = { _, _ -> },
+    /**
+     * 长按命中图片 → 图片操作弹层；anchor 为 view-local 长按点。图片优先于文字选区。
+     * imageRect = 图片实际绘制矩形（view 坐标，选中态压暗/描边用）；整页图为 null。
+     */
+    onImageLongPress: (src: String, anchor: Offset, imageRect: androidx.compose.ui.geometry.Rect?) -> Unit = { _, _, _ -> },
     bgColorArgb: Int = Color.WHITE,
     /**
      * 用户选择的阅读区背景图 uri；空串 = 纯色背景。
@@ -321,6 +324,8 @@ fun PageLevelReaderHost(
 
     // safe area + InfoBar 占位（infoBar != null 时正文 padding 给 InfoBar 让位避免遮挡）
     val density = androidx.compose.ui.platform.LocalDensity.current
+    // 长按命中图片的震动确认（对齐参照阅读器的选中手感）
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     // page-level 模式正文上下预留 = 页眉页脚单行高度 + 系统栏 inset。
     // 页眉页脚现在画进每页（随页翻，见 PagePaneCanvas.PageInfoBars），不再悬浮 overlay；
     // 复用 PAGED_INFO_BAR_LINE_DP 让正文末行紧贴页脚、不留多余空白（对齐参照铺满）。
@@ -874,10 +879,21 @@ fun PageLevelReaderHost(
                 x = offset.x - layout.paddingLeft,
                 yInChapter = offset.y + pageTopYInChapter(),
                 tolerancePx = with(density) { IMAGE_HIT_TOLERANCE_DP.dp.toPx() },
+                contentWidthPx = (viewWidth - paddingLeft - paddingRight).toFloat(),
             )
             if (img != null) {
-                // 图片优先于文字选区：长按图片不再落进「选中 U+FFFC 占位符」的老路
-                onImageLongPress(img.src, offset)
+                // 图片优先于文字选区：长按图片不再落进「选中 U+FFFC 占位符」的老路。
+                // 震动确认 + 绘制矩形转 view 坐标（选中态压暗/描边用），对齐参照阅读器手感。
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                val viewRect = img.drawnRect?.let { r ->
+                    androidx.compose.ui.geometry.Rect(
+                        left = r.left + layout.paddingLeft,
+                        top = r.top - pageTopYInChapter(),
+                        right = r.right + layout.paddingLeft,
+                        bottom = r.bottom - pageTopYInChapter(),
+                    )
+                }
+                onImageLongPress(img.src, offset, viewRect)
             } else {
                 val sel = handleLongPress(
                     layout = layout,
@@ -980,6 +996,7 @@ fun PageLevelReaderHost(
                                         x = offset.x - it.paddingLeft,
                                         yInChapter = offset.y + pageTopYInChapter(),
                                         tolerancePx = with(density) { IMAGE_HIT_TOLERANCE_DP.dp.toPx() },
+                                        contentWidthPx = (viewWidth - paddingLeft - paddingRight).toFloat(),
                                     )
                                 }
                                 if (img != null) onImageTap(img.src) else onTapCenter()

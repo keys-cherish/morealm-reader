@@ -18,6 +18,9 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -250,9 +253,9 @@ fun ReaderScreen(
     val epubHideImages by viewModel.settings.epubHideImages.collectAsStateWithLifecycle()
     val epubTypographyOverride by viewModel.settings.epubTypographyOverride.collectAsStateWithLifecycle()
     val blockedImageSrcs by viewModel.blockedImageSrcs.collectAsStateWithLifecycle()
-    // 图片长按弹层目标（src + view-local 长按点）；null = 不显示
+    // 图片长按弹层目标（src + view-local 长按点 + 图片绘制矩形）；null = 不显示
     var imageActionTarget by remember {
-        mutableStateOf<Pair<String, androidx.compose.ui.geometry.Offset>?>(null)
+        mutableStateOf<ImageActionTarget?>(null)
     }
     val readerStyles by viewModel.settings.allStyles.collectAsStateWithLifecycle()
     val activeStyleId by viewModel.settings.activeStyleId.collectAsStateWithLifecycle()
@@ -825,7 +828,9 @@ fun ReaderScreen(
                 blockedImageSrcs = blockedImageSrcs,
                 // 图片交互：tap 查看大图；长按弹图片操作条（查看/保存/复制源/屏蔽）
                 onImageTap = { src -> viewModel.onImageClick(src) },
-                onImageLongPress = { src, anchor -> imageActionTarget = src to anchor },
+                onImageLongPress = { src, anchor, rect ->
+                    imageActionTarget = ImageActionTarget(src, anchor, rect)
+                },
                 // 跳书签 / 续读 / 搜索定位（V1 LazyScrollRenderer jumpToken/jumpChapterPosition 等价）：
                 // renderedChapter.restoreToken 由 ReaderChapterController.loadChapter / seekProgressInPlace
                 // 每次 nanoTime 换新值。initialProgress 用于「Slider 拖动 in-place seek」路径
@@ -1023,7 +1028,9 @@ fun ReaderScreen(
                 hideImages = epubHideImages,
                 blockedImageSrcs = blockedImageSrcs,
                 onImageTap = { src -> viewModel.onImageClick(src) },
-                onImageLongPress = { src, anchor -> imageActionTarget = src to anchor },
+                onImageLongPress = { src, anchor, rect ->
+                    imageActionTarget = ImageActionTarget(src, anchor, rect)
+                },
                 bgColorArgb = readerBg.toArgb(),
                 bgImageUri = readerBgImage,
                 restoreToken = renderedChapter.restoreToken,
@@ -1894,10 +1901,33 @@ fun ReaderScreen(
             )
         }
 
-        // EPUB 图片长按弹层：查看大图 / 保存图片 / 复制图片源 / 屏蔽此图
-        imageActionTarget?.let { (src, anchor) ->
+        // EPUB 图片长按弹层：查看大图 / 保存图片 / 复制图片源 / 屏蔽此图。
+        // 弹层期间在图片绘制矩形上画选中态（压暗 + 主色描边）——与震动、工具条同款
+        // 弹层一起构成对齐参照阅读器的「选中了这张图」手感三件套。
+        imageActionTarget?.let { target ->
+            val src = target.src
+            target.rect?.let { r ->
+                val selDensity = LocalDensity.current
+                Box(
+                    Modifier
+                        .offset { androidx.compose.ui.unit.IntOffset(r.left.toInt(), r.top.toInt()) }
+                        .size(
+                            with(selDensity) { r.width.toDp() },
+                            with(selDensity) { r.height.toDp() },
+                        )
+                        .background(
+                            Color.Black.copy(alpha = 0.18f),
+                            androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                        )
+                        .border(
+                            2.dp,
+                            MaterialTheme.colorScheme.primary,
+                            androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                        ),
+                )
+            }
             ImageActionsPopup(
-                offset = anchor,
+                offset = target.anchor,
                 onView = {
                     imageActionTarget = null
                     viewModel.onImageClick(src)
@@ -2805,3 +2835,10 @@ private fun AutoPageIndicator(
         }
     }
 }
+
+/** 图片长按弹层目标：src + 长按点（view 坐标）+ 图片绘制矩形（选中态压暗/描边用；整页图 null）。 */
+private data class ImageActionTarget(
+    val src: String,
+    val anchor: androidx.compose.ui.geometry.Offset,
+    val rect: androidx.compose.ui.geometry.Rect?,
+)
