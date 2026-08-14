@@ -100,8 +100,8 @@ class AppPreferences @Inject constructor(
         val WEBDAV_PASS = stringPreferencesKey("webdav_pass")
         val SHELF_VIEW_MODE = stringPreferencesKey("shelf_view_mode")
         /**
-         * 最近一次成功选择的导入文档或目录 URI。普通文档 URI 也可直接作为
-         * DocumentsContract.EXTRA_INITIAL_URI，系统文件管理器会尝试定位其父目录。
+         * 最近一次成功导入位置：优先保存普通文档的父 document URI，文件夹导入保存 tree URI。
+         * 老版本可能仍存文件 URI，ShelfViewModel 下次成功选择时会自然纠正。
          */
         val LAST_IMPORT_LOCATION_URI = stringPreferencesKey("last_import_location_uri")
         /**

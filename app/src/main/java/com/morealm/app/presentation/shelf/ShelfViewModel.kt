@@ -2,6 +2,7 @@ package com.morealm.app.presentation.shelf
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.Book
@@ -48,6 +49,22 @@ data class FolderImportState(
 
 /** 文件夹导入阶段，给 UI 决定显示哪种 progress 样式 / 文案。 */
 enum class ImportPhase { Idle, Scanning, Phase1, Phase2, Done, Error }
+
+private const val EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY =
+    "com.android.externalstorage.documents"
+
+/** 只有 ExternalStorageProvider 的 documentId 可按层级路径解释。 */
+internal fun importParentDocumentId(authority: String?, documentId: String): String? {
+    if (authority != EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY) return null
+    val slash = documentId.lastIndexOf('/')
+    if (slash > 0) return documentId.substring(0, slash)
+    val volumeEnd = documentId.indexOf(':')
+    return if (volumeEnd >= 0 && volumeEnd < documentId.lastIndex) {
+        documentId.substring(0, volumeEnd + 1)
+    } else {
+        null
+    }
+}
 
 @HiltViewModel
 class ShelfViewModel @Inject constructor(
@@ -349,7 +366,7 @@ class ShelfViewModel @Inject constructor(
     val shelfViewMode: StateFlow<String> = prefs.shelfViewMode
         .stateIn(viewModelScope, SharingStarted.Eagerly, "grid")
 
-    /** 系统文件选择器下次启动位置；文件 URI 与 tree URI 均由 DocumentsUI 官方支持。 */
+    /** 系统文件选择器下次启动位置：优先为父 document URI，也兼容旧文件 URI 与 tree URI。 */
     val lastImportLocationUri: StateFlow<String> = prefs.lastImportLocationUri
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
@@ -359,8 +376,34 @@ class ShelfViewModel @Inject constructor(
 
     fun rememberImportLocation(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
-            prefs.setLastImportLocationUri(uri.toString())
+            val location = resolveImportLocation(uri)
+            prefs.setLastImportLocationUri(location.toString())
+            AppLog.debug(
+                "ShelfImport",
+                "remember location authority=${uri.authority} parentResolved=${location != uri}",
+            )
         }
+    }
+
+    /**
+     * 普通文件 URI 不能稳定作为 EXTRA_INITIAL_URI：部分 OEM DocumentsUI 会直接回根目录。
+     * AOSP 对普通 document URI 调 findDocumentPath 要求系统级 MANAGE_DOCUMENTS 权限，
+     * 所以这里只解析 ExternalStorageProvider 公开的层级 documentId。其他 provider 的 ID
+     * 可能完全不透明，必须保留原 URI，不能用字符串猜测父目录。
+     */
+    private fun resolveImportLocation(uri: Uri): Uri {
+        if (uri.scheme != "content" ||
+            DocumentsContract.isTreeUri(uri) ||
+            !DocumentsContract.isDocumentUri(context, uri)
+        ) {
+            return uri
+        }
+        return runCatching {
+            importParentDocumentId(uri.authority, DocumentsContract.getDocumentId(uri))
+                ?.let {
+                    DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY, it)
+                }
+        }.getOrNull() ?: uri
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)

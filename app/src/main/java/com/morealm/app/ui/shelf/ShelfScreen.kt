@@ -343,8 +343,8 @@ fun ShelfScreen(
         }
     }
 
-    // 首次导入从 Download 开始；成功选择后改用上次文档/目录 URI。Android 8+ 的
-    // DocumentsUI 会把普通文件 URI 解析到父目录，解析失败则按系统规则回退。
+    // 首次导入从 Download 开始；成功选择后改用 ShelfViewModel 已解析出的父 document
+    // URI / tree URI。不能直接记文件 URI：部分 OEM DocumentsUI 会忽略并退回根目录。
     val downloadUri: Uri = remember {
         DocumentsContract.buildDocumentUri(
             "com.android.externalstorage.documents",

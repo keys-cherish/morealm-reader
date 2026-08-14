@@ -16,8 +16,9 @@ internal data class OpenDocumentRequest(
 /**
  * 在 AndroidX [ActivityResultContracts.OpenDocument] 的完整行为上只追加初始位置。
  *
- * 官方契约允许传文档 URI 或目录 tree URI；若是普通文件，系统 DocumentsUI 会尝试
- * 打开它的父目录。这样不需要解析各厂商私有 documentId，也不会把 SAF 降级成路径猜测。
+ * 调用方应优先传父 document URI 或目录 tree URI。普通文件 URI 在 AOSP 上可能可用，
+ * 但部分 OEM DocumentsUI 会忽略并回根目录；调用方只对可证明为层级路径的 provider
+ * 解析父目录，这里保持契约单纯，只负责注入 EXTRA_INITIAL_URI。
  */
 internal class OpenDocumentAtLocation : ActivityResultContract<OpenDocumentRequest, Uri?>() {
     private val delegate = ActivityResultContracts.OpenDocument()
