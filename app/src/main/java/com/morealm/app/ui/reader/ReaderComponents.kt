@@ -1741,8 +1741,12 @@ fun ReaderSettingsPanel(
 @Composable
 fun ImageViewerDialog(
     imageSrc: String,
+    onSave: () -> Unit,
+    onShare: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var showActions by remember(imageSrc) { mutableStateOf(false) }
+    val openActions by rememberUpdatedState(newValue = { showActions = true })
     // Native PhotoView + Coil — no WebView needed.
     val filePath = remember(imageSrc) {
         when {
@@ -1770,6 +1774,10 @@ fun ImageViewerDialog(
                     com.morealm.app.ui.widget.image.PhotoView(ctx).apply {
                         setBackgroundColor(android.graphics.Color.BLACK)
                         setMaxScale(5f)
+                        setOnLongClickListener {
+                            openActions()
+                            true
+                        }
                     }
                 },
                 update = { photoView ->
@@ -1790,6 +1798,19 @@ fun ImageViewerDialog(
                 },
                 modifier = Modifier.fillMaxSize(),
             )
+            if (showActions) {
+                ImageViewerActionsPopup(
+                    onSave = {
+                        showActions = false
+                        onSave()
+                    },
+                    onShare = {
+                        showActions = false
+                        onShare()
+                    },
+                    onDismiss = { showActions = false },
+                )
+            }
             IconButton(
                 onClick = onDismiss,
                 modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)

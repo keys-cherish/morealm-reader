@@ -2,8 +2,10 @@ package com.morealm.app.domain.storage
 
 import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.core.content.FileProvider
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.parser.MobiResourceLoader
 import java.io.File
@@ -17,6 +19,11 @@ import java.io.File
  *  - 裸本地路径
  */
 object ImageSaver {
+
+    data class ShareData(
+        val uri: Uri,
+        val mimeType: String,
+    )
 
     /**
      * 「复制图片源」的展示串：取文件名段（即书内路径的下划线化形，如
@@ -58,19 +65,60 @@ object ImageSaver {
         }
         val resolver = context.contentResolver
         val uri = resolver.insert(collection, values) ?: return false
-        val written = runCatching {
-            resolver.openOutputStream(uri)?.use { it.write(bytes) } != null
-        }.getOrDefault(false)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            values.clear()
-            values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
+        var keepEntry = false
+        try {
+            val written = resolver.openOutputStream(uri)?.use { it.write(bytes) } != null
+            if (!written) return false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                if (resolver.update(uri, values, null, null) <= 0) return false
+            }
+            keepEntry = true
+            true
+        } finally {
+            // 插入后任一步失败都必须删除，否则相册会遗留 pending 或空图片记录。
+            if (!keepEntry) {
+                runCatching { resolver.delete(uri, null, null) }.onFailure { cleanupError ->
+                    AppLog.warn(
+                        "ImageSaver",
+                        "cleanup failed uri=$uri: ${cleanupError.message}",
+                    )
+                }
+            }
         }
-        if (!written) resolver.delete(uri, null, null)
-        written
     }.onFailure {
         AppLog.warn("ImageSaver", "saveToPictures failed src=$src: ${it.message}")
     }.getOrDefault(false)
+
+    /**
+     * 把原图字节写入应用分享缓存并转换为 FileProvider URI。
+     *
+     * 分享和保存必须复用同一套图片源读取协议，否则 `mobi-img://` 等虚拟源会在
+     * 预览正常的情况下分享失败。缓存文件带时间戳，避免系统分享面板复用旧缩略图。
+     */
+    fun prepareShare(context: Context, src: String): ShareData? = runCatching {
+        val bytes = readBytes(context, src) ?: return null
+        val sourceName = sourceLabel(src).substringAfterLast('/')
+            .ifBlank { "image.png" }
+        val mimeType = mimeFor(sourceName, fallback = "image/*")
+        val sourceExtension = sourceName.substringAfterLast('.', "").lowercase()
+        val shareExtension = if (mimeType == "image/*") ".img" else ".$sourceExtension"
+        val shareDir = File(context.cacheDir, "share").apply { mkdirs() }
+        val shareFile = File(
+            shareDir,
+            "reader_image_${System.currentTimeMillis()}$shareExtension",
+        )
+        shareFile.writeBytes(bytes)
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            shareFile,
+        )
+        ShareData(uri = uri, mimeType = mimeType)
+    }.onFailure {
+        AppLog.warn("ImageSaver", "prepareShare failed src=$src: ${it.message}")
+    }.getOrNull()
 
     private fun readBytes(context: Context, src: String): ByteArray? = when {
         src.startsWith("mobi-img://") -> {
@@ -85,12 +133,16 @@ object ImageSaver {
             ?.readBytes()
     }
 
-    private fun mimeFor(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+    private fun mimeFor(
+        name: String,
+        fallback: String = "image/png",
+    ): String = when (name.substringAfterLast('.', "").lowercase()) {
         "jpg", "jpeg" -> "image/jpeg"
         "png" -> "image/png"
         "gif" -> "image/gif"
         "webp" -> "image/webp"
         "bmp" -> "image/bmp"
-        else -> "image/png"
+        "svg" -> "image/svg+xml"
+        else -> fallback
     }
 }

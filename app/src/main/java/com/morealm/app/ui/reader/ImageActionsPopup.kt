@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -87,6 +88,36 @@ fun ImageActionsPopup(
     }
 }
 
+/** 全屏图片预览内再次长按后显示的操作菜单。 */
+@Composable
+fun ImageViewerActionsPopup(
+    onSave: () -> Unit,
+    onShare: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Popup(
+        alignment = Alignment.Center,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true),
+    ) {
+        Surface(
+            modifier = Modifier.width(VIEWER_BAR_WIDTH),
+            shape = RoundedCornerShape(BAR_CORNER),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = 3.dp,
+            tonalElevation = 2.dp,
+        ) {
+            Row(
+                Modifier.padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ImageMenuBtn(Icons.Default.SaveAlt, "保存图片", onSave, Modifier.weight(1f))
+                ImageMenuBtn(Icons.Default.Share, "分享图片", onShare, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
 /** 与 SelectionToolbar.MenuBtn 同款（14dp 主色 icon + 9sp label + 4dp 圆角水波）。 */
 @Composable
 private fun ImageMenuBtn(
@@ -121,6 +152,7 @@ private fun ImageMenuBtn(
 
 private val BAR_CORNER = 4.dp
 private val BAR_WIDTH = 232.dp
+private val VIEWER_BAR_WIDTH = 136.dp
 
 private class ImagePopupPositionProvider(
     private val anchor: IntOffset,

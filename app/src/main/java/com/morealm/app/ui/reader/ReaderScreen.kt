@@ -1,6 +1,7 @@
 package com.morealm.app.ui.reader
 
 import android.Manifest
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -64,6 +65,7 @@ import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.ui.theme.toComposeColor
 import com.morealm.app.presentation.reader.ReaderViewModel
 import com.morealm.app.domain.reader.scroll.ScrollChapterContent
+import com.morealm.app.domain.storage.ImageSaver
 import com.morealm.app.presentation.reader.PageTurnMode
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasInfoBarConfig
 import com.morealm.app.ui.reader.renderer.scroll.ScrollCanvasReaderHost
@@ -340,6 +342,67 @@ fun ReaderScreen(
 
     val context = LocalContext.current
     val centerToast = rememberCenterToastState()
+
+    fun saveImageToPictures(src: String) {
+        screenScope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                ImageSaver.saveToPictures(context, src)
+            }
+            centerToast.show(if (ok) "已保存到相册" else "保存失败")
+        }
+    }
+
+    var pendingImageSaveSrc by remember { mutableStateOf<String?>(null) }
+    val imageSavePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val pendingSrc = pendingImageSaveSrc
+        pendingImageSaveSrc = null
+        if (granted && pendingSrc != null) {
+            saveImageToPictures(pendingSrc)
+        } else if (!granted) {
+            centerToast.show("需要存储权限才能保存图片")
+        }
+    }
+
+    fun requestImageSave(src: String) {
+        val needsLegacyPermission = Build.VERSION.SDK_INT in
+            Build.VERSION_CODES.M..Build.VERSION_CODES.P &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            ) != PackageManager.PERMISSION_GRANTED
+        if (needsLegacyPermission) {
+            pendingImageSaveSrc = src
+            imageSavePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else {
+            saveImageToPictures(src)
+        }
+    }
+
+    fun shareImage(src: String) {
+        screenScope.launch {
+            val shareData = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                ImageSaver.prepareShare(context, src)
+            }
+            if (shareData == null) {
+                centerToast.show("分享图片失败")
+                return@launch
+            }
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = shareData.mimeType
+                putExtra(Intent.EXTRA_STREAM, shareData.uri)
+                clipData = ClipData.newUri(context.contentResolver, "分享图片", shareData.uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val launched = runCatching {
+                context.startActivity(Intent.createChooser(shareIntent, "分享图片"))
+            }.onFailure { err ->
+                AppLog.warn("ReaderImage", "launch share failed: ${err.message}")
+            }.isSuccess
+            if (!launched) centerToast.show("分享图片失败")
+        }
+    }
 
     // 链接提示注册表的生命周期严格跟书绑定。异步任务回填时还会二次校验 bookKey，
     // 因而快速退出/切书不会把旧书的章号区间写进新书。
@@ -1909,6 +1972,8 @@ fun ReaderScreen(
         viewingImageSrc?.let { src ->
             ImageViewerDialog(
                 imageSrc = src,
+                onSave = { requestImageSave(src) },
+                onShare = { shareImage(src) },
                 onDismiss = { viewModel.dismissImageViewer() },
             )
         }
@@ -1946,17 +2011,12 @@ fun ReaderScreen(
                 },
                 onSave = {
                     imageActionTarget = null
-                    screenScope.launch {
-                        val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            com.morealm.app.domain.storage.ImageSaver.saveToPictures(context, src)
-                        }
-                        centerToast.show(if (ok) "已保存到相册" else "保存失败")
-                    }
+                    requestImageSave(src)
                 },
                 onCopySource = {
                     imageActionTarget = null
                     viewModel.copyTextToClipboard(
-                        com.morealm.app.domain.storage.ImageSaver.sourceLabel(src),
+                        ImageSaver.sourceLabel(src),
                     )
                     centerToast.show("已复制图片源")
                 },
