@@ -39,10 +39,11 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.morealm.app.domain.entity.HttpTts
 import com.morealm.app.domain.entity.TtsVoice
-import com.morealm.app.domain.tts.SystemTtsEngine
 import com.morealm.app.presentation.profile.ListenViewModel
+import com.morealm.app.presentation.tts.SystemEnginePickerState
 import com.morealm.app.service.TtsEventBus
 import com.morealm.app.service.TtsSystemSettings
+import com.morealm.app.ui.widget.SystemEnginePickerDialog
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
@@ -273,8 +274,7 @@ fun ListenScreen(
                         viewModel.selectSystemEnginePackage(pkg)
                         scope.launch { snackbarHost.showSnackbar("已切换 TTS 引擎") }
                     },
-                    selectedSystemEnginePackageFlow = viewModel.selectedSystemEnginePackage,
-                    systemEnginesFlow = viewModel.systemEngines,
+                    systemEnginePickerStateFlow = viewModel.systemEnginePickerState,
                     onRefreshSystemEngines = viewModel::refreshSystemEngineList,
                 )
                 null -> Unit
@@ -750,18 +750,11 @@ private fun SettingsSheet(
     onNavigateHttpTtsManage: () -> Unit,
     onOpenSystemSettings: () -> Unit,
     onPickSystemEnginePkg: (String) -> Unit,
-    selectedSystemEnginePackageFlow: StateFlow<String>,
-    systemEnginesFlow: StateFlow<List<SystemTtsEngine.EngineInfo>>,
+    systemEnginePickerStateFlow: StateFlow<SystemEnginePickerState>,
     onRefreshSystemEngines: () -> Unit,
 ) {
-    val selectedPkg by selectedSystemEnginePackageFlow.collectAsStateWithLifecycle()
-    val systemEngines by systemEnginesFlow.collectAsStateWithLifecycle()
+    val systemEngineState by systemEnginePickerStateFlow.collectAsStateWithLifecycle()
     var showEnginePicker by remember { mutableStateOf(false) }
-
-    // 首次打开「系统 TTS 引擎包」picker 时拉一次引擎列表（getEngines 有开销，按需拉）
-    LaunchedEffect(showEnginePicker) {
-        if (showEnginePicker) onRefreshSystemEngines()
-    }
 
     Column(
         modifier = Modifier
@@ -861,7 +854,10 @@ private fun SettingsSheet(
             Column {
                 Spacer(Modifier.height(4.dp))
                 TextButton(
-                    onClick = { showEnginePicker = true },
+                    onClick = {
+                        onRefreshSystemEngines()
+                        showEnginePicker = true
+                    },
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                 ) {
                     Icon(
@@ -872,7 +868,7 @@ private fun SettingsSheet(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        "系统 TTS 引擎包: ${selectedPkg.ifBlank { "跟随系统默认" }}",
+                        "系统 TTS 引擎包: ${systemEngineState.selectedPackage.ifBlank { "跟随系统默认" }}",
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
@@ -880,10 +876,10 @@ private fun SettingsSheet(
         }
     }
 
-    if (showEnginePicker) {
+    if (showEnginePicker && selectedEngine == "system") {
         SystemEnginePickerDialog(
-            engines = systemEngines,
-            selected = selectedPkg,
+            state = systemEngineState,
+            onRefresh = onRefreshSystemEngines,
             onSelect = { pkg ->
                 onPickSystemEnginePkg(pkg)
                 showEnginePicker = false
@@ -900,81 +896,4 @@ private fun voiceDisplayName(selectedVoice: String, voices: List<TtsVoice>): Str
     if (selectedVoice.isBlank()) return "默认"
     return voices.find { it.id == selectedVoice }?.name?.substringAfterLast("#")?.take(10)
         ?: selectedVoice.substringAfterLast("#").take(10)
-}
-
-@Composable
-private fun SystemEnginePickerDialog(
-    engines: List<SystemTtsEngine.EngineInfo>,
-    selected: String,
-    onSelect: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("选择系统 TTS 引擎") },
-        text = {
-            Column {
-                Text(
-                    "改动后即时生效，无需重启。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                )
-                Spacer(Modifier.height(12.dp))
-                EngineRow(
-                    label = "跟随系统默认",
-                    pkg = "",
-                    selected = selected.isBlank(),
-                    onClick = { onSelect("") },
-                )
-                if (engines.isEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "未检测到任何 TTS 引擎，请先到系统设置安装",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                } else {
-                    engines.forEach { eng ->
-                        EngineRow(
-                            label = eng.label.ifBlank { eng.name },
-                            pkg = eng.name,
-                            selected = selected == eng.name,
-                            onClick = { onSelect(eng.name) },
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
-    )
-}
-
-@Composable
-private fun EngineRow(
-    label: String,
-    pkg: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    ListItem(
-        modifier = Modifier.clickable(onClick = onClick),
-        headlineContent = {
-            Text(
-                label,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (selected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurface,
-            )
-        },
-        supportingContent = pkg.takeIf { it.isNotBlank() }?.let {
-            { Text(it, style = MaterialTheme.typography.labelSmall) }
-        },
-        leadingContent = { RadioButton(selected = selected, onClick = null) },
-        colors = ListItemDefaults.colors(
-            containerColor = if (selected)
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-            else
-                Color.Transparent,
-        ),
-    )
 }

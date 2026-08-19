@@ -268,24 +268,43 @@ class SystemTtsEngine(private val context: Context) : TtsEngine {
     }
 
     /**
-     * 列出系统已安装的所有 TTS 引擎，供"听书"页 UI 让用户选指定包。
-     * 不需要 init 完成 —— `getEngines` 在 binder 没建好时也能查 PackageManager。
-     * 返回空列表表示真没装任何 TTS 引擎（这种情况下 picker UI 应该提示用户去
-     * 系统设置安装）。
+     * 列出系统已安装的所有 TTS 引擎。保留旧的列表返回值，避免已有调用方把
+     * 查询异常当成崩溃；需要区分“空列表”和“查询失败”的 UI 应改用
+     * [getInstalledEnginesResult]。
      */
-    fun getInstalledEngines(): List<EngineInfo> {
-        return runCatching {
-            val engine = tts ?: TextToSpeech(context) {}.also { tts = it }
-            engine.engines.orEmpty().map {
-                EngineInfo(name = it.name.orEmpty(), label = it.label.orEmpty())
+    fun getInstalledEngines(): List<EngineInfo> =
+        getInstalledEnginesResult().getOrDefault(emptyList())
+
+    /** 查询系统 TTS 引擎，并保留异常供 UI 展示失败与重试状态。 */
+    fun getInstalledEnginesResult(): Result<List<EngineInfo>> =
+        runCatching {
+            val current = tts
+            val engine = current ?: TextToSpeech(context) {}
+            try {
+                engine.engines.orEmpty()
+                    .mapNotNull { info ->
+                        val packageName = info.name.orEmpty()
+                        packageName.takeIf { it.isNotBlank() }?.let {
+                            EngineInfo(name = packageName, label = info.label.orEmpty())
+                        }
+                    }
+                    .distinctBy { it.name }
+            } finally {
+                if (current == null) {
+                    Thread(
+                        { runCatching { engine.shutdown() } },
+                        "SystemTts-enumerate-shutdown",
+                    ).apply {
+                        isDaemon = true
+                        start()
+                    }
+                }
             }
-        }.getOrElse {
+        }.onFailure {
             com.morealm.app.core.log.AppLog.warn(
                 "TTS", "getInstalledEngines threw: ${it.message}",
             )
-            emptyList()
         }
-    }
 
     /** 单个系统 TTS 引擎条目。 */
     data class EngineInfo(

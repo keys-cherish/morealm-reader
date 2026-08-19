@@ -9,6 +9,8 @@ import com.morealm.app.domain.entity.TtsVoice
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.tts.EdgeTtsEngine
 import com.morealm.app.domain.tts.SystemTtsEngine
+import com.morealm.app.presentation.tts.SystemEnginePickerState
+import com.morealm.app.presentation.tts.loadPickerState
 import com.morealm.app.service.TtsEventBus
 import com.morealm.app.service.TtsPlaybackState
 import com.morealm.app.service.TtsService
@@ -87,6 +89,15 @@ class ReaderTtsController(
     private val _voices = MutableStateFlow<List<TtsVoice>>(emptyList())
     val ttsVoices: StateFlow<List<TtsVoice>> = _voices.asStateFlow()
 
+    private val _systemEngineQueryState = MutableStateFlow(SystemEnginePickerState())
+    val systemEnginePickerState: StateFlow<SystemEnginePickerState> =
+        kotlinx.coroutines.flow.combine(
+            prefs.ttsSystemEnginePackage,
+            _systemEngineQueryState,
+        ) { selectedPackage, queryState ->
+            queryState.copy(selectedPackage = selectedPackage)
+        }.stateIn(scope, SharingStarted.Eagerly, SystemEnginePickerState())
+
     /**
      * 当前选中的 voice id。读自 prefs（按引擎分别保存：edge 走 ttsEdgeVoice，
      * 其他走 ttsSystemVoice，没有时回落 ttsVoice）。引擎切换时跟随更新。
@@ -152,6 +163,15 @@ class ReaderTtsController(
     /** TTS 面板打开时调用 —— 首次触发 system 引擎初始化 + 音色加载；幂等，重复调用无副作用。 */
     fun ensureVoicesLoaded() {
         voicesRequested.value = true
+    }
+
+    /** 弹窗每次打开时重新读取设备当前安装的系统 TTS 引擎。 */
+    fun refreshSystemEngineList() {
+        if (_systemEngineQueryState.value.isLoading) return
+        _systemEngineQueryState.value = SystemEnginePickerState(isLoading = true)
+        scope.launch {
+            _systemEngineQueryState.value = systemTtsEngine.loadPickerState()
+        }
     }
 
     /**
@@ -331,6 +351,18 @@ class ReaderTtsController(
 
     fun setTtsEngine(engine: String) {
         TtsEventBus.sendCommand(TtsEventBus.Command.SetEngine(engine))
+    }
+
+    /** 持久化具体系统引擎，并让播放 Host 串行重建后从当前位置续播。 */
+    fun selectSystemEnginePackage(pkg: String) {
+        scope.launch {
+            prefs.setTtsSystemEnginePackage(pkg)
+            AppLog.info(
+                "TTS",
+                "reader picked system TTS package: ${pkg.ifBlank { "<system-default>" }}",
+            )
+            TtsEventBus.sendCommand(TtsEventBus.Command.RebindSystemEngine(pkg))
+        }
     }
 
     fun setTtsVoice(voiceName: String) {

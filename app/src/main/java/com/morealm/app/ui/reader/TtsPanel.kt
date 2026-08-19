@@ -16,7 +16,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.morealm.app.domain.entity.TtsVoice
+import com.morealm.app.presentation.tts.SystemEnginePickerState
 import com.morealm.app.ui.theme.LocalMoRealmColors
+import com.morealm.app.ui.widget.SystemEnginePickerDialog
 
 /**
  * In-reader TTS overlay panel with full playback controls.
@@ -31,6 +33,7 @@ fun TtsOverlayPanel(
     currentParagraph: Int = 0,
     totalParagraphs: Int = 0,
     selectedEngine: String = "system",
+    systemEngineState: SystemEnginePickerState = SystemEnginePickerState(),
     sleepMinutes: Int = 0,
     onPlayPause: () -> Unit = {},
     onStop: () -> Unit = {},
@@ -40,6 +43,8 @@ fun TtsOverlayPanel(
     onNextParagraph: () -> Unit = {},
     onSpeedChange: (Float) -> Unit = {},
     onEngineChange: (String) -> Unit = {},
+    onRefreshSystemEngines: () -> Unit = {},
+    onSystemEngineChange: (String) -> Unit = {},
     onSleepTimerSet: (Int) -> Unit = {},
     voices: List<TtsVoice> = emptyList(),
     selectedVoice: String = "",
@@ -49,6 +54,7 @@ fun TtsOverlayPanel(
 ) {
     val moColors = LocalMoRealmColors.current
     var showSleepMenu by remember { mutableStateOf(false) }
+    var showSystemEnginePicker by remember { mutableStateOf(false) }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -234,6 +240,44 @@ fun TtsOverlayPanel(
                 Spacer(Modifier.height(4.dp))
             }
 
+            if (selectedEngine == "system") {
+                val selectedSystemEngineLabel = systemEngineState.engines
+                    .find { it.name == systemEngineState.selectedPackage }
+                    ?.let { it.label.ifBlank { it.name } }
+                    ?: systemEngineState.selectedPackage.ifBlank { "跟随系统默认" }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "系统引擎",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            onRefreshSystemEngines()
+                            showSystemEnginePicker = true
+                        },
+                        modifier = Modifier.weight(1f).height(32.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    ) {
+                        Icon(Icons.Default.RecordVoiceOver, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            selectedSystemEngineLabel,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Icon(Icons.Default.ArrowDropDown, null, modifier = Modifier.size(16.dp))
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+
             // Bottom row: engine selector + sleep timer + stop
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -296,5 +340,17 @@ fun TtsOverlayPanel(
                 }
             }
         }
+    }
+
+    if (showSystemEnginePicker && selectedEngine == "system") {
+        SystemEnginePickerDialog(
+            state = systemEngineState,
+            onRefresh = onRefreshSystemEngines,
+            onSelect = { pkg ->
+                onSystemEngineChange(pkg)
+                showSystemEnginePicker = false
+            },
+            onDismiss = { showSystemEnginePicker = false },
+        )
     }
 }

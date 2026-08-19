@@ -9,6 +9,8 @@ import com.morealm.app.domain.entity.TtsVoice
 import com.morealm.app.domain.preference.AppPreferences
 import com.morealm.app.domain.tts.EdgeTtsEngine
 import com.morealm.app.domain.tts.SystemTtsEngine
+import com.morealm.app.presentation.tts.SystemEnginePickerState
+import com.morealm.app.presentation.tts.loadPickerState
 import com.morealm.app.service.TtsEventBus
 import com.morealm.app.service.TtsPlaybackState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -62,21 +64,13 @@ class ListenViewModel @Inject constructor(
     val httpTtsList: StateFlow<List<HttpTts>> = httpTtsDao.getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /**
-     * 当前用户绑定的系统 TTS 引擎包名。空字符串 = 跟随系统默认。
-     * 仅在 [selectedEngine] = "system" 时 UI 才显示对应 picker；切到 edge / 其他
-     * 引擎时这个值仍保留，便于切回 system 时恢复用户偏好。
-     */
-    val selectedSystemEnginePackage: StateFlow<String> = prefs.ttsSystemEnginePackage
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
-
-    /**
-     * 系统已安装的所有 Android TTS 引擎清单（懒加载，UI 打开 picker 时调
-     * [refreshSystemEngineList] 主动拉一次；不放进 init 因为 systemTtsEngine
-     * 还没 init 完时清单可能为空）。
-     */
-    private val _systemEngines = MutableStateFlow<List<SystemTtsEngine.EngineInfo>>(emptyList())
-    val systemEngines: StateFlow<List<SystemTtsEngine.EngineInfo>> = _systemEngines.asStateFlow()
+    private val _systemEngineQueryState = MutableStateFlow(SystemEnginePickerState())
+    val systemEnginePickerState: StateFlow<SystemEnginePickerState> = combine(
+        prefs.ttsSystemEnginePackage,
+        _systemEngineQueryState,
+    ) { selectedPackage, queryState ->
+        queryState.copy(selectedPackage = selectedPackage)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, SystemEnginePickerState())
 
     val selectedSpeed: StateFlow<Float> = prefs.ttsSpeed
         .stateIn(viewModelScope, SharingStarted.Eagerly, 1.0f)
@@ -130,13 +124,12 @@ class ListenViewModel @Inject constructor(
         _ttsErrorBanner.value = null
     }
 
-    /**
-     * 拉一次 `TextToSpeech.getEngines()` 列表，UI 打开"系统 TTS 引擎包"
-     * picker 时调一次，结果写到 [systemEngines]。
-     */
+    /** 弹窗每次打开时重新读取设备当前安装的系统 TTS 引擎。 */
     fun refreshSystemEngineList() {
+        if (_systemEngineQueryState.value.isLoading) return
+        _systemEngineQueryState.value = SystemEnginePickerState(isLoading = true)
         viewModelScope.launch {
-            _systemEngines.value = systemTtsEngine.getInstalledEngines()
+            _systemEngineQueryState.value = systemTtsEngine.loadPickerState()
         }
     }
 

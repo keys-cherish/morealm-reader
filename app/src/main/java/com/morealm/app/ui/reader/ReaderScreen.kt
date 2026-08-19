@@ -1821,8 +1821,6 @@ fun ReaderScreen(
                 seekUndoTarget = null
             }
         }
-
-        // TTS overlay panel — collect TTS state only when panel is visible
         AnimatedVisibility(
             visible = showTtsPanel,
             enter = slideInVertically(tween(400, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f))) { it },
@@ -1837,9 +1835,8 @@ fun ReaderScreen(
             val ttsSleepMinutes by viewModel.tts.ttsSleepMinutes.collectAsStateWithLifecycle()
             val ttsVoices by viewModel.tts.ttsVoices.collectAsStateWithLifecycle()
             val ttsVoiceName by viewModel.tts.ttsVoiceName.collectAsStateWithLifecycle()
-            // 音色列表懒加载：面板首次可见才初始化 system TTS 引擎 + 拉列表（幂等）。
+            val systemEngineState by viewModel.tts.systemEnginePickerState.collectAsStateWithLifecycle()
             LaunchedEffect(Unit) { viewModel.tts.ensureVoicesLoaded() }
-            // 如果还没播放（ttsTotalParagraphs == 0），使用当前章节的段落数作为预览
             val effectiveTotalParagraphs = if (ttsTotalParagraphs > 0) ttsTotalParagraphs
                 else viewModel.getCurrentChapterParagraphCount()
             TtsOverlayPanel(
@@ -1850,6 +1847,7 @@ fun ReaderScreen(
                 currentParagraph = ttsParagraphIndex,
                 totalParagraphs = effectiveTotalParagraphs,
                 selectedEngine = ttsEngine,
+                systemEngineState = systemEngineState,
                 sleepMinutes = ttsSleepMinutes,
                 onPlayPause = viewModel::ttsPlayPause,
                 onStop = viewModel::ttsStop,
@@ -1859,6 +1857,8 @@ fun ReaderScreen(
                 onNextParagraph = viewModel.tts::ttsNextParagraph,
                 onSpeedChange = viewModel.tts::setTtsSpeed,
                 onEngineChange = viewModel.tts::setTtsEngine,
+                onRefreshSystemEngines = viewModel.tts::refreshSystemEngineList,
+                onSystemEngineChange = viewModel.tts::selectSystemEnginePackage,
                 onSleepTimerSet = viewModel.tts::setTtsSleepTimer,
                 voices = ttsVoices,
                 selectedVoice = ttsVoiceName,

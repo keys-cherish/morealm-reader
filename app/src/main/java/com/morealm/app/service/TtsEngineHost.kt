@@ -1781,16 +1781,8 @@ class TtsEngineHost(
     }
 
     /**
-     * 切换 system TTS 引擎包名 —— 不需要重启阅读器。
-     *
-     * 流程（持 controlMutex 串行化）：
-     * 1. 记录"切换前是否在朗读"。
-     * 2. cancelAndJoin speakJob → 旧 engine.stop() + shutdown()。
-     * 3. 新建 SystemTtsEngine 用新包名 initialize；voice/rate 也重新应用。
-     * 4. 之前在朗读则继续 speakLoop（从当前 paragraphIndex/StartPos 续读）。
-     *
-     * 仅当 [engineId] 当前是 "system" 时才有意义。"edge" 时该命令仅更新 prefs，
-     * 待用户切回 system 时新包名生效。
+     * 串行重建系统 TTS；等待新实例初始化成功后再恢复语速、音色与当前位置。
+     * 非 system 模式只保存包名，待用户切回时生效。
      */
     private fun rebindSystemEngine(newPkg: String) {
         scope.launch {
@@ -1812,6 +1804,12 @@ class TtsEngineHost(
                 // 直接调 ensureSystemTtsEngine 会再读一次 prefs；这里直接传新包名避免竞态
                 val fresh = SystemTtsEngine(context).also { it.initialize(enginePackage = newPkg.ifBlank { null }) }
                 systemTtsEngine = fresh
+                val initResult = fresh.awaitReadyResult()
+                if (initResult is SystemTtsEngine.InitResult.Failed) {
+                    publishState(playing = false)
+                    TtsEventBus.sendEvent(TtsEventBus.Event.Error(initResult.reason, canOpenSettings = true))
+                    return@withLock
+                }
                 clearEngineFatal() // 重新绑定了引擎实例，旧 fatal 不再适用
                 fresh.setSpeechRate(speed)
                 applyVoiceToEngine()
