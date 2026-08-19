@@ -2309,21 +2309,9 @@ private fun ChapterBookmarkPanel(
                         ),
                     )
                     Spacer(Modifier.height(4.dp))
-                    // ── 本地 TXT 自动分章合并显示 ──
-                    //
-                    // [LocalBookParser.parseWithoutToc] 会把无目录 TXT 按 MAX_LENGTH_NO_TOC 切成
-                    // `第1节` / `第2节` / ... 这些伪章名。底层切分仍需保留（渲染缓存 / 续读 /
-                    // ScrollAnchor 都按段做），但目录里再展示成多行只会让用户看到一串相同的
-                    // "《书名》"（[BookChapter.displayTitle] 已把伪章名换成书名）—— 完全没区分度。
-                    //
-                    // 解决方案：检测到这种"全是自动分章"的本地 TXT 时，目录里只展示一个虚拟
-                    // "整本书"项；点击 = 跳到 chapter 0 + chapterPosition 0。chapters 数据本身
-                    // 不动，所有渲染层 / 续读 / 进度上报全部按原样跑。
-                    //
-                    // 搜索状态（chapterSearch 非空）下退化回原逐章列表 —— 用户可能在查 "第 N 节"。
-                    // [isAutoSplitTxt] 由外层 [ReaderScreen] 计算后通过参数传入，与
-                    // [com.morealm.app.ui.reader.renderer.CanvasRenderer.omitChapterTitleBlock]
-                    // 同一口径，避免本地重算漂移。
+                    // 无目录 TXT 的伪章仍供渲染缓存、续读和 ScrollAnchor 使用，但目录只展示
+                    // 一个“整本书”入口，避免 [BookChapter.displayTitle] 把伪章显示成重复书名。
+                    // 搜索时恢复逐章列表；[isAutoSplitTxt] 由外层统一计算，避免本地口径漂移。
                     val showMergedWholeBook = isAutoSplitTxt && chapterSearch.isBlank()
                     val listState = rememberLazyListState(
                         initialFirstVisibleItemIndex = when {
@@ -2332,11 +2320,12 @@ private fun ChapterBookmarkPanel(
                             else -> 0
                         }
                     )
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(start = 16.dp, top = 4.dp, end = 28.dp, bottom = 4.dp),
+                        ) {
                         if (showMergedWholeBook) {
                             // 单 item — 整本书入口
                             item(key = "merged_whole_book") {
@@ -2408,29 +2397,31 @@ private fun ChapterBookmarkPanel(
                                 }
                             }
                         }
-                        // Linked books
-                        linkedBooks.forEach { linkedBook ->
-                            item(key = "linked_header_${linkedBook.id}") {
-                                Text(
-                                    linkedBook.title,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 4.dp),
-                                )
-                            }
-                            item(key = "linked_tap_${linkedBook.id}") {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { onLinkedBookClick(linkedBook.id) }
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                                ) {
-                                    Text("打开阅读 →", style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                            // Linked books
+                            linkedBooks.forEach { linkedBook ->
+                                item(key = "linked_header_${linkedBook.id}") {
+                                    Text(
+                                        linkedBook.title,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 4.dp),
+                                    )
+                                }
+                                item(key = "linked_tap_${linkedBook.id}") {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { onLinkedBookClick(linkedBook.id) }
+                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    ) {
+                                        Text("打开阅读 →", style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                                    }
                                 }
                             }
                         }
+                        ReaderCatalogScrollbar(listState, Modifier.align(Alignment.CenterEnd))
                     }
                 } else {
                     // Bookmarks tab
