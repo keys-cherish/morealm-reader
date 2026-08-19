@@ -569,7 +569,7 @@ fun ProfileScreen(
             onDismiss = { showAnnualReport = false },
         )
     }
-    // 检查更新：点击直接弹三网盘下载渠道（不查版本，详见 UpdateViewModel / UpdateDialogHost）。
+    // 检查更新：点击直接弹网盘下载渠道（不查版本，详见 UpdateViewModel / UpdateDialogHost）。
     val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     UpdateDialogHost(
         state = updateState,

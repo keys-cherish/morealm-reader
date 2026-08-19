@@ -49,7 +49,7 @@ val qqGroupId: String = providers.gradleProperty("qqGroupId").orNull
     ?: ""
 
 /**
- * 更新下载渠道（百度 / 夸克 / 123 网盘）分享链接 —— 同 qqGroupId 一样**故意不写源码**：
+ * 更新下载渠道（百度 / 夸克网盘）分享链接 —— 同 qqGroupId 一样**故意不写源码**：
  * local.properties（gitignored）→ -P 命令行 → 环境变量（CI secret）→ 缺省空串。
  * 这样开源仓库 + commit 历史里都看不到具体网盘链接；空串时 UI 隐藏对应渠道按钮。
  */
@@ -60,7 +60,6 @@ fun downloadChannelUrl(prop: String, gradleKey: String, env: String): String =
         ?: ""
 val panBaiduUrl = downloadChannelUrl("pan.baidu.url", "panBaiduUrl", "PAN_BAIDU_URL")
 val panQuarkUrl = downloadChannelUrl("pan.quark.url", "panQuarkUrl", "PAN_QUARK_URL")
-val pan123Url = downloadChannelUrl("pan.123.url", "pan123Url", "PAN_123_URL")
 
 android {
     namespace = "com.morealm.app"
@@ -87,10 +86,9 @@ android {
         // QQ 群号注入到 BuildConfig.QQ_GROUP_ID。
         // 注意 escape：BuildConfig 字符串字面量要包含双引号,外层 Kotlin 字符串再 escape 一次。
         buildConfigField("String", "QQ_GROUP_ID", "\"${qqGroupId}\"")
-        // 三网盘更新下载渠道（见上方 downloadChannelUrl）。空串时 UI 隐藏对应按钮。
+        // 更新下载渠道（见上方 downloadChannelUrl）。空串时 UI 隐藏对应按钮。
         buildConfigField("String", "PAN_BAIDU_URL", "\"${panBaiduUrl}\"")
         buildConfigField("String", "PAN_QUARK_URL", "\"${panQuarkUrl}\"")
-        buildConfigField("String", "PAN_123_URL", "\"${pan123Url}\"")
 
         // androidTest（Compose UI test）—— P3-2 引入；默认 AndroidJUnit4Runner
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

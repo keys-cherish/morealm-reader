@@ -31,13 +31,13 @@ import com.morealm.app.BuildConfig
 import com.morealm.app.presentation.update.UpdateViewModel
 
 /**
- * 「检查更新」UI —— 点击后展示三网盘下载渠道（百度 / 夸克 / 123），用户自行取最新安装包。
+ * 「检查更新」UI —— 点击后展示百度、夸克下载渠道，用户自行取最新安装包。
  *
- * 不做版本检查（详见 [UpdateViewModel]）。三个链接来自 [BuildConfig]（由 local.properties
+ * 不做版本检查（详见 [UpdateViewModel]）。链接来自 [BuildConfig]（由 local.properties
  * 注入，不进 git）；某渠道链接为空（未在 local.properties / CI env 配置）时其入口自动隐藏。
  * 百度链接已带 `?pwd=` 提取码，打开后网页 / 客户端通常自动填充。
  *
- * 图标当前用「品牌色圆 + 文字标识」（百度蓝度 / 夸克紫夸 / 123 橙），无需图片资源；
+ * 图标当前用「品牌色圆 + 文字标识」（百度蓝度 / 夸克紫夸），无需图片资源；
  * 若日后要换真品牌 logo，把 [DownloadChannel.badge] 渲染处替换为 painterResource(drawable) 即可。
  */
 @Composable
@@ -67,7 +67,6 @@ private fun DownloadChannelsDialog(onDismiss: () -> Unit) {
         listOf(
             DownloadChannel("百度网盘", BuildConfig.PAN_BAIDU_URL, "度", Color(0xFF3385FF)),
             DownloadChannel("夸克网盘", BuildConfig.PAN_QUARK_URL, "夸", Color(0xFF5B6CFF)),
-            DownloadChannel("123 网盘", BuildConfig.PAN_123_URL, "123", Color(0xFFFF7A00)),
         ).filter { it.url.isNotBlank() }
     }
     AlertDialog(
