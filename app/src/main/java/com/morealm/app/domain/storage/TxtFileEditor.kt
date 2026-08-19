@@ -143,7 +143,7 @@ object TxtFileEditor {
                 copyRange(input, out, chapter.startPosition)
                 val source = readRange(backup, chapter.startPosition, chapter.endPosition)
                 val (changed, count) = replaceText(
-                    String(source, charset), pattern, request.replacement, targetMatchOrdinal,
+                    String(source, charset), pattern, request, targetMatchOrdinal,
                 )
                 out.write(if (count == 0) source else changed.toByteArray(charset))
                 input.seek(chapter.endPosition)
@@ -173,7 +173,7 @@ object TxtFileEditor {
                         copyRange(input, out, start - cursor)
                     }
                     val source = readRange(backup, start, end)
-                    val (changed, count) = replaceText(String(source, charset), pattern, request.replacement, null)
+                    val (changed, count) = replaceText(String(source, charset), pattern, request, null)
                     if (count == 0) out.write(source) else out.write(changed.toByteArray(charset))
                     total += count
                     cursor = end
@@ -202,7 +202,7 @@ object TxtFileEditor {
     private fun replaceText(
         text: String,
         pattern: Pattern,
-        replacement: String,
+        request: TxtReplaceRequest,
         targetOrdinal: Int?,
     ): Pair<String, Int> {
         val matcher = pattern.matcher(text)
@@ -214,7 +214,11 @@ object TxtFileEditor {
             val shouldReplace = targetOrdinal == null || ordinal == targetOrdinal
             out.append(text, cursor, matcher.start())
             if (shouldReplace) {
-                out.append(expandReplacement(matcher, replacement))
+                // 普通搜索的“替换为”就是用户输入的原文；只有正则模式才展开 $1 和转义。
+                out.append(
+                    if (request.isRegex) expandReplacement(matcher, request.replacement)
+                    else request.replacement,
+                )
                 count++
             } else {
                 out.append(text, matcher.start(), matcher.end())
@@ -238,7 +242,7 @@ object TxtFileEditor {
     ): Pair<String, Int> = replaceText(
         text = text,
         pattern = compilePattern(request),
-        replacement = request.replacement,
+        request = request,
         targetOrdinal = targetOrdinal,
     )
 

@@ -172,11 +172,7 @@ fun ReaderScreen(
     val showSettings by viewModel.isSettingsPanelVisible.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pageTurnMode by viewModel.settings.pageTurnMode.collectAsStateWithLifecycle()
-    // ── 选区「替换」──
-    // replaceSupported：当前章内容是否非 wire 串（EPUB 精排内容上替换规则会被整章
-    // 拦掉，见 ReaderChapterController.skipReplaceForWireContent）。false 时三个渲染
-    // host 都收到 onReplaceText = null，按钮直接不渲染。
-    // replaceDialogText：非空即弹「替换」对话框，值就是选区文字。
+    // EPUB 精排 wire 内容不显示替换入口；非空选区文字触发独立替换对话框。
     val replaceSupported by viewModel.replaceSupported.collectAsStateWithLifecycle()
     var replaceDialogText by remember { mutableStateOf<String?>(null) }
     // ── 排版方向偏好 ──
@@ -2053,7 +2049,7 @@ fun ReaderScreen(
                 initialPattern = selected,
                 onDismiss = { replaceDialogText = null },
                 onConfirm = { pattern, replacement, chapterOnly ->
-                    viewModel.addQuickReplace(pattern, replacement, chapterOnly)
+                    viewModel.replaceSelectedText(pattern, replacement, chapterOnly)
                     replaceDialogText = null
                 },
             )
@@ -2106,6 +2102,9 @@ fun ReaderScreen(
         // 同源在 LocalTime 5s 内复发的事件直接丢弃。
         val snackbarHostState = remember { SnackbarHostState() }
         val scope = rememberCoroutineScope()
+        LaunchedEffect(Unit) {
+            viewModel.selectionReplaceFeedback.collect { snackbarHostState.showSnackbar(it) }
+        }
         LaunchedEffect(Unit) {
             var lastUrl: String? = null
             var lastAtMs = 0L

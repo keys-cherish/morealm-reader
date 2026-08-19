@@ -1,6 +1,8 @@
 package com.morealm.app.presentation.reader
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.parser.LocalBookParser
@@ -76,18 +78,19 @@ class ReaderContentEditController(
         isRegex: Boolean,
         isCaseSensitive: Boolean,
         target: ReaderSearchController.SearchResult? = null,
-    ) {
-        if (_txtReplaceState.value.running) return
+    ): Boolean {
+        if (_txtReplaceState.value.running) return false
         val book = chapter.book.value
         if (book == null || book.format != BookFormat.TXT || book.localPath.isNullOrBlank()) {
             _txtReplaceState.value = TxtReplaceState(error = "仅支持编辑本地 TXT 文件")
-            return
+            return false
         }
         if (query.isEmpty()) {
             _txtReplaceState.value = TxtReplaceState(error = "搜索内容不能为空")
-            return
+            return false
         }
-        val preferredIndex = target?.chapterIndex ?: chapter.currentChapterIndex.value
+        val requestedChapterIndex = target?.chapterIndex ?: chapter.currentChapterIndex.value
+        val preferredIndex = requestedChapterIndex
         _txtReplaceState.value = TxtReplaceState(
             running = true,
             message = "正在替换…",
@@ -102,7 +105,7 @@ class ReaderContentEditController(
                     chapters = chapter.chapters.value,
                     scope = editScope,
                     request = TxtReplaceRequest(query, replacement, isRegex, isCaseSensitive),
-                    targetChapterIndex = target?.chapterIndex ?: chapter.currentChapterIndex.value,
+                    targetChapterIndex = requestedChapterIndex,
                     targetMatchOrdinal = target?.matchOrdinalInChapter,
                 )
                 if (result.fileChanged) chapter.reparseLocalTxtAfterEdit(preferredIndex)
@@ -122,11 +125,16 @@ class ReaderContentEditController(
             } catch (e: Exception) {
                 AppLog.error("TxtEdit", "TXT replace failed", e)
                 _txtReplaceState.value = TxtReplaceState(
-                    error = e.message ?: "替换失败",
+                    error = if (e is SecurityException) {
+                        "原文件没有写入权限，请在书架重新选择该 TXT 授权后再替换"
+                    } else {
+                        e.message ?: "替换失败"
+                    },
                     canUndo = undoSnapshot != null,
                 )
             }
         }
+        return true
     }
 
     /** 撤销最近一次成功的 TXT 替换；恢复后同样等待当前章重新解析并发布。 */
@@ -166,21 +174,25 @@ class ReaderContentEditController(
     }
 
     /**
-     * 替换只允许原位写回用户选中的 TXT，不再静默创建应用私有副本。SAF 提供方若只
-     * 授予读取权限，Android 不允许绕过授权写入；此时明确终止，让用户重新选择原文件
-     * 获取写权限，避免书架路径在用户不知情时切到另一份文件。
+     * 替换只允许原位写回用户选中的 TXT，不再静默创建应用私有副本。这里只检查 URI
+     * 写授权，不能用 openFileDescriptor("rw") 预探测：部分 SAF Provider 支持实际使用的
+     * 输出流，却不提供 rw 所要求的可寻址文件描述符，会把可写文件误判成只读。
      */
     private fun resolveEditableTxtUri(book: com.morealm.app.domain.entity.Book): Uri {
         val source = Uri.parse(requireNotNull(book.localPath))
-        if (canOpenForWrite(source)) return source
+        if (hasWritePermission(source)) return source
         error("原文件没有写入权限，请在书架重新选择该 TXT 授权后再替换")
     }
 
-    private fun canOpenForWrite(uri: Uri): Boolean = when (uri.scheme) {
+    private fun hasWritePermission(uri: Uri): Boolean = when (uri.scheme) {
         null, "file" -> uri.path?.let { java.io.File(it) }?.canWrite() == true
-        else -> runCatching {
-            context.contentResolver.openFileDescriptor(uri, "rw")?.use { true } ?: false
-        }.getOrDefault(false)
+        "content" -> context.checkUriPermission(
+            uri,
+            android.os.Process.myPid(),
+            android.os.Process.myUid(),
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+        ) == PackageManager.PERMISSION_GRANTED
+        else -> false
     }
 
     fun clearTxtReplaceMessage() {

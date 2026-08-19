@@ -6,6 +6,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.domain.entity.Book
+import com.morealm.app.domain.entity.BookFormat
 import com.morealm.app.domain.entity.BookSource
 import com.morealm.app.domain.entity.Bookmark
 import com.morealm.app.domain.entity.BookChapter
@@ -427,17 +428,42 @@ class ReaderViewModel @Inject constructor(
      * 当前章内容是否支持替换（非 EPUB 精排 wire 串）。选区菜单据此决定是否给「替换」按钮。
      */
     val replaceSupported: StateFlow<Boolean> = chapter.replaceSupported
+    private val _selectionReplaceFeedback = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val selectionReplaceFeedback = _selectionReplaceFeedback.asSharedFlow()
 
     /**
-     * 选区菜单「替换」→ 落一条限定本书（可再限定本章）的字面量替换规则并立刻重渲染。
+     * 选区菜单「替换」：本地 TXT 原位搜索替换，其他内容保留数据库显示规则。
      *
-     * 刻意用 **isRegex = false**：入口是"用户选中的一段正文"，里面的 `.` `(` `?`
-     * 全是普通字符，按正则解释必然误伤。要写正则的用户走替换规则管理页。
-     *
-     * [replacement] 传空串即"删除该词"，与对话框底部提示一致，不需要额外分支。
+     * 选区文字始终按大小写敏感的普通文本处理，避免 `.` `(` `?` 被解释为正则。
      */
-    fun addQuickReplace(pattern: String, replacement: String, chapterOnly: Boolean) {
+    fun replaceSelectedText(pattern: String, replacement: String, chapterOnly: Boolean) {
         if (pattern.isEmpty()) return
+        val currentBook = chapter.book.value
+        if (currentBook != null &&
+            currentBook.format == BookFormat.TXT &&
+            !currentBook.localPath.isNullOrBlank()
+        ) {
+            val started = contentEdit.replaceTxt(
+                editScope = if (chapterOnly) TxtEditScope.CHAPTER else TxtEditScope.FULL_TEXT,
+                query = pattern,
+                replacement = replacement,
+                isRegex = false,
+                isCaseSensitive = true,
+            )
+            if (!started) {
+                _selectionReplaceFeedback.tryEmit("替换任务正在进行，请稍后再试")
+                return
+            }
+            viewModelScope.launch {
+                val state = txtReplaceState.first {
+                    !it.running && (it.error != null || it.message != null)
+                }
+                _selectionReplaceFeedback.emit(requireNotNull(state.error ?: state.message))
+                contentEdit.clearTxtReplaceMessage()
+            }
+            return
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
             val rule = com.morealm.app.domain.entity.ReplaceRule(
                 id = java.util.UUID.randomUUID().toString(),

@@ -50,6 +50,17 @@ class TxtFileEditorTest {
     }
 
     @Test
+    fun `literal replacement preserves backslashes and group-like text`() {
+        val result = TxtFileEditor.replaceTextForTest(
+            text = "旧文字",
+            request = TxtReplaceRequest("旧文字", "\\n-\$1", isRegex = false),
+        )
+
+        assertEquals("\\n-\$1", result.first)
+        assertEquals(1, result.second)
+    }
+
+    @Test
     fun `successful replacement keeps one undo snapshot and restore writes original bytes`() = runBlocking {
         val context = RuntimeEnvironment.getApplication()
         val original = "第一章\n旧文字\n"
