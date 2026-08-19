@@ -114,7 +114,12 @@ fun MoRealmNavHost(
     // MainActivity 置 pendingOpenBookId → 这里消费一次 → 导航到阅读器（去重命中已有书也走此路径）。
     LaunchedEffect(pendingOpenBookId) {
         val id = pendingOpenBookId ?: return@LaunchedEffect
-        navController.navigateToReader(id)
+        // 外部「打开方式」属于顶层 deep-link：先清掉旧 reader，再只压入最新一本。
+        // 否则用户连续从文件管理器导入 A/B/C 后，会依次退回 B/A 阅读页。
+        navController.navigateToReader(id) {
+            launchSingleTop = true
+            popUpTo("main_tabs") { inclusive = false }
+        }
         onPendingOpenConsumed()
     }
 
