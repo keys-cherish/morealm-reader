@@ -663,8 +663,9 @@ class ScrollLayoutEngineTest {
     }
 
     @Test
-    fun `图片段 自定义 resolver 返非空 dims 走真实缩放`() {
-        // intrinsic 200×100 → 等比缩 visibleWidth=1000 → h = 1000×100/200 = 500
+    fun `图片段 无宽度声明时按固有尺寸缩放且不上采样`() {
+        // intrinsic 200×100 按 16px 设计字号映射到当前 48px 字号：600×300。
+        // 无 width 声明时保持该固有 CSS 尺寸，不再强制放大到 visibleWidth=1000。
         val resolver = ScrollImageDimensionsResolver { _, _ -> 200 to 100 }
         val eng = ScrollLayoutEngine(
             viewWidth = 1080, viewHeight = 2200,
@@ -675,7 +676,7 @@ class ScrollLayoutEngineTest {
         val content = """<img src="x"/>"""
         val layout = eng.layoutChapter(0, "T", content, omitChapterTitleBlock = true)
         val img = layout.pages[0].lines[0]
-        assertEquals(500f, img.height, 0.01f)
+        assertEquals(300f, img.height, 0.01f)
     }
 
     @Test
