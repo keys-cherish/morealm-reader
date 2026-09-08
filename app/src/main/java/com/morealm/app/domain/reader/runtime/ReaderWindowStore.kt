@@ -32,14 +32,15 @@ class ReaderWindowStore(
         entries[currentId] = entry
     }
 
-    fun moveTo(unitId: ReadingUnitId) {
+    /** Replace the whole window before pruning, so an external jump retains adjacent artifacts. */
+    fun moveTo(
+        unitId: ReadingUnitId,
+        previous: ReadingUnitId? = null,
+        next: ReadingUnitId? = null,
+    ) {
         currentId = unitId
         currentEntry = entries[unitId] ?: WindowEntry.Empty
-        previousId = null
-        previousEntry = WindowEntry.Empty
-        nextId = null
-        nextEntry = WindowEntry.Empty
-        retainWindowEntries()
+        setNeighbors(previous, next)
     }
 
     fun setNeighbors(previous: ReadingUnitId?, next: ReadingUnitId?) {

@@ -215,16 +215,9 @@ class AnalyzeUrl(
             } finally {
                 org.mozilla.javascript.Context.exit()
             }
-            // jsLib 共享作用域 —— 失败时（脚本异常 / 网络问题）退化为标准 runtime scope，
-            // 避免一个有问题的 jsLib 把整个搜索 URL 跑炸。
-            val sharedScope = source?.jsLib?.let {
-                runCatching { SharedJsScope.getScope(it, coroutineContext) }.getOrNull()
-            }
-            val scope = if (sharedScope != null) {
-                bindings.apply { prototype = sharedScope }
-            } else {
-                RhinoScriptEngine.getRuntimeScope(bindings)
-            }
+            val scope = com.morealm.app.domain.source.SourceScriptRuntime.shared.createScope(
+                bindings, source?.jsLib, coroutineContext,
+            )
             RhinoScriptEngine.eval(normalizeJsSnippet(jsStr), scope, coroutineContext)
         }
     }

@@ -106,7 +106,7 @@ class SourceLoginScriptApi(
     ): String? {
         if (url.isNullOrBlank() && html.isNullOrBlank()) return null
         return try {
-            com.morealm.app.ui.source.ShowBrowserActivity.launch(
+            com.morealm.app.ui.source.SourceBrowserLauncher.await(
                 context = ctx,
                 url = url,
                 html = html,
@@ -114,15 +114,8 @@ class SourceLoginScriptApi(
                 sourceKey = source.getKey(),
                 title = "登录 ${source.bookSourceName}",
             )
-            // runBlocking 在脚本所处的 IO 协程里安全：Activity 的 emit 来自 main 线程，
-            // 这里等 RendezvousChannel 的 receive，等待期间不阻塞主线程。超时兜底避免
-            // Activity 极端情况下 emit 丢失导致脚本永挂（Activity.onDestroy 已有兜底 emit，
-            // 这层只是第二道保险）。
-            runBlocking {
-                kotlinx.coroutines.withTimeoutOrNull(5 * 60_000L) {
-                    ShowBrowserSession.awaitResult()
-                }
-            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             AppLog.warn("LoginApi", "showBrowser failed: ${e.message?.take(80)}")
             null

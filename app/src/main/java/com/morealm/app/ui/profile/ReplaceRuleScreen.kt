@@ -39,6 +39,12 @@ fun ReplaceRuleScreen(
 ) {
     val moColors = LocalMoRealmColors.current
     val rules by viewModel.allRules.collectAsStateWithLifecycle()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(viewModel) {
+        viewModel.messages.collect { message ->
+            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
     var showAddDialog by remember { mutableStateOf(false) }
     var editingRuleId by remember { mutableStateOf<String?>(null) }
     /**

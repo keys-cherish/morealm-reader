@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -232,7 +233,7 @@ fun SlidePageTransition(
                 selectionArgb = selectionArgb,
                 pageInfoBar = pageInfoBarProvider(curPage),
                 readerBgArgb = backgroundColor.toArgb(),
-                modifier = Modifier.fillMaxSize().background(backgroundColor),
+                modifier = Modifier.fillMaxSize().clipToBounds().background(backgroundColor),
             )
             PagePaneCanvas(
                 page = nextPage,
@@ -245,7 +246,7 @@ fun SlidePageTransition(
                 bookmarkCps = nextPageBookmarkCps,
                 pageInfoBar = pageInfoBarProvider(nextPage),
                 readerBgArgb = backgroundColor.toArgb(),
-                modifier = Modifier.fillMaxSize().background(backgroundColor),
+                modifier = Modifier.fillMaxSize().clipToBounds().background(backgroundColor),
             )
             PagePaneCanvas(
                 page = nextPlusPage,
@@ -258,7 +259,7 @@ fun SlidePageTransition(
                 bookmarkCps = nextPlusPageBookmarkCps,
                 pageInfoBar = pageInfoBarProvider(nextPlusPage),
                 readerBgArgb = backgroundColor.toArgb(),
-                modifier = Modifier.fillMaxSize().background(backgroundColor),
+                modifier = Modifier.fillMaxSize().clipToBounds().background(backgroundColor),
             )
             PagePaneCanvas(
                 page = prevPage,
@@ -271,7 +272,7 @@ fun SlidePageTransition(
                 bookmarkCps = prevPageBookmarkCps,
                 pageInfoBar = pageInfoBarProvider(prevPage),
                 readerBgArgb = backgroundColor.toArgb(),
-                modifier = Modifier.fillMaxSize().background(backgroundColor),
+                modifier = Modifier.fillMaxSize().clipToBounds().background(backgroundColor),
             )
         },
     ) { measurables, constraints ->

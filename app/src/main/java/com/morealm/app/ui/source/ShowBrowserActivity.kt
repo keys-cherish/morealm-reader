@@ -82,7 +82,7 @@ class ShowBrowserActivity : ComponentActivity() {
     private fun emitOnce(html: String?) {
         if (emitted) return
         emitted = true
-        ShowBrowserSession.emit(html)
+        ShowBrowserSession.emit(intent.getLongExtra("browserRequestId", 0L), html)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -147,6 +147,7 @@ class ShowBrowserActivity : ComponentActivity() {
             preloadJs: String?,
             sourceKey: String,
             title: String,
+            requestId: Long = 0L,
         ) {
             val intent = Intent(context, ShowBrowserActivity::class.java).apply {
                 putExtra(EXTRA_URL, url)
@@ -154,6 +155,7 @@ class ShowBrowserActivity : ComponentActivity() {
                 putExtra(EXTRA_PRELOAD_JS, preloadJs)
                 putExtra(EXTRA_SOURCE_KEY, sourceKey)
                 putExtra(EXTRA_TITLE, title)
+                putExtra("browserRequestId", requestId)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
@@ -193,16 +195,15 @@ private fun ShowBrowserContent(
                 },
                 actions = {
                     IconButton(onClick = {
-                        // 抓一次最新 HTML 后再退。evaluateJavascript 回调异步，先 capture
-                        // 再 onDone 可能读到空；WebView 持续在 onPageFinished 里 capture，
-                        // 这里再抓一次只是抢时效，即便回调晚于 finish 也无害——脚本拿到的
-                        // 就是上一轮 capture 的值，仍比 null 好。
-                        webView?.evaluateJavascript(
-                            "document.documentElement.outerHTML"
-                        ) { raw ->
-                            onHtmlCaptured(unquoteJsString(raw))
+                        val currentWebView = webView
+                        if (currentWebView == null) onCancel() else {
+                            currentWebView.evaluateJavascript("document.documentElement.outerHTML") { raw ->
+                                persistCookie(currentWebView, sourceKey)
+                                onHtmlCaptured(com.morealm.app.domain.source.decodeBrowserHtml(raw))
+                                // Reply only after the current DOM has been captured.
+                                onDone()
+                            }
                         }
-                        onDone()
                     }) {
                         Icon(Icons.Default.Check, contentDescription = "完成")
                     }
@@ -247,7 +248,7 @@ private fun ShowBrowserContent(
                                 }
                                 // 持续抓 HTML，确保"完成"按钮按下那一刻 latestHtml 是新的。
                                 view?.evaluateJavascript("document.documentElement.outerHTML") { raw ->
-                                    onHtmlCaptured(unquoteJsString(raw))
+                                    onHtmlCaptured(com.morealm.app.domain.source.decodeBrowserHtml(raw))
                                 }
                             }
 
@@ -296,24 +297,4 @@ private fun persistCookie(view: WebView?, sourceKey: String) {
     if (!raw.isNullOrBlank()) {
         CookieStore.setCookie(sourceKey, raw)
     }
-}
-
-/**
- * `evaluateJavascript` 回调的结果是**再次 JSON 编码**的字符串，例如 `"<html>...</html>"`
- * 带首尾引号、里面的换行是 `\n` 字面量。这里简单做一次反转：剥引号 + 常见转义还原。
- *
- * 完整 JSON 解析有点重，对脚本用途（正则匹配 token）来说字面量和真换行等效，简版够了。
- */
-private fun unquoteJsString(raw: String?): String? {
-    if (raw.isNullOrBlank() || raw == "null") return null
-    var s = raw
-    if (s.startsWith("\"") && s.endsWith("\"")) {
-        s = s.substring(1, s.length - 1)
-    }
-    return s
-        .replace("\\\"", "\"")
-        .replace("\\n", "\n")
-        .replace("\\r", "\r")
-        .replace("\\t", "\t")
-        .replace("\\\\", "\\")
 }

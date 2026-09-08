@@ -40,14 +40,17 @@ object StorageAccessHelper {
     private const val TAG = "StorageAccess"
 
     /**
-     * 是否拿到 "全文件访问" 权限。Android 11 (API 30) 引入；低版本返回 true
-     * （旧权限模型 READ_EXTERNAL_STORAGE 已经包含全盘读）。
+     * 是否允许直接遍历外部存储。Android 11+ 检查全文件访问；更早版本同时
+     * 检查运行时读取授权与 legacy storage，Android 10 分区存储必须走 SAF。
      */
-    fun hasAllFilesAccess(): Boolean {
+    fun hasAllFilesAccess(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()
         } else {
-            true  // API < 30 旧权限模型可读外部存储
+            val legacyStorage = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || Environment.isExternalStorageLegacy()
+            legacyStorage && androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.READ_EXTERNAL_STORAGE,
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         }
     }
 
@@ -80,7 +83,9 @@ object StorageAccessHelper {
      */
     fun treeUriToFilePath(treeUri: Uri): String? {
         return try {
-            val docId = DocumentsContract.getTreeDocumentId(treeUri)
+            if (treeUri.scheme == "file") return treeUri.path
+            if (treeUri.authority != "com.android.externalstorage.documents") return null
+            val docId = LocalDocumentIdentity.documentId(treeUri)
             val parts = docId.split(':', limit = 2)
             if (parts.isEmpty()) return null
             val volume = parts[0]
@@ -112,7 +117,9 @@ object StorageAccessHelper {
      */
     fun singleUriToFilePath(uri: Uri): String? {
         return try {
-            val docId = DocumentsContract.getDocumentId(uri)
+            if (uri.scheme == "file") return uri.path
+            if (uri.authority != "com.android.externalstorage.documents") return null
+            val docId = LocalDocumentIdentity.documentId(uri)
             val parts = docId.split(':', limit = 2)
             if (parts.size != 2) return null
             val (volume, relativePath) = parts

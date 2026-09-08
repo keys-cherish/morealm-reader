@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.MapSerializer
@@ -123,8 +124,10 @@ class SourceLoginViewModel @Inject constructor(
         refreshLoginStatusJob = viewModelScope.launch(Dispatchers.IO) {
             val map = HashMap<String, Boolean>(loginSources.size)
             for (source in loginSources) {
+                coroutineContext.ensureActive()
                 map[source.bookSourceUrl] = computeLoginStatus(source)
             }
+            coroutineContext.ensureActive()
             _loginStatusMap.value = map
         }
     }

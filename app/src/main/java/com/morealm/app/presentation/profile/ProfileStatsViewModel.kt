@@ -33,33 +33,34 @@ class ProfileStatsViewModel @Inject constructor(
     private val readStatsRepo: ReadStatsRepository,
 ) : ViewModel() {
 
-    val totalBooks: StateFlow<Int> = flow { emit(bookRepo.countLogicalBooks()) }
-        .stateIn(viewModelScope, SharingStarted.Lazily, 0)
+    val readBooks = bookRepo.getReadingHistory()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val completedBooks = readBooks.map { books -> books.filter { it.readProgress.isFinite() && it.readProgress >= 1f } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val totalBooks: StateFlow<Int> = readBooks.map { it.size }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
-    private val recentStats = readStatsRepo.getRecent(30)
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    val dailyStats = readStatsRepo.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val totalReadMs: StateFlow<Long> = recentStats
-        .map { stats -> stats.sumOf { it.readDurationMs } }
-        .stateIn(viewModelScope, SharingStarted.Lazily, 0L)
-
-    val todayReadMs: StateFlow<Long> = recentStats.map { stats ->
-        val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        stats.find { it.date == today }?.readDurationMs ?: 0L
-    }.stateIn(viewModelScope, SharingStarted.Lazily, 0L)
-
-    val recentDays: StateFlow<Int> = recentStats.map { stats ->
-        if (stats.isEmpty()) return@map 0
-        val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val dates = stats.map { it.date }.toSet()
-        var count = 0
-        val cal = Calendar.getInstance()
-        while (dates.contains(fmt.format(cal.time))) {
-            count++
-            cal.add(Calendar.DAY_OF_YEAR, -1)
+    private val today = flow {
+        while (true) {
+            emit(java.time.LocalDate.now())
+            kotlinx.coroutines.delay(60_000)
         }
-        count
-    }.stateIn(viewModelScope, SharingStarted.Lazily, 0)
+    }.distinctUntilChanged()
+
+    val totalReadMs: StateFlow<Long> = dailyStats
+        .map { stats -> stats.sumOf { it.readDurationMs.coerceAtLeast(0L) } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
+
+    val todayReadMs: StateFlow<Long> = combine(dailyStats, today) { stats, date ->
+        stats.firstOrNull { it.date == date.toString() }?.readDurationMs?.coerceAtLeast(0L) ?: 0L
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
+
+    val recentDays: StateFlow<Int> = combine(dailyStats, today) { stats, date ->
+        readingStreak(stats.filter { it.readDurationMs > 0 }.map { it.date }.toSet(), date)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     private val _annualReport = MutableStateFlow<AnnualReport?>(null)
     val annualReport: StateFlow<AnnualReport?> = _annualReport.asStateFlow()
@@ -74,7 +75,7 @@ class ProfileStatsViewModel @Inject constructor(
                 val booksFinished = yearStats.sumOf { it.booksFinished }
                 val activeDays = yearStats.count { it.readDurationMs > 0 }
                 val longestMs = yearStats.maxOfOrNull { it.readDurationMs } ?: 0L
-                val peakHour = "22:00"
+                val peakHour = "暂无分时数据"
 
                 val allBooks = bookRepo.getAllBooksSync()
                 val favoriteBook = allBooks
@@ -96,7 +97,7 @@ class ProfileStatsViewModel @Inject constructor(
 
                 _annualReport.value = AnnualReport(
                     year = year,
-                    totalBooks = if (booksFinished > 0) booksFinished else allBooks.size,
+                    totalBooks = booksFinished,
                     totalWordsWan = (totalWords / 10000).toInt(),
                     totalDurationHours = (totalMs / 3600000).toInt(),
                     activeDays = activeDays,

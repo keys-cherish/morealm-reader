@@ -228,6 +228,33 @@ class BookDetailViewModel @Inject constructor(
      * 详情页「加入书架」—— 把临时记录（inBookshelf=false）正式加入书架：翻 inBookshelf=true，
      * 并在未分组时按自动分组规则补一个 folderId（与搜索加书路径一致）。已在架则 no-op。
      */
+    /** Persist the requested chapter before creating the reader and its resume cursor. */
+    fun openChapter(chapterIndex: Int, onReady: () -> Unit) {
+        if (_isPreparingRead.value) return
+        viewModelScope.launch {
+            try {
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val catalog = chapterDao.getChaptersList(bookId)
+                    val selected = catalog.firstOrNull { it.index == chapterIndex }
+                        ?: error("所选章节已变更，请刷新目录")
+                    bookRepo.saveProgress(
+                        com.morealm.app.domain.entity.ReadProgress(
+                            bookId = bookId,
+                            chapterIndex = selected.index,
+                            chapterId = selected.url,
+                        ),
+                        totalChapters = catalog.size,
+                    )
+                }
+                onReady()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _readPreparationError.value = e.message ?: "无法打开章节"
+            }
+        }
+    }
+
     fun addToShelf() {
         viewModelScope.launch(Dispatchers.IO) {
             val current = _book.value ?: return@launch

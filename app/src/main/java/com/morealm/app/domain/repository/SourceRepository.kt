@@ -71,7 +71,8 @@ class SourceRepository @Inject constructor(
     /** 按 URL 批量删除——不需要先 select 出 BookSource。单事务。 */
     suspend fun deleteByUrls(urls: List<String>) {
         if (urls.isEmpty()) return
-        sourceDao.deleteByUrls(urls)
+        // Older Android SQLite builds allow at most 999 bind variables per statement.
+        urls.distinct().chunked(500).forEach { sourceDao.deleteByUrls(it) }
     }
 
     fun fetchSourceJson(url: String): String {

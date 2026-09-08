@@ -97,8 +97,16 @@ class BookRepository @Inject constructor(
     suspend fun searchBooks(keyword: String): List<Book> =
         bookDao.searchBooksSync(keyword)
 
-    suspend fun findByLocalPath(localPath: String): Book? =
-        bookDao.findByLocalPath(localPath)
+    suspend fun getLocalBookReferences() = bookDao.getLocalBookReferences()
+
+    suspend fun findByLocalPath(localPath: String): Book? {
+        bookDao.findByLocalPath(localPath)?.let { return it }
+        val key = com.morealm.app.domain.storage.LocalDocumentIdentity.key(android.net.Uri.parse(localPath))
+        val reference = bookDao.getLocalBookReferences().firstOrNull {
+            com.morealm.app.domain.storage.LocalDocumentIdentity.key(android.net.Uri.parse(it.localPath)) == key
+        } ?: return null
+        return getById(reference.id)
+    }
 
     suspend fun findByBookUrl(bookUrl: String, sourceUrl: String): Book? =
         bookDao.findByBookUrl(bookUrl, sourceUrl)

@@ -15,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -118,13 +119,13 @@ fun PagePaneCanvas(
     }
     if (pageInfoBar == null) {
         // 垂直滚动 / 无信息栏：裸 Canvas，与原实现完全等价（零行为变化）
-        Canvas(modifier, onDraw = drawPage)
+        Canvas(modifier.clipToBounds(), onDraw = drawPage)
     } else {
         // 水平翻页：正文 + 页眉页脚同在一个页容器内 → 随页 placeRelative 一起翻动；无渐变羽化
         // 整屏封面页不画页眉页脚：封面按 cover 铺满物理页，页眉页脚叠上去既遮画面
         // 也没有信息量（章名=「封面」、进度=1 页章的 100%），对齐成熟阅读器的纯封面页。
         val isCoverPage = page.lines.any { it.isFullPageImage }
-        Box(modifier) {
+        Box(modifier.clipToBounds()) {
             Canvas(Modifier.fillMaxSize(), onDraw = drawPage)
             if (!isCoverPage) PageInfoBars(pageInfoBar)
         }
@@ -569,19 +570,7 @@ internal fun drawScrollPageOnCanvas(
             if (isFullPage) {
                 slotW = chapterViewWidth.toFloat()
                 baseX = -chapterPaddingLeft.toFloat()
-                // cover 铺满整屏时以短边为准放大，需要的位图宽可能超过屏宽
-                // （竖屏放 3:4 封面：宽 = viewHeight × 原图宽高比）。按原图 dims 预算，
-                // 拿不到 dims 退回屏宽（等价旧行为，只是 cover 放大后略糊）。
-                cacheTargetW = com.morealm.app.domain.render.ImageCache.getBounds(src)
-                    ?.let { (w, h) ->
-                        if (w > 0 && h > 0) {
-                            maxOf(
-                                chapterViewWidth,
-                                (viewHeightF * w / h).toInt() + 1,
-                            )
-                        } else null
-                    }
-                    ?.coerceAtLeast(1) ?: chapterViewWidth.coerceAtLeast(1)
+                cacheTargetW = chapterViewWidth.coerceAtLeast(1)
             } else {
                 // box 内的图按 box 内容区取 slot（定宽容器 `width:300px` 里的 `<img width="85%">`
                 // 该量容器的 85%，且容器不居中时图要跟着容器走）；引擎未给区间则退化为整屏。
@@ -596,31 +585,20 @@ internal fun drawScrollPageOnCanvas(
                 }
                 cacheTargetW = slotW.toInt().coerceAtLeast(1)
             }
-            // FULLSCREEN/FIT_WINDOW 图片属于独立页面展示语义，不应被标题段的 lineTop 或
-            // content 行高挤到页面中间。整屏封面按**cover**铺满物理页（对齐成熟阅读器的
-            // 全覆盖封面）：短边贴满、长边居中裁切 —— svg 封面（1000x1333）在 9:16 屏上
-            // 若按 fit 只能铺满宽度，上下各留一条黑边，观感是"半屏图"而不是封面页。
-            // 超出部分由上方放宽到物理页边的 clip 裁掉。普通插图行保持 fit（不裁内容）。
+            // Page artwork fits the viewport; only background layers use cover/crop.
             val slotTop = if (isFullPage) 0f else line.lineTop
             val slotH = if (isFullPage) viewHeightF else line.lineBottom - line.lineTop
             val bitmap = com.morealm.app.domain.render.ImageCache.get(
                 src, cacheTargetW,
             ) ?: continue
-            val bmpW = bitmap.width.toFloat()
-            val bmpH = bitmap.height.toFloat()
-            val scale = if (isFullPage) {
-                maxOf(slotW / bmpW, slotH / bmpH)
-            } else {
-                minOf(slotW / bmpW, slotH / bmpH)
-            }
-            val drawW = bmpW * scale
-            val drawH = bmpH * scale
-            val offsetX = baseX + (slotW - drawW) / 2f
-            val offsetY = slotTop + (slotH - drawH) / 2f
+            val rect = com.morealm.epub.render.fitImageRect(
+                bitmap.width, bitmap.height,
+                com.morealm.epub.render.ImageRect(baseX, slotTop, baseX + slotW, slotTop + slotH),
+            )
             nc.drawBitmap(
                 bitmap,
                 null,
-                android.graphics.RectF(offsetX, offsetY, offsetX + drawW, offsetY + drawH),
+                android.graphics.RectF(rect.left, rect.top, rect.right, rect.bottom),
                 null,
             )
             continue

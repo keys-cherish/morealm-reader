@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -775,6 +776,7 @@ fun PageLevelReaderHost(
     // 共享在 Host 层（参照实现 ReadView 模型）：长按检测 + 选区状态 + 高亮 action 弹窗
     // 都在 Host，所有 Transition (NONE/SLIDE/COVER) 共享。Transition 不再自己接 pointerInput。
     var selection by remember { mutableStateOf(ScrollSelectionState.Empty) }
+    var selectionDragging by remember { mutableStateOf(false) }
     var highlightActionTarget by remember(core.state.currentChapterIndex) {
         mutableStateOf<com.morealm.app.domain.entity.Highlight?>(null)
     }
@@ -880,6 +882,7 @@ fun PageLevelReaderHost(
                 yInChapter = offset.y + pageTopYInChapter(),
                 tolerancePx = with(density) { IMAGE_HIT_TOLERANCE_DP.dp.toPx() },
                 contentWidthPx = (viewWidth - paddingLeft - paddingRight).toFloat(),
+                pageIndex = core.pageFactory.pageIndex,
             )
             if (img != null) {
                 // 图片优先于文字选区：长按图片不再落进「选中 U+FFFC 占位符」的老路。
@@ -997,6 +1000,7 @@ fun PageLevelReaderHost(
                                         yInChapter = offset.y + pageTopYInChapter(),
                                         tolerancePx = with(density) { IMAGE_HIT_TOLERANCE_DP.dp.toPx() },
                                         contentWidthPx = (viewWidth - paddingLeft - paddingRight).toFloat(),
+                pageIndex = core.pageFactory.pageIndex,
                                     )
                                 }
                                 if (img != null) onImageTap(img.src) else onTapCenter()
@@ -1013,6 +1017,7 @@ fun PageLevelReaderHost(
     Box(
         modifier
             .fillMaxSize()
+            .clipToBounds()
             .onSizeChanged {
                 // 渲染容器实测尺寸 → shadow 掉入参 viewHeight/viewWidth（修「底部凭空留白」根因：
                 // 入参来自 screenHeightDp 扣了状态栏，比真实容器小 72px）。仅在变化时更新避免重组抖动。
@@ -1289,12 +1294,13 @@ fun PageLevelReaderHost(
             ScrollSelectionOverlay(
                 selection = selection,
                 onSelectionChange = { selection = it },
+                onDraggingChange = { selectionDragging = it },
                 layout = currentLayout,
                 pixelOffsetProvider = pageTopYInChapter,
                 scrollableState = null,
                 viewportHeightProvider = { viewHeight },
             )
-            if (selection.isActive && selection.chapterIndex == currentLayout.chapterIndex) {
+            if (!selectionDragging && selection.isActive && selection.chapterIndex == currentLayout.chapterIndex) {
                 val cpRange = selection.cpRange
                 val endHit = currentLayout.findColumnAt(cpRange.last)
                 if (endHit != null) {

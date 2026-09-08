@@ -599,6 +599,7 @@ fun ScrollCanvasReaderHost(
     // 改由 ScrollCanvasRenderer 内 detectTapGestures.onLongPress 触发；handle drag 仍在
     // SelectionOverlay 内部 HandleDot 子 Composable 24dp 触发区内处理，不影响整屏 scroll）。
     var selection by remember { mutableStateOf(ScrollSelectionState.Empty) }
+    var selectionDragging by remember { mutableStateOf(false) }
 
     // ── tap-on-highlight 弹删除/分享菜单（V1 LazyScrollSection L545-575 + L859-885 等价）──
     // tap 命中已存高亮 cp 范围时不切控制栏，弹 HighlightActionToolbar；再 tap 关闭。
@@ -1019,6 +1020,7 @@ fun ScrollCanvasReaderHost(
             ScrollSelectionOverlay(
                 selection = selection,
                 onSelectionChange = { selection = it },
+                onDraggingChange = { selectionDragging = it },
                 layout = currentLayout,
                 pixelOffsetProvider = {
                     var y = 0f
@@ -1032,7 +1034,7 @@ fun ScrollCanvasReaderHost(
 
             // 选区菜单 —— 直接复用旧 LazyScrollSection 同款 SelectionToolbar，
             // 完整功能（8 项按钮 + 调色板 + 线型面板 + above/below 自适应定位）。
-            if (selection.isActive && selection.chapterIndex == currentLayout.chapterIndex) {
+            if (!selectionDragging && selection.isActive && selection.chapterIndex == currentLayout.chapterIndex) {
                 val cpRange = selection.cpRange
                 val endHit = currentLayout.findColumnAt(cpRange.last)
                 if (endHit != null) {

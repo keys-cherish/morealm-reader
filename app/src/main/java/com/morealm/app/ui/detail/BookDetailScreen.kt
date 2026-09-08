@@ -203,8 +203,9 @@ fun BookDetailScreen(
                         OutlinedButton(
                             onClick = viewModel::addToShelf,
                             enabled = !current.inBookshelf,
-                            modifier = Modifier.weight(0.42f).height(44.dp),
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp),
                             border = BorderStroke(0.75.dp, detailOutlineColor),
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -216,7 +217,12 @@ fun BookDetailScreen(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(7.dp))
-                            Text(if (current.inBookshelf) "已在书架" else "加入书架")
+                            Text(
+                                if (current.inBookshelf) "已在书架" else "加入书架",
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                         Button(
                             onClick = {
@@ -228,7 +234,7 @@ fun BookDetailScreen(
                                 }
                             },
                             enabled = !isPreparingRead,
-                            modifier = Modifier.weight(0.58f).height(44.dp),
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                             shape = RoundedCornerShape(14.dp),
                         ) {
                             if (isPreparingRead) {
@@ -504,6 +510,12 @@ fun BookDetailScreen(
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier
                                                 .fillMaxWidth()
+                                                .clickable(enabled = !isPreparingRead) {
+                                                    viewModel.openChapter(chapter.index) {
+                                                        hasOpenedReader = true
+                                                        onRead()
+                                                    }
+                                                }
                                                 .padding(vertical = 10.dp),
                                         )
                                     }

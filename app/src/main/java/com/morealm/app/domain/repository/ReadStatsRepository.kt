@@ -10,6 +10,8 @@ import javax.inject.Singleton
 class ReadStatsRepository @Inject constructor(
     private val dao: ReadStatsDao,
 ) {
+    fun observeAll(): Flow<List<ReadStats>> = dao.observeAll()
+
     suspend fun getByDate(date: String): ReadStats? = dao.getByDate(date)
 
     fun getRecent(limit: Int = 30): Flow<List<ReadStats>> = dao.getRecent(limit)

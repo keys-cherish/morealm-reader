@@ -97,11 +97,14 @@ fun ProfileScreen(
     onNavigateAppearance: () -> Unit = {},
     /** 跳到全局书签管理屏。 */
     onNavigateBookmarks: () -> Unit = {},
+    onOpenReadBook: (String) -> Unit = {},
 ) {
     val moColors = LocalMoRealmColors.current
     val activeTheme by themeViewModel.activeTheme.collectAsStateWithLifecycle()
     val allThemes by themeViewModel.allThemes.collectAsStateWithLifecycle()
-    val totalBooks by profileViewModel.totalBooks.collectAsStateWithLifecycle()
+    val readBooks by profileViewModel.readBooks.collectAsStateWithLifecycle()
+    val completedBooks by profileViewModel.completedBooks.collectAsStateWithLifecycle()
+    val dailyStats by profileViewModel.dailyStats.collectAsStateWithLifecycle()
     val totalReadMs by profileViewModel.totalReadMs.collectAsStateWithLifecycle()
     val todayReadMs by profileViewModel.todayReadMs.collectAsStateWithLifecycle()
     val recentDays by profileViewModel.recentDays.collectAsStateWithLifecycle()
@@ -163,52 +166,16 @@ fun ProfileScreen(
             windowInsets = WindowInsets(0, 0, 0, 0),
         )
 
-        // Reading stats card (real data)
-        // 白天 / 夜间各自一张插画背景（profile_card_bg_day / night）。containerColor 透明，
-        // Image 通过 Card shape 自动 clip 成 16dp 圆角。
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        ) {
-            Box {
-                Image(
-                    painter = painterResource(
-                        if (moColors.isNight) R.drawable.profile_card_bg_night
-                        else R.drawable.profile_card_bg_day
-                    ),
-                    contentDescription = null,
-                    modifier = Modifier.matchParentSize(),
-                    contentScale = ContentScale.Crop,
-                )
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text("阅读统计", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(12.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                        StatItem(value = "$totalBooks", label = "本书")
-                        StatItem(value = formatDuration(totalReadMs), label = "总时长")
-                        StatItem(value = "$recentDays", label = "连续天数")
-                    }
-                    // UX-6 (亲密性): 「主指标块 (标题+3 个数字)」与「辅助块 (今日+年度报告)」
-                    // 原本三个 12dp 同等间距, 视觉上四件平铺. 主→辅 拉到 18dp, 辅内紧密 4dp.
-                    Spacer(Modifier.height(18.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        Text("今日已读 ${formatDuration(todayReadMs)}",
-                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        TextButton(onClick = {
-                            profileViewModel.loadAnnualReport()
-                            showAnnualReport = true
-                        }) {
-                            Text("查看年度报告 →", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-            }
-        }
-
+        ReadingStatsCard(
+            readBooks = readBooks,
+            completedBooks = completedBooks,
+            dailyStats = dailyStats,
+            totalReadMs = totalReadMs,
+            todayReadMs = todayReadMs,
+            streak = recentDays,
+            onOpenBook = onOpenReadBook,
+            onAnnualReport = { profileViewModel.loadAnnualReport(); showAnnualReport = true },
+        )
         Spacer(Modifier.height(16.dp))
 
         // Theme grid follows this project's existing interaction prototype.
@@ -600,18 +567,9 @@ private fun StatItem(value: String, label: String) {
 // 时长格式：用国际通用 h/m 缩写代替「小时/分钟」中文长字 ——
 // 统计卡片格子小，长字会换行/截断。Image 12 风格：「9h 53m」
 // 比「9小时53分」更紧凑、信息密度高。
-private fun formatDuration(ms: Long): String {
-    val minutes = ms / 60_000
-    return when {
-        minutes < 1 -> "0m"
-        minutes < 60 -> "${minutes}m"
-        else -> {
-            val h = minutes / 60
-            val m = minutes % 60
-            if (m == 0L) "${h}h" else "${h}h ${m}m"
-        }
-    }
-}
+private fun formatDuration(ms: Long): String =
+    com.morealm.app.presentation.profile.formatReadingDuration(ms)
+
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -903,7 +861,7 @@ private fun AnnualReportDialog(
                 AnnualReportCard(
                     report = report,
                     accentColor = accentColor,
-                    teaser = highlights.firstOrNull { it.first != "读完/收藏的书" },
+                    teaser = highlights.firstOrNull { it.first != "读完的书" },
                     modifier = Modifier.fillMaxWidth(),
                 )
 
@@ -1037,7 +995,7 @@ private fun AnnualReportCard(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                "最长 ${report.longestSessionMin} 分钟 · 常在 ${report.peakHour} 翻书",
+                "最长单日 ${report.longestSessionMin} 分钟",
                 color = Color.White.copy(alpha = 0.55f),
                 fontSize = 10.sp,
                 textAlign = TextAlign.Center,
@@ -1068,11 +1026,11 @@ private fun AnnualMetric(label: String, value: String, modifier: Modifier = Modi
 }
 
 private fun AnnualReport.annualHighlights(): List<Pair<String, String>> = listOfNotNull(
-    "读完/收藏的书" to "$totalBooks 本",
+    "读完的书" to "$totalBooks 本",
     if (totalDurationHours > 0) "沉浸阅读时长" to "$totalDurationHours 小时" else null,
     if (totalWordsWan > 0) "翻过的文字" to "$totalWordsWan 万字" else null,
     if (activeDays > 0) "有阅读记录的日子" to "$activeDays 天" else null,
-    if (longestSessionMin > 0) "最长一次陪伴" to "$longestSessionMin 分钟" else null,
+    if (longestSessionMin > 0) "最长单日阅读" to "$longestSessionMin 分钟" else null,
 )
 
 private fun saveAnnualReportCard(context: Context, report: AnnualReport, accentColor: Color): Boolean {
@@ -1157,7 +1115,7 @@ private fun drawAnnualReportBitmap(report: AnnualReport, accentColor: Color): Bi
     canvas.drawRoundRect(RectF(140f, 910f, 940f, 1210f), 48f, 48f, paint)
     text("你最投入的一本书", width / 2f, 1000f, 34f, 0xAAFFFFFF.toInt())
     text(report.favoriteBook.ifBlank { "还在等待被记录" }.take(18), width / 2f, 1090f, 52f, 0xFFFFFFFF.toInt(), true)
-    text("最长单日 ${report.longestSessionMin} 分钟 · 常在 ${report.peakHour} 打开书页", width / 2f, 1170f, 30f, 0xAAFFFFFF.toInt())
+    text("最长单日 ${report.longestSessionMin} 分钟", width / 2f, 1170f, 30f, 0xAAFFFFFF.toInt())
     text("墨境 MoRealm · 把阅读留在时间里", width / 2f, 1510f, 34f, 0x99FFFFFF.toInt())
     return bitmap
 }

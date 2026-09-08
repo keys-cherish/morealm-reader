@@ -175,7 +175,11 @@ class ImportEngine @Inject constructor(
         val regroupAll = ArrayList<Book>()
         var matchedInTargetGroup = 0
 
-        for (chunk in files.chunked(PHASE1_CHUNK_SIZE)) {
+        val knownFiles = bookRepo.getLocalBookReferences().associate {
+            com.morealm.app.domain.storage.LocalDocumentIdentity.key(Uri.parse(it.localPath)) to it.id
+        }.toMutableMap()
+        val uniqueFiles = files.distinctBy { com.morealm.app.domain.storage.LocalDocumentIdentity.key(it.uri) }
+        for (chunk in uniqueFiles.chunked(PHASE1_CHUNK_SIZE)) {
             // chunk 边界：消费取消请求。返回 true 则停止后续 chunk。
             if (ImportStateBus.consumeCancelFlag()) {
                 AppLog.info(TAG, "cancel requested at chunk boundary, stopping")
@@ -190,7 +194,7 @@ class ImportEngine @Inject constructor(
                 break
             }
 
-            val chunkResult = processChunk(chunk, folderId)
+            val chunkResult = processChunk(chunk, folderId, knownFiles)
             regroupAll.addAll(chunkResult.regroup)
             matchedInTargetGroup += chunkResult.matchedInTargetGroup
             val chunkPending = chunkResult.pending
@@ -268,6 +272,7 @@ class ImportEngine @Inject constructor(
     private suspend fun processChunk(
         chunk: List<FastFileScanner.ScanItem>,
         folderId: String?,
+        knownFiles: MutableMap<String, String>,
     ): ChunkResult {
         val pending = ArrayList<PendingBook>(chunk.size)
         val regroup = ArrayList<Book>()
@@ -289,7 +294,8 @@ class ImportEngine @Inject constructor(
             // dedup 改按**原路径**判重：同一文件重复导入命中；同内容不同路径视为两本
             // （内容 hash 需要读全文件，违背零 IO 初衷——用户拍板可接受）。文件后来被
             // 移动/删除 → reader 打开时指纹探测给「文件已移动或删除」明确提示。
-            val existing = bookRepo.findByLocalPath(item.uri.toString())
+            val identity = com.morealm.app.domain.storage.LocalDocumentIdentity.key(item.uri)
+            val existing = knownFiles[identity]?.let { bookRepo.getById(it) }
             if (existing != null) {
                 // 已在书架：把它收编进本次导入组（除非已经在该组）。「重新导入文件夹」是
                 // 强意图——文件夹里的书就该归这个文件夹组，不管之前是散落（folderId==null）、
@@ -309,6 +315,7 @@ class ImportEngine @Inject constructor(
             val book = applyAutoGroup(
                 buildInPlaceBook(item, format, folderId, addedAtStamp = System.currentTimeMillis() + idx)
             )
+            knownFiles[identity] = book.id
             pending.add(PendingBook(book, item, format))
         }
         return ChunkResult(pending, regroup, matchedInTargetGroup)

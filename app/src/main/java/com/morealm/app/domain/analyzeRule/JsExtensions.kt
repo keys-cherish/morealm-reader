@@ -160,13 +160,11 @@ object JsExtensions {
     }
 
     /** 单元素版本，对齐参照实现 [AnalyzeRule.getElement]，未实现时直接返回列表第一个。 */
-    fun getElement(ruleStr: String): Any? = getElements(ruleStr).firstOrNull()
+    fun getElement(ruleStr: String): Any? = currentAnalyzeRule()?.getElement(ruleStr)
 
-    // 注：参照实现那边 AnalyzeRule 还提供 `getString` / `getStringList` 作为规则解析桥，
-    // 但本类的 [getString]（HTTP fetch，行 134/224）和 [JsExtensions.connect] 衍生
-    // 出来的同名方法占用了相同 JVM 签名，重定义会触发 platform declaration clash。
-    // 当前书源 JS 主要报 `setContent` / `getElements` 找不到，先把这两个补齐让规则
-    // 能跑；规则版 getString 走旧名 `connect(...).body` 或 `ajax(...)` 兜底。
+    @JvmOverloads
+    fun getStringList(rule: String?, content: Any? = null, isUrl: Boolean = false): List<String>? =
+        currentAnalyzeRule()?.getStringList(rule, content, isUrl)
 
     // ── Variable get/put (delegated to ruleData, matches AnalyzeUrl API) ──
 
@@ -204,10 +202,18 @@ object JsExtensions {
 
     fun ajax(url: Any, callTimeout: Long?): String? = ajax(url)
 
-    /** 参照实现-compatible: fetch URL and return body string (used by many book sources) */
-    fun getString(url: String): String? = ajax(url)
+    /** In a rule evaluation, getString extracts content; HTTP remains available as ajax/connect. */
+    fun getString(rule: String): String? =
+        currentAnalyzeRule()?.getString(rule) ?: ajax(rule)
 
-    fun getString(url: String, headers: Any?): String? = connect(url, headers).body
+    fun getString(rule: String, content: Any?): String? =
+        currentAnalyzeRule()?.getString(rule, content) ?: connect(rule, content).body
+
+    fun getString(rule: String, unescape: Boolean): String? =
+        currentAnalyzeRule()?.getString(rule, unescape) ?: ajax(rule)
+
+    fun getString(rule: String, content: Any?, isUrl: Boolean): String? =
+        currentAnalyzeRule()?.getString(rule, content, isUrl)
 
     fun connect(urlStr: String): StrResponse {
         return connect(urlStr, null, null)
@@ -684,26 +690,9 @@ object JsExtensions {
     }
 
     fun startBrowser(url: String, title: String, html: String?) {
-        AppLog.warn(
-            "JsExtensions",
-            "startBrowser requested by source '${getSource()?.bookSourceName ?: ""}': $title $url",
+        com.morealm.app.ui.source.ShowBrowserActivity.launch(
+            com.morealm.app.MoRealmApp.instance, url, html, null, getTag().orEmpty(), title,
         )
-        // MoRealm 当前没有参照实现那种交互式 WebView Activity (SourceVerificationDialog)；
-        // 退而用后台 WebView 跑一次页面，让 cookie 通过 onPageFinished 写回 CookieStore
-        // —— 能覆盖「自动跑 JS 写 cookie」类的源；图形验证码 / 扫码登录暂不支持，
-        // 后续做交互式 WebView 时改造此方法。
-        runCatching {
-            runBlocking {
-                com.morealm.app.domain.http.BackstageWebView(
-                    url = url,
-                    html = html,
-                    tag = getSource()?.bookSourceUrl,
-                    persistCookie = true,
-                ).getStrResponse()
-            }
-        }.onFailure {
-            AppLog.warn("JsExtensions", "startBrowser fallback failed: ${it.message?.take(80)}")
-        }
     }
 
     fun startBrowserAwait(url: String): StrResponse {
@@ -719,30 +708,10 @@ object JsExtensions {
     }
 
     fun startBrowserAwait(url: String, title: String, refetchAfterSuccess: Boolean, html: String?): StrResponse {
-        AppLog.warn(
-            "JsExtensions",
-            "startBrowserAwait fallback (no UI) for '${getSource()?.bookSourceName ?: ""}': $title $url",
-        )
-        // 关键变更：旧实现 html 为空时走 connect(url).body 直 GET，**cookie 不会写回**——
-        // 这就是大量参照实现书源迁过来"以为登录成功实际没登录"的根因。改走 BackstageWebView
-        // 让 onPageFinished 把 cookie 持久化到 CookieStore，下一次请求就能自动带上。
-        // 仍然没有用户交互能力（弹不出可见 WebView），所以图形验证码 / 滑块 / 扫码类源
-        // 还是会失败——这部分等交互式 WebView Activity 落地再补。
-        return runCatching {
-            runBlocking {
-                com.morealm.app.domain.http.BackstageWebView(
-                    url = url,
-                    html = html,
-                    tag = getSource()?.bookSourceUrl,
-                    persistCookie = true,
-                ).getStrResponse()
-            }
-        }.getOrElse { e ->
-            AppLog.warn("JsExtensions", "startBrowserAwait failed, fall back to direct GET: ${e.message?.take(80)}")
-            // BackstageWebView 出错（比如某些源 WebView 挂掉）兜底回直 GET，至少有内容返回
-            // 不至于让脚本因 NPE 全挂；cookie 这次拿不到只能下次再试
-            StrResponse(url, connect(url).body)
-        }
+        val result = com.morealm.app.ui.source.SourceBrowserLauncher.await(
+            com.morealm.app.MoRealmApp.instance, getTag().orEmpty(), url, html, title,
+        ) ?: return StrResponse(url, "")
+        return if (refetchAfterSuccess) connect(url) else StrResponse(url, result)
     }
 
     fun openVideoPlayer(url: String, title: String) {

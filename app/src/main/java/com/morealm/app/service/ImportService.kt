@@ -117,7 +117,6 @@ class ImportService : Service() {
             }
             // 这里**不**调 stopForeground —— 前一次导入仍在跑，它的前台状态还得保留
             // stopSelfResult(startId) 只丢弃**本次** intent，不影响前次的 startId
-            stopSelfResult(startId)
             return START_NOT_STICKY
         }
 
@@ -182,12 +181,16 @@ class ImportService : Service() {
             }.onFailure { AppLog.debug("ImportSvc", "write permission unavailable: ${it.message}") }
 
             try {
+                val seenFiles = hashSetOf<String>()
+                fun freshFiles(items: List<FastFileScanner.ScanItem>) = items.filter {
+                    seenFiles.add(com.morealm.app.domain.storage.LocalDocumentIdentity.key(it.uri))
+                }
                 val topChildren = FastFileScanner.listImmediateChildren(this@ImportService, treeUri)
                 // 忽略 . 开头的隐藏目录（.git / .thumbnails / .trash 等系统目录，不含正文书）
                 val subFolders = topChildren.filter { it.isDirectory && !it.name.startsWith(".") }
-                val directFiles = topChildren
+                val directFiles = freshFiles(topChildren
                     .filter { !it.isDirectory && detectFormat(it.name) != BookFormat.UNKNOWN }
-                    .map { ch -> FastFileScanner.ScanItem(uri = ch.uri, name = ch.name, filePath = ch.filePath) }
+                    .map { ch -> FastFileScanner.ScanItem(uri = ch.uri, name = ch.name, filePath = ch.filePath) })
                 AppLog.info(
                     "ImportSvc",
                     "Scan done folder=$folderName sub=${subFolders.size} direct=${directFiles.size}",
@@ -201,12 +204,12 @@ class ImportService : Service() {
                 val perSubFolder: List<Pair<BookGroup, List<FastFileScanner.ScanItem>>> =
                     if (subFolders.isNotEmpty()) {
                         subFolders.mapNotNull { folder ->
-                            val descendants = FastFileScanner.scanFolder(
+                            val descendants = freshFiles(FastFileScanner.scanFolder(
                                 context = this@ImportService,
                                 treeUri = folder.uri,
                                 isWanted = { detectFormat(it) != BookFormat.UNKNOWN },
                                 maxDepth = MAX_FOLDER_IMPORT_DEPTH,
-                            )
+                            ))
                             if (descendants.isEmpty()) null
                             // stable id（localfolder:根名/子名）：重导同一子文件夹复用同组、
                             // 不再每次建随机 UUID 新组（DAO insert REPLACE 幂等）。与用户手建

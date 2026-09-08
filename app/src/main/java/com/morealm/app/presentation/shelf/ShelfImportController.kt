@@ -183,6 +183,7 @@ class ShelfImportController(
      * （ShelfScreen 在用户首次按"导入文件夹"前 prompt）。
      */
     fun importFolder(uri: Uri) {
+        tryGrantPermission(uri)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 context, Manifest.permission.POST_NOTIFICATIONS,

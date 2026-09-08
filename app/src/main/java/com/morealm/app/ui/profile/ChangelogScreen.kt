@@ -193,10 +193,25 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
+        version = "v2.0",
+        date = "2026-09-08",
+        title = "阅读稳定性、书源体验与手写批注",
+        tag = ReleaseTag.LATEST,
+        items = listOf(
+            ChangelogItem(ChangeType.FIX, "连续切换章节后仍可返回上一章尾页，读完章节也能稳定进入下一章首页"),
+            ChangelogItem(ChangeType.FIX, "EPUB 大图完整适配屏幕，图片操作对应当前图片；横屏不再露出邻页文字，跨页装饰框不再压住后文"),
+            ChangelogItem(ChangeType.FIX, "滚动选区跟随光标实时更新，并新增拖选放大镜"),
+            ChangelogItem(ChangeType.FIX, "Android 10 可通过系统选择器导入文件夹，嵌套目录和重复选择不再重复导入书籍"),
+            ChangelogItem(ChangeType.FIX, "净化规则支持多种中文编码，导入不再乱码；阅读配色和书源页面在大字号下不再挤压"),
+            ChangelogItem(ChangeType.IMPROVE, "书源登录、搜索和内容解析共用稳定的脚本运行时；支持多选删除，并可从详情页直接打开指定章节"),
+            ChangelogItem(ChangeType.NEW, "新增手写批注：画笔、橡皮、颜色、撤销重做、历史记录、缩放移动和返回原文"),
+            ChangelogItem(ChangeType.IMPROVE, "阅读设置支持搜索和分类跳转；阅读统计明确区分读过、读完和累计时长"),
+        ),
+    ),
+    ChangelogEntry(
         version = "v1.9",
         date = "2026-08-13",
         title = "EPUB 精排大版本：中文排版 + 图片体验 + 自定义点击",
-        tag = ReleaseTag.LATEST,
         items = listOf(
             ChangelogItem(ChangeType.NEW, "EPUB 中文精排四件套 —— 着重号（字旁点/圈/芝麻点）、首字下沉、行尾标点悬挂、作者声明的分页控制全部生效，精排书的排版观感对齐专业阅读器"),
             ChangelogItem(ChangeType.NEW, "长按图片弹出操作条 —— 查看大图 / 保存到相册 / 复制图片源 / 屏蔽此图；长按有震动确认，被选中的图片会压暗描边，一眼看到选中了哪张（之前长按图片复制到的是空内容）"),

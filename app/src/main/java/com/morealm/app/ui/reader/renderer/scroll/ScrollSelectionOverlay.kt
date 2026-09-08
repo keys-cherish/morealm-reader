@@ -1,6 +1,8 @@
 package com.morealm.app.ui.reader.renderer.scroll
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.magnifier
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -51,6 +53,7 @@ import kotlinx.coroutines.delay
  * @param scrollableState scroll state（自动滚动用；null 时禁用自动滚动）
  * @param viewportHeightProvider lambda 返视口高度（自动滚动 y 边界判定用）
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ScrollSelectionOverlay(
     selection: ScrollSelectionState,
@@ -60,7 +63,12 @@ fun ScrollSelectionOverlay(
     scrollableState: ScrollableState? = null,
     viewportHeightProvider: () -> Int = { 0 },
     modifier: Modifier = Modifier,
+    onDraggingChange: (Boolean) -> Unit = {},
 ) {
+    val selectionUpdated by rememberUpdatedState(selection)
+    val layoutUpdated by rememberUpdatedState(layout)
+    val onDraggingChangeUpdated by rememberUpdatedState(onDraggingChange)
+    var magnifierPosition by remember { mutableStateOf(Offset.Unspecified) }
     val onSelectionChangeUpdated by rememberUpdatedState(onSelectionChange)
     val pixelOffsetUpdated by rememberUpdatedState(pixelOffsetProvider)
     val viewportHeightUpdated by rememberUpdatedState(viewportHeightProvider)
@@ -81,8 +89,10 @@ fun ScrollSelectionOverlay(
             // 重发当前 handle 位置触发 selection 扩展（chapter y = view-local y + 新 pixelOffset）
             val newYInChapter = lastDragYInView + pixelOffsetUpdated()
             val side = if (lastDragSide < 0.5f) ScrollHandleSide.START else ScrollHandleSide.END
-            val updated = handleHandleDrag(selection, layout, side, lastDragX, newYInChapter)
+            val updated = handleHandleDrag(selectionUpdated, layoutUpdated, side, lastDragX, newYInChapter)
             onSelectionChangeUpdated(updated)
+            magnifierPosition = selectedGlyphCenter(layoutUpdated,
+                if (side == ScrollHandleSide.START) updated.startCp else updated.endCp, pixelOffsetUpdated())
             delay(AUTO_SCROLL_INTERVAL_MS)
         }
     }
@@ -93,7 +103,7 @@ fun ScrollSelectionOverlay(
     // 取消选区由 ScrollCanvasRenderer 的 onTap 间接触发（Host 内逻辑：tap 时若选区 active 则取消 + 不切 controls）。
     // 本 Overlay 仅负责：画 handle + handle drag detection（handle 子 Composable 自己有 pointerInput
     // 仅在 24dp 触发区内消费事件，不影响整屏 scroll）。
-    Box(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().magnifier(sourceCenter = { magnifierPosition }, zoom = 1.6f)) {
         if (selection.isActive && selection.chapterIndex == layout.chapterIndex) {
             SelectionHandles(
                 selection = selection,
@@ -101,8 +111,11 @@ fun ScrollSelectionOverlay(
                 pixelOffsetProvider = pixelOffsetUpdated,
                 onHandleDrag = { side, xInChapter, yInChapter, yInView ->
                     // 普通 drag：直接更新 selection 端点
-                    val updated = handleHandleDrag(selection, layout, side, xInChapter, yInChapter)
+                    onDraggingChangeUpdated(true)
+                    val updated = handleHandleDrag(selectionUpdated, layoutUpdated, side, xInChapter, yInChapter)
                     onSelectionChangeUpdated(updated)
+                    magnifierPosition = selectedGlyphCenter(layoutUpdated,
+                        if (side == ScrollHandleSide.START) updated.startCp else updated.endCp, pixelOffsetUpdated())
                     // 自动滚动方向检测：view-local y 距离屏顶 / 屏底阈值内启动
                     val vh = viewportHeightUpdated()
                     lastDragX = xInChapter
@@ -115,7 +128,11 @@ fun ScrollSelectionOverlay(
                         else -> 0
                     }
                 },
-                onDragEnd = { autoScrollDir = 0 },
+                onDragEnd = {
+                    autoScrollDir = 0
+                    magnifierPosition = Offset.Unspecified
+                    onDraggingChangeUpdated(false)
+                },
             )
         }
     }
@@ -183,7 +200,7 @@ private fun SelectionHandles(
             // dragPos.x 是 view-x（HandleDot 初始位置 = xInView，delta 加在 view 空间），
             // 转 chapter-x 才能交给 handleHandleDrag 反查 column。
             val xInChapter = dragPos.x - padL
-            val yInChapter = dragPos.y + pixelOffsetProvider()
+            val yInChapter = dragPos.y - handleSizePx / 2f + pixelOffsetProvider()
             onHandleDrag(ScrollHandleSide.START, xInChapter, yInChapter, dragPos.y)
         },
         onDragEnd = onDragEnd,
@@ -195,7 +212,7 @@ private fun SelectionHandles(
         touchRadiusPx = touchRadiusPx,
         onDrag = { dragPos ->
             val xInChapter = dragPos.x - padL
-            val yInChapter = dragPos.y + pixelOffsetProvider()
+            val yInChapter = dragPos.y - handleSizePx / 2f + pixelOffsetProvider()
             onHandleDrag(ScrollHandleSide.END, xInChapter, yInChapter, dragPos.y)
         },
         onDragEnd = onDragEnd,
@@ -247,6 +264,7 @@ private fun HandleDot(
                     onDragStart = { _ ->
                         // 取最新 anchor 作 drag 起点，不依赖 pointerInput 重启
                         draggedTo = Offset(anchorX, anchorY)
+                        onDragUpdated(draggedTo)
                     },
                     onDragEnd = { onDragEndUpdated() },
                     onDragCancel = { onDragEndUpdated() },
@@ -271,3 +289,12 @@ private fun HandleDot(
 private const val AUTO_SCROLL_STEP_PX: Float = 20f
 private const val AUTO_SCROLL_INTERVAL_MS: Long = 16L
 private const val AUTO_SCROLL_EDGE_PX: Float = 80f
+
+/** Center the lens on the selected glyph rather than on the handle below the text. */
+private fun selectedGlyphCenter(layout: ScrollChapterLayout, cp: Int, viewportTop: Float): Offset {
+    val hit = layout.findColumnAt(cp) ?: return Offset.Unspecified
+    val column = hit.column ?: return Offset.Unspecified
+    val pageTop = layout.pages.take(hit.page.pageIndex).sumOf { it.height.toDouble() }.toFloat()
+    return Offset((column.start + column.end) / 2f + layout.paddingLeft,
+        pageTop + (hit.line.lineTop + hit.line.lineBottom) / 2f - viewportTop)
+}

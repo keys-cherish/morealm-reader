@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -139,7 +140,7 @@ fun CoverPageTransition(
 
     var diagDragMoves by remember { mutableIntStateOf(0) }
     Layout(
-        modifier = modifier
+        modifier = modifier.clipToBounds()
             .onSizeChanged { viewportWidthPx = it.width }
             .then(if (gesturesEnabled) Modifier.pointerInput(Unit) {
                 detectHorizontalDragGestures(
@@ -289,7 +290,7 @@ fun CoverPageTransition(
                 bookmarkCps = nextPageBookmarkCps,
                 pageInfoBar = pageInfoBarProvider(nextPage),
                 readerBgArgb = backgroundColor.toArgb(),
-                modifier = Modifier.fillMaxSize().background(backgroundColor),
+                modifier = Modifier.fillMaxSize().clipToBounds().background(backgroundColor),
             )
             // 索引 2：prevPage（从左滑入覆盖 cur）—— 阴影已搬到 cur 上，prev 这里只画内容
             PagePaneCanvas(
@@ -303,7 +304,7 @@ fun CoverPageTransition(
                 bookmarkCps = prevPageBookmarkCps,
                 pageInfoBar = pageInfoBarProvider(prevPage),
                 readerBgArgb = backgroundColor.toArgb(),
-                modifier = Modifier.fillMaxSize().background(backgroundColor),
+                modifier = Modifier.fillMaxSize().clipToBounds().background(backgroundColor),
             )
         },
     ) { measurables, constraints ->

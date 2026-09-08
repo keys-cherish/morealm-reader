@@ -247,6 +247,11 @@ fun ScrollCanvasRenderer(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = nextPageHighlightSpecs,
                 bookmarkCps = nextPageBookmarkCps,
+                revealHighlight = revealHighlight?.takeIf { it.chapterIndex == nextPage.chapterIndex },
+                searchHighlightCpRange = if (searchHighlightChapterIndex == nextPage.chapterIndex) searchHighlightCpRange else IntRange.EMPTY,
+                searchHighlightArgb = searchHighlightArgb,
+                selectionCpRange = if (selectionChapterIndex == nextPage.chapterIndex) selectionCpRange else IntRange.EMPTY,
+                selectionArgb = selectionArgb,
                 readerBgArgb = readerBgArgb,
             )
             PagePaneCanvas(
@@ -260,6 +265,11 @@ fun ScrollCanvasRenderer(
                 chapterNumPaint = chapterNumPaint,
                 highlightSpecs = nextPlusPageHighlightSpecs,
                 bookmarkCps = nextPlusPageBookmarkCps,
+                revealHighlight = revealHighlight?.takeIf { it.chapterIndex == nextPlusPage.chapterIndex },
+                searchHighlightCpRange = if (searchHighlightChapterIndex == nextPlusPage.chapterIndex) searchHighlightCpRange else IntRange.EMPTY,
+                searchHighlightArgb = searchHighlightArgb,
+                selectionCpRange = if (selectionChapterIndex == nextPlusPage.chapterIndex) selectionCpRange else IntRange.EMPTY,
+                selectionArgb = selectionArgb,
                 readerBgArgb = readerBgArgb,
             )
         },

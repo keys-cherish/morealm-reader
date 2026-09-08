@@ -48,8 +48,6 @@ class AnalyzeRule(
 
     private val stringRuleCache = hashMapOf<String, List<SourceRule>>()
     private val regexCache = hashMapOf<String, Regex?>()
-    private var topScopeRef: WeakReference<Scriptable>? = null
-    private var evalJSCallCount = 0
 
     private var coroutineContext: CoroutineContext = EmptyCoroutineContext
 
@@ -136,22 +134,9 @@ class AnalyzeRule(
             } finally {
                 org.mozilla.javascript.Context.exit()
             }
-            val topScope = topScopeRef?.get()
-            // 优先使用 jsLib 共享作用域
-            val sharedScope = source?.jsLib?.let { SharedJsScope.getScope(it, coroutineContext) }
-            val scope = if (sharedScope != null) {
-                bindings.apply { prototype = sharedScope }
-            } else if (topScope == null) {
-                RhinoScriptEngine.getRuntimeScope(bindings).apply {
-                    if (evalJSCallCount++ > 16) {
-                        topScopeRef = WeakReference(prototype)
-                    }
-                }
-            } else {
-                bindings.apply {
-                    prototype = topScope
-                }
-            }
+            val scope = com.morealm.app.domain.source.SourceScriptRuntime.shared.createScope(
+                bindings, source?.jsLib, coroutineContext,
+            )
             // 使用编译缓存：相同 JS 源码只编译一次，后续直接执行已编译脚本
             val script = normalizeJsSnippet(jsStr)
             val compiled = scriptCache.getOrPut(script) {

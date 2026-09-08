@@ -146,6 +146,9 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE localPath = :localPath LIMIT 1")
     suspend fun findByLocalPath(localPath: String): Book?
 
+    @Query("SELECT id, localPath FROM books WHERE localPath IS NOT NULL")
+    suspend fun getLocalBookReferences(): List<com.morealm.app.domain.storage.LocalBookReference>
+
     @Query("SELECT * FROM books WHERE bookUrl = :bookUrl AND sourceUrl = :sourceUrl LIMIT 1")
     suspend fun findByBookUrl(bookUrl: String, sourceUrl: String): Book?
 
@@ -590,6 +593,9 @@ interface ReadRecordDao {
 
 @Dao
 interface ReadStatsDao {
+    @Query("SELECT * FROM read_stats ORDER BY date DESC")
+    fun observeAll(): Flow<List<ReadStats>>
+
     @Query("SELECT * FROM read_stats WHERE date = :date")
     suspend fun getByDate(date: String): ReadStats?
 

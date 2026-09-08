@@ -55,9 +55,9 @@ object FastFileScanner {
         val t0 = System.currentTimeMillis()
 
         // 优先 File API：有 All-Files-Access 且能解出真实路径
-        if (StorageAccessHelper.hasAllFilesAccess()) {
+        if (StorageAccessHelper.hasAllFilesAccess(context)) {
             val rootPath = StorageAccessHelper.treeUriToFilePath(treeUri)
-            if (rootPath != null) {
+            if (rootPath != null && File(rootPath).canRead() && File(rootPath).list() != null) {
                 val items = scanByFileApi(rootPath, isWanted, maxDepth)
                 AppLog.info(
                     TAG,
@@ -68,7 +68,7 @@ object FastFileScanner {
         }
 
         // Fallback：SAF [DocumentsContract.query]（比 DocumentFile.listFiles 快 3-5x）
-        val items = scanBySaf(context, treeUri, isWanted, maxDepth)
+        val items = SafDocumentScanner.scan(context, treeUri, isWanted, maxDepth)
         AppLog.info(
             TAG,
             "SAF scan: ${items.size} files in ${System.currentTimeMillis() - t0}ms",
@@ -84,20 +84,22 @@ object FastFileScanner {
         context: Context,
         treeUri: Uri,
     ): List<ChildItem> = withContext(Dispatchers.IO) {
-        if (StorageAccessHelper.hasAllFilesAccess()) {
+        if (StorageAccessHelper.hasAllFilesAccess(context)) {
             val rootPath = StorageAccessHelper.treeUriToFilePath(treeUri)
             if (rootPath != null) {
-                return@withContext File(rootPath).listFiles()?.map { f ->
+                File(rootPath).listFiles()?.let { children ->
+                return@withContext children.map { f ->
                     ChildItem(
                         uri = Uri.fromFile(f),
                         name = f.name,
                         isDirectory = f.isDirectory,
                         filePath = f.absolutePath,
                     )
-                }.orEmpty()
+                }
+                }
             }
         }
-        listImmediateChildrenSaf(context, treeUri)
+        SafDocumentScanner.listChildren(context, treeUri)
     }
 
     data class ChildItem(
@@ -137,96 +139,4 @@ object FastFileScanner {
         return result
     }
 
-    // ── SAF 路径（DocumentsContract.query 替代 DocumentFile.listFiles） ─────────
-
-    private fun scanBySaf(
-        context: Context,
-        treeUri: Uri,
-        isWanted: (String) -> Boolean,
-        maxDepth: Int,
-    ): List<ScanItem> {
-        val result = ArrayList<ScanItem>(256)
-        val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
-        scanSafRecursive(context, treeUri, rootDocId, isWanted, result, depth = 0, maxDepth)
-        return result
-    }
-
-    private fun scanSafRecursive(
-        context: Context,
-        treeUri: Uri,
-        dirDocId: String,
-        isWanted: (String) -> Boolean,
-        out: MutableList<ScanItem>,
-        depth: Int,
-        maxDepth: Int,
-    ) {
-        if (depth > maxDepth) return
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, dirDocId)
-        val projection = arrayOf(
-            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            DocumentsContract.Document.COLUMN_MIME_TYPE,
-            DocumentsContract.Document.COLUMN_SIZE,
-            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-        )
-        try {
-            context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
-                while (cursor.moveToNext()) {
-                    val docId = cursor.getString(0)
-                    val name = cursor.getString(1) ?: continue
-                    val mime = cursor.getString(2) ?: ""
-                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                        // 跳过 . 开头的隐藏目录（.git / .thumbnails / .trash 等）
-                        if (!name.startsWith(".")) {
-                            scanSafRecursive(context, treeUri, docId, isWanted, out, depth + 1, maxDepth)
-                        }
-                    } else if (isWanted(name)) {
-                        out.add(
-                            ScanItem(
-                                uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId),
-                                name = name,
-                                filePath = null,
-                                // 同一 cursor 顺手带出，零额外 IPC；provider 不给则 0
-                                size = if (cursor.isNull(3)) 0L else cursor.getLong(3),
-                                lastModified = if (cursor.isNull(4)) 0L else cursor.getLong(4),
-                            )
-                        )
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            AppLog.warn(TAG, "SAF query failed dir=$dirDocId: ${e.message}")
-        }
-    }
-
-    private fun listImmediateChildrenSaf(context: Context, treeUri: Uri): List<ChildItem> {
-        val result = ArrayList<ChildItem>(64)
-        val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, rootDocId)
-        val projection = arrayOf(
-            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            DocumentsContract.Document.COLUMN_MIME_TYPE,
-        )
-        try {
-            context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
-                while (cursor.moveToNext()) {
-                    val docId = cursor.getString(0)
-                    val name = cursor.getString(1) ?: continue
-                    val mime = cursor.getString(2) ?: ""
-                    result.add(
-                        ChildItem(
-                            uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId),
-                            name = name,
-                            isDirectory = mime == DocumentsContract.Document.MIME_TYPE_DIR,
-                            filePath = null,
-                        )
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            AppLog.warn(TAG, "listImmediateChildren failed: ${e.message}")
-        }
-        return result
-    }
 }

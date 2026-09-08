@@ -377,6 +377,7 @@ fun MoRealmNavHost(
                             onNavigateHttpTtsManage = onNavHttpTtsManage,
                         )
                         BottomTab.Profile -> ProfileScreen(
+                            onOpenReadBook = { navController.navigateToReader(it) },
                             themeViewModel = themeViewModel,
                             onNavigateWebDav = onNavWebDav,
                             onNavigateAbout = onNavAbout,

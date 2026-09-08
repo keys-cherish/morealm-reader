@@ -15,7 +15,6 @@ import com.morealm.app.domain.entity.rule.TocRule
 import com.morealm.app.domain.analyzeRule.JsExtensions
 import com.morealm.app.domain.http.CacheManager
 import com.morealm.app.domain.http.CookieStore
-import com.morealm.app.domain.source.SharedJsScope
 import kotlinx.serialization.builtins.serializer
 import com.script.ScriptBindings
 import com.script.rhino.RhinoScriptEngine
@@ -344,16 +343,7 @@ data class BookSource(
             bindings["cookie"] = CookieStore
             bindings["cache"] = CacheManager
             extraBindings?.invoke(bindings)
-            // jsLib 里声明的变量（host / 辅助函数等）通过 prototype 链暴露给后续 eval。
-            // 对齐参照实现 BaseSource.evalJS：有 sharedScope 就跳过 getRuntimeScope，
-            // 直接把 bindings.prototype 挂成 sharedScope；否则走原 topLevel 路径。
-            val sharedScope = SharedJsScope.getScope(jsLib)
-            val scope = if (sharedScope != null) {
-                bindings.prototype = sharedScope
-                bindings
-            } else {
-                RhinoScriptEngine.getRuntimeScope(bindings)
-            }
+            val scope = com.morealm.app.domain.source.SourceScriptRuntime.shared.createScope(bindings, jsLib)
             try {
                 RhinoScriptEngine.eval(jsStr, scope)
             } catch (e: Exception) {

@@ -270,28 +270,28 @@ private fun DailyQuoteCard(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .height(136.dp),
+            .heightIn(min = 136.dp),
         shape = HomeCardShape,
         color = cardBaseColor,
         border = if (isDark) null else BorderStroke(0.5.dp, HomeLightCardBorder),
         shadowElevation = if (isDark) 1.dp else 0.5.dp,
     ) {
-        Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxWidth()) {
             Image(
                 painter = painterResource(backgroundRes),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.matchParentSize(),
             )
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .matchParentSize()
                     .background(overlayColor),
             )
             Column(
                 modifier = Modifier
-                    .fillMaxHeight()
                     .fillMaxWidth(0.72f)
+                    .heightIn(min = 136.dp)
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
