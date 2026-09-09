@@ -113,7 +113,7 @@ Performance ceiling check:
 
 ---
 
-## Legado 遗留模式总结
+## 兼容格式 遗留模式总结
 
 项目已完成从 View 系统到 Compose 的核心迁移:
 - **零** LiveData / Observer / Fragment / XML layout / findViewById
@@ -124,10 +124,10 @@ Performance ceiling check:
 残留的 View 时代模式:
 1. **SimulationReadView** (自定义 View + AndroidView 包装) — **justified**, 有文档说明 Compose 原生实现的回归 bug
 2. **Handler.post** in TtsPlayer/TtsErrorPresenter — **nice-to-have**, 可替换为 `withContext(Dispatchers.Main)`
-3. **God ViewModel** 模式 (ShelfVM/ProfileVM/ReaderVM) — Legado Activity 时代的 "一个 Activity 一个大 Presenter" 思维残留
+3. **God ViewModel** 模式 (ShelfVM/ProfileVM/ReaderVM) — 兼容格式 Activity 时代的 "一个 Activity 一个大 Presenter" 思维残留
 4. **Callback-based VM API** (`searchBooks(onResult)`) — View 时代 Fragment→Activity 通信模式
-5. **`lateinit var MutableStateFlow` 跨 Controller 交叉持有** — Legado Presenter 互相引用的残留
-6. **`object` 单例 Bus** — Legado EventBus 的 Flow 化版本, 但仍是全局可变状态
+5. **`lateinit var MutableStateFlow` 跨 Controller 交叉持有** — 兼容格式 Presenter 互相引用的残留
+6. **`object` 单例 Bus** — 兼容格式 EventBus 的 Flow 化版本, 但仍是全局可变状态
 
 ---
 

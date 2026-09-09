@@ -9,7 +9,7 @@ import kotlinx.serialization.Serializable
  *  field-for-field as serialized by GSON). Defaults match 参照实现 @ColumnInfo
  *  defaultValue annotations so partial JSONs from the wild still parse. */
 @Serializable
-internal data class LegadoReplaceRule(
+internal data class LegacyReplaceRule(
     val id: Long = 0L,
     val name: String = "",
     val group: String? = null,

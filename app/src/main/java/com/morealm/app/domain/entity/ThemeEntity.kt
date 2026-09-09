@@ -68,7 +68,7 @@ data class ThemeEntity(
  *    `file://` URIs.
  */
 @Serializable
-data class LegadoThemeConfig(
+data class LegacyThemeConfig(
     val themeName: String = "",
     val isNightTheme: Boolean = false,
     val primaryColor: String = "#ff000000",
@@ -94,7 +94,7 @@ data class LegadoThemeConfig(
         return ThemeEntity(
             id = "legado_${themeName.hashCode()}",
             name = themeName,
-            author = "Legado Import",
+            author = "备份导入",
             isBuiltin = false,
             isNightTheme = isNightTheme,
             primaryColor = primaryColor,
@@ -165,7 +165,7 @@ private fun argbToHex(argb: Int): String =
  *     （要做也可以做，但当前仅修「主题解析报错」P0 痛点）
  */
 @kotlinx.serialization.Serializable
-data class LegadoReadConfig(
+data class LegacyReadConfig(
     val name: String = "",
     /** 白天背景：可能是 `#RRGGBB` 颜色 或 文件绝对路径（看 [bgType]）。 */
     val bgStr: String = "#EEEEEE",
@@ -192,8 +192,8 @@ data class LegadoReadConfig(
  * inaccessibleBgPaths 是 out 参数：调用方传一个 MutableList，本函数把无法直接当颜色解析
  * 也无法当 file:// uri 用的路径（参照实现沙盒路径）追加进去，让上层 toast 一次性告知用户。
  */
-fun LegadoReadConfig.toThemeEntities(inaccessibleBgPaths: MutableList<String>): Pair<ThemeEntity, ThemeEntity> {
-    val baseName = name.ifBlank { "Legado 阅读样式" }
+fun LegacyReadConfig.toThemeEntities(inaccessibleBgPaths: MutableList<String>): Pair<ThemeEntity, ThemeEntity> {
+    val baseName = name.ifBlank { "兼容阅读样式" }
     return buildVariant(baseName, isNight = false, inaccessibleBgPaths) to
         buildVariant(baseName, isNight = true, inaccessibleBgPaths)
 }
@@ -210,7 +210,7 @@ fun LegadoReadConfig.toThemeEntities(inaccessibleBgPaths: MutableList<String>): 
  * textAccentColor；bgArgb 如果是颜色字串就用它派生 surface（±4% 亮度）和 isNightTheme（按
  * 亮度判定），否则参考字面 isNight 标记。
  */
-private fun LegadoReadConfig.buildVariant(
+private fun LegacyReadConfig.buildVariant(
     baseName: String,
     isNight: Boolean,
     inaccessibleBgPaths: MutableList<String>,
@@ -236,11 +236,13 @@ private fun LegadoReadConfig.buildVariant(
     val surfaceHex = surfaceArgb?.let(::argbToHex) ?: bgHex
 
     val suffix = if (isNight) "夜" else "日"
-    val themeId = "legado_read_${(baseName + suffix).hashCode()}"
+    // Keep the historical import identity even when its display label changes.
+    val identityName = name.ifBlank { "Legado 阅读样式" }
+    val themeId = "legado_read_${(identityName + suffix).hashCode()}"
     return ThemeEntity(
         id = themeId,
         name = "$baseName · $suffix",
-        author = "Legado Import",
+        author = "备份导入",
         isBuiltin = false,
         isNightTheme = isNight,
         primaryColor = accentHex,

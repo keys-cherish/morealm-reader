@@ -6,7 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.db.AppDatabase
-import com.morealm.app.domain.sync.LegadoImporter
+import com.morealm.app.domain.sync.LegacyImporter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -35,7 +35,7 @@ import javax.inject.Inject
  *  - **error**（errorMessage 非 null）：解析失败 / 导入抛错；用户重选清错
  */
 @HiltViewModel
-class LegadoImportViewModel @Inject constructor(
+class LegacyImportViewModel @Inject constructor(
     private val db: AppDatabase,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
@@ -44,8 +44,8 @@ class LegadoImportViewModel @Inject constructor(
     val pendingUri: StateFlow<Uri?> = _pendingUri.asStateFlow()
 
     /** zip 解析后的预览（数量 + 冲突）；null = 还没选 / 选了正在解。 */
-    private val _preview = MutableStateFlow<LegadoImporter.Preview?>(null)
-    val preview: StateFlow<LegadoImporter.Preview?> = _preview.asStateFlow()
+    private val _preview = MutableStateFlow<LegacyImporter.Preview?>(null)
+    val preview: StateFlow<LegacyImporter.Preview?> = _preview.asStateFlow()
 
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
@@ -54,8 +54,8 @@ class LegadoImportViewModel @Inject constructor(
     val importing: StateFlow<Boolean> = _importing.asStateFlow()
 
     /** 写完后显示的最终结果；null = 未导入 / 已 dismiss。 */
-    private val _result = MutableStateFlow<LegadoImporter.ImportResult?>(null)
-    val result: StateFlow<LegadoImporter.ImportResult?> = _result.asStateFlow()
+    private val _result = MutableStateFlow<LegacyImporter.ImportResult?>(null)
+    val result: StateFlow<LegacyImporter.ImportResult?> = _result.asStateFlow()
 
     /**
      * 实时进度反馈。null = 未在导入；非 null = 当前 step 文案 + 数值。UI 用 step.total 是否 > 0
@@ -64,8 +64,8 @@ class LegadoImportViewModel @Inject constructor(
      * 故意暴露最简结构：UI 不需要知道有多少 section，只渲染当前那一段进度即可。
      * 进度条在每次 step 切换时会从 100% 跳回 0%，这是预期行为，体现"在做下一段"。
      */
-    private val _progress = MutableStateFlow<LegadoImporter.Progress?>(null)
-    val progress: StateFlow<LegadoImporter.Progress?> = _progress.asStateFlow()
+    private val _progress = MutableStateFlow<LegacyImporter.Progress?>(null)
+    val progress: StateFlow<LegacyImporter.Progress?> = _progress.asStateFlow()
 
     /** 解析或导入失败的错误信息；null = 没错。 */
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -75,13 +75,13 @@ class LegadoImportViewModel @Inject constructor(
      * 冲突策略 —— UI 用 Switch 切。默认 SKIP：保守不动用户已有数据。
      * 改成 OVERWRITE 等价于"我就要参照实现这边全套"，慎用。
      */
-    private val _conflictStrategy = MutableStateFlow(LegadoImporter.ConflictStrategy.SKIP)
-    val conflictStrategy: StateFlow<LegadoImporter.ConflictStrategy> = _conflictStrategy.asStateFlow()
+    private val _conflictStrategy = MutableStateFlow(LegacyImporter.ConflictStrategy.SKIP)
+    val conflictStrategy: StateFlow<LegacyImporter.ConflictStrategy> = _conflictStrategy.asStateFlow()
 
     /** 缓存 zip bytes，免得 import 时再读一次 SAF（用户中途撤销权限会失败）。 */
     private var cachedZipBytes: ByteArray? = null
 
-    fun setConflictStrategy(strategy: LegadoImporter.ConflictStrategy) {
+    fun setConflictStrategy(strategy: LegacyImporter.ConflictStrategy) {
         _conflictStrategy.value = strategy
     }
 
@@ -103,17 +103,17 @@ class LegadoImportViewModel @Inject constructor(
                         ?: error("无法读取所选文件（权限可能已撤销）")
                 }
                 cachedZipBytes = bytes
-                val pv = LegadoImporter.previewZip(bytes, db)
+                val pv = LegacyImporter.previewZip(bytes, db)
                 if (pv.bookCount + pv.bookSourceCount + pv.bookmarkCount + pv.bookGroupCount +
                     pv.replaceRuleCount + pv.httpTtsCount + pv.searchHistoryCount == 0
                 ) {
-                    _errorMessage.value = "未在 zip 中识别到任何 Legado 数据，请确认这是 Legado 备份文件"
+                    _errorMessage.value = "未在 zip 中识别到任何 备份数据，请确认这是 兼容备份文件"
                     cachedZipBytes = null
                 } else {
                     _preview.value = pv
                 }
             } catch (e: Exception) {
-                AppLog.error("LegadoImport", "preview failed", e)
+                AppLog.error("LegacyImport", "preview failed", e)
                 _errorMessage.value = "解析失败：${e.message ?: e.javaClass.simpleName}"
                 cachedZipBytes = null
             } finally {
@@ -126,7 +126,7 @@ class LegadoImportViewModel @Inject constructor(
     fun runImport() {
         val bytes = cachedZipBytes
         if (bytes == null) {
-            _errorMessage.value = "状态错误：请重新选择 Legado 备份文件"
+            _errorMessage.value = "状态错误：请重新选择 兼容备份文件"
             return
         }
         _importing.value = true
@@ -134,10 +134,10 @@ class LegadoImportViewModel @Inject constructor(
         _progress.value = null
         viewModelScope.launch {
             try {
-                val r = LegadoImporter.import(
+                val r = LegacyImporter.import(
                     zipBytes = bytes,
                     db = db,
-                    opts = LegadoImporter.ImportOptions(
+                    opts = LegacyImporter.ImportOptions(
                         conflictStrategy = _conflictStrategy.value,
                     ),
                     // onProgress 在 IO dispatcher 上调用；StateFlow 的 setter 是线程安全的，
@@ -146,9 +146,9 @@ class LegadoImportViewModel @Inject constructor(
                     onProgress = { p -> _progress.value = p },
                 )
                 _result.value = r
-                AppLog.info("LegadoImport", "Done: ${r.summarize()}")
+                AppLog.info("LegacyImport", "Done: ${r.summarize()}")
             } catch (e: Exception) {
-                AppLog.error("LegadoImport", "import failed", e)
+                AppLog.error("LegacyImport", "import failed", e)
                 _errorMessage.value = "导入失败：${e.message ?: e.javaClass.simpleName}"
             } finally {
                 _importing.value = false

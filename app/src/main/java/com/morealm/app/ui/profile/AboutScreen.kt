@@ -145,7 +145,7 @@ fun AboutScreen(
         ) {
             Text(
                 "墨境是一款注重阅读体验的 Android 阅读器，支持 TXT、EPUB、PDF 等多种格式。" +
-                    "内置多套精心调校的主题配色，兼容 Legado 书源与主题格式，支持 WebDAV 云端同步。",
+                    "内置多套精心调校的主题配色，支持通用书源与主题格式，支持 WebDAV 云端同步。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                 lineHeight = 24.sp,
@@ -165,11 +165,11 @@ fun AboutScreen(
                 Text("特性", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(12.dp))
                 FeatureRow(Icons.AutoMirrored.Filled.MenuBook, "多格式支持", "TXT / EPUB / PDF")
-                FeatureRow(Icons.Default.Palette, "主题系统", "6 套内置主题 + Legado 主题导入")
+                FeatureRow(Icons.Default.Palette, "主题系统", "6 套内置主题 + 兼容主题导入")
                 FeatureRow(Icons.Default.Cloud, "WebDAV 同步", "进度 / 书架 / 书源 / 主题")
                 FeatureRow(Icons.Default.RecordVoiceOver, "TTS 朗读", "系统 TTS + 书内控制面板")
                 FeatureRow(Icons.Default.FolderOpen, "智能导入", "文件夹自动识别 + 批量导入")
-                FeatureRow(Icons.Default.Extension, "Legado 兼容", "书源格式 + 一键搬家")
+                FeatureRow(Icons.Default.Extension, "书源兼容", "书源格式 + 一键搬家")
             }
         }
 

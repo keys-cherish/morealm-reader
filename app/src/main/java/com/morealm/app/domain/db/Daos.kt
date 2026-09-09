@@ -548,7 +548,7 @@ interface ThemeDao {
  * - entity [com.morealm.app.domain.entity.ReadRecord]
  * - UI 入口（P3）：「我的 → 阅读记录」页面按 date 降序分组
  * - 写入（P2）：ReaderViewModel.onCleared / lifecycle ON_PAUSE upsert
- * - 参照实现导入（P4）：LegadoImporter 备份 zip readRecord 表 → bookName fuzzy match
+ * - 参照实现导入（P4）：LegacyImporter 备份 zip readRecord 表 → bookName fuzzy match
  *
  * 与 [ReadStatsDao] 关系：ReadStats 是天级汇总（不分书），本 DAO 是天 × 书 二维。两者并存
  * 互不冲突：ReadStats 给顶栏"今日阅读 X 小时"，本 DAO 给阅读记录页面。

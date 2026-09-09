@@ -39,7 +39,7 @@ object ReplaceRuleCodec {
             val item = row as? JsonObject ?: return@mapNotNull null
             runCatching {
                 when {
-                    "pattern" in item -> json.decodeFromJsonElement(LegadoReplaceRule.serializer(), item).toMoRealm()
+                    "pattern" in item -> json.decodeFromJsonElement(LegacyReplaceRule.serializer(), item).toMoRealm()
                     "regex" in item -> json.decodeFromJsonElement(YueduReplaceRule.serializer(), item).toMoRealm()
                     else -> null
                 }

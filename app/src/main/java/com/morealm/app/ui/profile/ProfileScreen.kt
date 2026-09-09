@@ -92,7 +92,7 @@ fun ProfileScreen(
     onNavigateBackupExport: () -> Unit = {},
     onNavigateBackupImport: () -> Unit = {},
     /** 跳到参照实现一键搬家页（独立流程，不复用备份导入页的状态）。 */
-    onNavigateLegadoImport: () -> Unit = {},
+    onNavigateLegacyImport: () -> Unit = {},
     /** 跳到外观设置页。 */
     onNavigateAppearance: () -> Unit = {},
     /** 跳到全局书签管理屏。 */
@@ -392,8 +392,8 @@ fun ProfileScreen(
             "跨书查看、按时间过滤、按书分组", onClick = onNavigateBookmarks)
         SettingsCard(Icons.Default.CloudDownload, "离线缓存",
             "批量下载章节，支持离线阅读", onClick = onNavigateCacheBook)
-        SettingsCard(Icons.Default.ImportExport, "Legado 一键搬家",
-            "导入 Legado 备份，书源/书架/进度全部迁移", onClick = onNavigateLegadoImport)
+        SettingsCard(Icons.Default.ImportExport, "备份迁移",
+            "导入 兼容备份，书源/书架/进度全部迁移", onClick = onNavigateLegacyImport)
 
         // Widget preview — 点击尝试请求把「继续阅读」小组件 pin 到桌面；
         // Launcher 不支持 (API 23~25 或部分老版 OEM) 时弹引导 Dialog 教用户长按桌面手动添加。

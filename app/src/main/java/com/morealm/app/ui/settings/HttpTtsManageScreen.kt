@@ -174,7 +174,7 @@ private fun EmptyState(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "粘贴 Legado 兼容的 JSON 一键导入，或手动新建一个 URL 模板",
+            "粘贴 书源兼容的 JSON 一键导入，或手动新建一个 URL 模板",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -412,7 +412,7 @@ private fun ImportHttpTtsDialog(
         text = {
             Column {
                 Text(
-                    "支持单对象、数组、{\"body\":[...]} 三种 Legado 格式",
+                    "支持单对象、数组、{\"body\":[...]} 三种 兼容格式",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

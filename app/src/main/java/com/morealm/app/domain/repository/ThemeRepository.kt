@@ -4,8 +4,8 @@ import android.content.Context
 import android.content.res.Configuration
 import com.morealm.app.core.log.AppLog
 import com.morealm.app.domain.db.ThemeDao
-import com.morealm.app.domain.entity.LegadoReadConfig
-import com.morealm.app.domain.entity.LegadoThemeConfig
+import com.morealm.app.domain.entity.LegacyReadConfig
+import com.morealm.app.domain.entity.LegacyThemeConfig
 import com.morealm.app.domain.entity.ThemeEntity
 import com.morealm.app.domain.entity.toThemeEntities
 import com.morealm.app.domain.http.okHttpClient
@@ -81,13 +81,13 @@ class ThemeRepository @Inject constructor(
      *
      * 走 sealed 类而非异常是因为「ReadConfig 命中」不是错误而是合法分支，UI 要据此 toast 区别处理。
      */
-    sealed class LegadoImportResult {
-        data class ThemeImported(val theme: ThemeEntity) : LegadoImportResult()
+    sealed class LegacyImportResult {
+        data class ThemeImported(val theme: ThemeEntity) : LegacyImportResult()
         data class ReadConfigImported(
             val themes: List<ThemeEntity>,
             val inaccessibleBgPaths: List<String>,
-        ) : LegadoImportResult()
-        data class Failed(val message: String) : LegadoImportResult()
+        ) : LegacyImportResult()
+        data class Failed(val message: String) : LegacyImportResult()
     }
 
     /**
@@ -97,14 +97,14 @@ class ThemeRepository @Inject constructor(
      *
      * 双 schema 都试解析；先匹配的赢，匹配失败兜底走 ThemeConfig（老行为）。
      */
-    suspend fun importLegadoTheme(jsonString: String): LegadoImportResult {
+    suspend fun importLegacyTheme(jsonString: String): LegacyImportResult {
         val trimmed = jsonString.trim()
         // 1. 快速识别 schema —— bgStr 是 ReadConfig 独有的强标识，主题色 ThemeConfig 没这字段
         val looksLikeReadConfig = trimmed.contains("\"bgStr\"") ||
             (trimmed.contains("\"textColor\"") && trimmed.contains("\"lineSpacingExtra\""))
         return runCatching {
             if (looksLikeReadConfig) {
-                val readConfig = json.decodeFromString<LegadoReadConfig>(trimmed)
+                val readConfig = json.decodeFromString<LegacyReadConfig>(trimmed)
                 val inaccessibleBg = mutableListOf<String>()
                 val (dayTheme, nightTheme) = readConfig.toThemeEntities(inaccessibleBg)
                 // 路径检查 + copy 到 internal（如果可读）
@@ -112,21 +112,21 @@ class ThemeRepository @Inject constructor(
                 themeDao.upsertAll(resolved)
                 activateTheme(resolved.first().id)  // 默认激活白天
                 AppLog.info("Theme", "ReadConfig imported as 2 themes (day+night), inaccessible bg paths: ${inaccessibleBg.size}")
-                LegadoImportResult.ReadConfigImported(resolved, inaccessibleBg)
+                LegacyImportResult.ReadConfigImported(resolved, inaccessibleBg)
             } else {
-                val legadoConfig = json.decodeFromString<LegadoThemeConfig>(trimmed)
+                val legadoConfig = json.decodeFromString<LegacyThemeConfig>(trimmed)
                 val entity = legadoConfig.toThemeEntity().withResolvedBg(mutableListOf())
                 saveAndActivate(entity)
-                LegadoImportResult.ThemeImported(entity)
+                LegacyImportResult.ThemeImported(entity)
             }
         }.getOrElse { e ->
-            AppLog.error("Theme", "Failed to import Legado theme JSON", e)
-            LegadoImportResult.Failed(e.message ?: e::class.simpleName ?: "解析失败")
+            AppLog.error("Theme", "Failed to import Legacy theme JSON", e)
+            LegacyImportResult.Failed(e.message ?: e::class.simpleName ?: "解析失败")
         }
     }
 
-    suspend fun importLegadoThemes(jsonArray: String): List<ThemeEntity> {
-        val configs = json.decodeFromString<List<LegadoThemeConfig>>(jsonArray)
+    suspend fun importLegacyThemes(jsonArray: String): List<ThemeEntity> {
+        val configs = json.decodeFromString<List<LegacyThemeConfig>>(jsonArray)
         val entities = configs.map { it.toThemeEntity().withResolvedBg(mutableListOf()) }
         themeDao.upsertAll(entities)
         return entities
@@ -199,7 +199,7 @@ class ThemeRepository @Inject constructor(
         // canRead() 在沙盒路径上会返回 false（即便文件存在），是最直接的可访问性检测
         if (!src.exists() || !src.canRead()) {
             inaccessibleBgPaths.add(path)
-            AppLog.warn("Theme", "Legado bg path inaccessible (cross-package sandbox): $path")
+            AppLog.warn("Theme", "Legacy bg path inaccessible (cross-package sandbox): $path")
             return copy(backgroundImageUri = null)
         }
         return runCatching {

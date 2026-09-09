@@ -14,7 +14,7 @@ import java.util.zip.ZipOutputStream
 /**
  * 参照实现一键搬家解析 + 字段映射回归测试。
  *
- * 不依赖真 DAO / DB —— 直接测 [LegadoImporter.parseZip]、[LegadoImporter.mapBook] 等
+ * 不依赖真 DAO / DB —— 直接测 [LegacyImporter.parseZip]、[LegacyImporter.mapBook] 等
  * internal 函数。protect 三个层面：
  *
  *  1. **zip 解析鲁棒性**：未知 entry 不阻断、损坏 JSON 不阻断、空 zip 也能跑出空 ParsedBackup
@@ -23,14 +23,14 @@ import java.util.zip.ZipOutputStream
  *  3. **参照实现升级容忍**：新增字段（如 `syncTime`、`originOrder` 等）不能 crash 解析；
  *     `Json { ignoreUnknownKeys=true }` 必须真生效
  */
-class LegadoImporterTest {
+class LegacyImporterTest {
 
     // ── parseZip 行为 ───────────────────────────────────────────────────────
 
     @Test
     fun `parseZip should handle empty zip without throwing`() {
         val zipBytes = makeZip(emptyMap())
-        val parsed = LegadoImporter.parseZip(zipBytes)
+        val parsed = LegacyImporter.parseZip(zipBytes)
         assertEquals(0, parsed.books.size)
         assertEquals(0, parsed.bookSources.size)
         assertTrue(parsed.skippedFiles.isEmpty())
@@ -44,7 +44,7 @@ class LegadoImporterTest {
             "themeConfig.json" to "[]",
             "what_is_this.json" to "{}",
         ))
-        val parsed = LegadoImporter.parseZip(zipBytes)
+        val parsed = LegacyImporter.parseZip(zipBytes)
         assertTrue("rssSources.json" in parsed.skippedFiles)
         assertTrue("config.xml" in parsed.skippedFiles)
         assertTrue("themeConfig.json" in parsed.skippedFiles)
@@ -59,14 +59,14 @@ class LegadoImporterTest {
             "bookshelf.json" to "this is not json {",
             "bookSource.json" to """[{"bookSourceUrl":"http://x","bookSourceName":"X"}]""",
         ))
-        val parsed = LegadoImporter.parseZip(zipBytes)
+        val parsed = LegacyImporter.parseZip(zipBytes)
         assertEquals(0, parsed.books.size)
         assertEquals(1, parsed.bookSources.size)
         assertEquals("http://x", parsed.bookSources[0].bookSourceUrl)
     }
 
     @Test
-    fun `parseZip should decode minimal Legado bookshelf entry`() {
+    fun `parseZip should decode minimal Legacy bookshelf entry`() {
         // 模拟参照实现.Book GSON 序列化的最小 JSON。注意参照实现用字段名不是 SerialName，
         // 我们的参照实现BookDto 字段名要严格对齐参照实现.Book Kotlin 字段名。
         val booksJson = """
@@ -90,7 +90,7 @@ class LegadoImporterTest {
             }]
         """.trimIndent()
         val zipBytes = makeZip(mapOf("bookshelf.json" to booksJson))
-        val parsed = LegadoImporter.parseZip(zipBytes)
+        val parsed = LegacyImporter.parseZip(zipBytes)
         assertEquals(1, parsed.books.size)
         val dto = parsed.books[0]
         assertEquals("https://book.com/abc", dto.bookUrl)
@@ -104,7 +104,7 @@ class LegadoImporterTest {
     }
 
     @Test
-    fun `parseZip should ignore unknown future Legado fields`() {
+    fun `parseZip should ignore unknown future Legacy fields`() {
         // 参照实现升级后给 Book 加了新字段；我们的 DTO 没有它，但解析不应该 crash。
         val booksJson = """
             [{
@@ -117,7 +117,7 @@ class LegadoImporterTest {
             }]
         """.trimIndent()
         val zipBytes = makeZip(mapOf("bookshelf.json" to booksJson))
-        val parsed = LegadoImporter.parseZip(zipBytes)
+        val parsed = LegacyImporter.parseZip(zipBytes)
         assertEquals(1, parsed.books.size)
         assertEquals("u", parsed.books[0].bookUrl)
         assertEquals("n", parsed.books[0].name)
@@ -127,7 +127,7 @@ class LegadoImporterTest {
 
     @Test
     fun `mapBook should preserve identity-critical fields`() {
-        val dto = LegadoImporter.LegadoBookDto(
+        val dto = LegacyImporter.LegacyBookDto(
             bookUrl = "https://x.com/b1",
             name = "Foo",
             author = "Bar",
@@ -143,7 +143,7 @@ class LegadoImporterTest {
             kind = "Fantasy",
             customTag = "fav",
         )
-        val book = LegadoImporter.mapBook(dto)
+        val book = LegacyImporter.mapBook(dto)
         assertEquals("https://x.com/b1", book.id)              // bookUrl → id
         assertEquals("https://x.com/b1", book.bookUrl)          // bookUrl 也填 bookUrl
         assertEquals("Foo", book.title)                         // name → title
@@ -164,58 +164,58 @@ class LegadoImporterTest {
 
     @Test
     fun `mapBook should compute readProgress from durChapterIndex over totalChapterNum`() {
-        val dto = LegadoImporter.LegadoBookDto(
+        val dto = LegacyImporter.LegacyBookDto(
             bookUrl = "u", name = "n",
             durChapterIndex = 25, totalChapterNum = 100,
         )
-        val book = LegadoImporter.mapBook(dto)
+        val book = LegacyImporter.mapBook(dto)
         assertEquals(0.25f, book.readProgress, 0.001f)
     }
 
     @Test
     fun `mapBook readProgress should be 0 when totalChapters is 0`() {
-        val dto = LegadoImporter.LegadoBookDto(
+        val dto = LegacyImporter.LegacyBookDto(
             bookUrl = "u", name = "n",
             durChapterIndex = 5, totalChapterNum = 0,
         )
-        val book = LegadoImporter.mapBook(dto)
+        val book = LegacyImporter.mapBook(dto)
         assertEquals(0f, book.readProgress, 0.001f)
     }
 
     @Test
     fun `mapBook should treat group=0 as no folder`() {
-        val dto = LegadoImporter.LegadoBookDto(bookUrl = "u", name = "n", group = 0)
-        assertNull(LegadoImporter.mapBook(dto).folderId)
+        val dto = LegacyImporter.LegacyBookDto(bookUrl = "u", name = "n", group = 0)
+        assertNull(LegacyImporter.mapBook(dto).folderId)
 
-        val dto2 = LegadoImporter.LegadoBookDto(bookUrl = "u", name = "n", group = 12345L)
-        assertEquals("12345", LegadoImporter.mapBook(dto2).folderId)
+        val dto2 = LegacyImporter.LegacyBookDto(bookUrl = "u", name = "n", group = 12345L)
+        assertEquals("12345", LegacyImporter.mapBook(dto2).folderId)
     }
 
     @Test
     fun `mapBook should map type bitmask to BookFormat`() {
         // type=0 → 在线 web
-        assertEquals(BookFormat.WEB, LegadoImporter.mapBook(
-            LegadoImporter.LegadoBookDto(bookUrl = "u", name = "n", type = 0)
+        assertEquals(BookFormat.WEB, LegacyImporter.mapBook(
+            LegacyImporter.LegacyBookDto(bookUrl = "u", name = "n", type = 0)
         ).format)
         // type=8 (webBook bit) → WEB
-        assertEquals(BookFormat.WEB, LegadoImporter.mapBook(
-            LegadoImporter.LegadoBookDto(bookUrl = "u", name = "n", type = 8)
+        assertEquals(BookFormat.WEB, LegacyImporter.mapBook(
+            LegacyImporter.LegacyBookDto(bookUrl = "u", name = "n", type = 8)
         ).format)
         // type=16 (local epub bit) → EPUB
-        assertEquals(BookFormat.EPUB, LegadoImporter.mapBook(
-            LegadoImporter.LegadoBookDto(bookUrl = "u", name = "n", type = 16)
+        assertEquals(BookFormat.EPUB, LegacyImporter.mapBook(
+            LegacyImporter.LegacyBookDto(bookUrl = "u", name = "n", type = 16)
         ).format)
     }
 
     @Test
     fun `mapBook should prefer customIntro over intro for description`() {
-        val a = LegadoImporter.mapBook(LegadoImporter.LegadoBookDto(
+        val a = LegacyImporter.mapBook(LegacyImporter.LegacyBookDto(
             bookUrl = "u", name = "n",
             intro = "原始简介", customIntro = "用户改的"
         ))
         assertEquals("用户改的", a.description)
 
-        val b = LegadoImporter.mapBook(LegadoImporter.LegadoBookDto(
+        val b = LegacyImporter.mapBook(LegacyImporter.LegacyBookDto(
             bookUrl = "u", name = "n",
             intro = "原始简介", customIntro = ""
         ))
@@ -226,16 +226,16 @@ class LegadoImporterTest {
 
     @Test
     fun `mapBookGroup should convert groupId Long to id String`() {
-        val dto = LegadoImporter.LegadoBookGroupDto(
+        val dto = LegacyImporter.LegacyBookGroupDto(
             groupId = 0xDEADBEEFL,
             groupName = "我的收藏",
             order = 3,
         )
-        val g = LegadoImporter.mapBookGroup(dto)
+        val g = LegacyImporter.mapBookGroup(dto)
         assertEquals("3735928559", g.id) // 0xDEADBEEF as decimal
         assertEquals("我的收藏", g.name)
         assertEquals(3, g.sortOrder)
-        assertFalse(g.auto) // 用户从 Legado 搬来的视为手动
+        assertFalse(g.auto) // 用户从 Legacy 搬来的视为手动
     }
 
     // ── filter: 空分组 ──────────────────────────────────────────────────────
@@ -253,16 +253,16 @@ class LegadoImporterTest {
         // 参照实现内置虚拟分组：IdAll=-1, IdLocal=-2, IdAudio=-3, IdNetNone=-4,
         // IdLocalNone=-5, IdVideo=-6, IdError=-11 — 全部应被剔除
         val groups = listOf(
-            LegadoImporter.LegadoBookGroupDto(groupId = -1L, groupName = "全部"),
-            LegadoImporter.LegadoBookGroupDto(groupId = -2L, groupName = "本地"),
-            LegadoImporter.LegadoBookGroupDto(groupId = -4L, groupName = "网络未分组"),
-            LegadoImporter.LegadoBookGroupDto(groupId = -5L, groupName = "本地未分组"),
-            LegadoImporter.LegadoBookGroupDto(groupId = -11L, groupName = "更新失败"),
-            LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "用户自建"),
+            LegacyImporter.LegacyBookGroupDto(groupId = -1L, groupName = "全部"),
+            LegacyImporter.LegacyBookGroupDto(groupId = -2L, groupName = "本地"),
+            LegacyImporter.LegacyBookGroupDto(groupId = -4L, groupName = "网络未分组"),
+            LegacyImporter.LegacyBookGroupDto(groupId = -5L, groupName = "本地未分组"),
+            LegacyImporter.LegacyBookGroupDto(groupId = -11L, groupName = "更新失败"),
+            LegacyImporter.LegacyBookGroupDto(groupId = 1L, groupName = "用户自建"),
         )
         // 一本书属于 groupId=1（位掩码 0b1）
-        val books = listOf(LegadoImporter.LegadoBookDto(bookUrl = "u", name = "n", group = 1L))
-        val effective = LegadoImporter.filterNonEmptyBookGroups(books, groups)
+        val books = listOf(LegacyImporter.LegacyBookDto(bookUrl = "u", name = "n", group = 1L))
+        val effective = LegacyImporter.filterNonEmptyBookGroups(books, groups)
         assertEquals(1, effective.size)
         assertEquals("用户自建", effective[0].groupName)
     }
@@ -270,15 +270,15 @@ class LegadoImporterTest {
     @Test
     fun `filterNonEmptyBookGroups should drop user groups with zero book references`() {
         val groups = listOf(
-            LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "有书的"),
-            LegadoImporter.LegadoBookGroupDto(groupId = 2L, groupName = "空着的"), // 用户建了但没书
-            LegadoImporter.LegadoBookGroupDto(groupId = 4L, groupName = "也是空"),
+            LegacyImporter.LegacyBookGroupDto(groupId = 1L, groupName = "有书的"),
+            LegacyImporter.LegacyBookGroupDto(groupId = 2L, groupName = "空着的"), // 用户建了但没书
+            LegacyImporter.LegacyBookGroupDto(groupId = 4L, groupName = "也是空"),
         )
         val books = listOf(
-            LegadoImporter.LegadoBookDto(bookUrl = "u1", name = "b1", group = 1L),
-            LegadoImporter.LegadoBookDto(bookUrl = "u2", name = "b2", group = 1L),
+            LegacyImporter.LegacyBookDto(bookUrl = "u1", name = "b1", group = 1L),
+            LegacyImporter.LegacyBookDto(bookUrl = "u2", name = "b2", group = 1L),
         )
-        val effective = LegadoImporter.filterNonEmptyBookGroups(books, groups)
+        val effective = LegacyImporter.filterNonEmptyBookGroups(books, groups)
         assertEquals(1, effective.size)
         assertEquals("有书的", effective[0].groupName)
     }
@@ -288,18 +288,18 @@ class LegadoImporterTest {
         // 参照实现一本书可以同时属于多个分组：book.group = groupId1 or groupId2
         // 比如 group=5 (0b101) 表示属于 groupId=1 (0b1) 和 groupId=4 (0b100)
         val groups = listOf(
-            LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "A"),
-            LegadoImporter.LegadoBookGroupDto(groupId = 2L, groupName = "B"), // 0b10 — 没人引用
-            LegadoImporter.LegadoBookGroupDto(groupId = 4L, groupName = "C"),
-            LegadoImporter.LegadoBookGroupDto(groupId = 8L, groupName = "D"),
+            LegacyImporter.LegacyBookGroupDto(groupId = 1L, groupName = "A"),
+            LegacyImporter.LegacyBookGroupDto(groupId = 2L, groupName = "B"), // 0b10 — 没人引用
+            LegacyImporter.LegacyBookGroupDto(groupId = 4L, groupName = "C"),
+            LegacyImporter.LegacyBookGroupDto(groupId = 8L, groupName = "D"),
         )
         val books = listOf(
             // 同时属于 A(1) 和 C(4)
-            LegadoImporter.LegadoBookDto(bookUrl = "u1", name = "b1", group = 5L),
+            LegacyImporter.LegacyBookDto(bookUrl = "u1", name = "b1", group = 5L),
             // 只属于 D(8)
-            LegadoImporter.LegadoBookDto(bookUrl = "u2", name = "b2", group = 8L),
+            LegacyImporter.LegacyBookDto(bookUrl = "u2", name = "b2", group = 8L),
         )
-        val effective = LegadoImporter.filterNonEmptyBookGroups(books, groups)
+        val effective = LegacyImporter.filterNonEmptyBookGroups(books, groups)
         // A / C / D 都该保留，只有 B 被剔除
         val names = effective.map { it.groupName }.toSet()
         assertEquals(setOf("A", "C", "D"), names)
@@ -308,24 +308,24 @@ class LegadoImporterTest {
     @Test
     fun `filterNonEmptyBookGroups should return empty when books list is empty`() {
         val groups = listOf(
-            LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "孤立分组"),
+            LegacyImporter.LegacyBookGroupDto(groupId = 1L, groupName = "孤立分组"),
         )
         // 没书 → 没人引用任何分组 → 全部剔除（避免给用户搬一堆空分组）
-        val effective = LegadoImporter.filterNonEmptyBookGroups(emptyList(), groups)
+        val effective = LegacyImporter.filterNonEmptyBookGroups(emptyList(), groups)
         assertTrue(effective.isEmpty())
     }
 
     @Test
     fun `filterNonEmptyBookGroups should preserve original order of effective groups`() {
         val groups = listOf(
-            LegadoImporter.LegadoBookGroupDto(groupId = 4L, groupName = "C", order = 0),
-            LegadoImporter.LegadoBookGroupDto(groupId = 2L, groupName = "B-empty", order = 1),
-            LegadoImporter.LegadoBookGroupDto(groupId = 1L, groupName = "A", order = 2),
+            LegacyImporter.LegacyBookGroupDto(groupId = 4L, groupName = "C", order = 0),
+            LegacyImporter.LegacyBookGroupDto(groupId = 2L, groupName = "B-empty", order = 1),
+            LegacyImporter.LegacyBookGroupDto(groupId = 1L, groupName = "A", order = 2),
         )
         val books = listOf(
-            LegadoImporter.LegadoBookDto(bookUrl = "u1", name = "b1", group = 1L or 4L),
+            LegacyImporter.LegacyBookDto(bookUrl = "u1", name = "b1", group = 1L or 4L),
         )
-        val effective = LegadoImporter.filterNonEmptyBookGroups(books, groups)
+        val effective = LegacyImporter.filterNonEmptyBookGroups(books, groups)
         // C 出现在 A 前面（保持入参顺序，不重排）
         assertEquals(listOf("C", "A"), effective.map { it.groupName })
     }
@@ -334,7 +334,7 @@ class LegadoImporterTest {
 
     @Test
     fun `mapReplaceRule should preserve regex semantic and toggle`() {
-        val dto = LegadoImporter.LegadoReplaceRuleDto(
+        val dto = LegacyImporter.LegacyReplaceRuleDto(
             id = 42L,
             name = "去广告",
             pattern = "广告.*?结束",
@@ -346,7 +346,7 @@ class LegadoImporterTest {
             timeoutMillisecond = 5000L,
             sortOrder = 10,
         )
-        val rule = LegadoImporter.mapReplaceRule(dto)
+        val rule = LegacyImporter.mapReplaceRule(dto)
         assertEquals("42", rule.id)
         assertEquals("去广告", rule.name)
         assertEquals("广告.*?结束", rule.pattern)
@@ -358,11 +358,11 @@ class LegadoImporterTest {
 
     @Test
     fun `mapReplaceRule should clamp huge timeout to Int max`() {
-        val dto = LegadoImporter.LegadoReplaceRuleDto(
+        val dto = LegacyImporter.LegacyReplaceRuleDto(
             id = 1L, pattern = "x",
             timeoutMillisecond = Long.MAX_VALUE,
         )
-        val rule = LegadoImporter.mapReplaceRule(dto)
+        val rule = LegacyImporter.mapReplaceRule(dto)
         assertEquals(Int.MAX_VALUE, rule.timeoutMs)
     }
 
@@ -370,7 +370,7 @@ class LegadoImporterTest {
 
     @Test
     fun `mapHttpTts should preserve identity and configuration fields`() {
-        val dto = LegadoImporter.LegadoHttpTtsDto(
+        val dto = LegacyImporter.LegacyHttpTtsDto(
             id = 1234L,
             name = "我的引擎",
             url = "https://tts.com/{{speakText}}",
@@ -380,7 +380,7 @@ class LegadoImporterTest {
             header = """{"Authorization":"Bearer abc"}""",
             lastUpdateTime = 1700000000000L,
         )
-        val tts = LegadoImporter.mapHttpTts(dto)
+        val tts = LegacyImporter.mapHttpTts(dto)
         assertEquals(1234L, tts.id)
         assertEquals("我的引擎", tts.name)
         assertEquals("https://tts.com/{{speakText}}", tts.url)
@@ -393,8 +393,8 @@ class LegadoImporterTest {
     @Test
     fun `mapHttpTts should fallback lastUpdateTime when source is 0`() {
         val before = System.currentTimeMillis()
-        val tts = LegadoImporter.mapHttpTts(
-            LegadoImporter.LegadoHttpTtsDto(id = 1, name = "n", lastUpdateTime = 0)
+        val tts = LegacyImporter.mapHttpTts(
+            LegacyImporter.LegacyHttpTtsDto(id = 1, name = "n", lastUpdateTime = 0)
         )
         val after = System.currentTimeMillis()
         assertTrue(tts.lastUpdateTime in before..after)
@@ -403,7 +403,7 @@ class LegadoImporterTest {
     // ── 综合：endend-to-end zip parse + sequence ────────────────────────────
 
     @Test
-    fun `parseZip should fan out a realistic multi-section Legado zip`() {
+    fun `parseZip should fan out a realistic multi-section Legacy zip`() {
         val zipBytes = makeZip(mapOf(
             "bookshelf.json" to """[{"bookUrl":"u1","name":"book1","author":"a"}]""",
             "bookSource.json" to """[{"bookSourceUrl":"https://s","bookSourceName":"S"}]""",
@@ -416,7 +416,7 @@ class LegadoImporterTest {
             "config.xml" to "<map></map>",
         ))
 
-        val parsed = LegadoImporter.parseZip(zipBytes)
+        val parsed = LegacyImporter.parseZip(zipBytes)
         assertEquals(1, parsed.books.size)
         assertEquals(1, parsed.bookSources.size)
         assertEquals(1, parsed.bookGroups.size)
@@ -442,7 +442,7 @@ class LegadoImporterTest {
               {"word":"示例书 B","usage":3,"lastUseTime":1700001000000}
             ]
         """.trimIndent()
-        val parsed = LegadoImporter.parseZip(makeZip(mapOf("searchHistory.json" to json)))
+        val parsed = LegacyImporter.parseZip(makeZip(mapOf("searchHistory.json" to json)))
         assertEquals(2, parsed.searchHistory.size)
         assertEquals("示例书 A", parsed.searchHistory[0].word)
         assertEquals(12, parsed.searchHistory[0].usage)
@@ -453,12 +453,12 @@ class LegadoImporterTest {
 
     @Test
     fun `mapSearchKeyword should preserve word, usage, lastUseTime`() {
-        val dto = LegadoImporter.LegadoSearchKeywordDto(
+        val dto = LegacyImporter.LegacySearchKeywordDto(
             word = "示例书 C",
             usage = 7,
             lastUseTime = 1700002000000L,
         )
-        val kw = LegadoImporter.mapSearchKeyword(dto)
+        val kw = LegacyImporter.mapSearchKeyword(dto)
         assertEquals("示例书 C", kw.word)
         assertEquals(7, kw.usage)
         assertEquals(1700002000000L, kw.lastUseTime)
@@ -467,8 +467,8 @@ class LegadoImporterTest {
     @Test
     fun `mapSearchKeyword should clamp usage to at least 1`() {
         // 参照实现老数据偶有 usage=0；按 SearchKeyword 表的排序约定要 ≥1
-        val kw = LegadoImporter.mapSearchKeyword(
-            LegadoImporter.LegadoSearchKeywordDto(word = "x", usage = 0, lastUseTime = 1L)
+        val kw = LegacyImporter.mapSearchKeyword(
+            LegacyImporter.LegacySearchKeywordDto(word = "x", usage = 0, lastUseTime = 1L)
         )
         assertEquals(1, kw.usage)
     }
@@ -476,8 +476,8 @@ class LegadoImporterTest {
     @Test
     fun `mapSearchKeyword should fallback lastUseTime when source is 0`() {
         val before = System.currentTimeMillis()
-        val kw = LegadoImporter.mapSearchKeyword(
-            LegadoImporter.LegadoSearchKeywordDto(word = "y", usage = 1, lastUseTime = 0L)
+        val kw = LegacyImporter.mapSearchKeyword(
+            LegacyImporter.LegacySearchKeywordDto(word = "y", usage = 1, lastUseTime = 0L)
         )
         val after = System.currentTimeMillis()
         assertTrue(kw.lastUseTime in before..after)

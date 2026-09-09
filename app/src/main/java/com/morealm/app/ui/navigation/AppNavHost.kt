@@ -227,7 +227,7 @@ fun MoRealmNavHost(
                 val onNavDonate = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "donate") } }
                 val onNavBackupExport = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "backup_export") } }
                 val onNavBackupImport = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "backup_import") } }
-                val onNavLegadoImport = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "legado_import") } }
+                val onNavLegacyImport = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "legado_import") } }
                 val onNavBookmarks = remember(navigateFromTab) { { navigateFromTab(BottomTab.Profile, "bookmarks") } }
                 val onNavHttpTtsManage = remember(navigateFromTab) { { navigateFromTab(BottomTab.Listen, "http_tts_manage") } }
                 val onHomeReadingSettings = remember(navigateFromTab) { { navigateFromTab(BottomTab.Home, "reading_settings") } }
@@ -392,7 +392,7 @@ fun MoRealmNavHost(
                             onNavigateDonate = onNavDonate,
                             onNavigateBackupExport = onNavBackupExport,
                             onNavigateBackupImport = onNavBackupImport,
-                            onNavigateLegadoImport = onNavLegadoImport,
+                            onNavigateLegacyImport = onNavLegacyImport,
                             onNavigateBookmarks = onNavBookmarks,
                             onNavigateAppearance = onNavAppearance,
                         )
@@ -468,7 +468,7 @@ fun MoRealmNavHost(
             }
 
             composable("legado_import") {
-                com.morealm.app.ui.profile.LegadoImportScreen(
+                com.morealm.app.ui.profile.LegacyImportScreen(
                     onBack = { navController.safePopBackStack() },
                 )
             }

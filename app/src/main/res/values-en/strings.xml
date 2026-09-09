@@ -346,8 +346,8 @@
     <!-- <string name="">View across books, filter by time, group by books</string> -->
     <!-- <string name="">Offline Cache</string> -->
     <!-- <string name="">Download chapters in batches to support offline reading</string> -->
-    <!-- <string name="legado_migration">Legado One-click Migration</string> -->
-    <!-- <string name="">Import backup from Legado and migrate all book sources, bookshelf, and progress</string> -->
+    <!-- <string name="legado_migration">Backup Migration</string> -->
+    <!-- <string name="">Import backup from 参考实现 and migrate all book sources, bookshelf, and progress</string> -->
     <!-- <string name="desktop_widget">Desktop Widget</string> -->
     <!-- <string name="">Place "Continue Reading" on your desktop to quickly return to where you left off</string> -->
 
@@ -367,14 +367,14 @@
             <!-- <string name="">Multi-Format Support</string> -->
             <!-- <string name="">TXT, EPUB, PDF</string> -->
             <!-- <string name="">Theme System</string> -->
-            <!-- <string name="">Six built-in themes + Legado theme import</string> -->
+            <!-- <string name="">Six built-in themes + 参考实现 theme import</string> -->
             <!-- <string name="">WebDAV Syncronization</string> -->
             <!-- <string name="">Progress, Bookshelf, Book Sources, Themes</string> -->
             <!-- <string name="">Text-To-Speech (TTS)</string> -->
             <!-- <string name="">System Text-To-Speech Engine + Internal Control Panel</string> -->
             <!-- <string name="">Smart Import</string> -->
             <!-- <string name="">Automatic Folder Recognition + Batch Import</string> -->
-            <!-- <string name="">Legado Support</string> -->
+            <!-- <string name="">Source Compatibility</string> -->
             <!-- <string name="">Book Source Format + One-click Migration</string> -->
         <!-- <string name="">Founding Anniversary</string> -->
             <!-- <string name="">First release: April 19, 2026 · v1.0.0-alpha1</string> -->

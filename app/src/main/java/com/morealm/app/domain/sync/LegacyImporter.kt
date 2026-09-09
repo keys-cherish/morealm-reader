@@ -57,9 +57,9 @@ import java.util.zip.ZipInputStream
  * 错误隔离：每个 section 独立 runCatching，单段解析失败仅记 warn，不影响其它段。
  * Books 是例外：解析失败会直接 throw 让 UI 显示真错（与 BackupManager.applyBackup 风格一致）。
  */
-object LegadoImporter {
+object LegacyImporter {
 
-    private const val TAG = "LegadoImporter"
+    private const val TAG = "LegacyImporter"
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -229,7 +229,7 @@ object LegadoImporter {
             warnings += "检测到书签但没有书架数据，书签会落不到本机书 → 大量孤立"
         }
         if (parsed.skippedFiles.contains("themeConfig.json")) {
-            warnings += "Legado 主题包含背景图引用，但备份 zip 不含图片字节，恢复后背景为空"
+            warnings += "兼容主题包含背景图引用，但备份 zip 不含图片字节，恢复后背景为空"
         }
 
         Preview(
@@ -642,13 +642,13 @@ object LegadoImporter {
      * 内存模型：解 zip 后保留所有支持的 section + 一个"已知存在但未支持"的清单。
      */
     internal data class ParsedBackup(
-        val books: List<LegadoBookDto>,
+        val books: List<LegacyBookDto>,
         val bookSources: List<BookSource>,
-        val bookmarks: List<LegadoBookmarkDto>,
-        val bookGroups: List<LegadoBookGroupDto>,
-        val replaceRules: List<LegadoReplaceRuleDto>,
-        val httpTts: List<LegadoHttpTtsDto>,
-        val searchHistory: List<LegadoSearchKeywordDto>,
+        val bookmarks: List<LegacyBookmarkDto>,
+        val bookGroups: List<LegacyBookGroupDto>,
+        val replaceRules: List<LegacyReplaceRuleDto>,
+        val httpTts: List<LegacyHttpTtsDto>,
+        val searchHistory: List<LegacySearchKeywordDto>,
         val skippedFiles: List<String>,
     )
 
@@ -658,13 +658,13 @@ object LegadoImporter {
      * Visible for tests，让单测直接喂 zip bytes verify 解析结果。
      */
     internal fun parseZip(zipBytes: ByteArray): ParsedBackup {
-        var books: List<LegadoBookDto> = emptyList()
+        var books: List<LegacyBookDto> = emptyList()
         var sources: List<BookSource> = emptyList()
-        var bookmarks: List<LegadoBookmarkDto> = emptyList()
-        var groups: List<LegadoBookGroupDto> = emptyList()
-        var replaceRules: List<LegadoReplaceRuleDto> = emptyList()
-        var httpTts: List<LegadoHttpTtsDto> = emptyList()
-        var searchHistory: List<LegadoSearchKeywordDto> = emptyList()
+        var bookmarks: List<LegacyBookmarkDto> = emptyList()
+        var groups: List<LegacyBookGroupDto> = emptyList()
+        var replaceRules: List<LegacyReplaceRuleDto> = emptyList()
+        var httpTts: List<LegacyHttpTtsDto> = emptyList()
+        var searchHistory: List<LegacySearchKeywordDto> = emptyList()
         val skipped = mutableListOf<String>()
         // 诊断：观察 zip 里到底有什么文件、各自体量。用户报「分组建好了 0 本书」
         // 时第一时间能看出 bookshelf.json 是否压根没在 zip 里 / 是不是空文件。
@@ -700,7 +700,7 @@ object LegadoImporter {
                         "config.xml", "videoConfig.xml" -> skipped += name
                         else -> {
                             // 未知文件 — 直接 skip 但 log 一下，方便发现参照实现加新字段
-                            AppLog.debug(TAG, "Unknown entry in Legado zip: $name (${bytes.size} bytes)")
+                            AppLog.debug(TAG, "Unknown entry in Legacy zip: $name (${bytes.size} bytes)")
                             skipped += name
                         }
                     }
@@ -734,7 +734,7 @@ object LegadoImporter {
                 AppLog.warn(
                     TAG,
                     "parseZip: bookshelf.json present (size=$sz bytes) but books list is EMPTY — " +
-                        "decode failed; check kx-serialization compatibility against Legado JSON shape",
+                        "decode failed; check kx-serialization compatibility against Legacy JSON shape",
                 )
             }
         }
@@ -766,7 +766,7 @@ object LegadoImporter {
      * - `type` → `format`（参照实现.BookType 数字位掩码 → BookFormat 枚举）
      * - `lastCheckCount / lastCheckTime / canUpdate` → 同名字段（v16 已对齐）
      */
-    internal fun mapBook(dto: LegadoBookDto): Book {
+    internal fun mapBook(dto: LegacyBookDto): Book {
         val format = legadoTypeToFormat(dto.type)
         val description = dto.customIntro?.takeIf { it.isNotBlank() } ?: dto.intro
         val folderId = dto.group.takeIf { it != 0L && it > 0 }?.toString()
@@ -776,7 +776,7 @@ object LegadoImporter {
             author = dto.author,
             coverUrl = dto.coverUrl,
             customCoverUrl = dto.customCoverUrl,
-            localPath = null, // Legado 本地书的 bookUrl 就是文件路径；MoRealm 自家本地书走另一条路径，这里不冒险映射
+            localPath = null, // Legacy 本地书的 bookUrl 就是文件路径；MoRealm 自家本地书走另一条路径，这里不冒险映射
             sourceId = dto.origin.takeIf { it.isNotBlank() && it != LEGADO_LOCAL_TAG },
             sourceUrl = dto.origin.takeIf { it.isNotBlank() && it != LEGADO_LOCAL_TAG },
             folderId = folderId,
@@ -855,9 +855,9 @@ object LegadoImporter {
      *   情况下根本不需要分组，避免单独搬一堆空分组进来）。
      */
     internal fun filterNonEmptyBookGroups(
-        books: List<LegadoBookDto>,
-        groups: List<LegadoBookGroupDto>,
-    ): List<LegadoBookGroupDto> {
+        books: List<LegacyBookDto>,
+        groups: List<LegacyBookGroupDto>,
+    ): List<LegacyBookGroupDto> {
         if (groups.isEmpty()) return emptyList()
         if (books.isEmpty()) return emptyList()
         return groups.filter { g ->
@@ -883,7 +883,7 @@ object LegadoImporter {
      * - `cover` 在 MoRealm 是 customCoverUrl，但参照实现.cover 是 url 不是文件，
      *   且 MoRealm.customCoverUrl 走 CoverStorage 文件，这里不映射避免引用失效
      */
-    internal fun mapBookGroup(dto: LegadoBookGroupDto): BookGroup = BookGroup(
+    internal fun mapBookGroup(dto: LegacyBookGroupDto): BookGroup = BookGroup(
         id = dto.groupId.toString(),
         name = dto.groupName,
         parentId = null,
@@ -892,7 +892,7 @@ object LegadoImporter {
         emoji = null,
         autoKeywords = "",
         createdAt = System.currentTimeMillis(),
-        auto = false, // 用户从 Legado 搬来的分组都视为手动，不让 TagResolver 重命名
+        auto = false, // 用户从 Legacy 搬来的分组都视为手动，不让 TagResolver 重命名
         customCoverUrl = null,
     )
 
@@ -908,7 +908,7 @@ object LegadoImporter {
      * - `kind` 智能推断：replacement 为空 → KIND_PURIFY（净化删除）；否则 KIND_GENERAL
      *   （语义替换）。参照实现没有 kind 概念，但 replacement="" 的规则本质就是净化。
      */
-    internal fun mapReplaceRule(dto: LegadoReplaceRuleDto): ReplaceRule = ReplaceRule(
+    internal fun mapReplaceRule(dto: LegacyReplaceRuleDto): ReplaceRule = ReplaceRule(
         id = dto.id.toString(),
         name = dto.name,
         pattern = dto.pattern,
@@ -928,13 +928,13 @@ object LegadoImporter {
     /**
      * 参照实现.HttpTTS → MoRealm.HttpTts。字段几乎一一对应。
      */
-    internal fun mapHttpTts(dto: LegadoHttpTtsDto): HttpTts = HttpTts(
+    internal fun mapHttpTts(dto: LegacyHttpTtsDto): HttpTts = HttpTts(
         id = dto.id,
         name = dto.name,
         url = dto.url,
         contentType = dto.contentType,
         header = dto.header,
-        enabled = true, // Legado 没有 enabled 字段，默认启用
+        enabled = true, // Legacy 没有 enabled 字段，默认启用
         lastUpdateTime = dto.lastUpdateTime.takeIf { it > 0 } ?: System.currentTimeMillis(),
         loginUrl = dto.loginUrl,
         loginUi = dto.loginUi,
@@ -951,7 +951,7 @@ object LegadoImporter {
      * 唯一处理：word 在调用方就 trim 过；这里只把 usage 兜底为 ≥1（参照实现老数据
      * 偶有 0，进库后会因 `usage DESC` 排序消失在最底，不友好）。
      */
-    internal fun mapSearchKeyword(dto: LegadoSearchKeywordDto): SearchKeyword = SearchKeyword(
+    internal fun mapSearchKeyword(dto: LegacySearchKeywordDto): SearchKeyword = SearchKeyword(
         word = dto.word,
         usage = dto.usage.coerceAtLeast(1),
         lastUseTime = dto.lastUseTime.takeIf { it > 0 } ?: System.currentTimeMillis(),
@@ -970,7 +970,7 @@ object LegadoImporter {
 
     /** 参照实现.Book 的 JSON 形态（只取我们映射要用的字段）。 */
     @Serializable
-    internal data class LegadoBookDto(
+    internal data class LegacyBookDto(
         val bookUrl: String = "",
         val tocUrl: String = "",
         val origin: String = "",
@@ -1003,7 +1003,7 @@ object LegadoImporter {
     )
 
     @Serializable
-    internal data class LegadoBookmarkDto(
+    internal data class LegacyBookmarkDto(
         val time: Long = 0,
         val bookName: String = "",
         val bookAuthor: String = "",
@@ -1015,7 +1015,7 @@ object LegadoImporter {
     )
 
     @Serializable
-    internal data class LegadoBookGroupDto(
+    internal data class LegacyBookGroupDto(
         val groupId: Long = 0,
         val groupName: String = "",
         val cover: String? = null,
@@ -1034,7 +1034,7 @@ object LegadoImporter {
      * 为简化，DTO 字段直接叫 `order`，跟参照实现.ReplaceRule.order 对齐。
      */
     @Serializable
-    internal data class LegadoReplaceRuleDto(
+    internal data class LegacyReplaceRuleDto(
         val id: Long = 0,
         val name: String = "",
         val group: String? = null,
@@ -1052,7 +1052,7 @@ object LegadoImporter {
     )
 
     @Serializable
-    internal data class LegadoHttpTtsDto(
+    internal data class LegacyHttpTtsDto(
         val id: Long = 0,
         val name: String = "",
         val url: String = "",
@@ -1070,7 +1070,7 @@ object LegadoImporter {
      * GSON 默认按 Kotlin 字段名输出 JSON key —— 直接对齐即可。
      */
     @Serializable
-    internal data class LegadoSearchKeywordDto(
+    internal data class LegacySearchKeywordDto(
         val word: String = "",
         val usage: Int = 1,
         val lastUseTime: Long = 0,

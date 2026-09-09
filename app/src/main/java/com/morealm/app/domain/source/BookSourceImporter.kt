@@ -108,12 +108,11 @@ object BookSourceImporter {
         }
 
         // MoRealm 仅支持参照实现 / yuedu 风格 JSON 书源。整文件 JS 书源
-        // （SkyBook / OpenSchedule 的 export default { meta, search(ctx)... } lifecycle 模型，
+        // （脚本模块 的 export default { meta, search(ctx)... } lifecycle 模型，
         // 或参照实现全 JS 书源）都不是规则模型，运行时全靠 JS runtime —— 移植成本远超收益。
         // 检测到 .js 内容直接报错，让用户找 JSON 格式的等价书源。
         if (isJsSource(raw)) {
-            val msg = "MoRealm 不支持 JS 格式书源（含 SkyBook / OpenSchedule lifecycle 模型 + " +
-                "Legado 全 JS 书源），仅支持 Legado / yuedu 风格 JSON 书源。请导入 .json 格式书源。"
+            val msg = "暂不支持独立 JS 脚本书源，请导入规则式 JSON 书源文件（.json）。"
             AppLog.warn("SourceImport", msg)
             lastImportError = msg
             return emptyList()

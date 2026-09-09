@@ -291,7 +291,7 @@ class ReaderChapterController(
             AppLog.info(
                 "ReadBook",
                 "commitChapterShiftNext NEXT-NOT-LAID-OUT (cur=$curIdx→$nextIdx) | " +
-                    "fall through to sync shift + async layout (legado-style)" +
+                    "fall through to sync shift + async layout (同步窗口)" +
                     " prevCh=${_prevTextChapter.value?.chapterIndex}" +
                     " curCh=${_curTextChapter.value?.chapterIndex}",
             )
@@ -406,7 +406,7 @@ class ReaderChapterController(
             AppLog.info(
                 "ReadBook",
                 "commitChapterShiftPrev PREV-NOT-LAID-OUT (cur=$curIdx→$prevIdx) | " +
-                    "fall through to sync shift + async layout (legado-style)" +
+                    "fall through to sync shift + async layout (同步窗口)" +
                     " curCh=${_curTextChapter.value?.chapterIndex}" +
                     " nextCh=${_nextTextChapter.value?.chapterIndex}",
             )

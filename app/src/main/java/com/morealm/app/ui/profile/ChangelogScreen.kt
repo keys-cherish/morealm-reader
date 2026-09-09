@@ -193,7 +193,7 @@ private data class ChangelogEntry(
 
 private val CHANGELOG: List<ChangelogEntry> = listOf(
     ChangelogEntry(
-        version = "v2.0",
+        version = "v2.1",
         date = "2026-09-09",
         title = "阅读稳定性、书源体验与手写批注",
         tag = ReleaseTag.LATEST,
@@ -309,7 +309,7 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             ChangelogItem(ChangeType.FIX, "老用户升级后新增的菜单项能看见 —— 老版本保存过菜单配置的用户，升级后新增项不再被补成「隐藏」"),
             ChangelogItem(ChangeType.FIX, "搜索历史 chip 的删除按钮位置修正 —— chip 高度自适应，文字垂直居中"),
             ChangelogItem(ChangeType.FIX, "书源规则编辑支持多行 —— 所有规则字段允许多行输入和粘贴"),
-            ChangelogItem(ChangeType.FIX, "书源 JSON 导入支持原始换行 —— Legado 等格式书源 JSON 里带原始换行的规则不再报语法错误"),
+            ChangelogItem(ChangeType.FIX, "书源 JSON 导入支持原始换行 —— 兼容格式书源 JSON 里带原始换行的规则不再报语法错误"),
         ),
     ),
     ChangelogEntry(
@@ -362,8 +362,8 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             ChangelogItem(ChangeType.FIX, "换源大多数返回空目录"),
             ChangelogItem(ChangeType.FIX, "校验书源过程中删源会闪退"),
             ChangelogItem(ChangeType.FIX, "校验完成可以勾选删除无效书源"),
-            ChangelogItem(ChangeType.FIX, "Legado 主题导入颜色异常（洋红 / 透明）"),
-            ChangelogItem(ChangeType.FIX, "Legado「阅读样式配置」也能导入了：自动识别 + 拆为日 / 夜两个主题 + 导入提示"),
+            ChangelogItem(ChangeType.FIX, "兼容主题导入颜色异常（洋红 / 透明）"),
+            ChangelogItem(ChangeType.FIX, "兼容阅读样式配置导入：自动识别并拆为日间、夜间两个主题，提供导入提示"),
             ChangelogItem(ChangeType.FIX, "跟随系统主题打开开关后不立即生效"),
             ChangelogItem(ChangeType.FIX, "阅读设置「左侧轻按」改完不生效"),
             ChangelogItem(ChangeType.FIX, "阅读器工具栏加号被遮挡 + 颜色容易被误以为不可点击"),
@@ -428,7 +428,7 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
 
             // ── 书源 / 数据导入 ──
             ChangelogItem(ChangeType.FIX, "修复部分书源乱码问题"),
-            ChangelogItem(ChangeType.FIX, "修复从 Legado 移植数据时闪退"),
+            ChangelogItem(ChangeType.FIX, "修复从兼容备份迁移数据时闪退"),
 
             // ── 设置·恢复出厂 ──
             ChangelogItem(ChangeType.IMPROVE, "「一键还原」从「轻还原」扩展为完整出厂：颜色 / 字体 / 字号 / 行距 / 段距 / 边距 / 翻页方式 / 翻页动画 / 屏幕方向 / 划词可选 / 繁简模式 / 状态栏 / 章节名 / 时间电量 / 屏幕亮度 / 音量键 / 耳机键 / 4 个 tap zone / 6 个 header & footer slot / 标题对齐 / 阅读区背景图 / 选区菜单顺序"),
@@ -506,13 +506,13 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             ChangelogItem(ChangeType.NEW, "数据库升级 v15→v16：Book 实体新增 lastCheckCount / lastCheckTime / canUpdate 字段（升级前自动备份）"),
             ChangelogItem(ChangeType.NEW, "ShelfRefreshController：固定线程池并发（默认 4），单源失败不影响其他源；状态合并避免双重刷新"),
             ChangelogItem(ChangeType.IMPROVE, "刷新进行中可点击按钮取消，已发起的 fetch 自然结束以避免半状态"),
-            ChangelogItem(ChangeType.IMPROVE, "用户点击书本打开时自动清除「N 新」角标（与 Legado 一致）"),
+            ChangelogItem(ChangeType.IMPROVE, "用户点击书本打开时自动清除「N 新」角标（统一阅读行为）"),
             ChangelogItem(ChangeType.NEW, "缓存页支持「导出 TXT」：选择保存位置后自动导出全部已缓存章节，含书名、作者、简介与 ContentProcessor 处理后的正文"),
             ChangelogItem(ChangeType.NEW, "缓存项操作区改为自适应换行布局：全部缓存 / 从当前章 / 导出 TXT / 清除四按钮"),
 
             // ── 搜索 / 书源引擎参照实现对齐 ──
-            ChangelogItem(ChangeType.NEW, "搜索结果卡片显示「最新章节 / 字数 / 分类」元信息（与 Legado 对齐）"),
-            ChangelogItem(ChangeType.IMPROVE, "AnalyzeUrl：搜索 / 详情 / 目录 / 正文 五处统一走 errResponse + loginCheckJs 错误恢复（Legado-parity）"),
+            ChangelogItem(ChangeType.NEW, "搜索结果卡片显示「最新章节 / 字数 / 分类」元信息（完善字段展示）"),
+            ChangelogItem(ChangeType.IMPROVE, "AnalyzeUrl：搜索 / 详情 / 目录 / 正文 五处统一走 errResponse + loginCheckJs 错误恢复（兼容书源）"),
             ChangelogItem(ChangeType.IMPROVE, "AnalyzeUrl：cookie 始终注入 — 关闭 enabledCookieJar 不再误丢已登录会话"),
             ChangelogItem(ChangeType.NEW, "AnalyzeUrl：补齐 getErrResponse / getErrStrResponse — 网络异常时 JS 仍能检查响应"),
             ChangelogItem(ChangeType.FIX, "搜索 HTTP 重定向到详情页时 bookUrl 错误：现在使用最终 URL 并复用 body（修单结果重定向源大量打不开）"),
@@ -520,7 +520,7 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             ChangelogItem(ChangeType.FIX, "JSONPath「No results for path」噪音从 warn 降为 debug — 日志量降低约 10×"),
             ChangelogItem(ChangeType.FIX, "正文为空时显示友好占位文本 + 自动展开控制栏，引导用户换源 / 重试"),
             ChangelogItem(ChangeType.FIX, "ContentProcessor：标题首行不再被错误段首缩进；标题去重新增二次匹配（替换后标题）"),
-            ChangelogItem(ChangeType.IMPROVE, "WEB 书短按打开优先进入详情页（Legado-parity），本地书保持直进阅读器"),
+            ChangelogItem(ChangeType.IMPROVE, "WEB 书短按打开优先进入详情页（兼容书源），本地书保持直进阅读器"),
             ChangelogItem(ChangeType.IMPROVE, "OkHttp 全局信任自签 / 过期证书（SSLHelper），修「Trust anchor not found」一类源失效"),
             ChangelogItem(ChangeType.IMPROVE, "搜索详情页二次请求复用 infoHtml — 减少 ~10% 跨阶段失败率"),
 
@@ -532,7 +532,7 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
 
             // ── 书源 JSON 导入 ──
             ChangelogItem(ChangeType.FIX, "JSON 粘贴 / 直接粘到导入框现可识别 — 之前 BookSourceImporter 把所有解析错误吞掉只剩一句「未识别到有效书源」无任何线索"),
-            ChangelogItem(ChangeType.NEW, "导入器支持 Legado 类常见 JSON 包装：{\"sources\":[…]} / {\"bookSources\":[…]} / {\"data\":[…]} / {\"list\":[…]} / {\"items\":[…]} 自动解包"),
+            ChangelogItem(ChangeType.NEW, "导入器支持常见 JSON 包装：{\"sources\":[…]} / {\"bookSources\":[…]} / {\"data\":[…]} / {\"list\":[…]} / {\"items\":[…]} 自动解包"),
             ChangelogItem(ChangeType.IMPROVE, "导入失败时把首条解析异常透到 UI（如「期望 String 但收到 Number」），用户能立刻定位坏字段"),
             ChangelogItem(ChangeType.IMPROVE, "数组整体解码失败回退逐项解析 — 一个坏书源不再导致整批 0 导入"),
             ChangelogItem(ChangeType.FIX, "剪贴板粘贴导入按钮在 Android 12+ 偶尔为空 — 改用 Android 原生 ClipboardManager 替代 Compose LocalClipboardManager；并按内容前缀自动分流：[/{ 走 JSON、http(s):// 走 URL、其它给出明确「不识别」提示"),
@@ -558,7 +558,7 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
             ChangelogItem(ChangeType.NEW, "完整实现真正的换源功能"),
             ChangelogItem(ChangeType.FIX, "JS / SSL / 分组等多个长期遗留问题"),
             ChangelogItem(ChangeType.IMPROVE, "BookChapterList / BookContent / BookInfo 在解析失败时不再崩溃"),
-            ChangelogItem(ChangeType.NEW, "移植 Legado CookieManager：通过 OkHttp 拦截器自动持久化登录会话"),
+            ChangelogItem(ChangeType.NEW, "完善 CookieManager：通过 OkHttp 拦截器自动持久化登录会话"),
             ChangelogItem(ChangeType.IMPROVE, "搜索流程对 JSONPath / JS 规则失败的容错"),
         ),
     ),
@@ -579,7 +579,7 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
         date = "2026-04-04",
         title = "阅读器体验优化",
         items = listOf(
-            ChangelogItem(ChangeType.NEW, "书源登录功能（兼容 Legado）"),
+            ChangelogItem(ChangeType.NEW, "书源登录功能（兼容通用）"),
             ChangelogItem(ChangeType.NEW, "阅读器右下角增加日 / 夜模式悬浮切换按钮"),
             ChangelogItem(ChangeType.FIX, "章节切换闪烁问题：通过 prelayout 缓存校验解决"),
             ChangelogItem(ChangeType.FIX, "仿真翻页向前翻页：当前页正确卷起以露出上一页"),

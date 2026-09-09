@@ -210,13 +210,13 @@ class ThemeViewModel @Inject constructor(
         }
     }
 
-    fun importLegadoTheme(jsonStr: String) {
+    fun importLegacyTheme(jsonStr: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val trimmed = jsonStr.trim()
                 if (trimmed.startsWith("[")) {
                     // Array of 参照实现 themes — import all, activate the first
-                    val themes = themeRepo.importLegadoThemes(trimmed)
+                    val themes = themeRepo.importLegacyThemes(trimmed)
                     if (themes.isNotEmpty()) {
                         themeRepo.activateTheme(themes.first().id)
                         _importMessage.emit("已导入 ${themes.size} 个主题")
@@ -224,22 +224,22 @@ class ThemeViewModel @Inject constructor(
                         _importMessage.emit("主题列表为空")
                     }
                 } else {
-                    when (val result = themeRepo.importLegadoTheme(trimmed)) {
-                        is ThemeRepository.LegadoImportResult.ThemeImported ->
+                    when (val result = themeRepo.importLegacyTheme(trimmed)) {
+                        is ThemeRepository.LegacyImportResult.ThemeImported ->
                             _importMessage.emit("已导入主题：${result.theme.name}")
-                        is ThemeRepository.LegadoImportResult.ReadConfigImported -> {
+                        is ThemeRepository.LegacyImportResult.ReadConfigImported -> {
                             val base = "检测到「阅读样式配置」（非主题色配置），已转换为${result.themes.size}个主题（日 + 夜）"
                             val msg = if (result.inaccessibleBgPaths.isNotEmpty()) {
-                                "$base；${result.inaccessibleBgPaths.size} 张背景图在 Legado 沙盒内无法访问，背景色继续使用"
+                                "$base；${result.inaccessibleBgPaths.size} 张背景图在 原应用沙盒内无法访问，背景色继续使用"
                             } else base
                             _importMessage.emit(msg)
                         }
-                        is ThemeRepository.LegadoImportResult.Failed ->
+                        is ThemeRepository.LegacyImportResult.Failed ->
                             _importMessage.emit("主题导入失败：${result.message}")
                     }
                 }
             } catch (e: Exception) {
-                AppLog.error("Theme", "Failed to import Legado theme", e)
+                AppLog.error("Theme", "Failed to import Legacy theme", e)
                 _importMessage.emit("主题导入失败：${e.message ?: e::class.simpleName}")
             }
         }
@@ -381,25 +381,25 @@ class ThemeViewModel @Inject constructor(
                 }
 
                 // Path 2/3: 参照实现 format — array or single object with themeName.
-                val isLegadoArray = parsed is JsonArray &&
+                val isLegacyArray = parsed is JsonArray &&
                     (parsed.firstOrNull() as? JsonObject)?.containsKey("themeName") == true
-                val isLegadoSingle = parsed is JsonObject && parsed.containsKey("themeName")
-                if (isLegadoArray || isLegadoSingle) {
-                    if (isLegadoArray) {
-                        val themes = themeRepo.importLegadoThemes(trimmed)
+                val isLegacySingle = parsed is JsonObject && parsed.containsKey("themeName")
+                if (isLegacyArray || isLegacySingle) {
+                    if (isLegacyArray) {
+                        val themes = themeRepo.importLegacyThemes(trimmed)
                         themes.firstOrNull()?.let { themeRepo.activateTheme(it.id) }
                         _importMessage.emit("已导入 ${themes.size} 个主题")
                     } else {
-                        when (val res = themeRepo.importLegadoTheme(trimmed)) {
-                            is ThemeRepository.LegadoImportResult.ThemeImported ->
+                        when (val res = themeRepo.importLegacyTheme(trimmed)) {
+                            is ThemeRepository.LegacyImportResult.ThemeImported ->
                                 _importMessage.emit("已导入主题：${res.theme.name}")
-                            is ThemeRepository.LegadoImportResult.ReadConfigImported ->
+                            is ThemeRepository.LegacyImportResult.ReadConfigImported ->
                                 _importMessage.emit(readConfigImportedMessage(res))
-                            is ThemeRepository.LegadoImportResult.Failed ->
+                            is ThemeRepository.LegacyImportResult.Failed ->
                                 _importMessage.emit("主题导入失败：${res.message}")
                         }
                     }
-                    AppLog.info("Theme", "Imported Legado themes")
+                    AppLog.info("Theme", "Imported Legacy themes")
                     return@launch
                 }
 
@@ -408,19 +408,19 @@ class ThemeViewModel @Inject constructor(
                 // 用户从参照实现的 阅读 → 设置 → 阅读样式 → 导出 拿到的就是这种 JSON。
                 // 之前没有专门分支会被 Path 4 ThemeExportData 接管，反序列化所有字段拿默认值，
                 // 导致主题颜色全异常。这里识别后走 ThemeRepository.import参照实现Theme 的 ReadConfig 分支。
-                val isLegadoReadConfig = parsed is JsonObject &&
+                val isLegacyReadConfig = parsed is JsonObject &&
                     (parsed.containsKey("bgStr") || parsed.containsKey("textColor")) &&
                     parsed.containsKey("lineSpacingExtra")
-                if (isLegadoReadConfig) {
-                    when (val res = themeRepo.importLegadoTheme(trimmed)) {
-                        is ThemeRepository.LegadoImportResult.ReadConfigImported ->
+                if (isLegacyReadConfig) {
+                    when (val res = themeRepo.importLegacyTheme(trimmed)) {
+                        is ThemeRepository.LegacyImportResult.ReadConfigImported ->
                             _importMessage.emit(readConfigImportedMessage(res))
-                        is ThemeRepository.LegadoImportResult.ThemeImported ->
+                        is ThemeRepository.LegacyImportResult.ThemeImported ->
                             _importMessage.emit("已导入主题：${res.theme.name}")
-                        is ThemeRepository.LegadoImportResult.Failed ->
+                        is ThemeRepository.LegacyImportResult.Failed ->
                             _importMessage.emit("阅读样式解析失败：${res.message}")
                     }
-                    AppLog.info("Theme", "Imported Legado ReadConfig")
+                    AppLog.info("Theme", "Imported Legacy ReadConfig")
                     return@launch
                 }
 
@@ -442,11 +442,11 @@ class ThemeViewModel @Inject constructor(
     /** ReadConfig 导入成功的 toast 文案 —— 把「日 + 夜分别创建了 2 个主题」和「N 张沙盒
      *  背景图无法读」两件事拼一句话说清楚。 */
     private fun readConfigImportedMessage(
-        res: ThemeRepository.LegadoImportResult.ReadConfigImported,
+        res: ThemeRepository.LegacyImportResult.ReadConfigImported,
     ): String {
         val base = "检测到「阅读样式配置」（非主题色配置），已转换为 ${res.themes.size} 个主题（日 + 夜）"
         return if (res.inaccessibleBgPaths.isNotEmpty()) {
-            "$base；${res.inaccessibleBgPaths.size} 张背景图在 Legado 沙盒中无法访问，背景色继续使用"
+            "$base；${res.inaccessibleBgPaths.size} 张背景图在 原应用沙盒中无法访问，背景色继续使用"
         } else base
     }
 }

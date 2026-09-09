@@ -346,8 +346,8 @@
     <!-- <string name="">跨书查看、按时间过滤、按书分组</string> -->
     <!-- <string name="">离线缓存</string> -->
     <!-- <string name="">批量下载章节，支持离线阅读</string> -->
-    <!-- <string name="">Legado 一键搬家</string> -->
-    <!-- <string name="">导入Legado备份，书源、书架、进度全部迁移</string> -->
+    <!-- <string name="">备份迁移</string> -->
+    <!-- <string name="">导入Legacy备份，书源、书架、进度全部迁移</string> -->
     <!-- <string name="">桌面小组件</string> -->
     <!-- <string name="">把“继续阅读”放到桌面，一键回到上次位置</string> -->
 
@@ -367,14 +367,14 @@
             <!-- <string name="">多格式支持</string> -->
             <!-- <string name="">TXT、EPUB、PDF</string> -->
             <!-- <string name="">主题系统</string> -->
-            <!-- <string name="">六套内置主题 + Legado 主题导入</string> -->
+            <!-- <string name="">六套内置主题 + 兼容主题导入</string> -->
             <!-- <string name="">WebDAV 同步</string> -->
             <!-- <string name="">进度、书架、书源、主题</string> -->
             <!-- <string name="">文字转语音</string> -->
             <!-- <string name="">系统朗读引擎 + 书内控制面板</string> -->
             <!-- <string name="">智能导入</string> -->
             <!-- <string name="">文件夹自动识别 + 批量导入</string> -->
-            <!-- <string name="">Legado 兼容</string> -->
+            <!-- <string name="">书源兼容</string> -->
             <!-- <string name="">书源格式 + 一键搬家</string> -->
         <!-- <string name="">创立纪念</string> -->
             <!-- <string name="">首个版本：2026 年 4 月 19 日 · v1.0.0-alpha1</string> -->

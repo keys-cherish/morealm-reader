@@ -22,14 +22,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.morealm.app.domain.sync.LegadoImporter
-import com.morealm.app.presentation.profile.LegadoImportViewModel
+import com.morealm.app.domain.sync.LegacyImporter
+import com.morealm.app.presentation.profile.LegacyImportViewModel
 
 /**
  * 「参照实现一键搬家」UI 入口页。流程：
  *
  * 1. 进入页 — 还没选 zip，Hero 卡片 + 「选择参照实现备份 zip」按钮。
- * 2. SAF 选完 → 立即调 [LegadoImportViewModel.onZipPicked] 解 zip + 生成预览
+ * 2. SAF 选完 → 立即调 [LegacyImportViewModel.onZipPicked] 解 zip + 生成预览
  * 3. 预览完成 → 渲染统计卡（书架 / 书源 / 书签 / 分组 / 替换规则 / 朗读引擎）+ 冲突警告 +
  *    冲突策略 toggle（保守跳过 / 强制覆盖）+ 「开始导入」按钮
  * 4. 导入完成 → 渲染 ImportResult 摘要 + 「再选一个」/「完成」按钮
@@ -41,9 +41,9 @@ import com.morealm.app.presentation.profile.LegadoImportViewModel
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LegadoImportScreen(
+fun LegacyImportScreen(
     onBack: () -> Unit,
-    viewModel: LegadoImportViewModel = hiltViewModel(),
+    viewModel: LegacyImportViewModel = hiltViewModel(),
 ) {
     val pendingUri by viewModel.pendingUri.collectAsStateWithLifecycle()
     val preview by viewModel.preview.collectAsStateWithLifecycle()
@@ -64,7 +64,7 @@ fun LegadoImportScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Legado 一键搬家") },
+                title = { Text("备份迁移") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
@@ -184,7 +184,7 @@ private fun HeroCard() {
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "从 Legado 一键搬家",
+                    "从 备份迁移",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -192,7 +192,7 @@ private fun HeroCard() {
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                "选择 Legado 应用导出的 .zip 备份，自动迁移：\n" +
+                "选择 原应用导出的 .zip 备份，自动迁移：\n" +
                     "• 书架（含阅读进度）\n" +
                     "• 书源 + 替换规则 + 自定义朗读引擎\n" +
                     "• 书签 + 分组 + 搜索历史",
@@ -202,7 +202,7 @@ private fun HeroCard() {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "暂不支持：RSS、词典、键盘助手、阅读样式（Legado 不在备份内带这些字节，下版补）",
+                "暂不支持：RSS、词典、键盘助手、阅读样式（备份内未包含这些数据，下版补）",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.55f),
             )
@@ -233,7 +233,7 @@ private fun FilePickerButton(
         } else {
             Icon(Icons.Default.FolderOpen, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text(if (hasFile) "重新选择 Legado 备份 zip" else "选择 Legado 备份 zip")
+            Text(if (hasFile) "重新选择 兼容备份 zip" else "选择 兼容备份 zip")
         }
     }
 }
@@ -265,7 +265,7 @@ private fun ErrorCard(message: String) {
 }
 
 @Composable
-private fun PreviewCard(pv: LegadoImporter.Preview) {
+private fun PreviewCard(pv: LegacyImporter.Preview) {
     Card(shape = RoundedCornerShape(16.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
@@ -343,8 +343,8 @@ private fun PreviewRow(label: String, count: Int, conflicts: Int) {
 
 @Composable
 private fun ConflictStrategyCard(
-    strategy: LegadoImporter.ConflictStrategy,
-    onChange: (LegadoImporter.ConflictStrategy) -> Unit,
+    strategy: LegacyImporter.ConflictStrategy,
+    onChange: (LegacyImporter.ConflictStrategy) -> Unit,
     hasConflicts: Boolean,
 ) {
     Card(shape = RoundedCornerShape(16.dp)) {
@@ -369,25 +369,25 @@ private fun ConflictStrategyCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        if (strategy == LegadoImporter.ConflictStrategy.SKIP)
-                            "保守跳过（推荐）" else "用 Legado 数据覆盖本机",
+                        if (strategy == LegacyImporter.ConflictStrategy.SKIP)
+                            "保守跳过（推荐）" else "用 备份数据覆盖本机",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                     )
                     Text(
-                        if (strategy == LegadoImporter.ConflictStrategy.SKIP)
+                        if (strategy == LegacyImporter.ConflictStrategy.SKIP)
                             "本机已有的条目原封不动，只追加新内容"
-                        else "本机已有的同 ID 条目会被 Legado 那份替换",
+                        else "本机已有的同 ID 条目会被 备份中的数据替换",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Switch(
-                    checked = strategy == LegadoImporter.ConflictStrategy.OVERWRITE,
+                    checked = strategy == LegacyImporter.ConflictStrategy.OVERWRITE,
                     onCheckedChange = { checked ->
                         onChange(
-                            if (checked) LegadoImporter.ConflictStrategy.OVERWRITE
-                            else LegadoImporter.ConflictStrategy.SKIP
+                            if (checked) LegacyImporter.ConflictStrategy.OVERWRITE
+                            else LegacyImporter.ConflictStrategy.SKIP
                         )
                     },
                 )
@@ -405,7 +405,7 @@ private fun ConflictStrategyCard(
  * - total>0：determinate，进度条 = current / total，文案显示 "正在导入{step}  current / total"。
  */
 @Composable
-private fun ImportProgressCard(progress: LegadoImporter.Progress?) {
+private fun ImportProgressCard(progress: LegacyImporter.Progress?) {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
@@ -474,7 +474,7 @@ private fun ImportProgressCard(progress: LegadoImporter.Progress?) {
 
 @Composable
 private fun ResultCard(
-    result: LegadoImporter.ImportResult,
+    result: LegacyImporter.ImportResult,
     onAnother: () -> Unit,
     onDone: () -> Unit,
 ) {
