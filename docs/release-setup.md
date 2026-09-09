@@ -1,5 +1,13 @@
 # 发版操作手册（CD）
 
+## 2.1 本地发布记录
+
+- 版本：2.1，versionCode：17。
+- 本版使用本地 `assembleRelease` 构建及现有正式签名，校验后上传 `MoRealm-v2.1.apk`。
+- EPUB 库使用 `refactor/epub-arch` 的 `e185873d2fec3c0eea1cbe35ff79c1e32a426150`。
+- 发布标签对应的提交带 `[skip ci]` 标记，避免重复触发自动打包；仓库工作流配置保持启用。
+- 附件发布成功后同步 `main` 的 `update.json`，使应用更新检查指向 2.1。
+
 本项目通过 `.github/workflows/release.yml` 自动化发版。本文是给项目维护者看的「**第一次发版前必读**」与「**每次发版操作清单**」。
 
 ---
