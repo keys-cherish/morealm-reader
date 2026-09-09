@@ -68,9 +68,6 @@ internal fun ReadingStatsCard(
                     color = MaterialTheme.colorScheme.primary,
                     textAlign = TextAlign.Center,
                 )
-                TextButton(onClick = { detail = "读完的书" }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                    Text("已读完 ${completedBooks.size} 本", style = MaterialTheme.typography.labelSmall)
-                }
                 TextButton(onClick = onAnnualReport, modifier = Modifier.align(Alignment.CenterHorizontally)) {
                     Text("查看年度报告 →", style = MaterialTheme.typography.labelSmall)
                 }
