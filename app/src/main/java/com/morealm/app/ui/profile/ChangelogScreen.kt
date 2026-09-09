@@ -198,6 +198,7 @@ private val CHANGELOG: List<ChangelogEntry> = listOf(
         title = "阅读稳定性、书源体验与手写批注",
         tag = ReleaseTag.LATEST,
         items = listOf(
+            ChangelogItem(ChangeType.FIX, "恢复阅读统计卡片的日夜插画背景与三列布局，保留读完明细和累计时长修正"),
             ChangelogItem(ChangeType.FIX, "连续切换章节后仍可返回上一章尾页，读完章节也能稳定进入下一章首页"),
             ChangelogItem(ChangeType.FIX, "EPUB 大图完整适配屏幕，图片操作对应当前图片；横屏不再露出邻页文字，跨页装饰框不再压住后文"),
             ChangelogItem(ChangeType.FIX, "滚动选区跟随光标实时更新，并新增拖选放大镜"),

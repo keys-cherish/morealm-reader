@@ -1,6 +1,9 @@
 package com.morealm.app.ui.profile
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -8,8 +11,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.morealm.app.R
+import com.morealm.app.ui.theme.LocalMoRealmColors
 import com.morealm.app.domain.entity.Book
 import com.morealm.app.domain.entity.ReadStats
 import com.morealm.app.presentation.profile.formatReadingDuration
@@ -26,19 +36,45 @@ internal fun ReadingStatsCard(
     onAnnualReport: () -> Unit,
 ) {
     var detail by remember { mutableStateOf<String?>(null) }
-    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("阅读统计", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text("今日阅读 ${formatReadingDuration(todayReadMs)}", color = MaterialTheme.colorScheme.primary)
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ReadingMetric("读过", "${readBooks.size} 本", Modifier.weight(1f)) { detail = "读过的书" }
-                ReadingMetric("读完", "${completedBooks.size} 本", Modifier.weight(1f)) { detail = "读完的书" }
+    val moColors = LocalMoRealmColors.current
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+    ) {
+        Box(Modifier.fillMaxWidth()) {
+            Image(
+                painter = painterResource(
+                    if (moColors.isNight) R.drawable.profile_card_bg_night
+                    else R.drawable.profile_card_bg_day,
+                ),
+                contentDescription = null,
+                modifier = Modifier.matchParentSize(),
+                contentScale = ContentScale.Crop,
+            )
+            Column(Modifier.fillMaxWidth().padding(20.dp)) {
+                Text("阅读统计", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ReadingMetric("读过的书", "${readBooks.size}", Modifier.weight(1f)) { detail = "读过的书" }
+                    ReadingMetric("总时长", compactReadingDuration(totalReadMs), Modifier.weight(1f)) { detail = "每日阅读时长" }
+                    ReadingMetric("连续天数", "$streak", Modifier.weight(1f)) { detail = "每日阅读时长" }
+                }
+                Spacer(Modifier.height(18.dp))
+                Text(
+                    "今日已读 ${formatReadingDuration(todayReadMs)}",
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
+                )
+                TextButton(onClick = { detail = "读完的书" }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                    Text("已读完 ${completedBooks.size} 本", style = MaterialTheme.typography.labelSmall)
+                }
+                TextButton(onClick = onAnnualReport, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                    Text("查看年度报告 →", style = MaterialTheme.typography.labelSmall)
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ReadingMetric("累计阅读", formatReadingDuration(totalReadMs), Modifier.weight(1f)) { detail = "每日阅读时长" }
-                ReadingMetric("连续阅读", "$streak 天", Modifier.weight(1f)) { detail = "每日阅读时长" }
-            }
-            TextButton(onClick = onAnnualReport, modifier = Modifier.align(Alignment.End)) { Text("查看年度报告") }
         }
     }
     detail?.let { title ->
@@ -75,11 +111,31 @@ internal fun ReadingStatsCard(
 
 @Composable
 private fun ReadingMetric(label: String, value: String, modifier: Modifier, onClick: () -> Unit) {
-    Surface(modifier.clickable(onClick = onClick), shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-        Column(Modifier.padding(12.dp).heightIn(min = 60.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+    Column(
+        modifier = modifier.clickable(onClick = onClick).heightIn(min = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(Modifier.fillMaxWidth().heightIn(min = 40.dp), contentAlignment = Alignment.Center) {
+            BasicText(
+                text = value,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
+                ),
+                maxLines = 1,
+                autoSize = TextAutoSize.StepBased(minFontSize = 12.sp, maxFontSize = 22.sp),
+            )
         }
+        Text(label, style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), textAlign = TextAlign.Center)
     }
+}
+
+private fun compactReadingDuration(ms: Long): String {
+    val minutes = ms.coerceAtLeast(0L) / 60_000L
+    val hours = minutes / 60L
+    return if (hours == 0L) "${minutes}m" else "${hours}h ${minutes % 60L}m"
 }
